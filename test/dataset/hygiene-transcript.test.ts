@@ -27,6 +27,11 @@ describe("leak scan: what stays clean", () => {
     "sk-short",
     "approx ~5 rows",
     "http://example.com/a/b",
+    "https://example.com/a/b/c",
+    "./a/b and ../c/d",
+    "joined 2022/10/17 and 10/20/2022",
+    "salary $65191.30",
+    "<home>/a/b/c",
   ])("%s", (text) => {
     expect(leaksIn(text, NO_ID)).toEqual([]);
     expect(leaksIn(text, ID)).toEqual([]);
@@ -73,6 +78,23 @@ describe("leak scan: host paths, one test per bypass", () => {
     ["$HOME", j("$", "HOME", S, "x")],
     ["braced HOME", j("$", "{HOME}", S, "x")],
     ["%USERPROFILE%", j("%", "USERPROFILE", "%", BS, "x")],
+    // Round 2 (leak-scan nits, fixed here): any absolute path, whatever its root.
+    ["GitHub container workspace", j(S, "github", S, "workspace", S, "x")],
+    ["GitHub container work dir", j(S, "__w", S, "repo", S, "x")],
+    ["runner work dir", j(S, "runner", S, "work", S, "x")],
+    ["self-hosted runner work dir", j(S, "actions-runner", S, "_work", S, "x")],
+    ["unlisted root after a redirect", j(">", S, "ci-cache", S, "x")],
+    ["unlisted root after =", j("--out=", S, "ci-cache", S, "x")],
+    ["unlisted root after a colon (PATH list)", j("PATH=x:", S, "ci-cache", S, "bin")],
+    ["unlisted root after -", j("-f", S, "ci-cache", S, "x")],
+    // Round 2: escapes and look-alikes.
+    ["shell hex escapes", j("$'", BS, "x2f", "home", BS, "x2f", "alice'")],
+    ["octal escapes", j(BS, "057", "home", BS, "057", "alice")],
+    ["braced unicode escapes", j(BS, "u{2f}", "home", BS, "u{2f}", "alice")],
+    ["fullwidth solidus", j("\uFF0F", "home", "\uFF0F", "alice")],
+    ["division slash", j("\u2215", "home", "\u2215", "alice")],
+    ["zero-width split", j(S, "ho", "\u200B", "me", S, "alice")],
+    ["named HTML slash entity (round-2 K)", j("&sol;", "home", "&sol;", "alice")],
   ];
   it.each(cases)("%s is a host path", (_name, text) => {
     expect(leaksIn(text, NO_ID)).toContain("host-path");
@@ -106,6 +128,17 @@ describe("leak scan: username and hostname (injected identity, D2)", () => {
   it("defaults to this machine's identity when none is injected", () => {
     // Whatever this machine is called, a generic text stays clean under the default.
     expect(leaksIn("Set record EMP-0003, column qty, to 500")).toEqual([]);
+  });
+});
+
+describe("leak scan: #542's planted marker", () => {
+  it("is refused in any decoded form, with no operator list", () => {
+    const marker = j("PLANTED", "_FAKE", "_MARKER");
+    expect(leaksIn(`x ${marker} y`, NO_ID)).toContain("planted-marker");
+    expect(leaksIn(j("PLANTED", "%5F", "FAKE", "%5F", "MARKER"), NO_ID)).toContain(
+      "planted-marker",
+    );
+    expect(leaksIn("PLANTED FAKE MARKER", NO_ID)).toEqual([]);
   });
 });
 

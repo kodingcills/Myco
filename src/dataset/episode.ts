@@ -12,12 +12,17 @@
  *  - `episodeMirrorSchema`: the closed JSON Schema, field for field, so an episode with a
  *    smuggled field (a gate `reasons`, an env dump, a path) is refused, not passed through;
  *  - `episodeIdOf`: the content address (sha256 of the canonical JSON without `episodeId`).
- * Pinned to #542 at `EPISODE_MIRROR_PINNED_AT` by test/dataset/episode-mirror.test.ts. One
- * deliberate loosening, because src/dataset may not import src/gate: `gate.reasonCodes`
+ * Pinned to #542 at `EPISODE_MIRROR_PINNED_AT`. test/dataset/episode-mirror.test.ts runs
+ * #542's OWN schema and `validateEpisode`, vendored byte for byte (apart from import paths)
+ * under test/fixtures/episode-542/ at that head, against the mirror's enums and schema and
+ * against every episode U's e2e exports, so the two formats cannot drift apart silently.
+ * When #542's head moves, `scripts/episode-mirror-drift.sh` says whether a re-sync is due.
+ * One deliberate loosening, because src/dataset may not import src/gate: `gate.reasonCodes`
  * items are code-shaped strings rather than the `REASON_CODES` enum. (The exporter still
  * requires the episode's codes to equal the raw gate result's, so a made-up code is never
- * exported as a positive.) Blob observations (`screenshot`, `state`) are refused by the
- * exporter for now (the container does not carry blobs yet).
+ * exported as a positive.) Blobs: the container carries the captured persisted document
+ * (a `state` / `persisted` / `text/csv` observation), which #542 requires of every graded
+ * episode. Screenshot and other state blobs are refused by the exporter (TO FILE).
  *
  * `draftEpisode` is the INTERIM stand-in for #542's episode writer (`buildEpisode` /
  * `EpisodeRecorder`): it assembles an episode from named fields only and addresses it by
@@ -30,7 +35,7 @@ import { createHash } from "node:crypto";
 import type { JsonSchema } from "../../schemas/validate.ts";
 
 /** Head of #542 the mirror was taken from. */
-export const EPISODE_MIRROR_PINNED_AT = "b50484690d22d9dbd34ea836678ed2ade1a7e9f7";
+export const EPISODE_MIRROR_PINNED_AT = "2e39c2463cc2fc7c0168721ed077b104f2b8733f";
 
 export const EPISODE_SCHEMA = "myco.episode/1" as const;
 export const EPISODE_WRITER = "myco.episode-writer/1" as const;
@@ -59,7 +64,25 @@ export const EPISODE_FAULT_CLASSES = [
   "transport-error",
   "capture-error",
   "gate-harness-code",
+  "harness-error",
 ] as const;
+/** #542's `groundTruth.reason` values when there is no grade. */
+export const EPISODE_NO_GRADE_REASONS = [
+  "no-independent-grader",
+  "harness-fault",
+  "agent-never-ran",
+  "document-withheld",
+] as const;
+/**
+ * Planner ids whose episodes may be real (#542 `REAL_PLANNERS`, src/episode/validate.ts). Every
+ * other episode must say `simulated: true`.
+ */
+export const EPISODE_REAL_PLANNERS: ReadonlySet<string> = new Set([
+  "claude-sonnet-5-5",
+  "claude-opus-5-5",
+  "claude-haiku-5-5",
+  "claude-fable-5-2",
+]);
 export const EPISODE_MAX_TEXT = 4000;
 export const EPISODE_MAX_ACTIONS = 1000;
 export const EPISODE_MAX_OBSERVATIONS = 500;
@@ -99,8 +122,21 @@ export type EpisodeObservation =
   | {
       readonly seq: number;
       readonly afterAction: number | null;
-      readonly kind: "screenshot" | "state";
-      readonly [field: string]: unknown;
+      readonly kind: "state";
+      readonly label: "persisted" | "ui-tree" | "app-state";
+      readonly mediaType: "text/csv" | "application/json";
+      readonly sha256: string;
+      readonly bytes: number;
+      readonly file: string;
+    }
+  | {
+      readonly seq: number;
+      readonly afterAction: number | null;
+      readonly kind: "screenshot";
+      readonly mediaType: "image/png";
+      readonly sha256: string;
+      readonly bytes: number;
+      readonly file: string;
     };
 
 export interface EpisodeGate {
@@ -126,7 +162,7 @@ export type EpisodeGroundTruth =
     }
   | {
       readonly source: "none";
-      readonly reason: "no-independent-grader" | "harness-fault" | "agent-never-ran";
+      readonly reason: (typeof EPISODE_NO_GRADE_REASONS)[number];
     };
 
 export interface Episode {
@@ -447,10 +483,7 @@ export const episodeMirrorSchema: JsonSchema = {
           required: ["source", "reason"],
           properties: {
             source: { const: "none" },
-            reason: {
-              type: "string",
-              enum: ["no-independent-grader", "harness-fault", "agent-never-ran"],
-            },
+            reason: { type: "string", enum: [...EPISODE_NO_GRADE_REASONS] },
           },
         },
       ],
@@ -586,6 +619,12 @@ export interface EpisodeDraft {
   }>;
   /** Observations dropped because they did not fit (e.g. over the status-text limit). */
   readonly withheld: number;
+  /**
+   * The persisted document the harness captured after the agent stopped (CSV bytes), or null.
+   * #542 requires a graded document to be observed in the episode, so it is appended as the
+   * last observation (`state` / `persisted`), after the last action.
+   */
+  readonly persisted: Uint8Array | null;
   readonly agentClaim: AgentClaim;
   readonly gate: EpisodeGate | null;
   readonly groundTruth: EpisodeGroundTruth;
@@ -596,6 +635,22 @@ export interface EpisodeDraft {
   readonly source: Episode["provenance"]["source"];
   readonly runId: string;
   readonly trialKey: string | null;
+}
+
+/** The blob file name a persisted CSV document is stored under (content-addressed). */
+export const persistedBlobFile = (bytes: Uint8Array): string => `blobs/${sha256Hex(bytes)}.csv`;
+
+function persistedObservation(d: EpisodeDraft & { persisted: Uint8Array }): EpisodeObservation {
+  return {
+    seq: d.observations.length,
+    afterAction: d.actions.length > 0 ? d.actions.length - 1 : null,
+    kind: "state",
+    label: "persisted",
+    mediaType: "text/csv",
+    sha256: sha256Hex(d.persisted),
+    bytes: d.persisted.byteLength,
+    file: persistedBlobFile(d.persisted),
+  };
 }
 
 /** Assembles an episode from named fields only (nothing copied wholesale) and addresses it. */
@@ -621,12 +676,17 @@ export function draftEpisode(d: EpisodeDraft): Episode {
     observations: {
       capture: "recorded",
       withheld: d.withheld,
-      items: d.observations.map((o, seq) => ({
-        seq,
-        afterAction: o.afterAction,
-        kind: "ui-status" as const,
-        text: o.text,
-      })),
+      items: [
+        ...d.observations.map(
+          (o, seq): EpisodeObservation => ({
+            seq,
+            afterAction: o.afterAction,
+            kind: "ui-status",
+            text: o.text,
+          }),
+        ),
+        ...(d.persisted === null ? [] : [persistedObservation({ ...d, persisted: d.persisted })]),
+      ],
     },
     agentClaim: d.agentClaim,
     gate:

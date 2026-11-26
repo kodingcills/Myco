@@ -48,7 +48,7 @@
 #   n1: an episode whose gate record differs from the raw gate result is accepted.
 #   n2: episodes are not checked against the closed myco.episode/1 schema (smuggled fields pass).
 #   n3: the episode content id is not checked.
-#   n4: blob observations are accepted (dangling references in the container).
+#   n4: screenshot / non-persisted blob observations are accepted (U carries one CSV only).
 #   n5: an episode whose outcome differs from its gate verdict is accepted.
 #   n6: out-of-order actions are accepted.
 #   n7: an observation following a nonexistent action (or out of order) is accepted.
@@ -56,6 +56,28 @@
 #   s2: schema.json is not scanned for leaks.
 #   s3: records.jsonl is not scanned for leaks.
 #   s4: episode files are not scanned for leaks.
+# Round 3 (R2-D1: #542's rules at 2e39c246, the document blob, the macOS-safe env test):
+#   r1: draftEpisode does not observe the persisted document (round 2's stale writer).
+#   r2: a graded document need not be observed in the episode (#542 R4/M07').
+#   r3: document-withheld needs no withheld observation.
+#   r4: outcome harness-fault need not match a recorded fault.
+#   r5: harness-fault ground truth need not match the outcome.
+#   r6: a cost estimate needs no token counts.
+#   r7: not-recorded actions/observations may carry items.
+#   r8: a grade without a document need not be ungradable.
+#   r9: the grade need not be against the task's fixture.
+#   r10: launch-refused / unregistrable may carry a gate decision.
+#   r11: an exported episode is not checked against the blob the container writes.
+#   r12: a blob that does not hash to its name and size is accepted.
+#   r13: a missing blob is accepted.
+#   r14: a second persisted document is accepted.
+#   r15: an unknown planner id may be unlabelled (#542 REAL_PLANNERS).
+#   r16: the mirror drops #542's `harness-error` fault class.
+#   r17: the mirror drops #542's `document-withheld` reason.
+#   r18: blobs are not written into the container.
+#   r19: a non-UTF-8 blob is carried unscanned (lossy decode instead of refusal).
+#   r20: a byte-order mark is stripped from a carried blob.
+#   s5: blobs are not scanned for leaks.
 #   t1: a step's action is not checked against the episode action schema.
 #   t2: over-long status text is kept instead of withheld.
 # Leak scan (src/dataset/hygiene.ts):
@@ -81,6 +103,16 @@
 #   h15: identity matching is case-sensitive.
 #   h16: placeholders are not neutralised (`<home>/tmp` refused as a host path).
 #   h18: a flag glued to a system root (`-f/etc/x`) is not matched.
+#   h19: any-root absolute paths not matched (`/github/workspace/x`, `/__w/repo/x`).
+#   h20: an any-root absolute path glued to a flag not matched (`-f/ci-cache/x`).
+#   h21: NFKC look-alikes not folded (fullwidth `／home`).
+#   h22: zero-width characters not stripped (`/ho<ZWSP>me/alice`).
+#   h23: shell hex escapes not decoded (`$'\x2fhome'`).
+#   h24: octal escapes not decoded (`\057home`).
+#   h25: braced unicode escapes not decoded (`\u{2f}home`).
+#   h26: #542's planted marker not scanned for.
+#   h27: `&sol;` not decoded (round-2 mutant K).
+#   h28: slash look-alikes NFKC leaves alone not folded (division slash).
 #   h17: forbiddenStringsFromFiles keeps whole lines only (a vault `NAME=value` value missed, D4).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -153,7 +185,29 @@ M = {
   "n1": [(E, '    ep.gate.verdict !== gate.verdict ||\n    ep.gate.accepted !== gate.accepted ||\n    !sameCodes(ep.gate.reasonCodes, gate.reasonCodes)\n', '    false\n')],
   "n2": [(E, 'const issues = validateSchema(ep, episodeMirrorSchema);', 'const issues: Array<{ path: string; keyword: string }> = [];')],
   "n3": [(E, 'if (episodeIdOf(e) !== e.episodeId) return', 'if (false) return')],
-  "n4": [(E, '    if (o.kind !== "ui-status") {\n      return { path: `$.observations.items[${i}]`, detail: "BLOBS_UNSUPPORTED" };\n    }\n', '    if (o.kind !== "ui-status") continue;\n')],
+  "n4": [(E, '      o.kind !== "state" ||\n      o.label !== "persisted" ||\n      o.mediaType !== "text/csv" ||\n', '      false ||\n')],
+  "r1": [(P, '        ...(d.persisted === null ? [] : [persistedObservation({ ...d, persisted: d.persisted })]),\n', '')],
+  "r2": [(E, 'if ((persisted?.sha256 ?? null) !== gt.persistedSha256)', 'if (persisted !== undefined && persisted.sha256 !== gt.persistedSha256)')],
+  "r3": [(E, '    (e.observations.withheld === 0 || persisted !== undefined)\n', '    persisted !== undefined\n')],
+  "r4": [(E, 'if ((e.outcome === "harness-fault") !== (e.harness.fault !== null))', 'if (false)')],
+  "r5": [(E, 'if ((e.outcome === "harness-fault") !== faultTruth)', 'if (false)')],
+  "r6": [(E, 'if (cost.estimateUsd !== null && (cost.inputTokens === null || cost.outputTokens === null))', 'if (false)')],
+  "r7": [(E, 'if (e.actions.capture === "not-recorded" && (e.actions.items.length > 0 || e.actions.truncated))', 'if (false)'),
+         (E, '    e.observations.capture === "not-recorded" &&\n', '    false &&\n')],
+  "r8": [(E, 'if (gt.persistedSha256 === null && gt.status !== "ungradable")', 'if (false)')],
+  "r9": [(E, 'if (e.task.fixtureSha256 !== null && gt.fixtureSha256 !== e.task.fixtureSha256)', 'if (false)')],
+  "r10": [(E, 'if ((e.outcome === "launch-refused" || e.outcome === "unregistrable") && e.gate !== null)', 'if (false)')],
+  "r11": [(E, '    if (blobProblem !== null) {', '    if (false) {')],
+  "r12": [(E, '      sha256Hex(bytes) !== persisted.sha256 ||\n      bytes.byteLength !== persisted.bytes ||\n      persisted.file !== `blobs/${persisted.sha256}.csv`\n', '      false\n')],
+  "r13": [(E, 'if (bytes === undefined) return { path: persistedAt, detail: "BLOB_MISSING" };', 'if (bytes === undefined) return null;')],
+  "r14": [(E, '      o.mediaType !== "text/csv" ||\n      persisted !== undefined\n', '      o.mediaType !== "text/csv"\n')],
+  "r15": [(E, '    !EPISODE_REAL_PLANNERS.has(ep.harness.plannerModelId) ||\n', '')],
+  "r16": [(P, '  "gate-harness-code",\n  "harness-error",\n', '  "gate-harness-code",\n')],
+  "r17": [(P, '  "agent-never-ran",\n  "document-withheld",\n] as const;', '  "agent-never-ran",\n] as const;')],
+  "r18": [(E, '    ...blobFiles.map((file) => [file, blobs.get(file)!] as const),\n', '')],
+  "r19": [(E, 'new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })', 'new TextDecoder("utf-8", { fatal: false, ignoreBOM: true })')],
+  "r20": [(E, 'new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })', 'new TextDecoder("utf-8", { fatal: true, ignoreBOM: false })')],
+  "s5": [(E, '    if (name.startsWith("blobs/")) {\n      // A captured document: raw text, scanned as one string (every decoded form).\n      const leaks = scanForLeaks(text, hygiene);', '    if (name.startsWith("blobs/")) {\n      // A captured document: raw text, scanned as one string (every decoded form).\n      const leaks: Array<{ path: string; kind: string }> = [];')],
   "n5": [(E, 'if (decided.includes(e.outcome) && e.gate?.verdict !== e.outcome) {', 'if (false) {')],
   "n6": [(E, 'if (a.seq !== i) return', 'if (false) return')],
   "n7": [(E, 'if (o.seq !== i || (o.afterAction !== null && o.afterAction >= e.actions.items.length)) {', 'if (false) {')],
@@ -185,6 +239,16 @@ M = {
   "h15": [(H, '(?:$|[^A-Za-z0-9])`, "i");', '(?:$|[^A-Za-z0-9])`);')],
   "h16": [(H, 'const pathForms = forms.map((f) => f.replace(PLACEHOLDER, "PLACEHOLDER"));', 'const pathForms = forms;')],
   "h18": [(H, r"--?[A-Za-z][A-Za-z0-9-]*\\/(?:", r"--?NEVER[A-Za-z][A-Za-z0-9-]*\\/(?:")],
+  "h19": [(H, "  /(?<![A-Za-z0-9._~/\\\\])\\/(?:[^\\s/\\\\\"'`<>|]+\\/)+/,\n", '')],
+  "h20": [(H, "  /(?:^|[\\s\"'=(])--?[A-Za-z][A-Za-z0-9-]*\\/(?:[^\\s/\\\\\"'`<>|]+\\/)+/,\n", '')],
+  "h21": [(H, '      .normalize("NFKC")\n', '')],
+  "h22": [(H, '      .replace(INVISIBLE, "")\n', '')],
+  "h23": [(H, '      .replace(/\\\\x([0-9A-Fa-f]{2})/g,', '      .replace(/\\\\xNEVER([0-9A-Fa-f]{2})/g,')],
+  "h24": [(H, '      .replace(/\\\\([0-3][0-7]{2})/g,', '      .replace(/\\\\NEVER([0-3][0-7]{2})/g,')],
+  "h25": [(H, '      .replace(/\\\\u\\{([0-9A-Fa-f]{1,6})\\}/g,', '      .replace(/\\\\uNEVER\\{([0-9A-Fa-f]{1,6})\\}/g,')],
+  "h26": [(H, '  if (forms.some((f) => f.includes(PLANTED_MARKER))) kinds.push("planted-marker");\n', '')],
+  "h27": [(H, '      .replace(/&sol;/gi, "/")\n', '')],
+  "h28": [(H, '      .replace(SLASH_LOOKALIKES, "/")\n', '')],
   "h17": [(H, 'if (value !== undefined && value.length >= minLength) out.add(value);', '')],
 }
 for edit_args in M[which]:
@@ -194,8 +258,10 @@ EOF
 
 MUTANTS=(d1 d2 d3 d4 d5 d6 d7 d8 d9 d10 d11 d12 d13 d14 f1 f2 f3 f4
   e1 e2 e2b e2c e3 e4 e5 e6 e7 e8 e9 e10 e11 e17 e18 e19 e20 e20b e21
-  n1 n2 n3 n4 n5 n6 n7 s1 s2 s3 s4 t1 t2
-  e12 e13 e14 e15 e16 h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18)
+  n1 n2 n3 n4 n5 n6 n7 s1 s2 s3 s4 s5 t1 t2
+  r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20
+  e12 e13 e14 e15 e16 h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+  h19 h20 h21 h22 h23 h24 h25 h26 h27 h28)
 if [ "$#" -gt 0 ]; then MUTANTS=("$@"); fi
 status=0
 for mutant in "${MUTANTS[@]}"; do

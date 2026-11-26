@@ -34,6 +34,7 @@ import { LocalProcessBackend } from "../../src/desktops/local-process.ts";
 import { parseTranscript } from "../../src/desktops/transcript.ts";
 import { buildRegistry, createGate, fileEvidenceReader } from "../../src/gate/gate.ts";
 import { FIXTURE_COLUMNS, generateFixture } from "../../src/tasks/fixture.ts";
+import { validateEpisode } from "../fixtures/episode-542/src/episode/validate.ts";
 
 const AGENT = resolve(import.meta.dirname, "..", "fixtures", "desktops", "scripted-agent.mjs");
 const IMAGE = "myco-linux-desktop/1";
@@ -197,6 +198,8 @@ async function candidateOf(
     source: "gated-trial",
     runId: outcome.runId,
     trialKey: outcome.trialKey,
+    // #542: the graded document is observed in the episode.
+    persisted: outcome.capture === null ? null : outcome.capture.bytes,
   });
   return {
     episode,
@@ -222,6 +225,7 @@ function writtenFiles(outDir: string): string[] {
     "manifest.json",
     "schema.json",
     ...readdirSync(join(outDir, "episodes")).map((f) => join("episodes", f)),
+    ...readdirSync(join(outDir, "blobs")).map((f) => join("blobs", f)),
   ].map((f) => readFileSync(join(outDir, f), "utf8"));
 }
 
@@ -336,6 +340,16 @@ describe("track U end-to-end: fleet -> real gate + real grader -> episodes -> da
         expect(ep.groundTruth.status).toBe("fail");
       }
       expect(ep.actions.items.length).toBeGreaterThanOrEqual(2);
+      // R2-D1: every exported episode passes #542's OWN validateEpisode at the pinned head,
+      // with the container's blobs (the graded document is observed and carried).
+      const blobs = new Map<string, Uint8Array>(
+        readdirSync(join(outDir, "blobs"))
+          .map((f) => `blobs/${f}`)
+          .filter((f) => ep.observations.items.some((o: { file?: string }) => o.file === f))
+          .map((f) => [f, readFileSync(join(outDir, f))]),
+      );
+      expect(blobs.size).toBe(1);
+      expect(validateEpisode(ep, { blobs })).toEqual([]);
       // Codes only: the gate's human-readable reasons are never exported.
       expect(Object.keys(ep.gate).sort()).toEqual(["accepted", "oracle", "reasonCodes", "verdict"]);
     }
@@ -343,10 +357,15 @@ describe("track U end-to-end: fleet -> real gate + real grader -> episodes -> da
     const written = writtenFiles(outDir).join("\n");
     expect(written).not.toContain(base);
     expect(written).not.toContain(tmpdir());
-    const [records, ...others] = writtenFiles(outDir);
+    const [records, manifestText, schemaText, ...rest] = writtenFiles(outDir);
     for (const doc of records!.trimEnd().split("\n"))
       expect(scanForLeaks(JSON.parse(doc))).toEqual([]);
-    for (const text of others) expect(scanForLeaks(JSON.parse(text))).toEqual([]);
+    for (const text of [manifestText!, schemaText!])
+      expect(scanForLeaks(JSON.parse(text))).toEqual([]);
+    // Episodes are JSON; blobs (the captured CSV documents) are scanned as text.
+    for (const text of rest)
+      expect(scanForLeaks(text.startsWith("{") ? JSON.parse(text) : text)).toEqual([]);
+    expect(manifest.blobs.length).toBeGreaterThanOrEqual(1);
     // The claim text the agent handed the gate is not part of the episode.
     expect(written).not.toContain("Done. Set");
   }, 60_000);
@@ -426,20 +445,25 @@ describe("track U end-to-end: fleet -> real gate + real grader -> episodes -> da
     }
   }, 120_000);
 
-  it("planted markers in the seeded fixture never reach the dataset unless echoed, and then refuse it", async () => {
+  it("planted markers in the seeded fixture refuse the export once the captured document carries them", async () => {
     const markers = [
       ["/", "home", "/", "fixture-owner", "/", "x"].join(""),
       ["sk", "-ant-", "fixture", "planted", "7".repeat(10)].join(""),
     ];
     let i = 60;
     for (const marker of markers) {
-      // An honest agent on a planted fixture: the marker is in the captured bytes (graded,
-      // digested) but the container never carries capture bytes, so nothing leaks.
+      // An honest agent on a planted fixture: the marker is in the captured document, which
+      // the container now carries (#542 requires the graded document in the episode), so the
+      // blob scan refuses the whole export and names the blob, not the value.
       const quiet = await runBatch([{ i: i++, mode: "honest", fixtureMarker: marker }], 1);
       const outDir = join(quiet.base, "ds");
-      const r = exportDataset(quiet.candidates, { outDir, includeNegatives: true, now: NOW });
-      expect(r.manifest.counts).toMatchObject({ candidates: 1 });
-      for (const text of writtenFiles(outDir)) expect(text).not.toContain(marker);
+      const blocked = refusalOf(() =>
+        exportDataset(quiet.candidates, { outDir, includeNegatives: true, now: NOW }),
+      );
+      expect(blocked.code).toBe("LEAK");
+      expect(blocked.where).toMatch(/^blobs\/[0-9a-f]{64}\.csv:\$$/);
+      expect(blocked.message).not.toContain(marker);
+      expect(existsSync(outDir)).toBe(false);
       // An agent that echoes the fixture's planted cell into its transcript is refused.
       const echo = await runBatch([{ i: i++, mode: "leak", marker, fixtureMarker: marker }], 1);
       const refused = refusalOf(() =>

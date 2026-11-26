@@ -13,6 +13,7 @@ import { datasetManifestSchema, datasetRecordSchema } from "../../schemas/datase
 import { validateSchema } from "../../schemas/validate.ts";
 import {
   draftEpisode,
+  EPISODE_REAL_PLANNERS,
   type Episode,
   type EpisodeDraft,
   type EpisodeGroundTruth,
@@ -25,15 +26,21 @@ import {
   type DesktopFacts,
   type ExportCandidate,
   ExportRefused,
+  episodeProblem,
   exportDataset,
   type GateLike,
 } from "../../src/dataset/export.ts";
+import { validateEpisode } from "../fixtures/episode-542/src/episode/validate.ts";
 
 const sha = (s: string | Uint8Array) => createHash("sha256").update(s).digest("hex");
 const NOW = () => new Date("2026-11-26T16:00:00.000Z");
 const FIXTURE_SHA = sha("pristine fixture");
 const DOC = Buffer.from("id,qty\nEMP-0001,42\n");
 const j = (...parts: string[]) => parts.join("");
+/** A planner id #542 accepts on a real (non-simulated) episode. */
+const REAL_PLANNER = [...EPISODE_REAL_PLANNERS][0]!;
+/** Host facts for #542's validator that nothing in these episodes can match. */
+const HOST_542 = { home: "/nonexistent-home-u", tmp: "/nonexistent-tmp-u", user: "nobody-u" };
 
 interface Over {
   readonly gate?: GateLike | null;
@@ -42,6 +49,8 @@ interface Over {
   readonly capture?: ExportCandidate["capture"];
   readonly fixtureSha256?: string;
   readonly desktop?: Partial<DesktopFacts>;
+  /** Another captured document (graded, observed and captured consistently). */
+  readonly doc?: Buffer;
 }
 
 function rawGate(k: number, fields: Partial<GateLike> = {}): GateLike {
@@ -77,6 +86,7 @@ function episodeGateOf(g: GateLike | null): EpisodeDraft["gate"] {
 }
 
 function candidate(k: number, o: Over = {}): ExportCandidate {
+  const doc = o.doc ?? DOC;
   const gate = o.gate === undefined ? rawGate(k) : o.gate;
   const epGate = o.draft?.gate === undefined ? episodeGateOf(gate) : o.draft.gate;
   const truth: EpisodeGroundTruth = {
@@ -86,7 +96,7 @@ function candidate(k: number, o: Over = {}): ExportCandidate {
     targetSatisfied: true,
     mismatchCount: 0,
     fixtureSha256: FIXTURE_SHA,
-    persistedSha256: sha(DOC),
+    persistedSha256: sha(doc),
     ...o.truth,
   } as EpisodeGroundTruth;
   const instruction = `Set record EMP-0001, column qty, to "42", and save. (${k})`;
@@ -113,19 +123,21 @@ function candidate(k: number, o: Over = {}): ExportCandidate {
     gate: epGate,
     groundTruth: truth,
     arm: "hcu+shell",
-    plannerModelId: "claude-model-x",
+    plannerModelId: REAL_PLANNER,
     startedAt: "2026-11-26T15:00:00.000Z",
     endedAt: "2026-11-26T15:01:00.000Z",
     source: "gated-trial",
     runId: `run-${k}`,
     trialKey: `task-${k}:run-${k}`,
+    // #542: a graded document is observed in the episode.
+    persisted: truth.source === "independent-grader" && truth.persistedSha256 !== null ? doc : null,
     ...o.draft,
   };
   return {
     episode: draftEpisode(draft),
     fixtureSha256: o.fixtureSha256 ?? FIXTURE_SHA,
     gate,
-    capture: o.capture === undefined ? { path: "doc.csv", format: "csv", bytes: DOC } : o.capture,
+    capture: o.capture === undefined ? { path: "doc.csv", format: "csv", bytes: doc } : o.capture,
     desktop: {
       backend: "local-process/1",
       isolation: "process",
@@ -331,6 +343,7 @@ describe("exportDataset: a container over episodes", () => {
       "manifest.json",
       "schema.json",
       ...readdirSync(join(d, "episodes")).map((f) => `episodes/${f}`),
+      ...readdirSync(join(d, "blobs")).map((f) => `blobs/${f}`),
     ];
     expect(files(a)).toEqual(files(b));
     for (const f of files(a)) expect(readFileSync(join(a, f))).toEqual(readFileSync(join(b, f)));
@@ -371,6 +384,13 @@ describe("exportDataset: a container over episodes", () => {
     );
     expect(manifest.files["records.jsonl"]).toBe(sha(readFileSync(join(a, "records.jsonl"))));
     expect(manifest.files["schema.json"]).toBe(sha(readFileSync(join(a, "schema.json"))));
+    // The captured document every exported episode graded is carried once, byte for byte,
+    // named by its digest, and listed in the manifest (three records share one document).
+    expect(readdirSync(join(a, "blobs"))).toEqual([`${sha(DOC)}.csv`]);
+    expect(readFileSync(join(a, "blobs", `${sha(DOC)}.csv`))).toEqual(DOC);
+    expect(manifest.blobs).toEqual([
+      { file: `blobs/${sha(DOC)}.csv`, sha256: sha(DOC), bytes: DOC.byteLength },
+    ]);
     expect(ra.manifest).toMatchObject({
       evidence: false,
       negativesIncluded: true,
@@ -420,6 +440,11 @@ describe("exportDataset: a container over episodes", () => {
     expect(refusal(() => exportDataset([excludedMock], { outDir: out() })).code).toBe(
       "SIMULATED_UNLABELLED",
     );
+    // #542's rule: a planner id that is not a real planner makes the episode simulated.
+    const unknownPlanner = candidate(1, { draft: { plannerModelId: "claude-model-x" } });
+    expect(refusal(() => exportDataset([unknownPlanner], { outDir: out() })).code).toBe(
+      "SIMULATED_UNLABELLED",
+    );
     // Labelled, it exports and is counted as simulated.
     const labelled = candidate(1, { draft: { plannerModelId: null, simulated: true } });
     const r = exportDataset([labelled], { outDir: out() });
@@ -443,7 +468,7 @@ describe("exportDataset: a container over episodes", () => {
         "$.episodeId",
       ],
       [
-        "blob observation (not carried yet)",
+        "screenshot blob observation (not carried)",
         readdressed({
           ...base,
           observations: {
@@ -510,6 +535,234 @@ describe("exportDataset: a container over episodes", () => {
     });
   });
 
+  describe("#542's rules at the pinned head (R2-D1): each one refuses the whole export", () => {
+    const base = candidate(1).episode as unknown as Record<string, unknown>;
+    const obs = base.observations as { items: Array<Record<string, unknown>> };
+    const persistedObs = obs.items.find((o) => o.kind === "state")!;
+    const uiObs = obs.items.filter((o) => o.kind === "ui-status");
+    const truth = base.groundTruth as Record<string, unknown>;
+    const harness = base.harness as Record<string, unknown>;
+    it.each<[string, Record<string, unknown>, string, string]>([
+      [
+        "a graded document with no persisted observation",
+        { ...base, observations: { capture: "recorded", withheld: 0, items: uiObs } },
+        "$.groundTruth.persistedSha256",
+        "GROUND_TRUTH_DOCUMENT",
+      ],
+      [
+        "a persisted observation of another document than the graded one",
+        {
+          ...base,
+          observations: {
+            ...obs,
+            items: [
+              ...uiObs,
+              { ...persistedObs, sha256: sha("other"), file: `blobs/${sha("other")}.csv` },
+            ],
+          },
+        },
+        "$.groundTruth.persistedSha256",
+        "GROUND_TRUTH_DOCUMENT",
+      ],
+      [
+        "a grade without a document that is not ungradable",
+        {
+          ...base,
+          observations: { capture: "recorded", withheld: 0, items: uiObs },
+          groundTruth: { ...truth, persistedSha256: null },
+        },
+        "$.groundTruth.status",
+        "GROUND_TRUTH_NO_DOCUMENT",
+      ],
+      [
+        "document-withheld while the document is captured",
+        {
+          ...base,
+          observations: { ...obs, withheld: 1 },
+          groundTruth: { source: "none", reason: "document-withheld" },
+        },
+        "$.groundTruth",
+        "GROUND_TRUTH_WITHHELD",
+      ],
+      [
+        "document-withheld with nothing withheld",
+        {
+          ...base,
+          observations: { capture: "recorded", withheld: 0, items: uiObs },
+          groundTruth: { source: "none", reason: "document-withheld" },
+        },
+        "$.groundTruth",
+        "GROUND_TRUTH_WITHHELD",
+      ],
+      [
+        "a harness fault recorded on a verified outcome",
+        { ...base, harness: { ...harness, fault: { class: "harness-error", code: null } } },
+        "$.outcome",
+        "OUTCOME_FAULT_MISMATCH",
+      ],
+      [
+        "harness-fault ground truth on an agent outcome",
+        {
+          ...base,
+          observations: { capture: "recorded", withheld: 0, items: uiObs },
+          groundTruth: { source: "none", reason: "harness-fault" },
+        },
+        "$.groundTruth",
+        "GROUND_TRUTH_FAULT",
+      ],
+      [
+        "an unregistrable outcome with a gate decision",
+        { ...base, outcome: "unregistrable" },
+        "$.gate",
+        "OUTCOME_GATE_MISMATCH",
+      ],
+      [
+        "a cost estimate without token counts",
+        {
+          ...base,
+          harness: {
+            ...harness,
+            cost: { ...(harness.cost as object), estimateUsd: 0.5, inputTokens: null },
+          },
+        },
+        "$.harness.cost",
+        "COST",
+      ],
+      [
+        "the grade against another fixture than the task's",
+        { ...base, groundTruth: { ...truth, fixtureSha256: sha("x") } },
+        "$.groundTruth.fixtureSha256",
+        "GROUND_TRUTH_FIXTURE",
+      ],
+      [
+        "not-recorded actions that carry items",
+        { ...base, actions: { ...(base.actions as object), capture: "not-recorded" } },
+        "$.actions",
+        "SEQ",
+      ],
+      [
+        "not-recorded observations that carry items",
+        { ...base, observations: { ...obs, capture: "not-recorded" } },
+        "$.observations",
+        "SEQ",
+      ],
+      [
+        "a second persisted document",
+        {
+          ...base,
+          observations: {
+            ...obs,
+            items: [...obs.items, { ...persistedObs, seq: obs.items.length }],
+          },
+        },
+        `$.observations.items[${obs.items.length}]`,
+        "BLOBS_UNSUPPORTED",
+      ],
+      [
+        "a JSON state blob",
+        {
+          ...base,
+          observations: {
+            ...obs,
+            items: [
+              ...uiObs,
+              {
+                ...persistedObs,
+                label: "app-state",
+                mediaType: "application/json",
+                file: `blobs/${sha(DOC)}.json`,
+              },
+            ],
+          },
+        },
+        `$.observations.items[${uiObs.length}]`,
+        "BLOBS_UNSUPPORTED",
+      ],
+    ])("%s", (_name, edited, path, detail) => {
+      const episode = readdressed(edited);
+      expect(episodeProblem(episode)).toEqual({ path, detail });
+      // #542's own validator refuses the same episode (U is stricter only on blobs: it carries
+      // one persisted CSV document and nothing else).
+      if (detail !== "BLOBS_UNSUPPORTED") {
+        expect(validateEpisode(episode, { host: HOST_542 })).not.toEqual([]);
+      }
+      const dir = out();
+      const e = refusal(() =>
+        exportDataset([candidate(2), { ...candidate(1), episode }], { outDir: dir }),
+      );
+      expect(e).toMatchObject({ code: "EPISODE_INVALID", where: `candidates[1]:${path}`, detail });
+      expect(existsSync(dir)).toBe(false);
+    });
+
+    it("the new #542 enum values are accepted (harness-error, document-withheld)", () => {
+      const faulted = readdressed({
+        ...base,
+        outcome: "harness-fault",
+        gate: null,
+        observations: { capture: "recorded", withheld: 0, items: uiObs },
+        groundTruth: { source: "none", reason: "harness-fault" },
+        harness: { ...harness, fault: { class: "harness-error", code: "X" } },
+      });
+      expect(episodeProblem(faulted)).toBeNull();
+      expect(validateEpisode(faulted, { host: HOST_542 })).toEqual([]);
+      const withheld = readdressed({
+        ...base,
+        observations: { capture: "recorded", withheld: 1, items: uiObs },
+        groundTruth: { source: "none", reason: "document-withheld" },
+      });
+      expect(episodeProblem(withheld)).toBeNull();
+      expect(validateEpisode(withheld, { host: HOST_542 })).toEqual([]);
+    });
+
+    it("with the blobs supplied, the document must be present and hash to its name and size", () => {
+      const ep = candidate(1).episode;
+      const at = `$.observations.items[${ep.observations.items.length - 1}]`;
+      const file = `blobs/${sha(DOC)}.csv`;
+      expect(episodeProblem(ep, new Map([[file, DOC]]))).toBeNull();
+      expect(validateEpisode(ep, { blobs: new Map([[file, DOC]]), host: HOST_542 })).toEqual([]);
+      expect(episodeProblem(ep, new Map())).toEqual({ path: at, detail: "BLOB_MISSING" });
+      expect(episodeProblem(ep, new Map([[file, Buffer.from("x")]]))).toEqual({
+        path: at,
+        detail: "BLOB_HASH",
+      });
+      // The file name must be the digest: a persisted observation naming another file is
+      // refused even when that file holds the right bytes.
+      const other = `blobs/${sha("other")}.csv`;
+      const renamed = readdressed({
+        ...base,
+        observations: { ...obs, items: [...uiObs, { ...persistedObs, file: other }] },
+      });
+      expect(episodeProblem(renamed, new Map([[other, DOC]]))).toEqual({
+        path: `$.observations.items[${uiObs.length}]`,
+        detail: "BLOB_HASH",
+      });
+      // The exporter applies this to every exported episode: a misnamed document is refused.
+      const e = refusal(() =>
+        exportDataset([{ ...candidate(1), episode: renamed }], { outDir: out() }),
+      );
+      expect(e).toMatchObject({ code: "EPISODE_INVALID", detail: "BLOB_MISSING" });
+    });
+  });
+
+  it("a captured document that is not UTF-8 text cannot be scanned, so it is refused", () => {
+    const binary = Buffer.from([0x69, 0x64, 0x0a, 0xff, 0xfe, 0x00]);
+    const dir = out();
+    const e = refusal(() => exportDataset([candidate(1, { doc: binary })], { outDir: dir }));
+    expect(e).toMatchObject({
+      code: "LEAK",
+      where: `blobs/${sha(binary)}.csv:$`,
+      detail: "unscannable",
+    });
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it("a captured document with a byte-order mark is carried byte for byte", () => {
+    const bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), DOC]);
+    const dir = out();
+    exportDataset([candidate(1, { doc: bom })], { outDir: dir });
+    expect(readFileSync(join(dir, "blobs", `${sha(bom)}.csv`))).toEqual(bom);
+  });
+
   it("refuses a record that fails its schema", () => {
     const bad = candidate(1, { desktop: { backend: "bad backend!" } });
     const e = refusal(() => exportDataset([bad], { outDir: out() }));
@@ -550,6 +803,22 @@ describe("exportDataset: a container over episodes", () => {
     ["typed text", (m) => ({ actions: [{ kind: "type", text: m }] })],
     ["shell command", (m) => ({ actions: [{ kind: "shell", command: m }] })],
   ];
+  for (const [markerName, marker] of MARKERS) {
+    it(`a ${markerName} in the captured document refuses the whole export, naming no value`, () => {
+      const dir = out();
+      const doc = Buffer.from(`id,note\nEMP-0001,${marker}\n`);
+      const e = refusal(() =>
+        exportDataset([candidate(1), candidate(2, { doc })], {
+          outDir: dir,
+          hygiene: { forbiddenStrings: ["zz-operator-planted-marker"], identity: IDENTITY },
+        }),
+      );
+      expect(e.code).toBe("LEAK");
+      expect(e.message).not.toContain(marker);
+      expect(e.where).toBe(`blobs/${sha(doc)}.csv:$`);
+      expect(existsSync(dir)).toBe(false);
+    });
+  }
 
   for (const [markerName, marker] of MARKERS) {
     for (const [fieldName, put] of FIELDS) {
@@ -580,7 +849,12 @@ describe("exportDataset: a container over episodes", () => {
     ],
     ["records.jsonl", "zz-only-in-record", { desktop: { image: "zz-only-in-record/1" } }],
     ["schema.json", "additionalProperties", {}],
-    ["manifest.json", "myco-dataset-exporter/2", {}],
+    ["manifest.json", "myco-dataset-exporter/3", {}],
+    [
+      "a blob (the captured document)",
+      "zz-only-in-blob",
+      { doc: Buffer.from("id,qty\nEMP-0001,zz-only-in-blob\n") },
+    ],
   ])("a leak only in %s is refused", (file, forbidden, o) => {
     const dir = out();
     const c = candidate(1, o);
@@ -591,7 +865,12 @@ describe("exportDataset: a container over episodes", () => {
       }),
     );
     expect(e.code).toBe("LEAK");
-    const expected = file === "an episode file" ? fileOf(c) : file;
+    const expected =
+      file === "an episode file"
+        ? fileOf(c)
+        : file === "a blob (the captured document)"
+          ? `blobs/${sha(o.doc!)}.csv`
+          : file;
     expect(e.where.split(/[:#]/)[0]).toBe(expected);
     expect(existsSync(dir)).toBe(false);
   });

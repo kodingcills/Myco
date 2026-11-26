@@ -18,10 +18,17 @@
  *  - everything else (uncertain, ungradable, gate/grader disagreement, unbound or missing
  *    records) is excluded and counted by code in the manifest.
  *
+ * The container also carries each exported episode's captured persisted document as
+ * `blobs/<sha256>.csv`: #542 requires a graded episode to observe the document it graded
+ * (a `state` / `persisted` / `text/csv` observation), so a container without it would hold
+ * episodes #542 rejects.
+ *
  * What refuses the WHOLE export (nothing is written): an episode that is not a valid
- * `myco.episode/1` (closed shape, content id, outcome/verdict agreement; blob observations
- * are not carried yet); a leak (host path, user or host name, operator-named string,
- * secret-shaped string) anywhere in ANY output file (episodes, records, manifest, schema);
+ * `myco.episode/1` under every rule of #542's `validateEpisode` at the pinned head
+ * (`episodeProblem`), or that carries a blob other than one persisted CSV document; a leak
+ * (host path, user or host name, planted marker, operator-named string, secret-shaped
+ * string) anywhere in ANY output file (episodes, records, manifest, schema, blobs), or a blob
+ * that is not UTF-8 text and so cannot be scanned;
  * a scripted, mock or non-gated episode not labelled simulated; a duplicate trial, run or
  * episode; a record that fails its schema; an existing output directory. A refusal names
  * the code and a location (file and JSON path, or candidate index), never the offending
@@ -39,16 +46,18 @@ import { validateSchema } from "../../schemas/validate.ts";
 import {
   canonicalJson,
   EPISODE_MIRROR_PINNED_AT,
+  EPISODE_REAL_PLANNERS,
   EPISODE_SCHEMA,
   type Episode,
   episodeIdOf,
   episodeMirrorSchema,
+  persistedBlobFile,
   sha256Hex,
 } from "./episode.ts";
 import { type HygieneOptions, scanForLeaks } from "./hygiene.ts";
 
 export { canonicalJson, sha256Hex };
-export const EXPORTER_VERSION = "myco-dataset-exporter/2";
+export const EXPORTER_VERSION = "myco-dataset-exporter/3";
 const GATE_API = "myco.gate/v1";
 
 /** The fields of a `myco.gate/v1` GateResult the exporter reads (structurally compatible). */
@@ -78,7 +87,8 @@ export interface ExportCandidate {
   /** The bytes the harness captured after the agent stopped, or null if nothing was captured. */
   readonly capture: {
     readonly path: string;
-    readonly format: "csv" | "xlsx";
+    /** CSV only: #542 stores a persisted document as a `text/csv` state observation. */
+    readonly format: "csv";
     readonly bytes: Uint8Array;
   } | null;
   readonly desktop: DesktopFacts;
@@ -186,35 +196,118 @@ export function classify(c: ExportCandidate, includeNegatives: boolean): Classif
   return { excluded: "GATE_GRADER_DISAGREE" };
 }
 
-/** A scripted planner, or anything but a real gated trial, makes an episode simulated. */
+/**
+ * #542's SIMULATED rule: an episode is real only from a gated trial whose planner is a real
+ * planner id (`EPISODE_REAL_PLANNERS`). A scripted planner, an unknown planner, or anything
+ * but a gated trial must be labelled simulated.
+ */
 function mustBeSimulated(ep: Episode): boolean {
-  return ep.harness.plannerModelId === null || ep.provenance.source !== "gated-trial";
+  return (
+    ep.harness.plannerModelId === null ||
+    !EPISODE_REAL_PLANNERS.has(ep.harness.plannerModelId) ||
+    ep.provenance.source !== "gated-trial"
+  );
 }
 
-/** Checks an episode against the mirrored `myco.episode/1` contract. Returns a JSON path or null. */
-export function episodeProblem(ep: unknown): { path: string; detail: string } | null {
+/**
+ * Checks an episode against the mirrored `myco.episode/1` contract: #542's closed schema and
+ * every rule of #542's `validateEpisode` at `EPISODE_MIRROR_PINNED_AT` (ID_MISMATCH, SEQ,
+ * OUTCOME, GROUND_TRUTH incl. the document-observation binding, SIMULATED, COST, BLOB_*),
+ * plus U's own blob limit (only a persisted CSV document is carried). Returns the first
+ * problem's JSON path and code, or null. #542's cleanliness scan is covered by the
+ * exporter's leak scan, which runs over every output file (blobs included).
+ */
+export function episodeProblem(
+  ep: unknown,
+  blobs?: ReadonlyMap<string, Uint8Array>,
+): { path: string; detail: string } | null {
   const issues = validateSchema(ep, episodeMirrorSchema);
   if (issues.length > 0) return { path: issues[0]!.path, detail: issues[0]!.keyword };
   const e = ep as Episode;
   if (episodeIdOf(e) !== e.episodeId) return { path: "$.episodeId", detail: "ID_MISMATCH" };
+  // SEQ
+  for (const [i, a] of e.actions.items.entries()) {
+    if (a.seq !== i) return { path: `$.actions.items[${i}]`, detail: "SEQ" };
+  }
   for (const [i, o] of e.observations.items.entries()) {
-    // The container does not carry blobs yet; a blob reference would dangle.
-    if (o.kind !== "ui-status") {
-      return { path: `$.observations.items[${i}]`, detail: "BLOBS_UNSUPPORTED" };
-    }
     if (o.seq !== i || (o.afterAction !== null && o.afterAction >= e.actions.items.length)) {
       return { path: `$.observations.items[${i}]`, detail: "SEQ" };
     }
   }
-  for (const [i, a] of e.actions.items.entries()) {
-    if (a.seq !== i) return { path: `$.actions.items[${i}]`, detail: "SEQ" };
+  if (e.actions.capture === "not-recorded" && (e.actions.items.length > 0 || e.actions.truncated))
+    return { path: "$.actions", detail: "SEQ" };
+  if (
+    e.observations.capture === "not-recorded" &&
+    (e.observations.items.length > 0 || e.observations.withheld > 0)
+  )
+    return { path: "$.observations", detail: "SEQ" };
+  // BLOBS (U's limit): the container carries one persisted CSV document and nothing else.
+  let persisted: { sha256: string; bytes: number; file: string } | undefined;
+  let persistedAt = "$";
+  for (const [i, o] of e.observations.items.entries()) {
+    if (o.kind === "ui-status") continue;
+    if (
+      o.kind !== "state" ||
+      o.label !== "persisted" ||
+      o.mediaType !== "text/csv" ||
+      persisted !== undefined
+    ) {
+      return { path: `$.observations.items[${i}]`, detail: "BLOBS_UNSUPPORTED" };
+    }
+    persisted = o;
+    persistedAt = `$.observations.items[${i}]`;
   }
+  // OUTCOME
+  if ((e.outcome === "harness-fault") !== (e.harness.fault !== null))
+    return { path: "$.outcome", detail: "OUTCOME_FAULT_MISMATCH" };
   const decided = ["verified", "refuted", "uncertain"];
   if (decided.includes(e.outcome) && e.gate?.verdict !== e.outcome) {
     return { path: "$.outcome", detail: "OUTCOME_GATE_MISMATCH" };
   }
+  if ((e.outcome === "launch-refused" || e.outcome === "unregistrable") && e.gate !== null)
+    return { path: "$.gate", detail: "OUTCOME_GATE_MISMATCH" };
   if (e.gate !== null && e.gate.accepted !== (e.gate.verdict === "verified")) {
     return { path: "$.gate.accepted", detail: "ACCEPTED_VERDICT_MISMATCH" };
+  }
+  // GROUND_TRUTH
+  const gt = e.groundTruth;
+  const faultTruth = gt.source === "none" && gt.reason === "harness-fault";
+  if ((e.outcome === "harness-fault") !== faultTruth)
+    return { path: "$.groundTruth", detail: "GROUND_TRUTH_FAULT" };
+  if (
+    gt.source === "none" &&
+    gt.reason === "document-withheld" &&
+    (e.observations.withheld === 0 || persisted !== undefined)
+  )
+    return { path: "$.groundTruth", detail: "GROUND_TRUTH_WITHHELD" };
+  if (gt.source === "independent-grader") {
+    if (gt.persistedSha256 === null && gt.status !== "ungradable")
+      return { path: "$.groundTruth.status", detail: "GROUND_TRUTH_NO_DOCUMENT" };
+    // Bound both ways (#542): a captured document is the graded one, and a graded document
+    // is captured in the episode.
+    if ((persisted?.sha256 ?? null) !== gt.persistedSha256)
+      return { path: "$.groundTruth.persistedSha256", detail: "GROUND_TRUTH_DOCUMENT" };
+    if (e.task.fixtureSha256 !== null && gt.fixtureSha256 !== e.task.fixtureSha256)
+      return { path: "$.groundTruth.fixtureSha256", detail: "GROUND_TRUTH_FIXTURE" };
+  }
+  // SIMULATED is #542's rule too; the exporter reports it as SIMULATED_UNLABELLED
+  // (see mustBeSimulated).
+  // COST
+  const cost = e.harness.cost;
+  if (cost.estimateUsd !== null && (cost.inputTokens === null || cost.outputTokens === null))
+    return { path: "$.harness.cost", detail: "COST" };
+  // BLOB_* (when a consumer supplies the blobs, e.g. re-validating an export). A capture the
+  // episode does not reference is not an error here: such an episode is not graded on it, so
+  // classify() excludes it (MISSING_GRADE / GRADE_NOT_BOUND) and the capture is never written.
+  if (blobs !== undefined && persisted !== undefined) {
+    const bytes = blobs.get(persisted.file);
+    if (bytes === undefined) return { path: persistedAt, detail: "BLOB_MISSING" };
+    if (
+      sha256Hex(bytes) !== persisted.sha256 ||
+      bytes.byteLength !== persisted.bytes ||
+      persisted.file !== `blobs/${persisted.sha256}.csv`
+    )
+      return { path: persistedAt, detail: "BLOB_HASH" };
   }
   return null;
 }
@@ -231,6 +324,12 @@ function firstLeak(
   hygiene: HygieneOptions | undefined,
 ): { where: string; kind: string } | null {
   for (const [name, text] of files) {
+    if (name.startsWith("blobs/")) {
+      // A captured document: raw text, scanned as one string (every decoded form).
+      const leaks = scanForLeaks(text, hygiene);
+      if (leaks.length > 0) return { where: `${name}:${leaks[0]!.path}`, kind: leaks[0]!.kind };
+      continue;
+    }
     const docs = name.endsWith(".jsonl")
       ? text
           .split("\n")
@@ -272,6 +371,9 @@ export function exportDataset(
   const runIds = new Set<string>();
   const episodeIds = new Set<string>();
   for (const [i, c] of candidates.entries()) {
+    // Structure and #542's rules. The blob itself is bound by classify(): an exported
+    // episode's persisted observation hashes to the grade's digest, which must equal the
+    // digest of the captured bytes the container writes.
     const problem = episodeProblem(c.episode);
     if (problem !== null) {
       throw new ExportRefused(
@@ -303,6 +405,7 @@ export function exportDataset(
     simulated: boolean;
     episodeText: string;
     line: string;
+    blob: { file: string; bytes: Uint8Array };
   }> = [];
   const excluded: Array<{ episodeId: string; code: ExclusionCode }> = [];
   const sorted = [...candidates].sort((a, b) =>
@@ -318,8 +421,21 @@ export function exportDataset(
       excluded.push({ episodeId: c.episode.episodeId, code: decision.excluded });
       continue;
     }
-    // classify() has proven the capture present and bound.
+    // classify() has proven the capture present and bound to the grade. The episode, with the
+    // blob the container will carry, must now pass every rule including BLOB_* (#542), so no
+    // exported episode references a blob the container does not hold byte for byte.
     const capture = c.capture!;
+    const blobProblem = episodeProblem(
+      c.episode,
+      new Map([[persistedBlobFile(capture.bytes), capture.bytes]]),
+    );
+    if (blobProblem !== null) {
+      throw new ExportRefused(
+        "EPISODE_INVALID",
+        `${episodeFile(c.episode.episodeId)}:${blobProblem.path}`,
+        blobProblem.detail,
+      );
+    }
     const episodeText = `${canonicalJson(c.episode)}\n`;
     const record = {
       schema: DATASET_RECORD_SCHEMA_ID,
@@ -352,8 +468,25 @@ export function exportDataset(
       simulated: c.episode.simulated,
       episodeText,
       line: canonicalJson(record),
+      blob: { file: persistedBlobFile(capture.bytes), bytes: capture.bytes },
     });
   }
+
+  // The captured persisted documents, one file per distinct content (two attempts that saved
+  // identical bytes share a blob). Each must be UTF-8 text: a blob the leak scan cannot read
+  // is refused, never carried unscanned.
+  const blobs = new Map<string, string>();
+  for (const r of exported) {
+    if (blobs.has(r.blob.file)) continue;
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(r.blob.bytes);
+    } catch {
+      throw new ExportRefused("LEAK", `${r.blob.file}:$`, "unscannable");
+    }
+    blobs.set(r.blob.file, text);
+  }
+  const blobFiles = [...blobs.keys()].sort();
 
   const recordsJsonl = exported.map((r) => `${r.line}\n`).join("");
   const schemaJson = `${canonicalJson({
@@ -384,6 +517,11 @@ export function exportDataset(
       sha256: sha256Hex(r.line),
     })),
     files: { "records.jsonl": sha256Hex(recordsJsonl), "schema.json": sha256Hex(schemaJson) },
+    blobs: blobFiles.map((file) => ({
+      file,
+      sha256: sha256Hex(blobs.get(file)!),
+      bytes: Buffer.byteLength(blobs.get(file)!),
+    })),
   };
   const manifestIssues = validateSchema(manifest, datasetManifestSchema);
   if (manifestIssues.length > 0) {
@@ -397,6 +535,7 @@ export function exportDataset(
     ["records.jsonl", recordsJsonl],
     ["schema.json", schemaJson],
     ["manifest.json", manifestJson],
+    ...blobFiles.map((file) => [file, blobs.get(file)!] as const),
   ];
   const leak = firstLeak(outputs, options.hygiene);
   if (leak !== null) throw new ExportRefused("LEAK", leak.where, leak.kind);
@@ -405,6 +544,7 @@ export function exportDataset(
   const staging = mkdtempSync(join(dirname(options.outDir), `.${basename(options.outDir)}.tmp-`));
   try {
     mkdirSync(join(staging, "episodes"));
+    mkdirSync(join(staging, "blobs"));
     for (const [name, text] of outputs) writeFileSync(join(staging, name), text, { flag: "wx" });
     if (existsSync(options.outDir)) throw new ExportRefused("OUT_EXISTS", "outDir");
     renameSync(staging, options.outDir);

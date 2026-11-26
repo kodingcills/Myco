@@ -115,12 +115,22 @@ describe("environment isolation", () => {
     expect(r.exitCode).toBe(0);
     expect(r.stdout).not.toContain(marker);
     const env = JSON.parse(r.stdout) as Record<string, string>;
+    // macOS injects `__CF_USER_TEXT_ENCODING` into EVERY child process, whatever env it is
+    // spawned with (round 2, R2-D2). It is allowed on darwin only, and only in its fixed
+    // `0x<uid>:0x<enc>:0x<region>` shape, so nothing else can ride in it.
+    const osInjected = process.platform === "darwin" ? ["__CF_USER_TEXT_ENCODING"] : [];
+    const injected = env.__CF_USER_TEXT_ENCODING;
+    if (injected !== undefined) {
+      expect(process.platform).toBe("darwin");
+      expect(injected).toMatch(/^0x[0-9A-Fa-f]+:0x[0-9A-Fa-f]+:0x[0-9A-Fa-f]+$/);
+    }
     expect(Object.keys(env).sort()).toEqual(
       [
         "HOME",
         "TMPDIR",
         "PATH",
         ...["LANG", "TZ"].filter((k) => process.env[k] !== undefined),
+        ...osInjected.filter((k) => env[k] !== undefined),
       ].sort(),
     );
     // PATH is never the host's (a host PATH can name host home directories).

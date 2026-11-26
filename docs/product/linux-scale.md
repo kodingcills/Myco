@@ -47,7 +47,9 @@ is verified and can be exported as a clean dataset.
   data-capture PR #542) is the ONE per-attempt record. M's skill store and U's export are both
   built from it. U defines no competing record: its dataset is a container over episodes
   (§6). Until #542 merges, U mirrors the episode type and schema in `src/dataset/episode.ts`
-  (pinned to a #542 head by `test/dataset/episode-mirror.test.ts`) and drafts episodes with an
+  (pinned to a #542 head by `test/dataset/episode-mirror.test.ts`, which runs #542's own
+  schema and `validateEpisode`, vendored under `test/fixtures/episode-542/`, against the
+  mirror and against every episode U exports) and drafts episodes with an
   interim writer; the step protocol (`src/desktops/transcript.ts`) emits episode actions
   directly. Both are replaced by #542's code when it merges (§10).
 - **The Linux path** (`docs/product/linux-path.md`, `src/linux/`) is today's single-desktop,
@@ -123,7 +125,10 @@ Every backend must keep these guarantees (pinned in `test/desktops/backend.test.
   (`CAPTURE_TOO_LARGE`). It never truncates.
 - A program in the desktop does not inherit the host environment. It sees `LANG`, `TZ`, a
   fixed system `PATH` (`DESKTOP_PATH`, never the host's, which can name host home
-  directories), its own `HOME` and its own `TMPDIR`, and nothing else.
+  directories), its own `HOME` and its own `TMPDIR`, and nothing else. One exception is not
+  the backend's to remove: macOS adds `__CF_USER_TEXT_ENCODING` (`0x<uid>:0x<enc>:0x<region>`,
+  no path or name) to every child process, whatever environment it is spawned with. The
+  test allows that one key on darwin only, and only in that shape.
 - A file that changes while it is captured is refused (`CAPTURE_CHANGED`), never captured
   partially.
 - A handle answers only for its own desktop. Calls after `destroy`, forged handles and other
@@ -165,26 +170,39 @@ evidence.
 The dataset is built FROM canonical `myco.episode/1` records: it is a container over episodes,
 not a second per-attempt format. `exportDataset` (`src/dataset/export.ts`) takes, per attempt,
 the episode, the raw gate result (to bind the episode's gate record to its trial), the
-captured bytes (to bind the grade), the task set's declared fixture digest, and U's desktop
-facts. It writes one directory:
+captured CSV bytes (to bind the grade, and carried as the episode's document blob), the task
+set's declared fixture digest, and U's desktop facts. It writes one directory:
 
 - `episodes/<episodeId>.json`: each exported episode, copied byte for byte as canonical JSON.
   Steps (actions and observations), the claim, the gate verdict (codes only), the
   independent grader's ground truth, harness metadata, provenance and the `simulated` flag
   live here, and only here.
-- `records.jsonl`: one `myco.dataset.record/2` per exported episode, sorted by episode id. A
+- `blobs/<sha256>.csv`: the persisted document each exported episode graded, byte for byte,
+  named by its digest. #542 requires a graded episode to observe the document it graded (a
+  `state` / `persisted` / `text/csv` observation whose hash is `groundTruth.persistedSha256`),
+  so the container carries it; every exported episode passes #542's `validateEpisode` with
+  these blobs. Two attempts that saved identical bytes share one blob.
+- `records.jsonl`: one `myco.dataset.record/3` per exported episode, sorted by episode id. A
   record references its episode by id and digest (`episode.id`, `episode.sha256`,
   `episode.file`) and carries only U's own fields: the `label` (`positive` / `negative`), the
   desktop facts (`backend`, `isolation`, `networkEnforced`, `image`) and where the capture was
   taken (`capture.path`, `format`, `size`; the digest is the episode's
   `groundTruth.persistedSha256`).
-- `manifest.json`: `myco.dataset.manifest/2`. It holds counts (candidates, records,
+- `manifest.json`: `myco.dataset.manifest/3`. It holds counts (candidates, records,
   positives, negatives, simulated, and excluded episodes by code), each record's SHA-256, the
-  SHA-256 of `records.jsonl` and `schema.json`, and the episode format with the #542 head the
+  SHA-256 of `records.jsonl` and `schema.json`, each blob's file, SHA-256 and size, and the
+  episode format with the #542 head the
   mirror was taken from. It always has `evidence: false`: a dataset is never scorecard
   evidence.
 - `schema.json`: the record and manifest schemas plus the mirrored episode schema, so a
   consumer can validate without this repo.
+
+**Which manifest a consumer trusts.** U's `manifest.json` describes U's container: which
+episodes were selected, with which label, on which desktop. Each episode inside is a
+`myco.episode/1` record a consumer can re-validate with #542's `validateEpisode`, blobs
+included. #542's own `myco-episodes export` (`myco.episode-dataset/1`) is a separate, flat
+export of episodes; U's container neither wraps nor replaces it. Both reference the same
+episodes by the same content id.
 
 **Which episodes are exported** (fail closed):
 
@@ -207,16 +225,27 @@ caller hands it.
 
 **What refuses the whole export.** Nothing is written, and the output directory never appears:
 
-- `EPISODE_INVALID`: an episode that fails the mirrored `myco.episode/1` contract. That means
-  the closed schema (a smuggled field such as gate prose or an env dump is refused, never
-  passed through), the content id, action and observation order, and outcome/verdict and
-  accepted/verdict agreement. Blob observations (`screenshot`, `state`) are refused for now,
-  because the container does not carry blobs yet (§10).
-- `LEAK`: a host path, the machine's user or host name, an operator-named string, or a
-  secret-shaped string anywhere in ANY output file (episodes, records, manifest and schema),
-  in keys as well as values. Every string is scanned as written and after decoding JSON
-  escapes (`\/`, `\uXXXX`), percent escapes (also double-encoded) and HTML entities. Host
-  paths include POSIX roots (a home root such as `/home/x` or `/Users/x` is matched even
+- `EPISODE_INVALID`: an episode that fails the mirrored `myco.episode/1` contract, which is
+  every rule of #542's `validateEpisode` at the pinned head: the closed schema (a smuggled
+  field such as gate prose or an env dump is refused, never passed through), the content id,
+  action and observation order (`not-recorded` carries no items), outcome agreement (with
+  the gate verdict, `accepted`, and a recorded harness fault), ground truth (a graded
+  document is observed in the episode and is the captured one; `document-withheld` needs a
+  withheld observation; a harness fault carries no grade; the grade is against the task's
+  fixture), and cost (an estimate needs token counts). An exported episode must also pass
+  #542's blob rules with the blob the container writes. U is stricter on blobs: it carries
+  one persisted CSV document per episode, and refuses a screenshot or any other state blob
+  (§10).
+- `LEAK`: a host path, the machine's user or host name, #542's planted marker, an
+  operator-named string, or a secret-shaped string anywhere in ANY output file (episodes,
+  records, manifest, schema and blobs), in keys as well as values. A blob that is not UTF-8
+  text cannot be scanned and is refused (`unscannable`). Every string is scanned as written
+  and after decoding Unicode look-alikes (NFKC fullwidth forms, other slash glyphs,
+  zero-width characters), shell and C escapes (`\x2f`, `\057`, `\u{2f}`), JSON escapes
+  (`\/`, `\uXXXX`), percent escapes (also double-encoded) and HTML entities. Any absolute
+  POSIX path of two or more segments is a host path, whatever its root (a root list is never
+  complete: `/github/workspace` and `/__w/repo` are real CI paths), and so is a single-segment
+  path under a known root. Host paths also include POSIX roots (a home root such as `/home/x` or `/Users/x` is matched even
   mid-token; system roots after any character that cannot end a relative path segment, so
   `>/tmp/x`, `-f/etc/x` and `2>/dev/null` are refused), Windows drive paths with either
   separator, UNC and backslash home paths, `file:` URLs, `~/` and `~user/`, and `$HOME` or
@@ -224,14 +253,16 @@ caller hands it.
   can be injected (`HygieneOptions.identity`); tests plant them, because a CI runner's own
   identity (`runner`) is too generic to scan for. The exporter never redacts. A refusal names
   the file and the JSON path, never the value.
-- `SIMULATED_UNLABELLED`: a scripted planner (`plannerModelId: null`) or any source other than
-  `gated-trial` whose episode is not labelled `simulated: true`. This applies to excluded
+- `SIMULATED_UNLABELLED`: a scripted or unknown planner (`plannerModelId` null or not one of
+  #542's real planner ids) or any source other than `gated-trial` whose episode is not
+  labelled `simulated: true`. This applies to excluded
   episodes too.
 - `DUPLICATE_TRIAL` (trial key, run id or episode id), `SCHEMA_INVALID`, `OUT_EXISTS`.
 
-**Fixture and vault contents.** The captured document and the fixture are recorded by digest,
-never copied, so a marker planted in the fixture never reaches the dataset unless the agent
-echoes it, and then the export is refused (`test/desktops/e2e.test.ts`). The exporter never
+**Fixture and vault contents.** The fixture is recorded by digest, never copied. The captured
+document is carried as a blob (#542 requires it), so a marker planted in the fixture that
+survives into the saved document refuses the export at that blob, as does an agent that
+echoes it into its transcript (`test/desktops/e2e.test.ts`). The exporter never
 reads the environment. It cannot know the value of a real secret, so it scans for secret
 shapes. A vault value that does not look like a secret is caught only if the operator names
 it: `forbiddenStringsFromFiles(paths)` (`src/dataset/hygiene.ts`) builds `forbiddenStrings`
@@ -365,13 +396,16 @@ them touches the Windows VM, its lock, qemu, UTM or port 8765.
    lead's GO.
 9. **Switch to #542's episode code** once it merges: replace the mirror and the interim writer
    in `src/dataset/episode.ts` with #542's `Episode` type, `episodeSchema`, `validateEpisode`
-   and `buildEpisode`, and the step protocol with its `EpisodeRecorder`. Then drop the one
-   documented loosening (reason codes are code-shaped, not the `REASON_CODES` enum).
+   and `buildEpisode`, and the step protocol with its `EpisodeRecorder`; delete the vendored
+   copy in `test/fixtures/episode-542/`. Then drop the one documented loosening (reason codes
+   are code-shaped, not the `REASON_CODES` enum). Until then, run
+   `scripts/episode-mirror-drift.sh` whenever #542's head moves.
 10. **One leak scanner:** consolidate `src/dataset/hygiene.ts` onto the canonical episode
     cleanliness scan (`src/episode/clean.ts`, #542) once it merges, so a single scanner (with
     the encoded-path cases tested here) guards every export.
-11. **Blobs in the container:** carry episode blobs (screenshots, state files) so episodes
-    with `screenshot` / `state` observations can be exported, not refused.
+11. **More blobs in the container:** the persisted CSV document is carried (round 3). Still
+    refused: screenshots (PNG needs #542's frame redaction plus a byte-level scan before it
+    can be carried) and `ui-tree` / `app-state` / JSON state blobs.
 12. **Placeholders at source for system paths:** have the microVM guest agent rewrite guest
     system paths (`/usr/bin/...`) to placeholders, so real hcu+shell actions export instead
     of being refused by the fail-closed scan.

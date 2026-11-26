@@ -8,9 +8,12 @@
  * cannot itself leak the value. Paths the harness controls are written as `<home>` /
  * `<desktop>` placeholders at the source (`src/desktops/local-process.ts`).
  *
- * Encodings: every string is scanned as written AND after decoding JSON escapes (`\/`,
- * `\\`, `\uXXXX`), percent/URL escapes (`%2F`, also double-encoded) and HTML numeric
- * entities, so an encoded host path or user name is caught too. Every pattern is tested
+ * Encodings: every string is scanned as written AND after decoding Unicode look-alikes
+ * (NFKC fullwidth forms, other slash glyphs, zero-width characters), shell/C escapes
+ * (`\x2f`, `\057`, `\u{2f}`), JSON escapes (`\/`, `\\`, `\uXXXX`), percent/URL escapes
+ * (`%2F`, also double-encoded) and HTML entities, so an encoded host path or user name is
+ * caught too. Any absolute POSIX path of two or more segments is a host path, whatever its
+ * root (a root list is never complete). Every pattern is tested
  * against every decoded form (test/dataset/hygiene-transcript.test.ts has one test per
  * bypass the round-1 verifier and the shared root cause named).
  *
@@ -20,7 +23,16 @@
 import { readFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
 
-export type LeakKind = "host-path" | "username" | "hostname" | "forbidden-string" | "secret-shaped";
+export type LeakKind =
+  | "host-path"
+  | "username"
+  | "hostname"
+  | "planted-marker"
+  | "forbidden-string"
+  | "secret-shaped";
+
+/** The canary #542's tests plant in env, home, fixtures, the vault and oracle config. */
+export const PLANTED_MARKER = ["PLANTED", "FAKE", "MARKER"].join("_");
 
 export interface Leak {
   /** JSON path of the string, e.g. `$.actions.items[2].text`. */
@@ -84,6 +96,13 @@ const SYSTEM_ROOTS = [
 ].join("|");
 
 const HOST_PATH: readonly RegExp[] = [
+  // ANY absolute POSIX path of two or more segments, whatever its root (#542's rule): a root
+  // list can never be complete (`/github/workspace`, `/__w/repo`, `/runner/work` are real CI
+  // paths). Not after a word character, `.`, `~`, `/` or `\`, so relative paths
+  // (`docs/var/x`, `./a/b`), URLs (`https://h/p`) and placeholders (`<home>/x`) stay clean.
+  /(?<![A-Za-z0-9._~/\\])\/(?:[^\s/\\"'`<>|]+\/)+/,
+  // The same, glued to a command-line flag: `-f/ci-cache/x`, `-I/opt-x/include/y`.
+  /(?:^|[\s"'=(])--?[A-Za-z][A-Za-z0-9-]*\/(?:[^\s/\\"'`<>|]+\/)+/,
   new RegExp(`\\/(?:${HOME_ROOTS})(?:\\/|\\\\|$)`, "i"),
   new RegExp(`(?:^|[^A-Za-z0-9_])\\/(?:${SYSTEM_ROOTS})(?:\\/|\\\\|$)`, "i"),
   // A command-line flag glued to a system root: `-f/etc/x`, `--out=/tmp/x` is caught above.
@@ -125,9 +144,30 @@ const GENERIC_ACCOUNTS = new Set(["root", "user", "runner", "admin", "ubuntu", "
 /** Placeholders the backend writes; they stand for desktop-local paths, never host ones. */
 const PLACEHOLDER = /<(?:home|desktop)>/g;
 
+/** Slash look-alikes NFKC does not fold (division, fraction, big solidus; set minus). */
+const SLASH_LOOKALIKES = /[\u2044\u2215\u29F8\u2571]/g;
+const BACKSLASH_LOOKALIKES = /[\u2216\u29F5\u29F9\u2572\uFE68]/g;
+/** Invisible format characters (zero-width space/joiners, word joiner, BOM, soft hyphen). */
+const INVISIBLE = /[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g;
+
 function decodeOnce(text: string): string {
   return (
     text
+      // Unicode look-alikes: fullwidth `／` (NFKC), other slash glyphs, zero-width splits.
+      .normalize("NFKC")
+      .replace(SLASH_LOOKALIKES, "/")
+      .replace(BACKSLASH_LOOKALIKES, "\\")
+      .replace(INVISIBLE, "")
+      // Shell / C escapes: `$'\x2fhome'`, `\057`, `\u{2f}`.
+      .replace(/\\x([0-9A-Fa-f]{2})/g, (_m, hex: string) =>
+        String.fromCharCode(Number.parseInt(hex, 16)),
+      )
+      .replace(/\\u\{([0-9A-Fa-f]{1,6})\}/g, (_m, hex: string) =>
+        String.fromCodePoint(Math.min(Number.parseInt(hex, 16), 0x10ffff)),
+      )
+      .replace(/\\([0-3][0-7]{2})/g, (_m, oct: string) =>
+        String.fromCharCode(Number.parseInt(oct, 8)),
+      )
       // JSON escapes.
       .replace(/\\u([0-9A-Fa-f]{4})/g, (_m, hex: string) =>
         String.fromCharCode(Number.parseInt(hex, 16)),
@@ -201,6 +241,7 @@ export function leaksIn(text: string, options: HygieneOptions = {}): LeakKind[] 
   for (const [kind, re] of identityPatterns(options)) {
     if (forms.some((f) => re.test(f)) && !kinds.includes(kind)) kinds.push(kind);
   }
+  if (forms.some((f) => f.includes(PLANTED_MARKER))) kinds.push("planted-marker");
   for (const s of options.forbiddenStrings ?? []) {
     if (s.length > 0 && forms.some((f) => f.includes(s))) {
       kinds.push("forbidden-string");

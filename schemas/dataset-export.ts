@@ -6,13 +6,22 @@ import type { JsonSchema } from "./validate.ts";
  *
  *  - `episodes/<episodeId>.json`  each exported episode, canonical JSON, byte-identical to
  *                                 the episode the harness recorded (content-addressed);
- *  - `records.jsonl`  one `myco.dataset.record/2` per exported episode, sorted by episode id.
+ *  - `records.jsonl`  one `myco.dataset.record/3` per exported episode, sorted by episode id.
  *                     A record references its episode by id and digest and carries ONLY
  *                     track U's own fields: the label, the desktop backend facts and where
  *                     the capture was taken. Steps, verdict, grade, claim, provenance and
  *                     the simulated flag live in the episode, never here;
- *  - `manifest.json`  `myco.dataset.manifest/2`: counts, per-record digests, file digests;
+ *  - `blobs/<sha256>.csv`  the persisted document each exported episode graded, byte for
+ *                     byte, named by its digest (the episode's `state`/`persisted`
+ *                     observation references it; #542 requires it of a graded episode);
+ *  - `manifest.json`  `myco.dataset.manifest/3`: counts, per-record digests, file and blob
+ *                     digests;
  *  - `schema.json`    these two schemas plus the mirrored episode schema.
+ *
+ * Which manifest a consumer trusts: this one describes U's container; each episode inside
+ * is a `myco.episode/1` record a consumer may re-validate with #542's `validateEpisode`
+ * (blobs included). #542's own `myco-episodes export` (`myco.episode-dataset/1`) is a
+ * separate, flat export of episodes; this container does not wrap or replace it.
  *
  * Only episodes the gate verified AND the independent grader graded `pass` are positives.
  * Refuted episodes the grader graded `fail` are exported only when the operator asks, and
@@ -34,8 +43,8 @@ const relPath: JsonSchema = {
   pattern: "^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127})*$",
 };
 
-export const DATASET_RECORD_SCHEMA_ID = "myco.dataset.record/2";
-export const DATASET_MANIFEST_SCHEMA_ID = "myco.dataset.manifest/2";
+export const DATASET_RECORD_SCHEMA_ID = "myco.dataset.record/3";
+export const DATASET_MANIFEST_SCHEMA_ID = "myco.dataset.manifest/3";
 
 export const datasetRecordSchema: JsonSchema = {
   type: "object",
@@ -72,14 +81,17 @@ export const datasetRecordSchema: JsonSchema = {
         image: safeId,
       },
     },
-    /** Where the persisted bytes were captured (desktop-relative). The digest is the episode's. */
+    /**
+     * Where the persisted bytes were captured (desktop-relative). The digest is the episode's;
+     * the bytes are `blobs/<digest>.csv`. CSV only (#542 stores a `text/csv` document).
+     */
     capture: {
       type: "object",
       additionalProperties: false,
       required: ["path", "format", "size"],
       properties: {
         path: relPath,
-        format: { type: "string", enum: ["csv", "xlsx"] },
+        format: { const: "csv" },
         size: { type: "integer", minimum: 0 },
       },
     },
@@ -99,6 +111,7 @@ export const datasetManifestSchema: JsonSchema = {
     "counts",
     "records",
     "files",
+    "blobs",
   ],
   properties: {
     schema: { const: DATASET_MANIFEST_SCHEMA_ID },
@@ -151,6 +164,20 @@ export const datasetManifestSchema: JsonSchema = {
       additionalProperties: false,
       required: ["records.jsonl", "schema.json"],
       properties: { "records.jsonl": sha256, "schema.json": sha256 },
+    },
+    /** Every carried blob, sorted by file: the file is named by `sha256`, which it hashes to. */
+    blobs: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["file", "sha256", "bytes"],
+        properties: {
+          file: { type: "string", pattern: "^blobs/[0-9a-f]{64}\\.csv$" },
+          sha256,
+          bytes: { type: "integer", minimum: 0 },
+        },
+      },
     },
   },
 };
