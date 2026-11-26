@@ -7,8 +7,10 @@
  * more kind of decision, built so that everything the comparison needs to be fair is a
  * field on the row rather than a claim in prose:
  *
- * - **Same task set and instruction.** The caller passes the same manifest rows as C1
- *   (`../sweep-v3.json`), and the planner gets `taskText(params)` verbatim.
+ * - **Same task set and instruction.** The caller passes a task's params: a published
+ *   fc-v1 task for the benchmark (`benchmark/false-completion/fc-v1/`; `armRowForTask` pins
+ *   the row to it), or the C1 manifest rows (`../sweep-v3.json`) for row-7 parity. The
+ *   planner gets `taskText(params)` verbatim.
  * - **Same budget.** `STEP_BUDGET` (30) counts every planner decision that acts - a GUI
  *   action *or* a shell call - so the shell buys the agent no extra turns. Same per-call
  *   output ceiling (1024) and no wall-clock budget, as C1.
