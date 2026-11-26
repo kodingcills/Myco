@@ -200,6 +200,20 @@ describe("assisted trials are refused as R1 evidence", () => {
     expect(text).toMatch(/duplicate handoff row for trialKey t7/);
   });
 
+  it("evidence-row note hygiene uses the protocol limits (280 agent, 500 human)", () => {
+    const ok = parseHandoffRows([
+      row("t11", [entry({ note: "word ".repeat(56), humanNote: "word ".repeat(80) })]),
+    ]);
+    expect(ok.errors).toEqual([]);
+    // Over the limit is refused (by the schema, which uses the same constants).
+    expect(
+      parseHandoffRows([row("t12", [entry({ note: `${"word ".repeat(56)}x` })])]).errors,
+    ).not.toEqual([]);
+    expect(
+      parseHandoffRows([row("t13", [entry({ humanNote: `${"word ".repeat(100)}x` })])]).errors,
+    ).not.toEqual([]);
+  });
+
   it("a handoff row naming no arm row is an error, and a malformed row fails schema", () => {
     const r = checkBenchmarkWithHandoffs(arm, grades, [row("nope", []), { schema: "x" }], opts);
     expect(r.errors.join("\n")).toMatch(/handoff row nope has no arm row/);

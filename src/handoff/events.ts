@@ -4,7 +4,7 @@
  * `HandoffEventSink` (broker.ts) receives `requested`, `resolved` and `attempt-ended` events as
  * they happen. Two implementations:
  *
- *  - `jsonlHandoffEventSink(path)`: append-only `handoffs.jsonl` in the trial's run directory,
+ *  - `jsonlHandoffEventSink(path)`: append-only `handoff-events.jsonl` in the trial's run directory,
  *    one event per line, opened with `a` (O_APPEND) and written synchronously, so a crash
  *    mid-handoff still leaves the request on disk.
  *  - `attemptLedgerSink(writer, trialKey)`: writes through #518's append-only attempt ledger

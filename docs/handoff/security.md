@@ -34,8 +34,9 @@ touching the verdict.
   bytes from `crypto.randomBytes`, held in the harness's memory and in one 0600 connection file
   that the operator places outside the repository. It is compared in constant time (SHA-256 of
   both sides, then `timingSafeEqual`). It is never printed, logged, put in argv or environment,
-  or sent to the agent. `connectionReachesAgent(plan, path, token)` lets the harness refuse a
-  launch plan that names the connection file or carries the token. The CLI refuses a connection
+  or sent to the agent. `connectionReachesAgent(plan, path, token)` detects a launch plan that
+  names the connection file or carries the token, and `runGatedTrial` refuses such a plan before
+  sealing (`assertNoOperatorReach`) when it is given `handoff.operatorConnection`. The CLI refuses a connection
   file whose mode is wider than 0600, or whose URL is not `http://127.0.0.1:<port>/`, so a
   tampered file cannot send the token elsewhere.
 - **Browser-safe.** The Host header must be loopback with the right port (DNS rebinding). A

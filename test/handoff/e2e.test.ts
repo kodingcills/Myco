@@ -211,7 +211,6 @@ function transport(
       if (!session) throw new Error("no session");
       const bytes = Buffer.from(await desktop.readFile(session, task.storePath));
       await desktop.destroy();
-      broker.close();
       return { [`persisted/${task.storePath}`]: bytes };
     },
   };
@@ -246,7 +245,7 @@ async function runTrial(taskId: string, runId: string, script: Scripted, timeout
     notify = r;
   });
   const terminal: string[] = [];
-  const eventsPath = join(base, `${runId}.handoffs.jsonl`);
+  const eventsPath = join(base, `${runId}.handoff-events.jsonl`);
   const broker = new HandoffBroker({
     runId,
     taskId,
@@ -279,13 +278,16 @@ async function runTrial(taskId: string, runId: string, script: Scripted, timeout
       scriptedHuman(noticed, conn, script, trace),
     ),
     oracleSources: ORACLE_SOURCES,
-    allowHandoffServer: true,
+    handoff: { broker, operatorConnection: { path: conn, token } },
   });
   await server.close();
   server = undefined;
   if (outcome.status !== "decided")
     throw new Error(`audit refused: ${JSON.stringify(outcome.audit.violations)}`);
-  const log = broker.log();
+  // The run record's `handoffs` comes from runGatedTrial's outcome, not from the test.
+  if (outcome.handoffs === undefined) throw new Error("runGatedTrial dropped the handoff log");
+  const log = outcome.handoffs;
+  expect(log).toEqual(broker.log());
   // The run record (result.json shape) carries the handoff log.
   const record = {
     runId,
@@ -464,6 +466,178 @@ describe("track N end to end: request, notify, human fixes on the desktop, resum
     expect(outcome.audit.violations.map((v) => v.tool)).toContain("mcp__myco-handoff");
     expect(Object.keys(HANDOFF_SERVER_CLASS)).toEqual(["myco-handoff"]);
     expect(Object.keys(GATE_SERVER_CLASS)).toEqual(["myco-gate"]);
+  });
+
+  it("runGatedTrial closes the broker when the agent stops: a pending handoff is cancelled", async () => {
+    const broker = new HandoffBroker({ runId: "run-h8", taskId: "df-s01" });
+    const base0 = transport(
+      "df-s01",
+      "run-h8",
+      broker,
+      { handoff: false },
+      { agentSaw: [] },
+      async () => {},
+    );
+    let sawAtStop: string | undefined;
+    const outcome = await runGatedTrial({
+      vault,
+      runId: "run-h8",
+      taskId: "df-s01",
+      tasks,
+      plan: plan("run-h8"),
+      transport: {
+        async runAgent(p, gate) {
+          await base0.runAgent(p, gate);
+          // The agent asks, sees "paused", and exits without awaiting: nobody resolved it.
+          sawAtStop = String(
+            (await handoffTool(broker, HANDOFF_REQUEST_TOOL, { reason: "uncertain", note: "?" }))
+              .status,
+          );
+        },
+        captureAfterStop: () => base0.captureAfterStop(),
+      },
+      oracleSources: ORACLE_SOURCES,
+      handoff: { broker },
+    });
+    expect(sawAtStop).toBe("paused");
+    if (outcome.status !== "decided") throw new Error("refused");
+    expect(outcome.handoffs?.entries.map((e) => [e.resolution, e.resolvedBy])).toEqual([
+      ["cancelled", "host:harness"],
+    ]);
+    expect(outcome.handoffs?.assistance).toBe("human-gated");
+    expect(broker.operatorChannel().pending()).toEqual([]);
+  });
+
+  it("without a handoff option the outcome carries no handoffs field", async () => {
+    const broker = new HandoffBroker({ runId: "run-h9", taskId: "df-s01" });
+    const p = plan("run-h9");
+    const { "myco-handoff": _dropped, ...servers } = p.mcpServers;
+    const outcome = await runGatedTrial({
+      vault,
+      runId: "run-h9",
+      taskId: "df-s01",
+      tasks,
+      plan: {
+        ...p,
+        argv: p.argv.map((a) =>
+          a
+            .split(",")
+            .filter((t) => !t.startsWith("mcp__myco-handoff"))
+            .join(","),
+        ),
+        mcpServers: servers,
+      },
+      transport: transport(
+        "df-s01",
+        "run-h9",
+        broker,
+        { handoff: false },
+        { agentSaw: [] },
+        async () => {},
+      ),
+      oracleSources: ORACLE_SOURCES,
+    });
+    expect(outcome.status).toBe("decided");
+    expect("handoffs" in outcome).toBe(false);
+  });
+
+  it("refuses a broker bound to another trial, before sealing", async () => {
+    const other = new HandoffBroker({ runId: "run-other", taskId: "df-s01" });
+    await expect(
+      runGatedTrial({
+        vault,
+        runId: "run-h10",
+        taskId: "df-s01",
+        tasks,
+        plan: plan("run-h10"),
+        transport: transport(
+          "df-s01",
+          "run-h10",
+          other,
+          { handoff: false },
+          { agentSaw: [] },
+          async () => {},
+        ),
+        oracleSources: ORACLE_SOURCES,
+        handoff: { broker: other },
+      }),
+    ).rejects.toThrow(/different trial/);
+    const wrongTask = new HandoffBroker({ runId: "run-h10", taskId: "df-s02" });
+    await expect(
+      runGatedTrial({
+        vault,
+        runId: "run-h10",
+        taskId: "df-s01",
+        tasks,
+        plan: plan("run-h10"),
+        transport: transport(
+          "df-s01",
+          "run-h10",
+          wrongTask,
+          { handoff: false },
+          { agentSaw: [] },
+          async () => {},
+        ),
+        oracleSources: ORACLE_SOURCES,
+        handoff: { broker: wrongTask },
+      }),
+    ).rejects.toThrow(/different trial/);
+  });
+
+  it("refuses a plan that reaches the operator connection (assertNoOperatorReach), before sealing", async () => {
+    const token = newOperatorToken();
+    const conn = join(base, "operator", "run-h11.json");
+    const leaky = plan("run-h11");
+    const mk = (pl: AgentLaunchPlan) => {
+      const broker = new HandoffBroker({ runId: "run-h11", taskId: "df-s01" });
+      let launched = false;
+      return {
+        launched: () => launched,
+        run: () =>
+          runGatedTrial({
+            vault,
+            runId: "run-h11",
+            taskId: "df-s01",
+            tasks,
+            plan: pl,
+            transport: {
+              async runAgent() {
+                launched = true;
+              },
+              captureAfterStop: async () => ({}),
+            },
+            oracleSources: ORACLE_SOURCES,
+            handoff: { broker, operatorConnection: { path: conn, token } },
+          }),
+      };
+    };
+    for (const pl of <AgentLaunchPlan[]>[
+      {
+        ...leaky,
+        mcpServers: {
+          ...leaky.mcpServers,
+          "myco-handoff": { command: "myco-handoff-mcp", args: [], env: { T: token } },
+        },
+      },
+      {
+        ...leaky,
+        mcpServers: {
+          ...leaky.mcpServers,
+          "myco-handoff": { command: "myco-handoff-mcp", args: ["--connection", conn], env: {} },
+        },
+      },
+    ]) {
+      const t = mk(pl);
+      const err = await t.run().then(
+        () => null,
+        (e: unknown) => e as Error,
+      );
+      expect(err?.message).toMatch(/reaches the handoff operator connection/);
+      expect(err?.message).not.toContain(token);
+      expect(err?.message).not.toContain(base);
+      expect(t.launched()).toBe(false);
+    }
+    expect(() => vault.markAgentStopped("run-h11")).toThrow();
   });
 });
 

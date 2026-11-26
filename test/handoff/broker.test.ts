@@ -116,6 +116,17 @@ describe("handoff broker: request, notify, resolve, resume", () => {
       ["uncertain", "line\nbreak", "NOTE_CONTROL_CHAR"],
       ["uncertain", "\u001b[2Jclear", "NOTE_CONTROL_CHAR"],
       ["uncertain", "see /home/alice/file.csv", "NOTE_HOST_PATH"],
+      // Round-1 verifier holes (G2): all were accepted before.
+      ["uncertain", `open file:///${"Users"}/alice/a.csv`, "NOTE_HOST_PATH"],
+      ["uncertain", "file://server/share", "NOTE_HOST_PATH"],
+      ["uncertain", "in $HOME/.myco/x", "NOTE_HOST_PATH"],
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the literal ${HOME} text is the case under test.
+      ["uncertain", "in ${HOME}/x", "NOTE_HOST_PATH"],
+      ["uncertain", "in %USERPROFILE%\\x", "NOTE_HOST_PATH"],
+      ["uncertain", "x/home/user/a", "NOTE_HOST_PATH"],
+      ["uncertain", "read /etc/passwd", "NOTE_HOST_PATH"],
+      ["uncertain", "/mnt/data/a.csv", "NOTE_HOST_PATH"],
+      ["uncertain", "(/opt/app/x)", "NOTE_HOST_PATH"],
       ["uncertain", "key sk-abcdefghijklmnop", "NOTE_SECRET_SHAPED"],
     ];
     for (const [reason, note, code] of cases)
@@ -329,6 +340,30 @@ describe("policy trigger (track O interface) and pause gate", () => {
     expect(s.broker.log().entries).toHaveLength(1);
   });
 
+  it("a pause-gate waiter pending at the deadline gets ended, never clear (fail closed)", async () => {
+    const s = setup(5_000);
+    void s.agent.request({ reason: "blocked", note: "?" }, INF);
+    const gate = s.policy.awaitClear();
+    const forwarded = vi.fn();
+    const guarded = guardAction(savePolicy, s.policy, { tool: "type", args: {} }).then(forwarded);
+    await flush();
+    s.clock.advance(5_000);
+    expect(await gate).toBe("ended");
+    await guarded;
+    expect(forwarded).toHaveBeenCalledWith({ kind: "ended", code: "ATTEMPT_ENDED" });
+  });
+
+  it("a pause-gate waiter pending at close() gets ended, never clear", async () => {
+    const s = setup();
+    void s.agent.request({ reason: "blocked", note: "?" }, INF);
+    const gate = s.policy.awaitClear();
+    const guarded = guardAction(savePolicy, s.policy, { tool: "type", args: {} });
+    await flush();
+    s.broker.close();
+    expect(await gate).toBe("ended");
+    expect(await guarded).toEqual({ kind: "ended", code: "ATTEMPT_ENDED" });
+  });
+
   it("refuses a malformed policy request", async () => {
     const s = setup();
     expect(
@@ -350,6 +385,14 @@ describe("assistance label", () => {
 
   it("note hygiene accepts plain short text", () => {
     expect(noteRejection("Is it OK to overwrite Sheet1?", 280)).toBeNull();
+    // Ordinary prose with slashes and URLs is not a host path.
+    for (const ok of [
+      "and/or w/o the 1/2 column",
+      "see https://example.com/docs/page",
+      "Sheet1!A1:B2 /approve",
+      "myco.handoff/v1",
+    ])
+      expect(noteRejection(ok, 280), ok).toBeNull();
     expect(noteRejection("", 280)).toBeNull();
   });
 });

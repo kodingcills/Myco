@@ -125,9 +125,16 @@ export type NoteRejection =
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/;
 
-/** Host path shapes (mirrors src/benchmark/check.ts `HOST_PATH`, plus `~/` and UNC). */
+/**
+ * Host path shapes. Broader than src/benchmark/check.ts `HOST_PATH` on purpose (the human note
+ * reaches the agent):
+ *  - a home or temp prefix anywhere in the text (`x/home/u/`, `file:///Users/...`);
+ *  - after a boundary: `~/`, a drive letter, UNC, or ANY absolute path of two or more
+ *    components (`/etc/passwd`, `/mnt/x`, `/opt/x`);
+ *  - a `file:` URL, `$HOME` / `${HOME}`, and the Windows `%USERPROFILE%`-style variables.
+ */
 export const HOST_PATH =
-  /(?:^|[\s"'(=:,])(?:\/Users\/|\/home\/|\/root\/|\/private\/|\/var\/folders\/|\/tmp\/|~\/|[A-Za-z]:\\|\\\\)/;
+  /(?:\/Users\/|\/home\/|\/root\/|\/private\/|\/var\/folders\/|\/tmp\/)|(?:^|[\s"'(=:,])(?:~\/|[A-Za-z]:\\|\\\\|\/[^\s/\\]+\/[^\s/\\])|\b[Ff][Ii][Ll][Ee]:\/|\$\{?HOME\b|%(?:USERPROFILE|HOMEPATH|HOMEDRIVE|APPDATA|LOCALAPPDATA|TEMP|TMP)%/;
 
 /**
  * Key-shaped strings: common vendor prefixes, PEM headers, bearer headers, and long unbroken

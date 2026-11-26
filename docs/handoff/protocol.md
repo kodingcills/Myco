@@ -24,7 +24,10 @@ Source: `src/handoff/`. Operator CLI: `pnpm myco-handoff`. Security model:
 `myco.gate/v1` is unchanged: its one tool still takes only `taskId`, `runId` and `claim`. The
 handoff is a separate MCP server with its own tools, classified for the launch audit
 (`HANDOFF_SERVER_CLASS`, reach `agent-local`). `runGatedTrial` refuses a launch plan that starts
-it unless the operator passes `allowHandoffServer: true`.
+it unless the operator passes the trial's broker as `handoff: { broker, operatorConnection }`.
+With it, `runGatedTrial` refuses a plan that reaches the operator connection
+(`assertNoOperatorReach`), closes the broker once the agent stopped, and returns the broker's
+log on the `decided` outcome as `handoffs`: the run record's field comes from there.
 
 ## Agent side: the `myco-handoff` MCP server
 
@@ -64,7 +67,9 @@ const decision = await guardAction(policy, broker.policyTrigger(), action);
 ```
 
 `guardAction` first waits on the pause gate, so no action is forwarded while any handoff is
-open, whoever opened it. Then it asks the policy. A forced pause resolves to `proceed`
+open, whoever opened it. This holds for an actuator that calls `guardAction`; no actuator calls
+it yet (that lands with track O and the live bridge). A pause-gate waiter pending when the
+handoff times out or the trial closes gets `ended`, never `clear`. Then it asks the policy. A forced pause resolves to `proceed`
 (approve), `skip` (fixed-it: the human did it), `deny` (reject), or `ended` (timeout or the
 trial closed). A policy that throws denies the action. A policy pause while a handoff is
 already open joins that handoff. The record names the policy (`source: "policy"`, `policyId`).
@@ -136,7 +141,7 @@ The run record (`result.json`) has an optional `handoffs` field, `myco.handoff.l
 }
 ```
 
-Trial events go to `handoffs.jsonl` in the run directory as they happen (append-only, one line
+Trial events go to `handoff-events.jsonl` in the run directory as they happen (append-only, one line
 per `requested`, `resolved` and `attempt-ended`), so a crash mid-handoff still leaves the
 request on disk. Once #518 merges, the same events go through its attempt ledger
 (`attemptLedgerSink`, see TO FILE). For a benchmark ledger, one `myco.handoff.trial/1` row per

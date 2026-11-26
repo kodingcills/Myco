@@ -203,8 +203,8 @@ export function writeConnectionFile(path: string, url: string, token: string): v
 }
 
 /**
- * True when anything in the agent's launch plan names the connection file or carries the token:
- * the harness refuses to launch in that case (`assertNoOperatorReach`).
+ * True when anything in the agent's launch plan names the connection file or carries the token.
+ * `assertNoOperatorReach` is the throwing form `runGatedTrial` calls before sealing.
  */
 export function connectionReachesAgent(
   plan: {
@@ -236,4 +236,19 @@ export function connectionReachesAgent(
   return strings.some(
     (s) => s.includes(connectionPath) || (base.length > 0 && s.includes(base)) || s.includes(token),
   );
+}
+
+/**
+ * Throws when `connectionReachesAgent` is true. The message names neither the path nor the token
+ * (it may reach a log). `runGatedTrial` calls this before anything is sealed or launched.
+ */
+export function assertNoOperatorReach(
+  plan: Parameters<typeof connectionReachesAgent>[0],
+  connectionPath: string,
+  token: string,
+): void {
+  if (connectionReachesAgent(plan, connectionPath, token))
+    throw new Error(
+      "refusing to launch: the agent's launch plan reaches the handoff operator connection",
+    );
 }

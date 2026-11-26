@@ -27,7 +27,14 @@ import {
   type CheckResult,
   checkBenchmark,
 } from "../benchmark/check.ts";
-import { type AssistanceLabel, assistanceOf, type HandoffLog, noteRejection } from "./protocol.ts";
+import {
+  AGENT_NOTE_LIMIT,
+  type AssistanceLabel,
+  assistanceOf,
+  type HandoffLog,
+  HUMAN_NOTE_LIMIT,
+  noteRejection,
+} from "./protocol.ts";
 
 export interface HandoffTrialRow {
   readonly schema: "myco.handoff.trial/1";
@@ -61,9 +68,9 @@ export function parseHandoffRows(input: readonly unknown[]): ParsedHandoffRows {
     if (timedOut !== (r.log.attemptEnd === "handoff-timeout"))
       errors.push(`${r.trialKey}: attemptEnd disagrees with its handoff entries`);
     for (const e of r.log.entries) {
-      if (noteRejection(e.note, 280) !== null)
+      if (noteRejection(e.note, AGENT_NOTE_LIMIT) !== null)
         errors.push(`${r.trialKey}: ${e.handoffId} agent note fails note hygiene`);
-      if (e.humanNote !== null && noteRejection(e.humanNote, 500) !== null)
+      if (e.humanNote !== null && noteRejection(e.humanNote, HUMAN_NOTE_LIMIT) !== null)
         errors.push(`${r.trialKey}: ${e.handoffId} human note fails note hygiene`);
       const human = e.resolvedBy.startsWith("operator:");
       if (human !== ["approve", "reject", "fixed-it"].includes(e.resolution))

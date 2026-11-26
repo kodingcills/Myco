@@ -21,6 +21,8 @@
  */
 
 import { HANDOFF_SERVER_CLASS } from "../handoff/agent-server.ts";
+import { assertNoOperatorReach } from "../handoff/operator-server.ts";
+import type { HandoffLog } from "../handoff/protocol.ts";
 import type { LaunchAudit } from "../integrity/launch.ts";
 import { type AgentLaunchPlan, auditAgentLaunch } from "../integrity/launch.ts";
 import type {
@@ -77,13 +79,33 @@ export interface GatedTrialOptions {
    */
   readonly corrections?: GateConfig["corrections"];
   /**
-   * Capability track N: the launch plan may start the `myco-handoff` MCP server (its two tools
-   * are classified `agent-local` by `HANDOFF_SERVER_CLASS`). Off when absent, so a plan with the
-   * server fails the audit closed unless the operator opted in. Only that one server class is
-   * added: this is not a general way to widen the audit. The handoff never reaches the gate,
-   * the vault or the verdict (docs/handoff/security.md §4).
+   * Capability track N: the trial's handoff broker. When present, the launch plan may start the
+   * `myco-handoff` MCP server (its two tools are classified `agent-local` by
+   * `HANDOFF_SERVER_CLASS`); when absent, a plan with the server fails the audit closed. Only
+   * that one server class is added: this is not a general way to widen the audit. The broker
+   * must be bound to this trial's `{ runId, taskId }`. Once the agent stopped, this function
+   * closes the broker (a still-pending handoff is recorded `cancelled`) and puts its log on the
+   * `decided` outcome as `handoffs`, so the run record's field comes from the broker, never
+   * from a caller remembering to write it. The handoff never reaches the gate, the vault or the
+   * verdict (docs/handoff/security.md §4).
    */
-  readonly allowHandoffServer?: boolean;
+  readonly handoff?: GatedTrialHandoff;
+}
+
+/** The handoff side of one gated trial (track N). `HandoffBroker` satisfies `broker`. */
+export interface GatedTrialHandoff {
+  readonly broker: {
+    readonly runId: string;
+    readonly taskId: string;
+    log(): HandoffLog;
+    close(): void;
+  };
+  /**
+   * The operator connection (file path and token). When given, the launch plan is refused
+   * before anything is sealed if it names the file or carries the token
+   * (`assertNoOperatorReach`, docs/handoff/security.md §2).
+   */
+  readonly operatorConnection?: { readonly path: string; readonly token: string };
 }
 
 export type GatedTrialOutcome =
@@ -95,6 +117,8 @@ export type GatedTrialOutcome =
       readonly result: GateResult;
       /** Whether the gate had corrections on for this trial's task. */
       readonly corrections: "on" | "off";
+      /** Track N: the broker's log, present exactly when the trial ran with `handoff`. */
+      readonly handoffs?: HandoffLog;
     };
 
 function frozenPlan(plan: AgentLaunchPlan): AgentLaunchPlan {
@@ -120,12 +144,21 @@ export async function runGatedTrial(opts: GatedTrialOptions): Promise<GatedTrial
     );
   // One copy, audited and launched: a caller mutating its plan afterwards changes neither.
   const plan = frozenPlan(opts.plan);
+  const handoff = opts.handoff;
+  if (handoff) {
+    if (handoff.broker.runId !== opts.runId || handoff.broker.taskId !== task.id)
+      throw new Error("invalid handoff broker: it is bound to a different trial");
+    if (handoff.operatorConnection)
+      assertNoOperatorReach(
+        plan,
+        handoff.operatorConnection.path,
+        handoff.operatorConnection.token,
+      );
+  }
   const audit = auditAgentLaunch(plan, {
     runId: opts.runId,
     extraServers:
-      opts.allowHandoffServer === true
-        ? { ...GATE_SERVER_CLASS, ...HANDOFF_SERVER_CLASS }
-        : GATE_SERVER_CLASS,
+      handoff !== undefined ? { ...GATE_SERVER_CLASS, ...HANDOFF_SERVER_CLASS } : GATE_SERVER_CLASS,
   });
   if (!audit.ok) return { status: "refused", audit };
 
@@ -147,10 +180,22 @@ export async function runGatedTrial(opts: GatedTrialOptions): Promise<GatedTrial
 
   // A transport that rejects has not shown the agent stopped: no stop marker, no capture,
   // so the trial has no verdict (the vault stays at seal, and any later check is uncertain).
-  await opts.transport.runAgent(plan, gate);
+  try {
+    await opts.transport.runAgent(plan, gate);
+  } finally {
+    // The agent stopped (or the transport failed): no handoff stays open past the attempt.
+    handoff?.broker.close();
+  }
   opts.vault.markAgentStopped(opts.runId);
   opts.vault.capture(opts.runId, await opts.transport.captureAfterStop());
   const result = await gate.check({ taskId: task.id, runId: opts.runId });
   const corrections = opts.corrections?.families.includes(task.family.id) ? "on" : "off";
-  return { status: "decided", audit, receipt, result, corrections };
+  return {
+    status: "decided",
+    audit,
+    receipt,
+    result,
+    corrections,
+    ...(handoff ? { handoffs: handoff.broker.log() } : {}),
+  };
 }

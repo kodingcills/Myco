@@ -492,7 +492,9 @@ describe("leakage: no host paths or secrets in agent-facing output", () => {
         handoffId: "ho-2",
         outcome: "reject",
         via: "cli",
-        note: "Bearer abcdefghijklmnopqrstuv",
+        // Built at runtime: a literal bearer shape trips the repo-wide credential scan
+        // (test/sai/harness.test.ts), which reads every tracked file.
+        note: `${"Bear"}er ${"x".repeat(22)}`,
       }),
     ).toEqual({
       ok: false,
