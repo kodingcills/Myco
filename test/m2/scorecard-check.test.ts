@@ -10,7 +10,9 @@ import {
   r2Trials,
   r3Manifest,
   r3Trials,
+  refuted,
   type Trial,
+  trial,
   writePack,
 } from "./pack-fixture.ts";
 
@@ -63,6 +65,39 @@ beforeAll(() => {
   nullCost[25]!.arm = { ...nullCost[25]!.arm, cost: { ...nullCost[25]!.arm.cost, modelUsd: null } };
   writePack("m2-fx-r2-null", nullCost, r2Manifest(), root);
   mkdirSync(join(root, "m2-fx-nomanifest"));
+  // R3 pack plus one ineligible kill-app trial per non-harness cause (N2, D1-residual).
+  const mixed: Trial[] = r3Trials();
+  let i = mixed.length;
+  mixed.push(
+    trial(
+      i++,
+      {
+        faultClass: "kill-app",
+        gate: { called: false, verdict: null },
+        cause: { kind: "agent", detail: "skipped the gate" },
+      },
+      "fail",
+    ),
+    trial(
+      i++,
+      {
+        faultClass: "kill-app",
+        gate: { called: true, verdict: null },
+        cause: { kind: "agent", detail: "gate returned nothing" },
+      },
+      "fail",
+    ),
+    refuted(i++, { faultClass: "kill-app", claim: "not-done" }),
+  );
+  const unlanded = refuted(i++, { faultClass: "kill-app" });
+  unlanded.ops = { ...unlanded.ops, faultLanded: false };
+  mixed.push(unlanded);
+  writePack(
+    "m2-fx-r3-mixed",
+    mixed,
+    manifest({ rows: ["R3"], expectTrials: { "myco-gate": mixed.length } }),
+    root,
+  );
 });
 
 function run(args: string[]) {
@@ -266,6 +301,31 @@ describe("m2-scorecard-check: rows recomputed from fixture packs", () => {
   );
 
   it(
+    "renders every ineligible cause in the Recomputed cell, in the evidence check's order",
+    () => {
+      // Expected by hand: the r3 fixture's figures, plus 4 more ineligible kill-app trials,
+      // one per non-harness cause, listed in INELIGIBLE_CAUSES order (not alphabetical).
+      const fig = R3_FIG.replace(
+        "2 ineligible (harness cause 2)",
+        "6 ineligible (harness cause 2, gate not called 1, no gate verdict 1, no DONE claim 1, " +
+          "fault did not land 1)",
+      );
+      const doc = status(setRow(COMMITTED, "R3", "DONE", "m2-fx-r3-mixed", fig), 1, 7, 0);
+      const r = check(doc);
+      expect(r.mismatch).toEqual([]);
+      expect(r.status).toBe(0);
+      const sorted = fig.replace(
+        "harness cause 2, gate not called 1, no gate verdict 1, no DONE claim 1, fault did not land 1",
+        "fault did not land 1, gate not called 1, harness cause 2, no DONE claim 1, no gate verdict 1",
+      );
+      const bad = check(status(setRow(COMMITTED, "R3", "DONE", "m2-fx-r3-mixed", sorted), 1, 7, 0));
+      expect(bad.status).toBe(1);
+      expect(bad.mismatch.join("\n")).toMatch(/^MISMATCH R3: recomputed figures/m);
+    },
+    T,
+  );
+
+  it(
     "keeps rows with no recomputation (R4, R5, R6, R8) PENDING",
     () => {
       const r = check(setRow(COMMITTED, "R4", "DONE", "m2-fx-r1", R1_FIG));
@@ -437,6 +497,37 @@ describe("m2-scorecard-check: the number sweep and layout", () => {
       expect(r.mismatch.join("\n")).toMatch(
         /MISMATCH process: identifier words: word 1: the doc has 'm2-scorecard-check' where IDENTIFIER_PINS has 'm2-evidence-check'/,
       );
+    },
+    T,
+  );
+});
+
+describe("m2-scorecard-check: the R7 definition is pinned (lead ruling 02:52Z)", () => {
+  it(
+    "fails when the R7 criterion drops or narrows 'total over ALL trials / verified count' or the null rule",
+    () => {
+      const cases: [string, string][] = [
+        // The verifier's round-2 rewrite: sum over verified rows only.
+        [
+          "each the total over ALL of the arm's trials (failed and refuted trials still cost money) divided by its verified count",
+          "each summed over verified rows",
+        ],
+        ["the total over ALL of the arm's trials", "the total over the arm's verified trials"],
+        ["divided by its verified count", "divided by its trial count"],
+        [" divided by its verified count (accepted DONE the grader passes)", ""],
+        ["A null cost is unmeasured, never 0", "A null cost counts as 0"],
+        // Every pinned phrase kept, but verified-rows-only wording added beside it.
+        [
+          "A null cost is unmeasured, never 0",
+          "Each is summed over verified rows only. A null cost is unmeasured, never 0",
+        ],
+      ];
+      for (const [from, to] of cases) {
+        const r = check(mutate(COMMITTED, from, to));
+        expect(r.status, `${from} -> ${to}`).toBe(1);
+        expect(r.mismatch.join("\n")).toMatch(/^MISMATCH R7: /m);
+      }
+      expect(check(COMMITTED).status).toBe(0);
     },
     T,
   );

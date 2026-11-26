@@ -15,9 +15,10 @@
  * What this module adds on top of it is stated where it is computed:
  *
  *  - eligibility (R1, R3), the M1 corrupt-suite rule (eval-runbook, "a fault that never
- *    landed is also ineligible"): a gated trial is ELIGIBLE only when the gate was called,
- *    the agent claimed DONE, the cause is not the harness, and, on a faulted trial, the
- *    fault landed (trial-ops `faultLanded`). A trial that never put a DONE claim in front
+ *    landed is also ineligible"): a gated trial is ELIGIBLE only when the gate returned a
+ *    verdict on a DONE claim (called, verdict not null; a call with no verdict judged
+ *    nothing), the cause is not the harness, and, on a faulted trial, the fault landed
+ *    (trial-ops `faultLanded`). A trial that never put a DONE claim in front
  *    of the gate says nothing about the gate. Ineligible trials are counted and listed by
  *    cause (`ineligible`), never dropped silently, and a false DONE accepted on an
  *    ineligible trial still fails R1 and R3: eligibility never excuses a false accept;
@@ -33,8 +34,8 @@
  *    underpowered below SIGN_TEST_UNDERPOWERED;
  *  - R3's per-class rates over the gated arm's ELIGIBLE faulted trials: false successes
  *    (accepted DONE the grader does not pass) over eligible trials, and detection (the
- *    gate's verdict was not `verified`) over eligible trials the grader does not pass,
- *    each with an exact Clopper-Pearson 95% interval;
+ *    gate's own refusal: verdict `refuted` or `uncertain`) over eligible trials the
+ *    grader does not pass, each with an exact Clopper-Pearson 95% interval;
  *  - R7's cost per verified task, per arm and per cost field: the field summed over ALL
  *    of the arm's trials (failed attempts cost money too) divided by the verified tasks
  *    (accepted DONE the grader passes). A null cost is never counted as 0: one null row
@@ -92,6 +93,7 @@ export interface TrialOps {
 export const INELIGIBLE_CAUSES = [
   "harness cause",
   "gate not called",
+  "no gate verdict",
   "no DONE claim",
   "fault did not land",
 ] as const;
@@ -248,6 +250,8 @@ export function ineligibleCause(
 ): IneligibleCause | null {
   if (row.cause?.kind === "harness") return "harness cause";
   if (row.gate === null || !row.gate.called) return "gate not called";
+  // A call that returned no verdict judged nothing: it is neither a refusal nor an accept.
+  if (row.gate.verdict === null) return "no gate verdict";
   if (row.claim !== "done") return "no DONE claim";
   if (row.faultClass !== NO_FAULT && ops?.faultLanded !== true) return "fault did not land";
   return null;
@@ -495,8 +499,11 @@ export function checkPack(input: PackInput): PackResult {
       const rows = ok.filter((r) => r.faultClass === cls);
       const notPass = rows.filter((r) => grades.get(r.trialKey)?.status !== "pass");
       const fs = notPass.filter((r) => r.accepted).length;
-      // Detection is the gate's own refusal on a trial the grader does not pass.
-      const detected = notPass.filter((r) => r.gate?.verdict !== "verified").length;
+      // Detection is the gate's own refusal (refuted or uncertain) on a trial the grader
+      // does not pass; an eligible trial always carries a verdict.
+      const detected = notPass.filter(
+        (r) => r.gate?.verdict === "refuted" || r.gate?.verdict === "uncertain",
+      ).length;
       falseSuccesses += fs;
       return {
         faultClass: cls,

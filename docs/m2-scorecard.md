@@ -7,7 +7,7 @@ leaves PENDING only when its evidence pack is committed under `docs/research/exp
 `scripts/m2-scorecard-check.py` recomputes it. The check fails on any number in this file it
 cannot attribute to committed evidence, a code constant or the plan. No hand tallies and no
 silent exclusions. R1 and R3 count eligible trials only, the corrupt-suite rule in
-`docs/eval-runbook.md`: the gate was called on a DONE claim, the cause is not the harness, and
+`docs/eval-runbook.md`: the gate returned a verdict on a DONE claim, the cause is not the harness, and
 on a fault trial the fault landed. Their Recomputed cells count the ineligible trials by cause,
 and a false DONE accepted on an ineligible trial still fails the row.
 

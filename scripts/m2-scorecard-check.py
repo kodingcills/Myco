@@ -84,6 +84,12 @@ IDENTIFIER_PINS: dict[str, tuple[str, ...]] = {
     "process": ("m2-evidence-check", "m2-", "m2", "m2-evidence"),
     "how": ("python3", "m2-scorecard-check"),
 }
+# R7's definition, verbatim in the R7 criterion (lead ruling 02:52Z; src/m2/evidence.ts costField).
+R7_RULING = (
+    "the total over ALL of the arm's trials",
+    "divided by its verified count",
+    "A null cost is unmeasured, never 0",
+)
 IDENTIFIERS = frozenset(w for pin in IDENTIFIER_PINS.values() for w in pin)
 
 
@@ -392,6 +398,12 @@ def check_bars(r: Report, const: dict, plan: str) -> None:
             f"src/m2/evidence.ts R3_SECURITY_CLASSES = {const['r3SecurityClasses']}", "the two security classes")
     r.unchecked("R7", "a null cost is never 0", "a counting rule (src/m2/evidence.ts costField), not a figure",
                 "A null cost is unmeasured, never 0")
+    # The lead's R7 ruling (02:52Z): total cost of ALL of the arm's trials / the arm's verified count.
+    for phrase in R7_RULING:
+        r.quote("R7", "R7 definition (lead ruling)", phrase, source="the lead's R7 ruling; src/m2/evidence.ts costField")
+    if re.search(r"verified rows", r.segment("R7"), re.IGNORECASE):
+        r.fail("R7", "R7 definition (lead ruling)",
+               "the R7 criterion says 'verified rows'; the ruling sums over ALL of the arm's trials")
 
 
 def check_rows(r: Report, evidence_root: Path) -> Counter:
