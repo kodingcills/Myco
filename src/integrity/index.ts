@@ -2,10 +2,21 @@ export {
   gatedVerdict,
   gateForTrial,
   INTEGRITY_REASON_PREFIX,
+  integrityCodes,
   integrityReasons,
+  openForTrial,
+  receiptProblem,
   type SealedOracle,
   type TrialBinding,
 } from "./gate.ts";
+export {
+  type AgentLaunchPlan,
+  auditAgentLaunch,
+  grantedToolsFromArgv,
+  type LaunchAudit,
+  type LaunchAuditOptions,
+  type McpServerLaunch,
+} from "./launch.ts";
 export {
   appendChainedRow,
   checkChainedLedger,

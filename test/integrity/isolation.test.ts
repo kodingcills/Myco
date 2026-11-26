@@ -33,6 +33,7 @@ import {
   gateForTrial,
   integrityReasons,
   type SealedOracle,
+  type TrialBinding,
 } from "../../src/integrity/gate.ts";
 import { appendChainedRow, checkChainedLedger } from "../../src/integrity/ledger.ts";
 import {
@@ -492,6 +493,65 @@ describe("the gate binds the agent's run id to its own trial (V5)", () => {
     expectIntegrity(v, "receipt-missing");
     // @ts-expect-error: the receipt is a required parameter.
     expect(gatedVerdict(vault, "run-0", undefined, oracle).status).toBe("uncertain");
+  });
+
+  // #470 follow-up N1: the audit opt-out is refused at runtime, not only by the signature.
+  it("the audit opt-out passed by a cast is receipt-missing, never an audit", () => {
+    trial({ agentValue: params.newValue, runId: "run-0" });
+    const audit = AUDIT_WITHOUT_RECEIPT as unknown as SealReceipt;
+    // The opt-out does open this honest run on the offline-audit path...
+    expect(auditVerdict("run-0").status).toBe("verified");
+    // ...but neither gate entry point accepts it.
+    expectIntegrity(gatedVerdict(vault, "run-0", audit, oracle), "receipt-missing");
+    expectIntegrity(
+      gateForTrial(vault, { runId: "run-0", receipt: audit }, "run-0", oracle),
+      "receipt-missing",
+    );
+  });
+
+  // #470 follow-up N2: an object that is not a well-formed receipt is refused.
+  it("a malformed receipt object is refused, with no throw", () => {
+    const { ctx } = trial({ agentValue: params.newValue, runId: "run-0" });
+    const good = ctx.receipt;
+    const throwing = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("trap");
+        },
+      },
+    );
+    const malformed: unknown[] = [
+      {},
+      { runId: "run-0" },
+      { sealDigest: good.sealDigest },
+      { runId: "run-0", sealDigest: 7 },
+      { runId: "run-0", sealDigest: "" },
+      { runId: "run-0", sealDigest: "zz".repeat(32) },
+      { runId: "run-0", sealDigest: good.sealDigest.toUpperCase() },
+      { runId: "", sealDigest: good.sealDigest },
+      throwing,
+    ];
+    for (const receipt of malformed) {
+      const cast = receipt as SealReceipt;
+      expectIntegrity(gatedVerdict(vault, "run-0", cast, oracle), "receipt-malformed");
+      expectIntegrity(
+        gateForTrial(vault, { runId: "run-0", receipt: cast }, "run-0", oracle),
+        "receipt-malformed",
+      );
+    }
+    for (const receipt of [null, "digest", 0, Symbol("x")]) {
+      const cast = receipt as unknown as SealReceipt;
+      expectIntegrity(gatedVerdict(vault, "run-0", cast, oracle), "receipt-missing");
+    }
+    // The well-formed receipt still opens it.
+    expect(gatedVerdict(vault, "run-0", good, oracle).status).toBe("verified");
+  });
+
+  it("a binding without a run id refuses every request", () => {
+    trial({ agentValue: params.newValue, runId: "run-0" });
+    for (const binding of [null, {}, { runId: "" }] as unknown as TrialBinding[])
+      expectIntegrity(gateForTrial(vault, binding, "run-0", oracle), "run-not-bound");
   });
 });
 
