@@ -209,7 +209,10 @@ export function preregLocation(packDir: string, repoRoot: string, file: string):
 }
 
 /** The checked file's sha256, read through one descriptor that must still be the checked file. */
-export function preregSha256(where: { readonly real: string; readonly stat: Stats }): string | null {
+export function preregSha256(where: {
+  readonly real: string;
+  readonly stat: Stats;
+}): string | null {
   const fd = openSync(where.real, "r");
   try {
     if (identity(fstatSync(fd)) !== identity(where.stat)) return null;

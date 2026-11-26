@@ -106,9 +106,7 @@ const packs = dirs.map((dir) => {
     const result = checkAbPack(input);
     const provenance = packProvenanceErrors(dir, [...input.on.arm, ...input.off.arm], {
       abPack: true,
-    }).map(
-      (e) => `provenance: ${e}`,
-    );
+    }).map((e) => `provenance: ${e}`);
     return {
       pack: relative(ROOT, dir) || ".",
       result:
