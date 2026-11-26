@@ -13,10 +13,21 @@
  *     verified AND the grader passed become skills (`admit`). The store head is then pinned.
  *  2. measurement phase: every pair's repeat and similar task runs in BOTH arms, cold (no
  *     store at all) and warm (skills retrieved through the `myco_skills_retrieve` tool path
- *     and given to the agent as advice). No learning in this phase (`learn` is refused
- *     outside the seed phase), so the store is the same for every measured trial.
- *  3. every trial is verified exactly as a cold one: the gate (myco.gate/v1, unchanged) and
- *     the independent grader. A row is `verified` only when both say so.
+ *     and given to the agent as advice). A warm trial retrieves only from the pinned head
+ *     (`pinnedHead`; any other head refuses the trial, `STORE_NOT_PINNED`) and writes
+ *     nothing to the store: no learning (`learn` is refused outside the seed phase) and no
+ *     `use` events. So every measured warm trial sees the same store, whatever the order.
+ *  3. after the measurement phase, `recordMeasuredUses` writes each warm trial's `use`
+ *     events; quarantine from refuted uses takes effect from then on, between phases.
+ *  4. every trial is verified exactly as a cold one: the gate (myco.gate/v1, unchanged) and
+ *     the independent grader on the gate's own bytes. A row is `verified` only when both
+ *     say so on the same bytes.
+ *
+ * Simulated planners (scripted agents) are plumbing: a trial declares `simulated` up front
+ * (checked against the planner it reports), a real trial never receives a
+ * simulated-provenance skill, and simulated rows never count in a real summary or paired
+ * counts (`summarizeSkillArms`, `pairedCounts`; only an explicitly simulated scope counts
+ * them, for the $0 tests).
  *
  * Rows are `myco.skills.arm-row/1`, NOT `myco.benchmark.arm-row/1`: they fail the benchmark
  * ledger schema, name a task set the R1 binding does not know, and carry
@@ -27,9 +38,9 @@ import type { BenchmarkTask } from "../benchmark/taskset.ts";
 import { buildTaskSet } from "../benchmark/taskset.ts";
 import { type AdmissionGate, type AdmissionGrade, admit } from "./admission.ts";
 import { callRetrieve } from "./mcp-server.ts";
-import { canonicalJson, type ForbiddenValues, sha256 } from "./record.ts";
+import { canonicalJson, type ForbiddenValues, isSimulatedPlanner, sha256 } from "./record.ts";
 import type { RetrievalResult, SkillAdvice } from "./retrieve.ts";
-import { type SkillStore, useOutcome } from "./store.ts";
+import { type SkillStore, SkillStoreError, useOutcome } from "./store.ts";
 
 export const SKILLS_TASKSET_VERSION = "skills-rs-v1";
 export const SKILL_ARM_ROW_SCHEMA = "myco.skills.arm-row/1";
@@ -140,7 +151,9 @@ export interface SkillArmRow {
     readonly accepted: boolean;
   };
   readonly grade: { readonly status: "pass" | "fail" | "ungradable" | null };
-  /** Gate verified AND grader passed. The only success this arm counts. */
+  /** The grader graded the bytes the gate decided on (its persisted-state ref digest). */
+  readonly gradedGateBytes: boolean;
+  /** Gate verified AND grader passed, on the same bytes. The only success this arm counts. */
   readonly verified: boolean;
   /** The skill this trial added (seed phase only), or null. */
   readonly admittedSkillId: string | null;
@@ -159,6 +172,14 @@ export interface SkillArmTrialOptions {
   readonly runId: string;
   /** Required for warm (retrieval) and for learn (admission). Cold never retrieves. */
   readonly store: SkillStore | null;
+  /** The store head pinned after the seed phase. Required for warm; another head refuses. */
+  readonly pinnedHead?: string;
+  /**
+   * Whether this trial's planner is simulated (a scripted agent). Declared up front, checked
+   * against the planner the run reports. A real trial is never served simulated skills;
+   * a simulated trial may admit simulated skills (the $0 tests).
+   */
+  readonly simulated: boolean;
   /** Offer the outcome to admission. Seed phase only. */
   readonly learn: boolean;
   /** The task's forbidden values (`forbiddenValuesFor`), required when learning. */
@@ -173,14 +194,21 @@ export async function runSkillArmTrial(o: SkillArmTrialOptions): Promise<SkillAr
   if (o.learn && o.arm !== "cold") throw new Error("the seed phase runs cold");
   if ((o.arm === "warm" || o.learn) && o.store === null)
     throw new Error(`${o.arm}${o.learn ? " learning" : ""} trial needs a store`);
+  if (o.arm === "warm" && o.pinnedHead === undefined)
+    throw new Error("a warm trial needs the pinned store head");
   const family = o.task.family;
   let retrieved: RetrievalResult | null = null;
   let storeHead: string | null = null;
-  if (o.arm === "warm" && o.store !== null) {
-    storeHead = o.store.head();
-    // Through the MCP tool path, the same code the agent-facing server runs.
+  if (o.arm === "warm" && o.store !== null && o.pinnedHead !== undefined) {
+    // Through the MCP tool path, the same code the agent-facing server runs, scoped to the
+    // pinned head (another head is refused) and to this trial's planner kind.
     const r = callRetrieve(
-      { store: o.store, taskFamily: family },
+      {
+        store: o.store,
+        taskFamily: family,
+        serveSimulated: o.simulated,
+        expectHead: o.pinnedHead,
+      },
       { taskFamily: family, features: taskFeatures(o.task) },
     );
     if (!r.ok) throw new Error("retrieval failed");
@@ -188,14 +216,25 @@ export async function runSkillArmTrial(o: SkillArmTrialOptions): Promise<SkillAr
       .structuredContent;
     if (body.codes !== undefined) throw new Error(`retrieval refused: ${body.codes.join(",")}`);
     retrieved = body;
+    storeHead = o.pinnedHead;
   }
   const advice = o.arm === "warm" ? renderAdvice(retrieved?.skills ?? []) : null;
   const run = await o.execute(advice);
+  const simulated = isSimulatedPlanner(run.plannerModelId);
+  if (simulated !== o.simulated)
+    throw new Error("the run's planner contradicts the trial's declared simulated flag");
+  const persistedRefs = (run.gate.evidenceRefs ?? []).filter((r) => r.kind === "persisted-state");
+  const gradedGateBytes =
+    persistedRefs.length === 1 &&
+    typeof run.grade?.persistedSha256 === "string" &&
+    persistedRefs[0]?.sha256 === run.grade.persistedSha256;
   const verified =
-    run.gate.verdict === "verified" && run.gate.accepted === true && run.grade?.status === "pass";
-  const outcome = useOutcome(run.gate.verdict, run.grade?.status ?? null);
-  if (o.arm === "warm" && o.store !== null)
-    for (const s of retrieved?.skills ?? []) o.store.recordUse(s.skillId, o.runId, outcome);
+    run.gate.verdict === "verified" &&
+    run.gate.accepted === true &&
+    run.grade?.status === "pass" &&
+    gradedGateBytes;
+  // No store write here: measured warm trials leave the pinned store as it is.
+  // `recordMeasuredUses` writes their use events after the measurement phase.
 
   let admittedSkillId: string | null = null;
   let admissionCode: string | null = null;
@@ -208,6 +247,7 @@ export async function runSkillArmTrial(o: SkillArmTrialOptions): Promise<SkillAr
             runId: o.runId,
             taskId: o.task.taskId,
             taskFamily: family,
+            fixtureSha256: o.task.fixtureSha256,
             features: taskFeatures(o.task),
             preconditions: run.procedure.preconditions,
             steps: run.procedure.steps,
@@ -219,6 +259,7 @@ export async function runSkillArmTrial(o: SkillArmTrialOptions): Promise<SkillAr
             plannerModelId: run.plannerModelId,
           },
           o.forbidden ?? { values: [] },
+          { simulated: o.simulated },
         ),
       );
       if (added.stored) admittedSkillId = added.skillId;
@@ -236,11 +277,12 @@ export async function runSkillArmTrial(o: SkillArmTrialOptions): Promise<SkillAr
     taskId: o.task.taskId,
     runId: o.runId,
     plannerModelId: run.plannerModelId,
-    simulated: !/^claude-[a-z0-9.-]+$/.test(run.plannerModelId),
+    simulated,
     storeHead,
     retrievedSkillIds: (retrieved?.skills ?? []).map((s) => s.skillId),
     gate: { verdict: run.gate.verdict, accepted: run.gate.accepted },
     grade: { status: run.grade?.status ?? null },
+    gradedGateBytes,
     verified,
     admittedSkillId,
     admissionCode,
@@ -267,18 +309,48 @@ export interface ArmSummary {
   readonly r1Evidence: false;
 }
 
-/** Summarise rows per (base arm, arm, kind). Refuses rows that break the arm's invariants. */
-export function summarizeSkillArms(rows: readonly SkillArmRow[]): ArmSummary {
+/**
+ * Which rows count. Real by default: simulated rows never count and are reported as errors.
+ * `{ simulated: true }` (the $0 tests only) counts simulated rows and refuses real ones, so
+ * the two never mix in one cell or one paired count.
+ */
+export interface ArmScope {
+  readonly simulated?: boolean;
+}
+
+/** Whether a row belongs to the scope; a row whose flag contradicts its planner never does. */
+function inScope(r: SkillArmRow, scope: ArmScope): boolean {
+  if (r.simulated !== isSimulatedPlanner(r.plannerModelId)) return false;
+  return r.simulated === (scope.simulated === true);
+}
+
+/**
+ * Summarise rows per (base arm, arm, kind). Refuses rows that break the arm's invariants.
+ * Rows outside the scope (simulated rows in a real summary, and the reverse) are reported
+ * and left out of every cell.
+ */
+export function summarizeSkillArms(rows: readonly SkillArmRow[], scope: ArmScope = {}): ArmSummary {
   const errors: string[] = [];
   const digest = skillTaskSetDigest();
   const groups = new Map<string, SkillArmRow[]>();
   for (const r of rows) {
+    if (r.simulated !== isSimulatedPlanner(r.plannerModelId))
+      errors.push(`${r.runId}: simulated flag contradicts the planner`);
+    else if (!inScope(r, scope))
+      errors.push(
+        r.simulated
+          ? `${r.runId}: a simulated row never counts in a real summary`
+          : `${r.runId}: a real row in a simulated summary`,
+      );
     if (r.schema !== SKILL_ARM_ROW_SCHEMA) errors.push(`${r.runId}: not a skills arm row`);
     if (r.evidence !== "never-r1") errors.push(`${r.runId}: evidence must be never-r1`);
     if (r.taskSetVersion !== SKILLS_TASKSET_VERSION || r.taskSetSha256 !== digest)
       errors.push(`${r.runId}: not the frozen ${SKILLS_TASKSET_VERSION} task set`);
     const shouldVerify =
-      r.gate.verdict === "verified" && r.gate.accepted && r.grade.status === "pass";
+      r.gate.verdict === "verified" &&
+      r.gate.accepted &&
+      r.grade.status === "pass" &&
+      r.gradedGateBytes === true;
     if (r.verified !== shouldVerify) errors.push(`${r.runId}: verified contradicts gate and grade`);
     if (r.admittedSkillId !== null && !shouldVerify)
       errors.push(`${r.runId}: a skill was stored from an outcome that is not verified and graded`);
@@ -286,6 +358,7 @@ export function summarizeSkillArms(rows: readonly SkillArmRow[]): ArmSummary {
       errors.push(`${r.runId}: a skill was stored outside the cold seed phase`);
     if (r.arm === "cold" && r.retrievedSkillIds.length > 0)
       errors.push(`${r.runId}: a cold trial retrieved skills`);
+    if (!inScope(r, scope)) continue;
     const key = `${r.baseArm}|${r.arm}|${r.kind}`;
     groups.set(key, [...(groups.get(key) ?? []), r]);
   }
@@ -307,21 +380,37 @@ export function summarizeSkillArms(rows: readonly SkillArmRow[]): ArmSummary {
   return { cells, errors, r1Evidence: false };
 }
 
-/** Paired counts for the pre-registered test: one pair = (pairId, kind), cold vs warm. */
+/**
+ * Paired counts for the pre-registered test: one pair = (pairId, kind), cold vs warm. Rows
+ * outside the scope (simulated rows by default) never count; they are tallied as `excluded`.
+ */
 export function pairedCounts(
   rows: readonly SkillArmRow[],
   baseArm: BaseArm,
-): { both: number; warmOnly: number; coldOnly: number; neither: number; unpaired: number } {
+  scope: ArmScope = {},
+): {
+  both: number;
+  warmOnly: number;
+  coldOnly: number;
+  neither: number;
+  unpaired: number;
+  excluded: number;
+} {
   const byKey = new Map<string, { cold?: boolean; warm?: boolean; dup: boolean }>();
+  let excluded = 0;
   for (const r of rows) {
     if (r.baseArm !== baseArm || r.kind === "seed") continue;
+    if (!inScope(r, scope)) {
+      excluded++;
+      continue;
+    }
     const key = `${r.pairId}|${r.kind}`;
     const e = byKey.get(key) ?? { dup: false };
     if (e[r.arm] !== undefined) e.dup = true;
     e[r.arm] = r.verified;
     byKey.set(key, e);
   }
-  const out = { both: 0, warmOnly: 0, coldOnly: 0, neither: 0, unpaired: 0 };
+  const out = { both: 0, warmOnly: 0, coldOnly: 0, neither: 0, unpaired: 0, excluded };
   for (const e of byKey.values()) {
     if (e.dup || e.cold === undefined || e.warm === undefined) out.unpaired++;
     else if (e.cold && e.warm) out.both++;
@@ -330,6 +419,34 @@ export function pairedCounts(
     else out.neither++;
   }
   return out;
+}
+
+/**
+ * After the measurement phase: write each warm trial's `use` events (its outcome from the
+ * gate verdict AND the grader status) to the store, so quarantine applies from the next
+ * phase on. The store must still be at `pinnedHead` (nothing was written during the
+ * phase), and every warm row must have retrieved from it. Returns the number of events.
+ */
+export function recordMeasuredUses(
+  store: SkillStore,
+  rows: readonly SkillArmRow[],
+  pinnedHead: string,
+): number {
+  if (store.snapshot().head !== pinnedHead)
+    throw new SkillStoreError("STORE_NOT_PINNED", "the store moved during the measurement phase");
+  const warm = rows.filter((r) => r.arm === "warm");
+  for (const r of warm)
+    if (r.storeHead !== pinnedHead)
+      throw new SkillStoreError("STORE_NOT_PINNED", `${r.runId} did not read the pinned head`);
+  let n = 0;
+  for (const r of warm) {
+    const outcome = useOutcome(r.gate.verdict, r.grade.status);
+    for (const id of r.retrievedSkillIds) {
+      store.recordUse(id, r.runId, outcome);
+      n++;
+    }
+  }
+  return n;
 }
 
 /** One-sided exact McNemar p-value: P(X >= warmOnly) for X ~ Binomial(warmOnly+coldOnly, 1/2). */

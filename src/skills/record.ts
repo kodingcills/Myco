@@ -255,8 +255,11 @@ export function checkProcedure(
 
 /**
  * Structural check of a whole record as read back from disk: every invariant admission
- * guarantees, re-checked so a hand-written line with recomputed digests still cannot
- * plant forbidden content or a non-verified provenance. Returns a list of problems.
+ * guarantees that does not need the task, re-checked so a hand-written line with
+ * recomputed digests still cannot plant secrets, host paths, oracle internals, injection
+ * or a non-verified provenance. The task's own values (expected value, record key, fixture
+ * cells) are NOT re-checked here: the store does not know the task. The operator's head
+ * pin closes that (`test/skills/store.test.ts`). Returns a list of problems.
  */
 export function checkRecordShape(value: unknown): string[] {
   const problems: string[] = [];

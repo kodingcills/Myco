@@ -6,8 +6,15 @@
  * back is ADVICE: it is labelled `advisory: true` and `evidence: false`, it never reaches
  * the gate (myco.gate/v1 takes only taskId/runId/claim) or the grader, and a warm run is
  * verified exactly like a cold one.
+ *
+ * Two operator-side scopes (never agent input):
+ *  - `serveSimulated`: skills whose provenance planner is simulated (a scripted agent, a
+ *    fake) are served only when this is true, i.e. only to simulated trials. A real-planner
+ *    run never gets simulated-provenance advice. Default false.
+ *  - `expectHead`: the pinned store head. When given, a store whose verified head is not it
+ *    serves nothing (`STORE_NOT_PINNED`), so every measured warm trial reads the same store.
  */
-import type { SkillState, SkillStore } from "./store.ts";
+import { type SkillState, type SkillStore, SkillStoreError } from "./store.ts";
 
 export const SKILLS_API_VERSION = "myco.skills/v1";
 export const DEFAULT_LIMIT = 3;
@@ -72,10 +79,25 @@ function advice(s: SkillState, similarity: number): SkillAdvice {
   };
 }
 
-export function retrieve(store: SkillStore, q: RetrievalQuery): RetrievalResult {
+export interface RetrievalScope {
+  /** Serve simulated-provenance skills. Only for simulated trials. Default false. */
+  readonly serveSimulated?: boolean;
+  /** The pinned head. A different verified head serves nothing (`STORE_NOT_PINNED`). */
+  readonly expectHead?: string;
+}
+
+export function retrieve(
+  store: SkillStore,
+  q: RetrievalQuery,
+  scope: RetrievalScope = {},
+): RetrievalResult {
   const limit = Math.min(Math.max(1, Math.trunc(q.limit ?? DEFAULT_LIMIT)), MAX_LIMIT);
-  const ranked = store
-    .active()
+  const snap = store.snapshot();
+  if (scope.expectHead !== undefined && snap.head !== scope.expectHead)
+    throw new SkillStoreError("STORE_NOT_PINNED", "the store head is not the pinned head");
+  const ranked = snap.skills
+    .filter((s) => s.status === "active")
+    .filter((s) => scope.serveSimulated === true || !s.record.provenance.simulated)
     .filter((s) => s.record.taskFamily === q.taskFamily)
     .map((s) => ({ s, sim: jaccard(s.record.features, q.features) }))
     .filter((x) => x.sim >= MIN_SIMILARITY)

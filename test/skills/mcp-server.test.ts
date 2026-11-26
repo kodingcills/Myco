@@ -4,7 +4,7 @@
  * audit refuses a plan granting the skills tool unless the operator classifies it (fail
  * closed), and the gate's own server is unchanged (one tool, the same three inputs).
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -14,7 +14,6 @@ import { GATE_SERVER_CLASS } from "../../src/gate/gated-trial.ts";
 import { GATE_TOOL, toolDefinitions } from "../../src/gate/mcp-server.ts";
 import { auditAgentLaunch } from "../../src/integrity/launch.ts";
 import { newVaultKey, VerdictVault } from "../../src/integrity/vault.ts";
-import { admit } from "../../src/skills/admission.ts";
 import { taskFeatures } from "../../src/skills/arm.ts";
 import {
   handleSkillsLine,
@@ -24,7 +23,15 @@ import {
   serveSkillsStdio,
 } from "../../src/skills/mcp-server.ts";
 import { SkillStore, STORE_FILE } from "../../src/skills/store.ts";
-import { candidateFrom, docWith, forbiddenFor, gatedRun, plan, NONE_TASK as T } from "./helpers.ts";
+import {
+  admitSimulated,
+  candidateFrom,
+  docWith,
+  forbiddenFor,
+  gatedRun,
+  plan,
+  NONE_TASK as T,
+} from "./helpers.ts";
 
 let base: string;
 let store: SkillStore;
@@ -38,7 +45,7 @@ beforeEach(async () => {
   });
   store = SkillStore.open(join(base, "store"));
   const run = await gatedRun(vault, base, T, "seed-0", docWith(T, T.intent.newValue));
-  const added = store.add(admit(candidateFrom(T, "seed-0", run), forbiddenFor(T)));
+  const added = store.add(admitSimulated(candidateFrom(T, "seed-0", run), forbiddenFor(T)));
   if (!added.stored) throw new Error(added.code);
   skillId = added.skillId;
 });
@@ -57,14 +64,15 @@ const call = (opts: Parameters<typeof handleSkillsLine>[0], args: unknown, name 
     ) as string,
   );
 const args = () => ({ taskFamily: T.family, features: taskFeatures(T) });
+/** The seeded skill comes from a scripted (simulated) planner: serve it only in this scope. */
+const sim = () => ({ store, taskFamily: T.family, serveSimulated: true });
+const served = (r: { result: { structuredContent: { skills: { skillId: string }[] } } }) =>
+  r.result.structuredContent.skills.map((s) => s.skillId);
 
 describe("myco-skills MCP server", () => {
   it("lists exactly one read-only tool, not the gate's", () => {
     const r = JSON.parse(
-      handleSkillsLine(
-        { store, taskFamily: T.family },
-        '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
-      ) as string,
+      handleSkillsLine(sim(), '{"jsonrpc":"2.0","id":1,"method":"tools/list"}') as string,
     );
     expect(r.result.tools.map((t: { name: string }) => t.name)).toEqual([SKILLS_TOOL]);
     expect(r.result.tools[0].annotations).toMatchObject({
@@ -76,7 +84,7 @@ describe("myco-skills MCP server", () => {
   });
 
   it("serves advice labelled advisory, never evidence, with digest-only provenance", () => {
-    const r = call({ store, taskFamily: T.family }, args());
+    const r = call(sim(), args());
     expect(r.result.isError).toBe(false);
     const body = r.result.structuredContent;
     expect(body).toMatchObject({ apiVersion: "myco.skills/v1", advisory: true, evidence: false });
@@ -87,7 +95,7 @@ describe("myco-skills MCP server", () => {
   });
 
   it("is scoped: another family is SCOPE_MISMATCH and serves nothing", () => {
-    const r = call({ store, taskFamily: T.family }, { taskFamily: "todo-add" });
+    const r = call(sim(), { taskFamily: "todo-add" });
     expect(r.result.isError).toBe(true);
     expect(r.result.structuredContent).toMatchObject({ skills: [], codes: ["SCOPE_MISMATCH"] });
   });
@@ -101,7 +109,7 @@ describe("myco-skills MCP server", () => {
       [{ ...args(), limit: 99 }, "INVALID_REQUEST"],
       ["string", "INVALID_REQUEST"],
     ] as const) {
-      const r = call({ store, taskFamily: T.family }, a);
+      const r = call(sim(), a);
       expect(r.result.structuredContent.codes, JSON.stringify(a)).toEqual([code]);
       expect(r.result.content[0].text).not.toContain("passwd");
     }
@@ -121,13 +129,47 @@ describe("myco-skills MCP server", () => {
 
   it("never serves a revoked or quarantined skill", () => {
     store.recordUse(skillId, "warm-1", "refuted");
-    expect(call({ store, taskFamily: T.family }, args()).result.structuredContent.skills).toEqual(
-      [],
-    );
+    expect(call(sim(), args()).result.structuredContent.skills).toEqual([]);
+  });
+
+  it("a real-planner scope is never served a simulated-provenance skill", () => {
+    const real = call({ store, taskFamily: T.family }, args());
+    expect(real.result.isError).toBe(false);
+    expect(served(real)).toEqual([]);
+    expect(served(call({ ...sim(), serveSimulated: false }, args()))).toEqual([]);
+    expect(served(call(sim(), args()))).toEqual([skillId]);
+  });
+
+  it("a revocation through another handle reaches an already-open server", () => {
+    expect(served(call(sim(), args()))).toEqual([skillId]);
+    // The operator opens the same store separately and revokes; the server's handle is
+    // never reopened.
+    SkillStore.open(join(base, "store")).revoke(skillId, "poisoned");
+    const r = call(sim(), args());
+    expect(r.result.isError).toBe(false);
+    expect(served(r)).toEqual([]);
+  });
+
+  it("a rolled-back revocation under an open server serves nothing (STORE_UNAVAILABLE)", () => {
+    const file = join(base, "store", STORE_FILE);
+    const before = readFileSync(file, "utf8");
+    SkillStore.open(join(base, "store")).revoke(skillId, "poisoned");
+    expect(served(call(sim(), args()))).toEqual([]); // the server has now seen the revocation
+    writeFileSync(file, before); // someone deletes it again
+    const r = call(sim(), args());
+    expect(r.result.structuredContent).toMatchObject({ skills: [], codes: ["STORE_UNAVAILABLE"] });
+  });
+
+  it("a pinned head serves only that head (STORE_NOT_PINNED otherwise)", () => {
+    const pinned = store.head();
+    expect(served(call({ ...sim(), expectHead: pinned }, args()))).toEqual([skillId]);
+    store.recordUse(skillId, "warm-1", "verified");
+    const r = call({ ...sim(), expectHead: pinned }, args());
+    expect(r.result.structuredContent).toMatchObject({ skills: [], codes: ["STORE_NOT_PINNED"] });
   });
 
   it("has no gate tool: calling myco_gate_check here is an unknown tool", () => {
-    const r = call({ store, taskFamily: T.family }, { taskId: T.taskId, runId: "r" }, GATE_TOOL);
+    const r = call(sim(), { taskId: T.taskId, runId: "r" }, GATE_TOOL);
     expect(r.error).toMatchObject({ code: -32602 });
   });
 
@@ -136,7 +178,7 @@ describe("myco-skills MCP server", () => {
     const output = new PassThrough();
     const chunks: string[] = [];
     output.on("data", (c) => chunks.push(String(c)));
-    const done = serveSkillsStdio({ store, taskFamily: T.family }, input, output);
+    const done = serveSkillsStdio(sim(), input, output);
     input.write('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n');
     input.write("not json\n");
     input.write('[{"jsonrpc":"2.0","id":2,"method":"ping"}]\n');

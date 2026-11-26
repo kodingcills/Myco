@@ -20,6 +20,7 @@ import type { BenchmarkTask } from "../../src/benchmark/taskset.ts";
 import { newVaultKey, VerdictVault } from "../../src/integrity/vault.ts";
 import {
   pairedCounts,
+  recordMeasuredUses,
   runSkillArmTrial,
   type SkillArmRow,
   type SkillTrialRun,
@@ -51,6 +52,9 @@ beforeEach(() => {
   });
 });
 afterEach(() => rmSync(base, { recursive: true, force: true }));
+
+/** Scripted agents are simulated planners: their rows count only in this explicit scope. */
+const SIM = { simulated: true } as const;
 
 type Behaviour = "correct" | "unsaved" | "wrong-value" | "wrong-column";
 
@@ -105,6 +109,7 @@ describe("track M end to end (scripted agents, real gate and grader)", () => {
           runId,
           store,
           learn: true,
+          simulated: true,
           forbidden: forbiddenFor(task),
           execute: scripted(task, runId, i === 3 ? "wrong-value" : "correct"),
         }),
@@ -133,7 +138,9 @@ describe("track M end to end (scripted agents, real gate and grader)", () => {
               task,
               runId,
               store: arm === "warm" ? store : null,
+              pinnedHead: pinned,
               learn: false,
+              simulated: true,
               execute: (advice) =>
                 scripted(
                   task,
@@ -148,7 +155,10 @@ describe("track M end to end (scripted agents, real gate and grader)", () => {
       }
     }
 
-    const summary = summarizeSkillArms(rows);
+    // Measured warm trials wrote nothing: the store is still exactly the pinned one.
+    expect(store.head()).toBe(pinned);
+    expect(() => SkillStore.open(join(base, "store"), { expectHead: pinned })).not.toThrow();
+    const summary = summarizeSkillArms(rows, SIM);
     expect(summary.errors).toEqual([]);
     expect(summary.r1Evidence).toBe(false);
     const cell = (arm: string, kind: string) =>
@@ -158,13 +168,17 @@ describe("track M end to end (scripted agents, real gate and grader)", () => {
     expect(cell("cold", "similar")?.verifiedRate).toBe(0.25);
     expect(cell("warm", "similar")?.verifiedRate).toBe(1);
     expect(cell("warm", "repeat")?.estimatedCostPerVerified).toBeCloseTo(0.01);
-    expect(pairedCounts(rows, "hcu-shell")).toEqual({
+    expect(pairedCounts(rows, "hcu-shell", SIM)).toEqual({
       both: 2,
       warmOnly: 6,
       coldOnly: 0,
       neither: 0,
       unpaired: 0,
+      excluded: 0,
     });
+    // In a real (default) scope these simulated rows never count.
+    expect(pairedCounts(rows, "hcu-shell")).toMatchObject({ both: 0, warmOnly: 0, excluded: 16 });
+    expect(summarizeSkillArms(rows).cells).toEqual([]);
 
     // Warm rows retrieved from the pinned store; cold rows never touched it.
     for (const r of rows.filter((x) => x.arm === "warm")) {
@@ -172,10 +186,12 @@ describe("track M end to end (scripted agents, real gate and grader)", () => {
       expect(r.storeHead).not.toBeNull();
     }
     for (const r of rows.filter((x) => x.arm === "cold")) expect(r.storeHead).toBeNull();
-    expect(rows.find((r) => r.runId === "warm-repeat-0")?.storeHead).toBe(pinned);
-    // Learning is off in measurement: no new skills, and every use was verified.
+    for (const r of rows.filter((x) => x.arm === "warm")) expect(r.storeHead).toBe(pinned);
+    // Learning is off in measurement: no new skills. Use events are written after the phase.
     expect(store.active()).toHaveLength(3);
+    expect(recordMeasuredUses(store, rows, pinned)).toBe(24); // 8 warm trials x 3 skills
     for (const s of store.skills()) expect(s.uses.refuted).toBe(0);
+    expect(store.skills().reduce((n, s) => n + s.uses.verified, 0)).toBe(24);
 
     // Never R1 evidence.
     for (const r of rows) {
@@ -204,11 +220,13 @@ describe("track M end to end (scripted agents, real gate and grader)", () => {
       runId: "seed-poison",
       store,
       learn: true,
+      simulated: true,
       forbidden: forbiddenFor(seedTask),
       execute: scripted(seedTask, "seed-poison", "correct", poison),
     });
     expect(seed.admittedSkillId).not.toBeNull();
     const poisonId = seed.admittedSkillId as string;
+    const pinned = store.head();
 
     // A later warm run follows the advice and writes to the wrong column: refuted.
     const t1 = taskById(p1?.similarTaskId as string);
@@ -220,7 +238,9 @@ describe("track M end to end (scripted agents, real gate and grader)", () => {
       task: t1,
       runId: "warm-poisoned",
       store,
+      pinnedHead: pinned,
       learn: false,
+      simulated: true,
       execute: (advice) =>
         scripted(
           t1,
@@ -230,13 +250,17 @@ describe("track M end to end (scripted agents, real gate and grader)", () => {
     });
     expect(warm.retrievedSkillIds).toEqual([poisonId]);
     expect(warm.verified).toBe(false);
-    expect(store.skills().find((s) => s.record.skillId === poisonId)?.status).toBe("quarantined");
+    // During the measurement phase the pinned store is unchanged: still active.
+    const status = () => store.skills().find((s) => s.record.skillId === poisonId)?.status;
+    expect(status()).toBe("active");
+    // Between phases the refuted use is written and quarantines it.
+    expect(recordMeasuredUses(store, [warm], pinned)).toBe(1);
+    expect(status()).toBe("quarantined");
 
-    // The next warm run gets no advice from it (and survives a reopen).
+    // The next phase's warm run gets no advice from it (and survives a reopen).
+    const q1 = { taskFamily: t1.family, features: taskFeatures(t1) };
     const reopened = SkillStore.open(join(base, "store"), { expectHead: store.head() });
-    expect(
-      retrieve(reopened, { taskFamily: t1.family, features: taskFeatures(t1) }).skills,
-    ).toEqual([]);
+    expect(retrieve(reopened, q1, { serveSimulated: true }).skills).toEqual([]);
 
     // Revocation works the same way for an operator-flagged skill.
     const t2 = taskById(p1?.seedTaskId as string);
@@ -249,6 +273,7 @@ describe("track M end to end (scripted agents, real gate and grader)", () => {
       runId: "seed-2",
       store,
       learn: true,
+      simulated: true,
       forbidden: forbiddenFor(t2),
       execute: scripted(t2, "seed-2", "correct"),
     });

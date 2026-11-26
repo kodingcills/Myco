@@ -11,6 +11,11 @@
  *  - the store is opened (and its whole hash chain verified) by the operator before the
  *    server starts; if that fails, the server is started with `store: null` and every
  *    call answers `STORE_UNAVAILABLE` with no skills (fail closed);
+ *  - every call re-reads and re-verifies the store, so an operator's revocation reaches a
+ *    running server on its next call; a store that no longer verifies, or no longer extends
+ *    what this server verified, answers `STORE_UNAVAILABLE`;
+ *  - simulated-provenance skills are served only when the operator sets `serveSimulated`
+ *    (simulated trials); `expectHead` pins the store head (`STORE_NOT_PINNED` otherwise);
  *  - replies are labelled `advisory: true, evidence: false`; refusals carry codes only.
  *
  * Classified for the launch audit as `agent-local` (it reads only the operator's store and
@@ -24,7 +29,7 @@ import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { TOKEN } from "./record.ts";
 import { MAX_LIMIT, retrieve, SKILLS_API_VERSION } from "./retrieve.ts";
-import type { SkillStore } from "./store.ts";
+import { type SkillStore, SkillStoreError } from "./store.ts";
 
 export const SKILLS_TOOL = "myco_skills_retrieve";
 export const SKILLS_SERVER_NAME = "myco-skills";
@@ -65,13 +70,18 @@ export type SkillsRefusal =
   | "INVALID_REQUEST"
   | "UNKNOWN_FIELD"
   | "SCOPE_MISMATCH"
-  | "STORE_UNAVAILABLE";
+  | "STORE_UNAVAILABLE"
+  | "STORE_NOT_PINNED";
 
 export interface SkillsServerOptions {
   /** The operator-verified store, or null when it failed to open (every call refuses). */
   readonly store: SkillStore | null;
   /** The one task family this server serves. */
   readonly taskFamily: string;
+  /** Operator scope: serve simulated-provenance skills (simulated trials only). Default false. */
+  readonly serveSimulated?: boolean;
+  /** Operator scope: the pinned store head; another head serves nothing (`STORE_NOT_PINNED`). */
+  readonly expectHead?: string;
 }
 
 type RpcResult = { ok: true; result: unknown } | { ok: false; code: number; message: string };
@@ -130,13 +140,25 @@ export function callRetrieve(opts: SkillsServerOptions, args: unknown): RpcResul
   if (opts.store === null) return refusal("STORE_UNAVAILABLE");
   let body: ReturnType<typeof retrieve>;
   try {
-    body = retrieve(opts.store, {
-      taskFamily: a.taskFamily,
-      features: features as string[],
-      ...(typeof a.limit === "number" ? { limit: a.limit } : {}),
-    });
-  } catch {
-    return refusal("STORE_UNAVAILABLE");
+    body = retrieve(
+      opts.store,
+      {
+        taskFamily: a.taskFamily,
+        features: features as string[],
+        ...(typeof a.limit === "number" ? { limit: a.limit } : {}),
+      },
+      {
+        serveSimulated: opts.serveSimulated === true,
+        ...(opts.expectHead !== undefined ? { expectHead: opts.expectHead } : {}),
+      },
+    );
+  } catch (err) {
+    // A re-read that fails verification (tampered, rolled back) serves nothing.
+    return refusal(
+      err instanceof SkillStoreError && err.code === "STORE_NOT_PINNED"
+        ? "STORE_NOT_PINNED"
+        : "STORE_UNAVAILABLE",
+    );
   }
   return {
     ok: true,

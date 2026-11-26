@@ -16,8 +16,13 @@ import { runGatedTrial } from "../../src/gate/gated-trial.ts";
 import { GATE_TOOL } from "../../src/gate/mcp-server.ts";
 import type { AgentLaunchPlan } from "../../src/integrity/launch.ts";
 import type { VerdictVault } from "../../src/integrity/vault.ts";
-import type { AdmissionCandidate } from "../../src/skills/admission.ts";
+import {
+  type AdmissionCandidate,
+  type AdmissionResult,
+  admit as admitReal,
+} from "../../src/skills/admission.ts";
 import { taskFeatures } from "../../src/skills/arm.ts";
+import type { ForbiddenValues } from "../../src/skills/record.ts";
 import { forbiddenValuesFor } from "../../src/skills/record.ts";
 import { generateFixture } from "../../src/tasks/fixture.ts";
 
@@ -136,6 +141,7 @@ export function candidateFrom(
     runId,
     taskId: task.taskId,
     taskFamily: task.family,
+    fixtureSha256: task.fixtureSha256,
     features: taskFeatures(task),
     preconditions: [...GOOD_PRECONDITIONS],
     steps: [...GOOD_STEPS],
@@ -148,3 +154,10 @@ export function candidateFrom(
     ...extra,
   };
 }
+
+/**
+ * Admission explicitly scoped as simulated: these $0 tests use a scripted planner
+ * (`simulated:scripted`), which a real admission refuses (`SIMULATED_PLANNER`).
+ */
+export const admitSimulated = (c: AdmissionCandidate, f: ForbiddenValues): AdmissionResult =>
+  admitReal(c, f, { simulated: true });

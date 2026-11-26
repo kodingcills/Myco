@@ -10,12 +10,14 @@
  * Every event carries `seq` (0, 1, 2, ...), `prevSha256` (the previous event's digest, or
  * 64 zeros) and `eventSha256` (SHA-256 of its canonical JSON without that field). Loading
  * verifies the chain, every record's own digest and skill id, and re-runs the record shape
- * and content rules. ANY failure refuses the whole store (`SkillStoreError`, code
+ * and the task-independent content rules (secrets, host paths, oracle internals,
+ * injection; not the task's own values, which the store does not know). ANY failure refuses the whole store (`SkillStoreError`, code
  * `STORE_TAMPERED`): retrieval then serves nothing. When the operator pins the expected head
  * digest (kept outside the store, e.g. beside the run ledger), a truncated or rolled-back
  * log is refused too (`STORE_HEAD_MISMATCH`). Without a pin, an attacker who can rewrite the
- * file AND recompute every digest is not detected; the pin is what closes that, and the
- * record content rules still apply to anything that loads.
+ * file AND recompute every digest is not detected (they could plant a task's expected
+ * value); the pin is what closes that, and the task-independent content rules still apply
+ * to anything that loads.
  *
  * State is derived from the log, never stored separately:
  *  - revoked: a `revoke` event names the skill;
@@ -25,6 +27,12 @@
  *
  * Writes re-read and re-verify the file first and refuse if the on-disk head is not the
  * head this process last saw, so a concurrent or hand edit is never silently extended.
+ *
+ * Reads (`skills()`, `active()`, `snapshot()`) re-read and re-verify the file every time, so
+ * a revocation written through another handle (the operator's) reaches a store that is
+ * already open (a running `myco-skills` server) on its next call. The re-read log must
+ * extend the log this handle already verified; a shorter or diverging log (a rolled-back
+ * revocation) refuses the read (`STORE_HEAD_MISMATCH`).
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -87,6 +95,7 @@ export type StoreErrorCode =
   | "STORE_TAMPERED"
   | "STORE_HEAD_MISMATCH"
   | "STORE_CHANGED"
+  | "STORE_NOT_PINNED"
   | "UNKNOWN_SKILL"
   | "DUPLICATE"
   | "INVALID_EVENT";
@@ -204,9 +213,29 @@ export class SkillStore {
     return store;
   }
 
+  private readLog(): { events: StoreEvent[]; head: string } {
+    return verifyLog(existsSync(this.file) ? readFileSync(this.file, "utf8") : "");
+  }
+
   private reload(): void {
-    const text = existsSync(this.file) ? readFileSync(this.file, "utf8") : "";
-    const { events, head } = verifyLog(text);
+    const { events, head } = this.readLog();
+    this.events = events;
+    this.headDigest = head;
+  }
+
+  /**
+   * Re-read and re-verify the log for a read. It must extend what this handle already
+   * verified (same events, possibly more after them); otherwise the log was rolled back or
+   * rewritten and the read is refused.
+   */
+  private sync(): void {
+    const { events, head } = this.readLog();
+    const n = this.events.length;
+    if (events.length < n || (n > 0 && events[n - 1]?.eventSha256 !== this.headDigest))
+      throw new SkillStoreError(
+        "STORE_HEAD_MISMATCH",
+        "the log no longer extends the head this store verified",
+      );
     this.events = events;
     this.headDigest = head;
   }
@@ -276,8 +305,21 @@ export class SkillStore {
     this.append({ type: "use", skillId, runId, outcome });
   }
 
-  /** Every skill with its derived state, in admission order. */
+  /**
+   * The verified on-disk head and every skill's derived state, read in one pass (so the
+   * head and the states always belong together).
+   */
+  snapshot(): { head: string; skills: SkillState[] } {
+    this.sync();
+    return { head: this.headDigest, skills: this.derive() };
+  }
+
+  /** Every skill with its derived state, in admission order, as on disk now. */
   skills(): SkillState[] {
+    return this.snapshot().skills;
+  }
+
+  private derive(): SkillState[] {
     const out = new Map<
       string,
       {

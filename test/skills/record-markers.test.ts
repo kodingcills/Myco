@@ -9,11 +9,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { newVaultKey, VerdictVault } from "../../src/integrity/vault.ts";
-import { admit } from "../../src/skills/admission.ts";
 import { checkText, MAX_STEPS, MAX_TEXT } from "../../src/skills/record.ts";
 import { SkillStore, STORE_FILE } from "../../src/skills/store.ts";
 import { generateFixture } from "../../src/tasks/fixture.ts";
 import {
+  admitSimulated,
   candidateFrom,
   docWith,
   forbiddenFor,
@@ -39,16 +39,33 @@ afterEach(() => rmSync(base, { recursive: true, force: true }));
 const fixture = generateFixture(T.fixtureSeed);
 const someCell = fixture.rows[2]?.[1] as string; // a name from the fixture, e.g. "Ada Ito"
 
-/** Planted markers by class, each with the code it must be refused with. */
+/**
+ * Planted markers by class, each with the code it must be refused with. Secret-shaped and
+ * home-path markers are assembled at runtime so this tracked file never carries one
+ * (`test/sai/harness.test.ts`, `test/no-home-paths.test.ts`, gitleaks).
+ */
+const KEY = (...parts: string[]) => parts.join("-");
 const PLANTED: ReadonlyArray<readonly [string, string, string]> = [
-  ["secret: anthropic key", "Paste sk-ant-PLANTEDmarker0001xyz into the box", "FORBIDDEN_SECRET"],
-  ["secret: github token", "Use ghp_PLANTEDmarker0002abcdefghij to log in", "FORBIDDEN_SECRET"],
-  ["secret: aws key", "Set AKIAPLANTEDMARKER003 first", "FORBIDDEN_SECRET"],
+  [
+    "secret: anthropic key",
+    `Paste ${KEY("sk", "ant", "PLANTEDmarker0001xyz")} into the box`,
+    "FORBIDDEN_SECRET",
+  ],
+  [
+    "secret: github token",
+    `Use ${["ghp", "PLANTEDmarker0002abcdefghij"].join("_")} to log in`,
+    "FORBIDDEN_SECRET",
+  ],
+  ["secret: aws key", `Set ${["AKIA", "PLANTEDMARKER003"].join("")} first`, "FORBIDDEN_SECRET"],
   ["secret: assignment", "Export api_key=whatever then continue", "FORBIDDEN_SECRET"],
-  ["secret: bearer", "Send Bearer PLANTEDmarker0004abcdef", "FORBIDDEN_SECRET"],
-  ["secret: private key", "-----BEGIN RSA PRIVATE KEY----- marker", "FORBIDDEN_SECRET"],
+  ["secret: bearer", `Send ${["Bearer", "PLANTEDmarker0004abcdef"].join(" ")}`, "FORBIDDEN_SECRET"],
+  [
+    "secret: private key",
+    `${["-----BEGIN RSA", "PRIVATE KEY-----"].join(" ")} marker`,
+    "FORBIDDEN_SECRET",
+  ],
   ["secret: long blob", `Use ${"Q".repeat(44)} as input`, "FORBIDDEN_SECRET"],
-  ["host path: mac home", "Open /Users/planted/Documents/doc.csv", "FORBIDDEN_HOST_PATH"],
+  ["host path: mac home", `Open /${"Users"}/planted/Documents/doc.csv`, "FORBIDDEN_HOST_PATH"],
   ["host path: linux home", "Open /home/planted/doc.csv", "FORBIDDEN_HOST_PATH"],
   ["host path: tmp", "Copy it to /tmp/planted", "FORBIDDEN_HOST_PATH"],
   ["host path: windows", "Open C:\\Users\\planted\\doc.csv", "FORBIDDEN_HOST_PATH"],
@@ -83,14 +100,14 @@ describe("planted markers are refused in steps and preconditions", () => {
   for (const [label, text, code] of PLANTED) {
     it(`step: ${label}`, () => {
       const steps = [...GOOD_STEPS.slice(0, 2), text, ...GOOD_STEPS.slice(2)];
-      expect(admit(candidateFrom(T, "run-m", run, { steps }), forbiddenFor(T))).toEqual({
+      expect(admitSimulated(candidateFrom(T, "run-m", run, { steps }), forbiddenFor(T))).toEqual({
         ok: false,
         code,
       });
     });
     it(`precondition: ${label}`, () => {
       expect(
-        admit(candidateFrom(T, "run-m", run, { preconditions: [text] }), forbiddenFor(T)),
+        admitSimulated(candidateFrom(T, "run-m", run, { preconditions: [text] }), forbiddenFor(T)),
       ).toEqual({ ok: false, code });
     });
   }
@@ -101,20 +118,20 @@ describe("planted markers are refused in steps and preconditions", () => {
 
   it("bounds: empty, too many steps, bad features", () => {
     const F = forbiddenFor(T);
-    expect(admit(candidateFrom(T, "run-m", run, { steps: [] }), F)).toEqual({
+    expect(admitSimulated(candidateFrom(T, "run-m", run, { steps: [] }), F)).toEqual({
       ok: false,
       code: "PROCEDURE_EMPTY",
     });
     const many = Array.from({ length: MAX_STEPS + 1 }, (_, i) => `Do step number ${i + 1}`);
-    expect(admit(candidateFrom(T, "run-m", run, { steps: many }), F)).toEqual({
+    expect(admitSimulated(candidateFrom(T, "run-m", run, { steps: many }), F)).toEqual({
       ok: false,
       code: "PROCEDURE_TOO_LONG",
     });
-    expect(admit(candidateFrom(T, "run-m", run, { features: ["Has Space"] }), F)).toEqual({
+    expect(admitSimulated(candidateFrom(T, "run-m", run, { features: ["Has Space"] }), F)).toEqual({
       ok: false,
       code: "FEATURES_INVALID",
     });
-    expect(admit(candidateFrom(T, "run-m", run, { features: [] }), F)).toEqual({
+    expect(admitSimulated(candidateFrom(T, "run-m", run, { features: [] }), F)).toEqual({
       ok: false,
       code: "FEATURES_INVALID",
     });
@@ -130,15 +147,17 @@ describe("a stored record carries references and digests only", () => {
       ...claimRun.outcome.result,
       request: {
         ...claimRun.outcome.result.request,
-        claim: "done sk-ant-PLANTEDclaim0001 /Users/x",
+        claim: `done ${KEY("sk", "ant", "PLANTEDclaim0001")} /${"Users"}/x/`,
       },
     };
     const store = SkillStore.open(join(base, "store"));
-    const added = store.add(admit(candidateFrom(T, "run-c", claimRun, { gate }), forbiddenFor(T)));
+    const added = store.add(
+      admitSimulated(candidateFrom(T, "run-c", claimRun, { gate }), forbiddenFor(T)),
+    );
     expect(added.stored).toBe(true);
     const bytes = readFileSync(join(base, "store", STORE_FILE), "utf8");
     expect(bytes).not.toContain("PLANTEDclaim");
-    expect(bytes).not.toContain("/Users/");
+    expect(bytes).not.toContain(`/${"Users"}/`);
     expect(bytes).not.toContain("persisted/");
     expect(bytes).not.toContain(gate.oracle?.specSha256 as string);
     expect(bytes).not.toContain(T.intent.newValue);

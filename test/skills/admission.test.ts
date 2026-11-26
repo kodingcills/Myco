@@ -12,6 +12,7 @@ import { newVaultKey, VerdictVault } from "../../src/integrity/vault.ts";
 import { admit, gradeDigest, verdictDigest } from "../../src/skills/admission.ts";
 import { SkillStore, STORE_FILE } from "../../src/skills/store.ts";
 import {
+  admitSimulated,
   candidateFrom,
   docWith,
   forbiddenFor,
@@ -39,7 +40,7 @@ describe("admission: verified AND graded, or nothing", () => {
     const run = await gatedRun(vault, base, T, "run-ok", docWith(T, T.intent.newValue));
     expect(run.outcome.status === "decided" && run.outcome.result.verdict).toBe("verified");
     expect(run.grade.status).toBe("pass");
-    const r = admit(candidateFrom(T, "run-ok", run), F());
+    const r = admitSimulated(candidateFrom(T, "run-ok", run), F());
     expect(r.ok).toBe(true);
     if (!r.ok || run.outcome.status !== "decided") return;
     expect(r.record.provenance).toMatchObject({
@@ -63,7 +64,7 @@ describe("admission: verified AND graded, or nothing", () => {
     const run = await gatedRun(vault, base, T, "run-ref", docWith(T, "WRONG-VALUE"));
     expect(run.outcome.status === "decided" && run.outcome.result.verdict).toBe("refuted");
     const store = SkillStore.open(join(base, "store"));
-    const r = admit(candidateFrom(T, "run-ref", run), F());
+    const r = admitSimulated(candidateFrom(T, "run-ref", run), F());
     expect(r).toEqual({ ok: false, code: "GATE_NOT_VERIFIED" });
     expect(store.add(r)).toEqual({ stored: false, code: "GATE_NOT_VERIFIED" });
     expect(existsSync(join(base, "store", STORE_FILE))).toBe(false);
@@ -71,7 +72,7 @@ describe("admission: verified AND graded, or nothing", () => {
 
   it("refuses an unsaved run (pristine document: refuted)", async () => {
     const run = await gatedRun(vault, base, T, "run-unsaved", pristine(T));
-    expect(admit(candidateFrom(T, "run-unsaved", run), F())).toEqual({
+    expect(admitSimulated(candidateFrom(T, "run-unsaved", run), F())).toEqual({
       ok: false,
       code: "GATE_NOT_VERIFIED",
     });
@@ -80,7 +81,7 @@ describe("admission: verified AND graded, or nothing", () => {
   it("refuses an uncertain run (nothing captured: STATE_MISSING)", async () => {
     const run = await gatedRun(vault, base, T, "run-unc", null);
     expect(run.outcome.status === "decided" && run.outcome.result.verdict).toBe("uncertain");
-    expect(admit(candidateFrom(T, "run-unc", run), F())).toEqual({
+    expect(admitSimulated(candidateFrom(T, "run-unc", run), F())).toEqual({
       ok: false,
       code: "GATE_NOT_VERIFIED",
     });
@@ -97,7 +98,7 @@ describe("admission: verified AND graded, or nothing", () => {
     };
 
     it("assisted (track N) is refused", () => {
-      expect(admit(candidateFrom(T, "run-v", run, { assisted: true }), F())).toEqual({
+      expect(admitSimulated(candidateFrom(T, "run-v", run, { assisted: true }), F())).toEqual({
         ok: false,
         code: "ASSISTED_OR_UNKNOWN",
       });
@@ -105,22 +106,25 @@ describe("admission: verified AND graded, or nothing", () => {
     it("assistance not stated is refused (fail closed)", () => {
       const c = candidateFrom(T, "run-v", run);
       const { assisted: _, ...rest } = c;
-      expect(admit(rest, F())).toEqual({ ok: false, code: "ASSISTED_OR_UNKNOWN" });
+      expect(admitSimulated(rest, F())).toEqual({ ok: false, code: "ASSISTED_OR_UNKNOWN" });
     });
     it("ungraded (no grade) is refused", () => {
-      expect(admit(candidateFrom(T, "run-v", run, { grade: null }), F())).toEqual({
+      expect(admitSimulated(candidateFrom(T, "run-v", run, { grade: null }), F())).toEqual({
         ok: false,
         code: "UNGRADED",
       });
     });
     it("a grader fail on a gate-verified run (a false VERIFIED) is refused", () => {
       expect(
-        admit(candidateFrom(T, "run-v", run, { grade: { ...run.grade, status: "fail" } }), F()),
+        admitSimulated(
+          candidateFrom(T, "run-v", run, { grade: { ...run.grade, status: "fail" } }),
+          F(),
+        ),
       ).toEqual({ ok: false, code: "GRADE_NOT_PASS" });
     });
     it("ungradable is refused", () => {
       expect(
-        admit(
+        admitSimulated(
           candidateFrom(T, "run-v", run, { grade: { ...run.grade, status: "ungradable" } }),
           F(),
         ),
@@ -128,7 +132,7 @@ describe("admission: verified AND graded, or nothing", () => {
     });
     it("a grade on other bytes than the gate read is refused", () => {
       expect(
-        admit(
+        admitSimulated(
           candidateFrom(T, "run-v", run, {
             grade: { ...run.grade, persistedSha256: "b".repeat(64) },
           }),
@@ -137,33 +141,36 @@ describe("admission: verified AND graded, or nothing", () => {
       ).toEqual({ ok: false, code: "GRADE_BYTES_MISMATCH" });
     });
     it("corrections on is refused, even when verified", () => {
-      expect(admit(candidateFrom(T, "run-v", run, { corrections: "on" }), F())).toEqual({
+      expect(admitSimulated(candidateFrom(T, "run-v", run, { corrections: "on" }), F())).toEqual({
         ok: false,
         code: "CORRECTIONS_ON",
       });
     });
     it("corrections not stated is refused", () => {
       const { corrections: _, ...rest } = candidateFrom(T, "run-v", run);
-      expect(admit(rest, F())).toEqual({ ok: false, code: "CORRECTIONS_ON" });
+      expect(admitSimulated(rest, F())).toEqual({ ok: false, code: "CORRECTIONS_ON" });
     });
     it("a gate result that delivered corrections is refused", () => {
       const gate = {
         ...gateOf(),
         corrections: [{ kind: "target_unchanged" } as never],
       };
-      expect(admit(candidateFrom(T, "run-v", run, { gate }), F())).toEqual({
+      expect(admitSimulated(candidateFrom(T, "run-v", run, { gate }), F())).toEqual({
         ok: false,
         code: "CORRECTIONS_DELIVERED",
       });
     });
     it("verified but not accepted is refused", () => {
       expect(
-        admit(candidateFrom(T, "run-v", run, { gate: { ...gateOf(), accepted: false } }), F()),
+        admitSimulated(
+          candidateFrom(T, "run-v", run, { gate: { ...gateOf(), accepted: false } }),
+          F(),
+        ),
       ).toEqual({ ok: false, code: "GATE_NOT_ACCEPTED" });
     });
     it("verified without ORACLE_PASS is refused", () => {
       expect(
-        admit(
+        admitSimulated(
           candidateFrom(T, "run-v", run, {
             gate: { ...gateOf(), reasonCodes: ["CLAIM_RECORDED"] },
           }),
@@ -172,32 +179,34 @@ describe("admission: verified AND graded, or nothing", () => {
       ).toEqual({ ok: false, code: "GATE_NO_ORACLE_PASS" });
     });
     it("a gate result for another run is refused", () => {
-      expect(admit(candidateFrom(T, "run-other", run), F())).toEqual({
+      expect(admitSimulated(candidateFrom(T, "run-other", run), F())).toEqual({
         ok: false,
         code: "GATE_RUN_MISMATCH",
       });
     });
     it("a gate result for another task is refused", () => {
-      expect(admit(candidateFrom(T, "run-v", run, { taskId: "fc-v1-099" }), F())).toEqual({
+      expect(admitSimulated(candidateFrom(T, "run-v", run, { taskId: "fc-v1-099" }), F())).toEqual({
         ok: false,
         code: "GATE_TASK_MISMATCH",
       });
     });
     it("a gate result from another family is refused", () => {
-      expect(admit(candidateFrom(T, "run-v", run, { taskFamily: "todo-add" }), F())).toEqual({
+      expect(
+        admitSimulated(candidateFrom(T, "run-v", run, { taskFamily: "todo-add" }), F()),
+      ).toEqual({
         ok: false,
         code: "GATE_FAMILY_MISMATCH",
       });
     });
     it("no gate result is refused", () => {
-      expect(admit(candidateFrom(T, "run-v", run, { gate: null }), F())).toEqual({
+      expect(admitSimulated(candidateFrom(T, "run-v", run, { gate: null }), F())).toEqual({
         ok: false,
         code: "NO_GATE_RESULT",
       });
     });
     it("a malformed ledger reference is refused", () => {
       expect(
-        admit(
+        admitSimulated(
           candidateFrom(T, "run-v", run, {
             ledgerRef: { ledger: "../x", entrySha256: "a".repeat(64) },
           }),
@@ -206,18 +215,32 @@ describe("admission: verified AND graded, or nothing", () => {
       ).toEqual({ ok: false, code: "LEDGER_REF_INVALID" });
     });
     it("no forbidden-value list is refused (the expected-value check could not run)", () => {
-      expect(admit(candidateFrom(T, "run-v", run), { values: [] })).toEqual({
+      expect(admitSimulated(candidateFrom(T, "run-v", run), { values: [] })).toEqual({
         ok: false,
         code: "NO_FORBIDDEN_VALUES",
       });
     });
+    it("a simulated planner is refused unless the admission is explicitly scoped simulated", () => {
+      const c = candidateFrom(T, "run-v", run); // plannerModelId "simulated:scripted"
+      expect(admit(c, F())).toEqual({ ok: false, code: "SIMULATED_PLANNER" });
+      expect(admit(c, F(), { simulated: false })).toEqual({ ok: false, code: "SIMULATED_PLANNER" });
+      expect(admit(c, F(), { simulated: true }).ok).toBe(true);
+      // A real planner needs no scope, and its record is not simulated.
+      const real = admit(candidateFrom(T, "run-v", run, { plannerModelId: "claude-test-1" }), F());
+      expect(real.ok && real.record.provenance.simulated).toBe(false);
+    });
+    it("a grade made against another fixture is refused (GRADE_FIXTURE_MISMATCH)", () => {
+      expect(
+        admitSimulated(candidateFrom(T, "run-v", run, { fixtureSha256: "e".repeat(64) }), F()),
+      ).toEqual({ ok: false, code: "GRADE_FIXTURE_MISMATCH" });
+    });
     it("a path-shaped run id is refused", () => {
-      expect(admit(candidateFrom(T, "/tmp/run", run), F()).ok).toBe(false);
+      expect(admitSimulated(candidateFrom(T, "/tmp/run", run), F()).ok).toBe(false);
     });
     it("one skill per run: a second admission of the same run is a duplicate", () => {
       const store = SkillStore.open(join(base, "store"));
-      expect(store.add(admit(candidateFrom(T, "run-v", run), F())).stored).toBe(true);
-      const again = admit(
+      expect(store.add(admitSimulated(candidateFrom(T, "run-v", run), F())).stored).toBe(true);
+      const again = admitSimulated(
         candidateFrom(T, "run-v", run, {
           steps: ["Open the spreadsheet in Calc and save it as CSV"],
         }),
@@ -233,7 +256,7 @@ describe("admission: verified AND graded, or nothing", () => {
     });
     expect(run.outcome.status === "decided" && run.outcome.corrections).toBe("on");
     const store = SkillStore.open(join(base, "store"));
-    expect(store.add(admit(candidateFrom(T, "run-corr", run), F()))).toEqual({
+    expect(store.add(admitSimulated(candidateFrom(T, "run-corr", run), F()))).toEqual({
       stored: false,
       code: "CORRECTIONS_ON",
     });

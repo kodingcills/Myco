@@ -13,6 +13,12 @@
  *    `fail` or `ungradable` is refused);
  *  - the grader and the gate looked at the same bytes: the grade's `persistedSha256` equals
  *    the gate's `persisted-state` evidence ref digest;
+ *  - the grader graded against this task's published fixture: the grade's `fixtureSha256`
+ *    equals the task's (`candidate.fixtureSha256`);
+ *  - the planner is real: a simulated planner (`isSimulatedPlanner`) is refused unless the
+ *    caller explicitly scopes the admission as simulated (`{ simulated: true }`, the $0
+ *    tests). A simulated skill is then marked `simulated` and only served to simulated
+ *    trials (`retrieve.ts`);
  *  - the run was not assisted (track N): `assisted` must be explicitly `false`; absent or
  *    true is refused;
  *  - gate corrections were off for the run and the gate delivered none: a run that only
@@ -61,6 +67,8 @@ export interface AdmissionCandidate {
   readonly runId: string;
   readonly taskId: string;
   readonly taskFamily: string;
+  /** The published task's fixture digest (`BenchmarkTask.fixtureSha256`). */
+  readonly fixtureSha256: string;
   readonly features: readonly string[];
   readonly preconditions: readonly string[];
   readonly steps: readonly string[];
@@ -88,6 +96,8 @@ export const ADMISSION_CODES = [
   "UNGRADED",
   "GRADE_NOT_PASS",
   "GRADE_BYTES_MISMATCH",
+  "GRADE_FIXTURE_MISMATCH",
+  "SIMULATED_PLANNER",
   "ASSISTED_OR_UNKNOWN",
   "CORRECTIONS_ON",
   "CORRECTIONS_DELIVERED",
@@ -134,8 +144,17 @@ export function gradeDigest(grade: AdmissionGrade): string {
 
 const fail = (code: AdmissionCode): AdmissionResult => ({ ok: false, code });
 
+/** Admission scope. `simulated: true` admits simulated planners ($0 tests only). */
+export interface AdmissionScope {
+  readonly simulated?: boolean;
+}
+
 /** Decide whether `c` may become a skill. Never throws on malformed input; refuses it. */
-export function admit(c: AdmissionCandidate, forbidden: ForbiddenValues): AdmissionResult {
+export function admit(
+  c: AdmissionCandidate,
+  forbidden: ForbiddenValues,
+  scope: AdmissionScope = {},
+): AdmissionResult {
   if (typeof c !== "object" || c === null) return fail("INVALID_CANDIDATE");
   if (
     typeof c.runId !== "string" ||
@@ -148,6 +167,8 @@ export function admit(c: AdmissionCandidate, forbidden: ForbiddenValues): Admiss
     !/^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/.test(c.plannerModelId)
   )
     return fail("INVALID_CANDIDATE");
+  if (isSimulatedPlanner(c.plannerModelId) && scope.simulated !== true)
+    return fail("SIMULATED_PLANNER");
 
   // Gate: verified, accepted, ORACLE_PASS, this run, this task, this family.
   const g = c.gate;
@@ -171,6 +192,8 @@ export function admit(c: AdmissionCandidate, forbidden: ForbiddenValues): Admiss
     persistedRefs[0]?.sha256 !== gr.persistedSha256
   )
     return fail("GRADE_BYTES_MISMATCH");
+  if (typeof c.fixtureSha256 !== "string" || gr.fixtureSha256 !== c.fixtureSha256)
+    return fail("GRADE_FIXTURE_MISMATCH");
 
   // Not assisted, no corrections.
   if (c.assisted !== false) return fail("ASSISTED_OR_UNKNOWN");

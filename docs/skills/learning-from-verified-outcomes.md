@@ -40,6 +40,8 @@ A procedure is stored only when every rule holds. Each rule fails closed with a 
 | The independent grader graded the run | `UNGRADED` |
 | The grader passed it (`fail` and `ungradable` are refused) | `GRADE_NOT_PASS` |
 | The grader and the gate read the same bytes | `GRADE_BYTES_MISMATCH` |
+| The grader graded against this task's published fixture | `GRADE_FIXTURE_MISMATCH` |
+| The planner is real; a simulated planner only when the admission is explicitly scoped `{ simulated: true }` (the $0 tests) | `SIMULATED_PLANNER` |
 | The run was not assisted (track N); it must be stated as `false` | `ASSISTED_OR_UNKNOWN` |
 | Gate corrections were off, and stated as off | `CORRECTIONS_ON` |
 | The gate delivered no corrections | `CORRECTIONS_DELIVERED` |
@@ -61,6 +63,13 @@ are refused.
 - Skills are ranked by Jaccard similarity of their features. A skill is served only at
   similarity 0.5 or more. At most 5 are served; the default is 3.
 - Revoked and quarantined skills are never served.
+- Every call re-reads and re-verifies the store. A revocation written through another handle
+  (the operator's) reaches a running server on its next call. A log that no longer verifies,
+  or no longer extends what the server already verified (a rolled-back revocation), answers
+  `STORE_UNAVAILABLE` with no skills.
+- A skill from a simulated planner (a scripted agent) is served only when the operator sets
+  `serveSimulated` (simulated trials). A real-planner run never gets simulated advice.
+- The operator can pin the head (`expectHead`). Any other head answers `STORE_NOT_PINNED`.
 - Every reply is labelled `advisory: true, evidence: false`. Refusals carry codes only.
 - If the store fails verification when the operator opens it, the server is started with no
   store. Every call then answers `STORE_UNAVAILABLE` with no skills.
@@ -109,20 +118,25 @@ negative could leak an expected value into a later run's advice.
 **Poisoning defences.**
 
 - **Revocation.** An operator can revoke a skill with a closed set of reasons: `operator`,
-  `poisoned`, `superseded`, `provenance-doubt`. A revoked skill is never served again.
-- **Quarantine.** Every warm run records a `use` event for each skill it retrieved. The event
-  carries that run's outcome: `verified` only when the gate verified AND the grader passed;
-  `refuted` when either refuted, which includes a false VERIFIED caught by the grader. A skill
-  with at least `quarantineAfter` refuted uses (default 1) is quarantined. Quarantine is
-  sticky: later verified uses do not lift it.
+  `poisoned`, `superseded`, `provenance-doubt`. A revoked skill is never served again, also by
+  a store or server that was already open (reads re-verify the file).
+- **Quarantine.** After a measurement phase, `recordMeasuredUses` writes a `use` event for
+  each skill each warm run retrieved. The event carries that run's outcome: `verified` only
+  when the gate verified AND the grader passed; `refuted` when either refuted, which includes
+  a false VERIFIED caught by the grader. A skill with at least `quarantineAfter` refuted uses
+  (default 1) is quarantined from then on. Quarantine is sticky: later verified uses do not
+  lift it. Quarantine applies between phases, never during one (see the arm below).
 - **Tamper evidence.** Each event carries a sequence number, the previous event's digest and
   its own digest. Each record carries its own digest, and the skill id is derived from it. On
-  open, the store verifies the whole chain and every record's digest. It also re-runs every
-  record shape and content rule, so a hand-written line with recomputed digests still cannot
-  plant forbidden content or a non-verified provenance. Any failure refuses the whole store.
+  open, the store verifies the whole chain and every record's digest. It also re-runs the
+  record shape and the content rules that do not need the task, so a hand-written line with
+  recomputed digests still cannot plant secrets, host paths, oracle internals, injection or a
+  non-verified provenance. It CAN plant the task's own values (expected value, record key,
+  fixture cells): the store does not know the task. Any failure refuses the whole store.
 - **Head pin.** The operator can pin the head digest outside the store, for example beside the
-  run ledger. A truncated or rolled-back log is then refused (`STORE_HEAD_MISMATCH`). Without a
-  pin, someone who can rewrite the file and recompute every digest is not detected. The content
+  run ledger. A truncated, rolled-back or resealed log is then refused (`STORE_HEAD_MISMATCH`);
+  this is what stops a resealed line planting a task value. Without a pin, someone who can
+  rewrite the file and recompute every digest is not detected. The task-independent content
   and provenance rules still apply to anything that loads.
 - **Concurrent edits.** Writes re-verify the file first. A change by anyone else since the last
   read refuses the write (`STORE_CHANGED`).
@@ -144,10 +158,19 @@ Protocol, as wired:
    verified and the grader passed become skills. Pin the store head.
 2. **Measurement phase.** Every pair's repeat task and similar task run in both arms:
    - cold: no store at all;
-   - warm: skills retrieved from the pinned store.
+   - warm: skills retrieved from the pinned store (`pinnedHead`). A store at any other head
+     refuses the warm trial (`STORE_NOT_PINNED`).
 
-   Learning is refused outside the seed phase, so every measured trial sees the same store.
-3. **Scoring.** A row is `verified` only when the gate verified AND the grader passed.
+   A measured trial writes nothing to the store: learning is refused outside the seed phase,
+   and warm trials record no `use` events. So every measured warm trial sees the same store,
+   whatever the trial order.
+3. **Between phases.** `recordMeasuredUses` writes the warm trials' `use` events. Refuted uses
+   quarantine skills from then on.
+4. **Scoring.** A row is `verified` only when the gate verified AND the grader passed, and the
+   grader graded the gate's own bytes (`gradedGateBytes`).
+
+Every trial declares up front whether its planner is simulated, and the run's reported planner
+must match. A real trial is never served a simulated skill.
 
 Rows use the schema `myco.skills.arm-row/1`. They are never R1 evidence:
 
@@ -155,7 +178,10 @@ Rows use the schema `myco.skills.arm-row/1`. They are never R1 evidence:
 - the R1 task-set binding does not know `skills-rs-v1`;
 - they carry `evidence: "never-r1"`.
 
-`summarizeSkillArms` refuses rows that break any of the arm's invariants. Cost per verified
+`summarizeSkillArms` refuses rows that break any of the arm's invariants. Simulated rows never
+count: by default `summarizeSkillArms` and `pairedCounts` report them and leave them out. Only
+an explicitly simulated scope (`{ simulated: true }`, the $0 tests) counts them, and it refuses
+real rows, so the two never mix. Cost per verified
 follows R7: the total estimated cost of ALL trials divided by the verified count. A null cost
 makes the cell null, never 0. The cost is a token-derived ESTIMATE, never billed USD.
 
@@ -181,8 +207,8 @@ replacement for #503, the #494 follow-up) and the lead's GO, and runs on Claude 
 - **Bar (all must hold):**
   1. for at least one baseline, McNemar p ≤ 0.025, with the warm verified rate higher than the
      cold rate;
-  2. **zero** stored skills from any outcome that was not gate-verified and grader-passed (the
-     summary's invariant errors list is empty);
+  2. **zero** stored skills from any outcome that was not gate-verified and grader-passed, and
+     no simulated rows (the real summary's invariant errors list is empty);
   3. the warm arm's false VERIFIED count (gate verified, grader not pass) is no higher than the
      cold arm's;
   4. R7 is reported per arm as an estimate. No claim is made from cost.

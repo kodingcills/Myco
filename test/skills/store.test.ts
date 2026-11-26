@@ -9,10 +9,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { newVaultKey, VerdictVault } from "../../src/integrity/vault.ts";
-import { admit } from "../../src/skills/admission.ts";
 import { taskFeatures } from "../../src/skills/arm.ts";
 import { canonicalJson, recordDigest, sha256, skillIdFor } from "../../src/skills/record.ts";
-import { retrieve } from "../../src/skills/retrieve.ts";
+import { type RetrievalQuery, retrieve } from "../../src/skills/retrieve.ts";
 import {
   GENESIS,
   SkillStore,
@@ -21,6 +20,7 @@ import {
   useOutcome,
 } from "../../src/skills/store.ts";
 import {
+  admitSimulated,
   candidateFrom,
   docWith,
   forbiddenFor,
@@ -52,7 +52,7 @@ async function seeded(n = 2): Promise<{ store: SkillStore; ids: string[] }> {
     const steps =
       i === 0 ? undefined : [`Open the spreadsheet in Calc, variant ${i}`, "Save as CSV"];
     const added = store.add(
-      admit(candidateFrom(T, runId, run, steps ? { steps } : {}), forbiddenFor(T)),
+      admitSimulated(candidateFrom(T, runId, run, steps ? { steps } : {}), forbiddenFor(T)),
     );
     if (!added.stored) throw new Error(added.code);
     ids.push(added.skillId);
@@ -60,6 +60,9 @@ async function seeded(n = 2): Promise<{ store: SkillStore; ids: string[] }> {
   return { store, ids };
 }
 
+/** The seeded skills come from a scripted (simulated) planner: retrieve in that scope. */
+const retrieveSim = (s: SkillStore, query: RetrievalQuery) =>
+  retrieve(s, query, { serveSimulated: true });
 const q = { taskFamily: T.family, features: taskFeatures(T) };
 const lines = () => readFileSync(join(dir, STORE_FILE), "utf8").trimEnd().split("\n");
 const writeLines = (ls: string[]) => writeFileSync(join(dir, STORE_FILE), `${ls.join("\n")}\n`);
@@ -85,7 +88,7 @@ describe("store: append-only, chained, verified on load", () => {
     expect(head).not.toBe(GENESIS);
     const again = SkillStore.open(dir, { expectHead: head });
     expect(again.active().map((s) => s.record.skillId)).toEqual(ids);
-    expect(retrieve(again, q).skills.map((s) => s.skillId)).toEqual(ids);
+    expect(retrieveSim(again, q).skills.map((s) => s.skillId)).toEqual(ids);
   });
 
   it("an edited step (digests left alone) refuses the whole store", async () => {
@@ -114,7 +117,7 @@ describe("store: append-only, chained, verified on load", () => {
         return lines()[0];
       })()) as string,
     );
-    e.record.steps[0] = "Open /Users/planted/doc.csv";
+    e.record.steps[0] = `Open /${"Users"}/planted/doc.csv`; // built at runtime: no-home-paths
     const sealed = recordDigest(e.record);
     e.record.recordSha256 = sealed;
     e.record.skillId = skillIdFor(sealed);
@@ -131,6 +134,72 @@ describe("store: append-only, chained, verified on load", () => {
     e.record.skillId = skillIdFor(sealed);
     writeLines([JSON.stringify(reseal(e))]);
     refusedWith("STORE_TAMPERED", () => SkillStore.open(dir));
+  });
+
+  /** Rewrite the single admit line with `edit`, recompute every digest, write it back. */
+  async function resealedRecord(edit: (record: Record<string, unknown>) => void): Promise<string> {
+    const { store } = await seeded(1);
+    const pinned = store.head();
+    const e = JSON.parse(lines()[0] as string);
+    edit(e.record);
+    const sealed = recordDigest(e.record);
+    e.record.recordSha256 = sealed;
+    e.record.skillId = skillIdFor(sealed);
+    writeLines([JSON.stringify(reseal(e))]);
+    return pinned;
+  }
+
+  it("a resealed record whose simulated flag contradicts its planner is refused", async () => {
+    await resealedRecord((r) => {
+      // A scripted planner's skill relabelled as real, so a real trial would be served it.
+      (r.provenance as Record<string, unknown>).simulated = false;
+    });
+    refusedWith("STORE_TAMPERED", () => SkillStore.open(dir));
+  });
+
+  it("a resealed record carrying a host path in provenance is refused (whole-record scan)", async () => {
+    // graderVersion only has to be printable; only the whole-record scan sees the path.
+    await resealedRecord((r) => {
+      (r.provenance as Record<string, unknown>).graderVersion = "grader at /srv/planted/g";
+    });
+    refusedWith("STORE_TAMPERED", () => SkillStore.open(dir));
+  });
+
+  it("a resealed revocation with an unknown reason is refused", async () => {
+    const { store, ids } = await seeded(1);
+    store.revoke(ids[0] as string, "operator");
+    const ls = lines();
+    const e = JSON.parse(ls[1] as string);
+    e.reason = "because";
+    ls[1] = JSON.stringify(reseal(e));
+    writeLines(ls);
+    refusedWith("STORE_TAMPERED", () => SkillStore.open(dir));
+  });
+
+  it("a resealed record planting the task's value loads without a pin, and the pin refuses it", async () => {
+    // The store does not know a task's values, so the load-time content rules cannot catch
+    // this (docs: only secrets, host paths, oracle internals and injection are re-checked).
+    // The head pin is what closes it.
+    const pinned = await resealedRecord((r) => {
+      (r.steps as string[])[0] = `Type ${T.intent.newValue} into the cell`;
+    });
+    expect(SkillStore.open(dir).skills()[0]?.record.steps[0]).toContain(T.intent.newValue);
+    refusedWith("STORE_HEAD_MISMATCH", () => SkillStore.open(dir, { expectHead: pinned }));
+  });
+
+  it("an open handle sees a revocation written through another handle", async () => {
+    const { store, ids } = await seeded(2);
+    expect(store.active().map((s) => s.record.skillId)).toEqual(ids);
+    SkillStore.open(dir).revoke(ids[0] as string, "poisoned");
+    expect(store.active().map((s) => s.record.skillId)).toEqual([ids[1]]);
+    expect(retrieveSim(store, q).skills.map((s) => s.skillId)).toEqual([ids[1]]);
+  });
+
+  it("an open handle refuses a log rolled back below what it verified", async () => {
+    const { store, ids } = await seeded(2);
+    store.revoke(ids[0] as string, "poisoned");
+    writeLines(lines().slice(0, -1));
+    refusedWith("STORE_HEAD_MISMATCH", () => store.active());
   });
 
   it("a deleted line breaks the chain", async () => {
@@ -214,8 +283,8 @@ describe("revocation and quarantine", () => {
   it("a revoked skill is never retrieved again, and stays revoked after reload", async () => {
     const { store, ids } = await seeded();
     store.revoke(ids[0] as string, "poisoned");
-    expect(retrieve(store, q).skills.map((s) => s.skillId)).toEqual([ids[1]]);
-    expect(retrieve(SkillStore.open(dir), q).skills.map((s) => s.skillId)).toEqual([ids[1]]);
+    expect(retrieveSim(store, q).skills.map((s) => s.skillId)).toEqual([ids[1]]);
+    expect(retrieveSim(SkillStore.open(dir), q).skills.map((s) => s.skillId)).toEqual([ids[1]]);
     expect(store.skills().find((s) => s.record.skillId === ids[0])?.status).toBe("revoked");
   });
 
@@ -235,7 +304,7 @@ describe("revocation and quarantine", () => {
     store.recordUse(ids[0] as string, "warm-4", "verified");
     store.recordUse(ids[0] as string, "warm-5", "verified");
     expect(store.skills()[0]?.status).toBe("quarantined");
-    expect(retrieve(store, q).skills.map((s) => s.skillId)).toEqual([ids[1]]);
+    expect(retrieveSim(store, q).skills.map((s) => s.skillId)).toEqual([ids[1]]);
     expect(SkillStore.open(dir).skills()[0]?.status).toBe("quarantined");
   });
 
@@ -268,15 +337,15 @@ describe("revocation and quarantine", () => {
 describe("retrieval scope", () => {
   it("serves only the task family asked for, ranked by similarity, at most the limit", async () => {
     const { store, ids } = await seeded();
-    expect(retrieve(store, { taskFamily: "todo-add", features: q.features }).skills).toEqual([]);
+    expect(retrieveSim(store, { taskFamily: "todo-add", features: q.features }).skills).toEqual([]);
     const other = TASKS.find(
       (t) => t.satisfiable && t.columnTypes[t.intent.column] !== T.columnTypes[T.intent.column],
     );
-    const r = retrieve(store, { taskFamily: T.family, features: taskFeatures(other as never) });
+    const r = retrieveSim(store, { taskFamily: T.family, features: taskFeatures(other as never) });
     expect(r.skills.map((s) => s.skillId)).toEqual(ids);
     expect(r.skills[0]?.similarity).toBeLessThan(1);
-    expect(retrieve(store, { ...q, features: ["app:other"] }).skills).toEqual([]);
-    expect(retrieve(store, { ...q, limit: 1 }).skills).toHaveLength(1);
-    expect(retrieve(store, q)).toMatchObject({ advisory: true, evidence: false });
+    expect(retrieveSim(store, { ...q, features: ["app:other"] }).skills).toEqual([]);
+    expect(retrieveSim(store, { ...q, limit: 1 }).skills).toHaveLength(1);
+    expect(retrieveSim(store, q)).toMatchObject({ advisory: true, evidence: false });
   });
 });
