@@ -172,7 +172,10 @@ async function oracle(
 }
 
 /** A vault with one run sealed, stopped and captured (the honest saved file). */
-function sealedRun(dir: string): { vault: VerdictVault; receipt: ReturnType<VerdictVault["seal"]> } {
+function sealedRun(dir: string): {
+  vault: VerdictVault;
+  receipt: ReturnType<VerdictVault["seal"]>;
+} {
   mkdirSync(dir, { recursive: true });
   const vault = new VerdictVault({ root: join(dir, "vault"), key: newVaultKey(), agentRoots: [] });
   const receipt = vault.seal("run-1", {
@@ -220,14 +223,7 @@ while not os.path.exists(stop):
 
 async function main(): Promise<void> {
   if (mode === "oracle")
-    return oracle(
-      a as string,
-      b as string,
-      c as string,
-      Number(d),
-      e as string,
-      Number(f ?? "2"),
-    );
+    return oracle(a as string, b as string, c as string, Number(d), e as string, Number(f ?? "2"));
   if (mode === "vault-static") {
     const { vault, receipt } = sealedRun(a as string);
     plant(join(a as string, "vault", "run-1", b as string), c as string);
