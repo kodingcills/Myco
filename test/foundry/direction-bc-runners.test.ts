@@ -17,6 +17,8 @@ import {
  * the committed task files. Asserting the committed file's values therefore passed even with
  * the YAML parser returning `{}` (test audit, mutation M1). These tests load a temp package
  * whose every asserted value differs from the default, so only a real read can pass.
+ * The "loads the committed ..." tests still pin the committed files' values (the task id is
+ * written into evidence as `taskId`), so drift in a committed package fails too.
  */
 const tmpDirs: string[] = [];
 afterAll(() => {
@@ -70,6 +72,8 @@ describe("Direction B Runner (Calc Interrupted Operation)", () => {
   it("loads the committed calc-invoice-update package", () => {
     const pkg = loadDirectionBTaskPackage("tasks/calc-invoice-update.yaml");
     expect(pkg.name).toBe("calc-invoice-update");
+    expect(pkg.app).toBe("libreoffice/calc");
+    expect(pkg.task).toBe("df-b01-interrupted-record-update");
     expect(pkg.intent.record.id).toBe("INV-2026-088");
     expect(pkg.interruption?.simulateKillMidWrite).toBe(true);
   });
@@ -161,7 +165,9 @@ describe("Direction C Runner (Branching vs Intent-Log Replay)", () => {
   it("loads the committed branch-retry-experiment package", () => {
     const pkg = loadDirectionCTaskPackage("tasks/branch-retry-experiment.yaml");
     expect(pkg.name).toBe("branch-retry-experiment");
+    expect(pkg.task).toBe("df-c01-ambiguous-branch-search");
     expect(pkg.comparison.linearRetryRestoreSec).toBe(21.0);
+    expect(pkg.comparison.forkSnapshotOverheadSec).toBe(2.0);
   });
 
   it("executes paired comparison dry-run and calculates fork speedup vs memory overhead", async () => {
