@@ -37,6 +37,11 @@ Every other outcome reaches the planner as what it is: `refuted`, `uncertain`, `
 `refused` (a limit or a malformed submission) or `killed`. A sub-planner's report is `done`
 only when it has at least one child and every child is `done`.
 
+A planner's handle **closes when its planner returns** (or is cut off by a halt). Its
+children are then final: a submission through a kept handle is refused `PLANNER_ENDED` (or
+`RUN_NOT_ACTIVE` once the run is over) and starts nothing, so no trial runs outside the
+recorded tree. Spawn before you return.
+
 ## Limits (mandatory, host-side, fail closed)
 
 `OrchestratorLimits` (`src/orchestrate/limits.ts`, `myco.orchestrate.limits/v1`). Every field is
@@ -45,7 +50,7 @@ required and must be a positive integer; unknown fields are refused. There is no
 | Limit | Meaning | Refusal code |
 |---|---|---|
 | `maxTotalTokens` | All tokens in the run (workers and planners) | `BUDGET_TOKENS` |
-| `maxTokensPerWorker` | Reserved for each worker at spawn; the live transport caps the worker at it | `BUDGET_TOKENS` |
+| `maxTokensPerWorker` | Reserved for each worker at spawn; a live transport must cap the worker at it (V-live, not in this change) | `BUDGET_TOKENS` |
 | `maxEstimatedCostMicroUsd` | Estimated cost ceiling (micro-USD, a token-derived ESTIMATE, never billed USD) | `BUDGET_COST` |
 | `estimateMicroUsdPerM{Input,Output}Tokens` | Operator prices for the estimate | (n/a) |
 | `maxWallMs` | Wall clock from `run()`; at the deadline the run halts and in-flight workers are aborted | `BUDGET_WALL` |
@@ -60,17 +65,29 @@ Budget rules:
   stays within `maxTotalTokens` (and likewise for the cost estimate, reserving every token at the
   dearer price). The total therefore holds with every desktop busy.
 - **Unmetered is not free.** Usage comes from the host's meter (`WorkerTransport.usage()`,
-  `Orchestrator.chargePlanner`), never from the worker's claim. A `null` or malformed usage, or a
-  trial that never reached the meter, makes the run's estimated cost `null` (never 0) and refuses
-  every later spawn (`BUDGET_UNMETERED`).
+  `Orchestrator.chargePlanner`), never from the worker's claim. A `null` or malformed usage
+  (including a negative count, which would otherwise credit the budget), or a trial that never
+  reached the meter, makes the run's estimated cost `null` (never 0) and refuses every later
+  spawn (`BUDGET_UNMETERED`).
 - Concurrency is refused, not queued: a planner may resubmit after a worker finishes.
 
 ### Kill switch
 
 `Orchestrator.kill(detail)` (operator API) or an operator kill-switch file (`killSwitchFile`,
-checked at every spawn) halts the run: every in-flight worker's `AbortSignal` fires, every later
-spawn is refused `KILLED`, in-flight results come back `killed` (never `done`), and a `halt` row
-records the code, the detail and the in-flight node ids. A halt latches; nothing un-halts a run.
+checked at every spawn and polled every `KILL_FILE_POLL_MS` = 100 ms while the run is active)
+halts the run: every in-flight worker's `AbortSignal` fires, every later spawn is refused
+`KILLED`, in-flight results come back `killed` (never `done`), and a `halt` row records the
+code, the detail and the in-flight node ids. The halt is also a `limitsHit` entry (parent
+`null`). A halt latches; nothing un-halts a run. `kill()` before `run()` halts at 0 ms, and its
+`halt` row follows `run-start`.
+
+A halt (kill switch, wall budget or ledger failure) ends the run **whenever it lands**: no
+planner waits on a child past it, even when the child's transport never settles. A child still
+running when the run ends is recorded `killed` with an `abandoned` row, before `run-end`, and
+counts as unmetered (cost `null`). If it settles later it is handed back `killed` and writes
+nothing. Stopping the agent and releasing its desktop on abort is the transport's job (the
+trial's `release` runs when the transport settles); the live transport that guarantees it is
+V-live.
 
 ## Security model
 
@@ -87,7 +104,9 @@ Who can write what:
 
 Binding gate guarantees are unchanged: the agent-facing gate input stays `taskId`/`runId`/`claim`
 (`myco.gate/v1`); the orchestrator adds **no** gate input. The planner's `note` goes to the
-worker's assignment and the ledger only; it never reaches the gate or the oracle. Grader
+worker's assignment only, and the ledger records its sha256 and length in the worker's `spawn`
+row (agent-authored text, so not the text); a sub-planner's `goal` is recorded the same way in
+its `spawn` row. Neither reaches the gate or the oracle. Grader
 independence holds: the orchestrator takes the grader as an operator callback and imports nothing
 from `src/benchmark/grade`. Calc stays CSV-only. R1 evidence rules are untouched. An orchestration
 run record has `countsAsEvidence: false`, and every ledger row carries its `provenance` (`mock` in
@@ -98,9 +117,12 @@ this change), so simulated rows never count as evidence.
 `TrialIsolation` (`src/orchestrate/isolation.ts`) provisions one isolated trial per worker and
 releases it after; a desktop counts against `maxConcurrentDesktops` from provision to release.
 The orchestrator refuses (`ISOLATION_OVERLAP`) a workspace that is inside, contains or equals any
-earlier trial's workspace, or that comes back with a different run id. The vault and the ledger
-must be disjoint from `isolation.agentRoots` (the vault checks its own roots; the orchestrator
-checks the ledger and kill file). The `tempDirIsolation` here is the local $0 stand-in (a fresh
+earlier trial's workspace, or that comes back with a different run id, and refuses
+(`ISOLATION_UNCONTAINED`) a workspace that is not inside any of `isolation.agentRoots` (the
+ledger and kill-file checks rely on those roots being accurate). The vault, the ledger and the
+kill file must be disjoint from `isolation.agentRoots`: the orchestrator's constructor checks all
+three (the vault through `VerdictVault.reachableFrom`, so a vault built with other roots is still
+refused). The `tempDirIsolation` here is the local $0 stand-in (a fresh
 0700 directory per trial); per-trial isolated desktops land with track L.
 
 ## Run record and ledger
@@ -109,8 +131,9 @@ checks the ledger and kill file). The `tempDirIsolation` here is the local $0 st
 (every node with parent, depth, task, run, status, verdict, gate codes, orchestrator codes, seal
 digest; refused submissions are nodes too), `limitsHit`, `halt`, token totals and the estimated
 cost (null when unmetered), the root report and the ledger head. The ledger holds `run-start`
-(with the limits), `spawn`, `refused`, `verdict`, `usage`, `planner-end`, `halt` and `run-end`
-rows.
+(with the limits), `spawn` (with the note or goal digest), `refused`, `verdict`, `usage`,
+`planner-end`, `halt`, `abandoned` and `run-end` rows. `run-end` is the last row: nothing is
+appended after it (a late `chargePlanner`, a leaked handle or a late worker writes nothing).
 
 ## Measurement bar proposal (pre-registered, for docs/product/capability-spec.md)
 
@@ -122,9 +145,10 @@ integrity fixes in flight and the lead's GO, on Claude Ultra only).
 - **Arms.** (C1) screenshot-only baseline; (H) hcu+shell baseline; (V) planner + workers through
   the orchestrator, workers using the hcu+shell tool surface. Same model, same task instances,
   same per-task total token budget for every arm (V's `maxTotalTokens` = the single-agent budget).
-- **Tasks.** A pre-registered set of multi-part tasks, each a conjunction of 2-4 existing gated
-  sub-tasks (todo and Calc-CSV families), fixed and hashed before the first run. Hidden from
-  the planner: the decomposition is the planner's job.
+- **Tasks.** A pre-registered set of 60 distinct multi-part tasks (20 with 2 parts, 20 with 3,
+  20 with 4), each a conjunction of existing gated sub-tasks (todo and Calc-CSV families), fixed
+  and hashed before the first run; one instance per task, so the 60 pairs are independent.
+  Hidden from the planner: the decomposition is the planner's job.
 - **Grading.** Every task graded by the independent grader (`src/benchmark/grade`) on the
   persisted end state, not by the gate and not by the planner. A task counts as success only when
   the grader passes every part.
@@ -139,7 +163,10 @@ integrity fixes in flight and the lead's GO, on Claude Ultra only).
   simulation from the baseline arms' observed discordance before the first run and raise n if
   power is under 80 %. A smaller effect is reported as inconclusive, not as a gain.
 - **Pass bar.** V beats both baselines on the primary metric under that test, **and** V's
-  false-completion rate is not higher than either baseline's (one-sided exact test, alpha 0.05).
+  false-completion rate is not higher than either baseline's. False completion is a per-instance
+  0/1 (the arm reported done and the grader failed), paired by instance, so the test is a
+  one-sided exact McNemar test (H1: V's rate is higher), V vs C1 and V vs H, alpha 0.05 each;
+  a significant result fails the bar.
 - **Stop rules.** Any false VERIFIED by the gate found by the grader halts the measurement.
   Trials faulted by the harness are re-run in place per TIF-274 and kept in the record.
 

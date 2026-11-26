@@ -4,11 +4,13 @@
  * seal, sealed gate bound to the worker's run, capture after stop), and a result reaches the
  * planner only as the report the orchestrator builds from the gate's verdict.
  */
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GateResult } from "../../src/gate/api.ts";
 import type { GatedTrialOutcome } from "../../src/gate/gated-trial.ts";
+import { newVaultKey, VerdictVault } from "../../src/integrity/vault.ts";
 import type { TrialIsolation } from "../../src/orchestrate/isolation.ts";
 import { LimitsError, loadLimitsFile, parseLimits } from "../../src/orchestrate/limits.ts";
 import {
@@ -705,5 +707,403 @@ describe("statusOfOutcome: done only for verified + accepted + ORACLE_PASS", () 
     expect(
       statusOfOutcome({ status: "refused", audit: {} } as unknown as GatedTrialOutcome),
     ).toMatchObject({ status: "unverified", codes: ["LAUNCH_REFUSED"] });
+  });
+});
+
+/** Resolves to "TIMEOUT" when `promise` has not settled within `ms`. */
+const within = <T>(promise: Promise<T>, ms: number): Promise<T | "TIMEOUT"> =>
+  Promise.race([promise, new Promise<"TIMEOUT">((resolve) => setTimeout(resolve, ms, "TIMEOUT"))]);
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe("round 2: a halt ends the run whenever it lands (D1)", () => {
+  it("kill() after the planner returned, while it waits on a child that never settles: run() returns and records the child killed", async () => {
+    const orch = makeOrchestrator(env, { transport: { script: () => "stuck" } });
+    setTimeout(() => orch.kill("late stop"), 30);
+    const record = await within(
+      orch.run(async (h) => {
+        void h.submit({ taskId: "df-s01" });
+      }),
+      1_500,
+    );
+    if (record === "TIMEOUT") throw new Error("run() did not return after kill()");
+    expect(record.halt).toMatchObject({ code: "KILLED", detail: "late stop" });
+    expect(record.root).toMatchObject({ status: "killed", codes: ["KILLED"] });
+    // The unsettled child is in the root's report and in the record, as killed.
+    expect(record.root.children.map((c) => [c.nodeId, c.status, c.codes])).toEqual([
+      ["w1", "killed", ["KILLED"]],
+    ]);
+    expect(record.nodes.map((n) => [n.nodeId, n.status])).toEqual([
+      ["p0", "killed"],
+      ["w1", "killed"],
+    ]);
+    // Never reached the meter: unmetered, cost null (never 0).
+    expect(record.totals.unmetered).toBe(1);
+    expect(record.totals.estimatedCostMicroUsd).toBeNull();
+    // The halt itself is a limit hit (V4).
+    expect(record.limitsHit).toContainEqual(
+      expect.objectContaining({ code: "KILLED", parentId: null }),
+    );
+    expect(ledgerRows(env).map((r) => r.type)).toEqual([
+      "run-start",
+      "spawn",
+      "halt",
+      "planner-end",
+      "abandoned",
+      "run-end",
+    ]);
+  });
+
+  it("the wall budget fires while the planner waits on a child that never settles: run() returns", async () => {
+    const orch = makeOrchestrator(env, {
+      limits: { ...LIMITS, maxWallMs: 40 },
+      transport: { script: () => "stuck" },
+    });
+    const record = await within(
+      orch.run(async (h) => {
+        void h.submit({ taskId: "df-s01" });
+      }),
+      1_500,
+    );
+    if (record === "TIMEOUT") throw new Error("run() did not return at the wall budget");
+    expect(record.halt?.code).toBe("BUDGET_WALL");
+    expect(record.limitsHit).toContainEqual(
+      expect.objectContaining({ code: "BUDGET_WALL", parentId: null }),
+    );
+    expect(record.nodes.find((n) => n.nodeId === "w1")?.status).toBe("killed");
+  });
+
+  it("a nested sub-planner waiting on a stuck worker: run() returns and both are recorded killed", async () => {
+    const orch = makeOrchestrator(env, {
+      transport: { script: () => "stuck" },
+      subPlanners: {
+        sub: async (h) => {
+          void h.submit({ taskId: "df-s01" });
+        },
+      },
+    });
+    setTimeout(() => orch.kill(), 30);
+    const record = await within(
+      orch.run(async (h) => {
+        void h.submit({ kind: "planner", goal: "sub" });
+      }),
+      1_500,
+    );
+    if (record === "TIMEOUT") throw new Error("run() did not return after kill()");
+    const status = Object.fromEntries(record.nodes.map((n) => [n.nodeId, n.status]));
+    expect(status).toEqual({ p0: "killed", p1: "killed", w2: "killed" });
+    const rows = ledgerRows(env);
+    expect(rows.at(-1)?.type).toBe("run-end");
+  });
+});
+
+describe("round 2: nothing is recorded after run-end", () => {
+  it("a worker that settles after a halted run ended comes back killed and writes nothing", async () => {
+    const orch = makeOrchestrator(env, { transport: { script: () => "late" } });
+    let inflight: Promise<Report> | undefined;
+    setTimeout(() => orch.kill(), 30);
+    const record = await orch.run(async (h) => {
+      inflight = h.submit({ taskId: "df-s01" });
+    });
+    expect(record.nodes.find((n) => n.nodeId === "w1")?.status).toBe("killed");
+    const rows = ledgerRows(env).length;
+    const late = await within(inflight as Promise<Report>, 1_500);
+    expect(late).toMatchObject({ nodeId: "w1", status: "killed", codes: ["KILLED"] });
+    expect(ledgerRows(env)).toHaveLength(rows);
+    expect(ledgerRows(env).at(-1)?.type).toBe("run-end");
+    expect(env.live).toBe(0);
+  });
+
+  it("chargePlanner after run-end writes no ledger row", async () => {
+    const orch = makeOrchestrator(env);
+    await orch.run(async () => {});
+    const rows = ledgerRows(env).length;
+    orch.chargePlanner("p0", { inputTokens: 1, outputTokens: 1 });
+    expect(ledgerRows(env)).toHaveLength(rows);
+  });
+});
+
+describe("round 2: a planner's handle spawns nothing once its planner returned (D2)", () => {
+  it("a sub-planner's kept handle is refused PLANNER_ENDED; no desktop outlives the run and every worker is recorded", async () => {
+    let zombie: PlannerHandle | undefined;
+    const orch = makeOrchestrator(env, {
+      subPlanners: {
+        z: async (h) => {
+          zombie = h;
+          await h.submit({ taskId: "df-s01" });
+        },
+      },
+    });
+    let late: Report | undefined;
+    const record = await orch.run(async (h) => {
+      await h.submit({ kind: "planner", goal: "z" });
+      late = await (zombie as PlannerHandle).submit({ taskId: "df-s01", note: "slow" });
+    });
+    expect(late).toMatchObject({ status: "refused", codes: ["PLANNER_ENDED"] });
+    expect(env.live).toBe(0);
+    expect(env.logs).toHaveLength(1);
+    expect(record.totals.workers).toBe(1);
+    expect(record.nodes.map((n) => [n.nodeId, n.parentId, n.status])).toEqual([
+      ["w2", "p1", "done"],
+      ["p1", "p0", "done"],
+      ["r3", "p1", "refused"],
+      ["p0", null, "done"],
+    ]);
+    const types = ledgerRows(env).map((r) => r.type);
+    expect(types).toEqual([
+      "run-start",
+      "spawn",
+      "spawn",
+      "verdict",
+      "planner-end",
+      "refused",
+      "planner-end",
+      "run-end",
+    ]);
+  });
+
+  it("after run-end, a leaked handle writes no node and no ledger row", async () => {
+    const orch = makeOrchestrator(env);
+    let leaked: PlannerHandle | undefined;
+    const record = await orch.run(async (h) => {
+      leaked = h;
+    });
+    const before = ledgerRows(env).length;
+    const late = await (leaked as PlannerHandle).submit({ taskId: "df-s01" });
+    expect(late.codes).toEqual(["RUN_NOT_ACTIVE"]);
+    expect(ledgerRows(env)).toHaveLength(before);
+    expect(ledgerRows(env).at(-1)?.type).toBe("run-end");
+    expect(record.nodes).toHaveLength(1);
+  });
+});
+
+describe("round 2: agent-authored note and goal are recorded as digest + length (D3)", () => {
+  it("the spawn rows carry sha256 and length of the note and the goal, never the text", async () => {
+    const note = "please tick item two first";
+    const goal = "split the todo work";
+    const orch = makeOrchestrator(env, {
+      subPlanners: {
+        [goal]: async (h) => {
+          await h.submit({ taskId: "df-s01" });
+        },
+      },
+    });
+    await orch.run(async (h) => {
+      await h.submit({ taskId: "df-s01", note });
+      await h.submit({ kind: "planner", goal });
+    });
+    const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+    const spawns = ledgerRows(env).filter((r) => r.type === "spawn");
+    expect(spawns.map((r) => [r.kind, r.kind === "worker" ? r.note : r.goal])).toEqual([
+      ["worker", { sha256: sha(note), length: note.length }],
+      ["planner", { sha256: sha(goal), length: goal.length }],
+      ["worker", null],
+    ]);
+    const raw = readFileSync(env.ledgerPath, "utf8");
+    expect(raw).not.toContain(note);
+    expect(raw).not.toContain(goal);
+  });
+});
+
+describe("round 2: isolation claims are enforced (D4, V1, V3)", () => {
+  it("a vault inside an isolation agent root is refused, even when the vault was built without that root", () => {
+    const agentRoot = env.isolation.agentRoots[0] as string;
+    const blind = new VerdictVault({
+      root: join(agentRoot, "vault"),
+      key: newVaultKey(),
+      agentRoots: [],
+    });
+    expect(() => makeOrchestrator(env, { vault: blind })).toThrow(/vault is agent-reachable/);
+    const containing = new VerdictVault({ root: env.base, key: newVaultKey(), agentRoots: [] });
+    expect(() => makeOrchestrator(env, { vault: containing })).toThrow(/vault is agent-reachable/);
+  });
+
+  it("a workspace outside every agent root is refused ISOLATION_UNCONTAINED and never launched", async () => {
+    env.cleanup();
+    env = makeEnv((root) => ({
+      agentRoots: [root],
+      provision: async (runId) => {
+        const workspace = join(root, "..", "operator", runId);
+        mkdirSync(workspace, { recursive: true });
+        return { runId, workspace, release: async () => {} };
+      },
+    }));
+    const orch = makeOrchestrator(env);
+    let report: Report | undefined;
+    await orch.run(async (h) => {
+      report = await h.submit({ taskId: "df-s01" });
+    });
+    expect(report).toMatchObject({ status: "unverified", codes: ["ISOLATION_UNCONTAINED"] });
+    expect(env.logs).toHaveLength(0);
+  });
+
+  it("a trial that comes back with a different run id is refused ISOLATION_OVERLAP", async () => {
+    env.cleanup();
+    env = makeEnv((root) => ({
+      agentRoots: [root],
+      provision: async (runId) => {
+        const workspace = join(root, runId);
+        mkdirSync(workspace, { recursive: true });
+        return { runId: `${runId}x`, workspace, release: async () => {} };
+      },
+    }));
+    const orch = makeOrchestrator(env);
+    let report: Report | undefined;
+    await orch.run(async (h) => {
+      report = await h.submit({ taskId: "df-s01" });
+    });
+    expect(report).toMatchObject({ status: "unverified", codes: ["ISOLATION_OVERLAP"] });
+    expect(env.logs).toHaveLength(0);
+  });
+
+  for (const [name, first, second] of [
+    ["inside", "a", join("a", "b")],
+    ["containing", join("a", "b"), "a"],
+  ] as const) {
+    it(`a workspace ${name} an earlier trial's workspace is refused ISOLATION_OVERLAP`, async () => {
+      env.cleanup();
+      let n = 0;
+      env = makeEnv((root) => ({
+        agentRoots: [root],
+        provision: async (runId) => {
+          const workspace = join(root, n++ === 0 ? first : second);
+          mkdirSync(workspace, { recursive: true });
+          return { runId, workspace, release: async () => {} };
+        },
+      }));
+      const orch = makeOrchestrator(env);
+      const out: string[] = [];
+      await orch.run(async (h) => {
+        out.push((await h.submit({ taskId: "df-s01" })).status);
+        out.push((await h.submit({ taskId: "df-s01" })).codes.join());
+      });
+      expect(out).toEqual(["done", "ISOLATION_OVERLAP"]);
+    });
+  }
+});
+
+describe("round 2: negative usage is malformed, never a credit (V2)", () => {
+  for (const usage of [
+    { inputTokens: -1_000_000, outputTokens: 0 },
+    { inputTokens: 0, outputTokens: -1_000_000 },
+  ]) {
+    it(`worker usage ${JSON.stringify(usage)} is unmetered and refuses later spawns`, async () => {
+      const orch = makeOrchestrator(env, { transport: { usage: () => usage } });
+      const out: string[] = [];
+      const record = await orch.run(async (h) => {
+        out.push((await h.submit({ taskId: "df-s01" })).status);
+        out.push((await h.submit({ taskId: "df-s01" })).codes.join());
+      });
+      expect(out).toEqual(["done", "BUDGET_UNMETERED"]);
+      expect(record.totals).toMatchObject({
+        inputTokens: 0,
+        outputTokens: 0,
+        unmetered: 1,
+        estimatedCostMicroUsd: null,
+      });
+    });
+
+    it(`planner usage ${JSON.stringify(usage)} is unmetered, refuses later spawns and is logged`, async () => {
+      const orch = makeOrchestrator(env);
+      let report: Report | undefined;
+      await orch.run(async (h) => {
+        orch.chargePlanner(h.nodeId, usage);
+        report = await h.submit({ taskId: "df-s01" });
+      });
+      expect(report?.codes).toEqual(["BUDGET_UNMETERED"]);
+      expect(ledgerRows(env).find((r) => r.type === "usage")).toMatchObject({
+        nodeId: "p0",
+        source: "planner",
+        usage,
+      });
+    });
+  }
+});
+
+describe("round 2: kill switch and halt details", () => {
+  it("the kill-switch file stops an in-flight trial with no further spawn (polled on a timer)", async () => {
+    const stop = join(env.base, "operator", "STOP");
+    const orch = makeOrchestrator(env, {
+      killSwitchFile: stop,
+      transport: { script: () => "stuck" },
+    });
+    setTimeout(() => writeFileSync(stop, ""), 30);
+    const record = await within(
+      orch.run(async (h) => {
+        await h.submit({ taskId: "df-s01" });
+      }),
+      1_500,
+    );
+    if (record === "TIMEOUT") throw new Error("the kill-switch file did not stop the run");
+    expect(record.halt).toMatchObject({ code: "KILLED", detail: "kill-switch file present" });
+    expect(record.nodes.find((n) => n.nodeId === "w1")?.status).toBe("killed");
+  });
+
+  it("a halt latches: a later kill or wall budget does not replace it", async () => {
+    const orch = makeOrchestrator(env, { limits: { ...LIMITS, maxWallMs: 30 } });
+    const record = await orch.run(async () => {
+      orch.kill("first");
+      orch.kill("second");
+      await sleep(60);
+    });
+    expect(record.halt).toMatchObject({ code: "KILLED", detail: "first" });
+    expect(record.limitsHit.filter((h) => h.parentId === null)).toHaveLength(1);
+    expect(ledgerRows(env).filter((r) => r.type === "halt")).toHaveLength(1);
+  });
+
+  it("kill() before run(): the halt is at 0 ms and its row follows run-start", async () => {
+    const orch = makeOrchestrator(env, { now: () => 1_700_000_000_000 });
+    orch.kill("before start");
+    const record = await orch.run(async (h) => {
+      await h.submit({ taskId: "df-s01" });
+    });
+    expect(record.halt).toMatchObject({ code: "KILLED", atMs: 0 });
+    expect(record.limitsHit.filter((h) => h.parentId === null)).toEqual([
+      { code: "KILLED", parentId: null, atMs: 0 },
+    ]);
+    expect(
+      ledgerRows(env)
+        .map((r) => r.type)
+        .slice(0, 2),
+    ).toEqual(["run-start", "halt"]);
+    expect(env.logs).toHaveLength(0);
+  });
+});
+
+describe("round 2: written claims executed", () => {
+  it("every limit-like word in a submission field name is refused LIMIT_WRITE_REJECTED", async () => {
+    const words = [
+      "limit",
+      "budget",
+      "depth",
+      "concurrency",
+      "max",
+      "token",
+      "cost",
+      "wall",
+      "kill",
+      "quota",
+      "deadline",
+      "timeout",
+    ];
+    const orch = makeOrchestrator(env);
+    const codes: string[] = [];
+    await orch.run(async (h) => {
+      for (const word of words)
+        codes.push(...(await h.submit({ taskId: "df-s01", [word]: 1 })).codes);
+    });
+    expect(codes).toEqual(words.map(() => "LIMIT_WRITE_REJECTED"));
+    expect(env.logs).toHaveLength(0);
+  });
+
+  it("src/orchestrate imports nothing from src/benchmark (grader independence)", () => {
+    const dir = join(import.meta.dirname, "..", "..", "src", "orchestrate");
+    for (const file of readdirSync(dir).filter((f) => f.endsWith(".ts"))) {
+      const text = readFileSync(join(dir, file), "utf8");
+      const imports = [...text.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]);
+      expect(
+        imports.filter((i) => i?.includes("benchmark")),
+        file,
+      ).toEqual([]);
+    }
   });
 });

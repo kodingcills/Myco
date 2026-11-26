@@ -21,6 +21,7 @@
  * never the gate's reason text or any evidence bytes.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { GateVerdict, ReasonCode } from "../gate/api.ts";
 import { isSafeId } from "../gate/api.ts";
@@ -59,6 +60,11 @@ export const ORCH_CODES = [
   "KILLED",
   /** The run is over (or not started): nothing more is spawned. */
   "RUN_NOT_ACTIVE",
+  /**
+   * The submitting planner has already returned (its report is built): a handle kept past its
+   * planner's return spawns nothing, so no trial can start outside the recorded tree.
+   */
+  "PLANNER_ENDED",
   "DEPTH_CAP",
   "PLANNER_SPAWN_CAP",
   "TOTAL_SPAWN_CAP",
@@ -71,8 +77,10 @@ export const ORCH_CODES = [
   /** The orchestrator ledger could not be written; the run halts (an unlogged spawn can't be audited). */
   "LEDGER_FAILED",
   "ISOLATION_FAILED",
-  /** A provisioned workspace overlaps another trial's workspace. */
+  /** A provisioned workspace overlaps another trial's workspace, or the trial's run id is not the one minted. */
   "ISOLATION_OVERLAP",
+  /** A provisioned workspace is not inside any of `isolation.agentRoots`. */
+  "ISOLATION_UNCONTAINED",
   /** The worker's launch plan failed the launch audit; nothing was launched. */
   "LAUNCH_REFUSED",
   /** The worker's transport or gate path threw; no verdict. */
@@ -144,7 +152,10 @@ export interface WorkerAssignment {
   readonly depth: number;
   /** The trial's own isolated workspace. */
   readonly workspace: string;
-  /** The planner's note for the worker (recorded; never an oracle input). */
+  /**
+   * The planner's note for the worker. Its sha256 and length are recorded in the spawn row
+   * (agent-authored text, so not the text itself); never a gate or oracle input.
+   */
   readonly note?: string;
   /** Aborted by the kill switch or the wall budget: the transport must stop the agent. */
   readonly signal: AbortSignal;
@@ -181,7 +192,7 @@ export interface OrchestratorConfig {
   /** Operator limits (parsed again here; a raw object is accepted and validated). */
   readonly limits: unknown;
   readonly tasks: TaskRegistry;
-  /** The vault; its `agentRoots` must include `isolation.agentRoots`. */
+  /** The vault; it must be disjoint from `isolation.agentRoots` (checked at construction). */
   readonly vault: VerdictVault;
   readonly isolation: TrialIsolation;
   readonly worker: WorkerFactory;
@@ -342,6 +353,22 @@ interface PlannerNode {
   readonly depth: number;
   spawns: number;
   readonly children: Promise<Report>[];
+  /** Set when the planner returns (or is cut off by a halt): its handle spawns nothing after. */
+  closed: boolean;
+}
+
+/** A spawned node whose own record has not been written yet. */
+interface OpenNode {
+  readonly record: NodeRecord;
+  readonly worker: boolean;
+}
+
+/** How often the kill-switch file is polled while a run is active (it is also checked at every spawn). */
+export const KILL_FILE_POLL_MS = 100;
+
+/** sha256 and length of agent-authored text, for the ledger (never the text itself). */
+function textDigest(text: string): { readonly sha256: string; readonly length: number } {
+  return { sha256: createHash("sha256").update(text, "utf8").digest("hex"), length: text.length };
 }
 
 export class Orchestrator {
@@ -352,6 +379,13 @@ export class Orchestrator {
   readonly #limitsHit: LimitHit[] = [];
   readonly #inflight = new Map<string, AbortController>();
   readonly #workspaces: string[] = [];
+  readonly #agentRoots: readonly string[];
+  /** Spawned nodes not yet recorded; any left at run end are recorded `killed`. */
+  readonly #open = new Map<string, OpenNode>();
+  /** The report a child stands for if it has not settled when its planner is cut off by a halt. */
+  readonly #placeholders = new WeakMap<Promise<Report>, Report>();
+  /** True once the `run-end` row is written: nothing is recorded or logged after it. */
+  #closed = false;
   #state: "new" | "running" | "ended" = "new";
   #halt: RunRecord["halt"] = null;
   #haltResolve: (() => void) | undefined;
@@ -379,6 +413,8 @@ export class Orchestrator {
     if (config.ledger.key.length < 32)
       throw new Error("orchestrator ledger key shorter than 32 bytes");
     const roots = config.isolation.agentRoots;
+    const vaultClash = config.vault.reachableFrom(roots);
+    if (vaultClash) throw new Error(`orchestrator vault is agent-reachable: ${vaultClash}`);
     const ledgerClash = agentReachable(config.ledger.path, roots);
     if (ledgerClash) throw new Error(`orchestrator ledger is agent-reachable: ${ledgerClash}`);
     if (config.killSwitchFile !== undefined) {
@@ -388,6 +424,7 @@ export class Orchestrator {
     if (existsSync(config.ledger.path))
       throw new Error("orchestrator ledger already exists: one ledger per run (append-only)");
     this.#config = config;
+    this.#agentRoots = Object.freeze(roots.map(realish));
     this.#now = config.now ?? Date.now;
     this.#halted = new Promise((resolve) => {
       this.#haltResolve = resolve;
@@ -415,19 +452,51 @@ export class Orchestrator {
       this.#limits.maxWallMs,
     );
     timer.unref?.();
-    if (!this.#log({ type: "run-start", limits: this.#limits })) {
+    const killFile = this.#config.killSwitchFile;
+    const poll =
+      killFile === undefined
+        ? undefined
+        : setInterval(() => {
+            if (!this.#halt && existsSync(killFile))
+              this.#haltWith("KILLED", "kill-switch file present");
+          }, KILL_FILE_POLL_MS);
+    poll?.unref?.();
+    const stopTimers = () => {
       clearTimeout(timer);
+      if (poll) clearInterval(poll);
+    };
+    // A halt that came before run() (kill() on a new orchestrator) is logged after run-start.
+    const earlyHalt = this.#halt;
+    if (!this.#log({ type: "run-start", limits: this.#limits })) {
+      stopTimers();
       this.#state = "ended";
+    } else if (earlyHalt) {
+      this.#log({ type: "halt", code: earlyHalt.code, detail: earlyHalt.detail, inFlight: [] });
     }
-    const rootNode: PlannerNode = { nodeId: "p0", depth: 0, spawns: 0, children: [] };
+    const rootNode: PlannerNode = {
+      nodeId: "p0",
+      depth: 0,
+      spawns: 0,
+      children: [],
+      closed: false,
+    };
     this.#planners += 1;
     const report =
       this.#state === "running"
         ? await this.#drivePlanner(rootNode, null, root)
         : this.#plannerReport(rootNode, "unverified", ["LEDGER_FAILED"], []);
-    clearTimeout(timer);
+    stopTimers();
     this.#state = "ended";
+    // Only a halt can end a run with nodes still open (otherwise every child was awaited):
+    // record each as killed, before run-end. A worker cut off this way never reached the meter.
+    for (const [nodeId, open] of this.#open) {
+      this.#open.delete(nodeId);
+      if (open.worker) this.#unmetered += 1;
+      this.#record({ ...open.record, status: "killed", codes: [...open.record.codes, "KILLED"] });
+      this.#log({ type: "abandoned", nodeId, kind: open.record.kind, status: "killed" });
+    }
     this.#log({ type: "run-end", status: report.status, totals: this.#totals() });
+    this.#closed = true;
     return deepFreeze({
       version: ORCHESTRATOR_RECORD_VERSION,
       runId: this.#config.runId,
@@ -464,8 +533,12 @@ export class Orchestrator {
     }
   }
 
-  /** Append one ledger row. On failure the run halts (fail closed) and this returns false. */
+  /**
+   * Append one ledger row. On failure the run halts (fail closed) and this returns false.
+   * After run-end nothing is appended (returns false, no halt): `run-end` is the last row.
+   */
   #log(row: Record<string, unknown>): boolean {
+    if (this.#closed) return false;
     try {
       this.#head = appendChainedRow(
         this.#config.ledger.path,
@@ -483,12 +556,13 @@ export class Orchestrator {
 
   #haltWith(code: OrchCode, detail: string, log = true): void {
     if (this.#halt) return;
-    this.#halt = { code, detail, atMs: this.#now() - this.#startedAt };
+    const before = this.#state === "new";
+    this.#halt = { code, detail, atMs: before ? 0 : this.#now() - this.#startedAt };
     if (LIMIT_CODES.has(code))
       this.#limitsHit.push({ code, parentId: null, atMs: this.#halt.atMs });
     const inFlight = [...this.#inflight.keys()];
     for (const controller of this.#inflight.values()) controller.abort(new Error(code));
-    if (log) this.#log({ type: "halt", code, detail, inFlight });
+    if (log && !before) this.#log({ type: "halt", code, detail, inFlight });
     this.#haltResolve?.();
   }
 
@@ -549,6 +623,7 @@ export class Orchestrator {
   }
 
   #record(node: NodeRecord): void {
+    this.#open.delete(node.nodeId);
     this.#nodes.push(deepFreeze(node));
   }
 
@@ -586,6 +661,12 @@ export class Orchestrator {
   #handle(node: PlannerNode): PlannerHandle {
     const limits = deepFreeze(structuredClone(this.#limits));
     const submit = (submission: unknown): Promise<Report> => {
+      // Checked before anything else: a closed node's report is built, so nothing it submits
+      // may become a child (or a trial) it cannot account for.
+      if (node.closed)
+        return Promise.resolve(
+          this.#refuse(node, this.#state === "running" ? "PLANNER_ENDED" : "RUN_NOT_ACTIVE"),
+        );
       const promise = this.#submit(node, submission);
       node.children.push(promise);
       return promise;
@@ -611,13 +692,39 @@ export class Orchestrator {
     if (parsed.kind === "planner") {
       const nodeId = `p${this.#seq}`;
       this.#planners += 1;
-      if (!this.#log({ type: "spawn", kind: "planner", nodeId, parentId: parent.nodeId, depth }))
+      if (
+        !this.#log({
+          type: "spawn",
+          kind: "planner",
+          nodeId,
+          parentId: parent.nodeId,
+          depth,
+          goal: textDigest(parsed.goal),
+        })
+      )
         return Promise.resolve(this.#refuse(parent, "LEDGER_FAILED", "planner"));
-      return this.#subPlanner(
-        { nodeId, depth, spawns: 0, children: [] },
+      this.#open.set(nodeId, {
+        worker: false,
+        record: {
+          nodeId,
+          parentId: parent.nodeId,
+          kind: "planner",
+          depth,
+          gateCodes: [],
+          codes: [],
+          status: "killed",
+        },
+      });
+      const promise = this.#subPlanner(
+        { nodeId, depth, spawns: 0, children: [], closed: false },
         parent.nodeId,
         parsed.goal,
       );
+      this.#placeholders.set(
+        promise,
+        deepFreeze({ kind: "planner", nodeId, status: "killed", codes: ["KILLED"], children: [] }),
+      );
+      return promise;
     }
     const nodeId = `w${this.#seq}`;
     const runId = `${this.#config.runId}-w${this.#seq}`;
@@ -644,21 +751,49 @@ export class Orchestrator {
         depth,
         taskId: parsed.taskId,
         runId,
+        note: parsed.note === undefined ? null : textDigest(parsed.note),
       })
     ) {
       release();
       return Promise.resolve(this.#refuse(parent, "LEDGER_FAILED"));
     }
-    return this.#runWorker({
+    this.#open.set(nodeId, {
+      worker: true,
+      record: {
+        nodeId,
+        parentId: parent.nodeId,
+        kind: "worker",
+        depth,
+        taskId: parsed.taskId,
+        runId,
+        status: "killed",
+        gateCodes: [],
+        codes: [],
+      },
+    });
+    const promise = this.#runWorker({
       nodeId,
       parentId: parent.nodeId,
       depth,
       taskId: parsed.taskId,
       runId,
-      note: parsed.kind === "worker" ? parsed.note : undefined,
+      note: parsed.note,
       controller,
       release,
     });
+    this.#placeholders.set(
+      promise,
+      deepFreeze({
+        kind: "worker",
+        nodeId,
+        taskId: parsed.taskId,
+        runId,
+        status: "killed",
+        gateCodes: [],
+        codes: ["KILLED"],
+      }),
+    );
+    return promise;
   }
 
   async #runWorker(w: {
@@ -684,6 +819,10 @@ export class Orchestrator {
     try {
       trial = await this.#config.isolation.provision(w.runId);
       const workspace = realish(trial.workspace);
+      if (!this.#agentRoots.some((root) => within(workspace, root)))
+        throw Object.assign(new Error("workspace outside every agent root"), {
+          uncontained: true,
+        });
       if (
         trial.runId !== w.runId ||
         this.#workspaces.some((other) => within(workspace, other) || within(other, workspace))
@@ -740,11 +879,17 @@ export class Orchestrator {
       }
     } catch (error) {
       this.#diag("isolation", error);
-      const overlap = (error as { overlap?: unknown } | null)?.overlap === true;
+      const tag = error as { overlap?: unknown; uncontained?: unknown } | null;
       result = {
         status: "unverified",
         gateCodes: [],
-        codes: [overlap ? "ISOLATION_OVERLAP" : "ISOLATION_FAILED"],
+        codes: [
+          tag?.overlap === true
+            ? "ISOLATION_OVERLAP"
+            : tag?.uncontained === true
+              ? "ISOLATION_UNCONTAINED"
+              : "ISOLATION_FAILED",
+        ],
       };
     } finally {
       try {
@@ -753,10 +898,24 @@ export class Orchestrator {
         this.#diag("isolation-release", error);
       }
     }
+    w.release();
+    // Settled after run end (the run was halted and did not wait): it is already recorded as
+    // killed and counted unmetered, and nothing more is logged.
+    if (this.#closed) {
+      const killed: WorkerReport = {
+        kind: "worker",
+        nodeId: w.nodeId,
+        taskId: w.taskId,
+        runId: w.runId,
+        status: "killed",
+        gateCodes: [],
+        codes: ["KILLED"],
+      };
+      return deepFreeze(killed);
+    }
     // `usage` stays null unless the meter was read: a trial that never reached the meter
     // (isolation failed, factory threw) is unmetered, never free.
     this.#charge(usage);
-    w.release();
     // Stopped by the kill switch (or wall budget) while in flight: never handed over as done.
     if (this.#halt && w.controller.signal.aborted) {
       result.status = "killed";
@@ -835,10 +994,14 @@ export class Orchestrator {
       this.#diag("planner", error);
       failed = true;
     }
-    // When halted, in-flight children may never settle (the transport was aborted): do not wait.
-    const children = this.#halt
-      ? await settledNow(node.children)
-      : await Promise.all(node.children);
+    // The planner returned (or was cut off): its handle spawns nothing more, so `children` is
+    // final and every trial this node started is in it.
+    node.closed = true;
+    // Wait for the children, but never past a halt: an aborted transport may never settle,
+    // and a halt that lands while this wait is running must still end the run.
+    if (!this.#halt) await Promise.race([Promise.all(node.children), this.#halted]);
+    // A child not settled by now (only possible after a halt) stands as its `killed` placeholder.
+    const children = await settledNow(node.children, this.#placeholders);
     let status: ReportStatus;
     const codes: OrchCode[] = [];
     if (this.#halt) {
@@ -894,14 +1057,23 @@ export class Orchestrator {
   }
 }
 
-/** The children that have already settled; the rest are recorded as killed placeholders. */
-async function settledNow(children: readonly Promise<Report>[]): Promise<Report[]> {
+/**
+ * The children's reports, in submission order: each settled child's own report, and for one
+ * still pending its `killed` placeholder (an unsettled child without one is left out).
+ */
+async function settledNow(
+  children: readonly Promise<Report>[],
+  placeholders: WeakMap<Promise<Report>, Report>,
+): Promise<Report[]> {
   const pending = Symbol("pending");
   const out: Report[] = [];
   for (const child of children) {
     const value = await Promise.race([child, Promise.resolve(pending)]);
-    if (value === pending) continue;
-    out.push(value as Report);
+    if (value !== pending) out.push(value as Report);
+    else {
+      const placeholder = placeholders.get(child);
+      if (placeholder) out.push(placeholder);
+    }
   }
   return out;
 }

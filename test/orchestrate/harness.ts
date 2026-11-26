@@ -51,7 +51,9 @@ export type WorkerScript =
   | "honest" // does the task, saves; the app's own bugs are what the gate sees
   | "no-save" // claims done but never does the task: nothing saved (STATE_MISSING → uncertain)
   | "throws" // transport rejects (no verdict)
-  | "hang"; // runs until aborted (the kill switch)
+  | "hang" // runs until aborted (the kill switch)
+  | "stuck" // never settles, even when aborted (a transport that ignores its signal)
+  | "late"; // stops 150 ms after it is aborted (settles after a halted run has ended)
 
 export interface WorkerLog {
   readonly assignment: WorkerAssignment;
@@ -154,6 +156,20 @@ export function scriptedTransport(
       env.peak = Math.max(env.peak, env.live);
       try {
         if (script === "throws") throw new Error("worker crashed");
+        if (script === "stuck") {
+          await new Promise<void>(() => {});
+          return;
+        }
+        if (script === "late") {
+          await new Promise<void>((_resolve, reject) => {
+            a.signal.addEventListener(
+              "abort",
+              () => setTimeout(() => reject(new Error("aborted late")), 150),
+              { once: true },
+            );
+          });
+          return;
+        }
         if (script === "hang") {
           await new Promise<void>((_resolve, reject) => {
             a.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
