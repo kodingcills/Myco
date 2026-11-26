@@ -70,6 +70,13 @@ export class ScheduleState {
     mkdirSync(join(dir, "manual"), { recursive: true, mode: 0o700 });
     this.claimsPath = join(dir, "claims.jsonl");
     this.cursorPath = join(dir, "cursor.json");
+    this.loadClaims();
+  }
+
+  /** (Re)read `claims.jsonl` into memory, replacing whatever was loaded before. */
+  private loadClaims(): void {
+    this.claims.clear();
+    this.perDay.clear();
     if (existsSync(this.claimsPath)) {
       const lines = readFileSync(this.claimsPath, "utf8").split("\n");
       lines.forEach((line, i) => {
@@ -161,6 +168,15 @@ export class ScheduleState {
       closeSync(fd);
     }
     this.locked = true;
+    // Re-read the claims now that no other service can write them: the copy the constructor
+    // loaded predates the lock, and a service that claimed a key and released the lock in
+    // between would otherwise leave that key missing here (a double run under a race).
+    try {
+      this.loadClaims();
+    } catch (e) {
+      this.releaseLock();
+      throw e;
+    }
   }
 
   releaseLock(): void {

@@ -52,6 +52,9 @@ explicitly says otherwise).
   A replay under the same delivery id is a `DUPLICATE` (409) and runs nothing. A signed
   request that was refused without a claim (423 `PAUSED`, 429 `BUDGET_CONCURRENCY`) is meant
   to be retried, so it stays replayable until it runs; the MAC carries no timestamp.
+  A 429 can also come while an earlier run of that schedule already has its `timeout` or
+  `killed` row but its executor has not stopped yet: the slot is still held. The 429 does not
+  say so; the earlier row is in the ledger.
 - **Delivery-id format.** A delivery id outside 1 to 128 characters of `[A-Za-z0-9._-]` is
   refused 401 `BAD_SIGNATURE` even when the signature over it is correct.
 - **One refusal code.** A missing header, a malformed header and a wrong signature all return
@@ -80,10 +83,10 @@ file seen on every tick is not.
 |---|---|
 | Claim cannot be written | The trigger does not run (`STATE_WRITE_FAILED`). |
 | `claims.jsonl` or `cursor.json` corrupt | The service refuses to start. |
-| `<stateDir>/LOCK` held (another service, or one that crashed) | The service refuses to start. |
+| `<stateDir>/LOCK` held (another service, one that crashed, or one still waiting for an executor to settle) | The service refuses to start. Claims are re-read after the lock is taken, never trusted from before it. |
 | Ledger row cannot be written | The run is reported `error` / `LEDGER_FAILED`, never verified, and notified. |
 | Policy throws or is malformed | Denied. |
-| Executor throws, times out, is killed, or returns a malformed, inconsistent or other-run result | Not verified. A timed-out or killed run keeps its concurrency slot until the executor settles. |
+| Executor throws, times out, is killed, or returns a malformed, inconsistent or other-run result | Not verified. A timed-out or killed run keeps its concurrency slot until the executor settles, and a stopping service keeps `LOCK` until then too. |
 | Notifier throws | Diagnostic only; the record is unchanged. |
 | Zero policies configured | The scheduler refuses to construct; `serve` needs `--allow-task`. |
 

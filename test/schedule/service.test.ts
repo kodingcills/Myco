@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { parseScheduleFile } from "../../src/schedule/config.ts";
 import { FakeClock } from "../../src/schedule/runtime.ts";
 import { startScheduleService } from "../../src/schedule/service.ts";
+import { ScheduleState, triggerKeySha256 } from "../../src/schedule/state.ts";
 import { allowAll, decided, flush, MemoryNotifier, StubExecutor, T0, tmp } from "./helpers.ts";
 
 function config(dir: string, keyLine: string, webhook = false) {
@@ -162,6 +163,90 @@ describe("schedule service", () => {
       expect(existsSync(join(dir, "state", "LOCK"))).toBe(false);
       const svc = await start(dir);
       await svc.stop();
+    });
+
+    it("stop() keeps the lock until a killed run's executor has actually settled (round-2 D1)", async () => {
+      const dir = tmp();
+      let live = 0;
+      let maxLive = 0;
+      const finishers: Array<() => void> = [];
+      // An executor that ignores the abort signal: it ends only when the test says so.
+      const ex = new StubExecutor(
+        (req) =>
+          new Promise((resolve) => {
+            live += 1;
+            maxLive = Math.max(maxLive, live);
+            finishers.push(() => {
+              live -= 1;
+              resolve(decided(req, "verified"));
+            });
+          }),
+      );
+      const a = await start(dir, ex);
+      const k1 = a.scheduler.submit({ scheduleId: "ops", source: "manual", key: "k1" });
+      expect(k1.admission.admitted).toBe(true);
+      await flush();
+      a.scheduler.kill();
+      expect((await k1.done).status).toBe("killed");
+      expect(live).toBe(1);
+      let stopped = false;
+      const stopping = a.stop().then(() => {
+        stopped = true;
+      });
+      for (let i = 0; i < 5; i++) await flush();
+      // The row is written but the executor still runs: the lock (and the budget) is held.
+      expect(stopped).toBe(false);
+      expect(existsSync(join(dir, "state", "LOCK"))).toBe(true);
+      await expect(start(dir, ex)).rejects.toThrow(/LOCK exists/);
+      finishers[0]?.();
+      await stopping;
+      expect(existsSync(join(dir, "state", "LOCK"))).toBe(false);
+      // Only now can a restart admit the next run, and it never overlaps the first.
+      const b = await start(dir, ex);
+      b.state.resume();
+      const k2 = b.scheduler.submit({ scheduleId: "ops", source: "manual", key: "k2" });
+      expect(k2.admission.admitted).toBe(true);
+      await flush();
+      expect(maxLive).toBe(1);
+      finishers[1]?.();
+      await k2.done;
+      await b.stop();
+    });
+
+    it("claims are re-read after the lock is taken, so a key claimed in between is not lost (round-2 D2)", () => {
+      const dir = join(tmp(), "state");
+      const rec = (key: string) => ({
+        keySha256: triggerKeySha256("ops", "manual", key),
+        scheduleId: "ops",
+        source: "manual" as const,
+        runId: `sched-ops-${key}`,
+        at: T0,
+        admitted: true,
+      });
+      const a = new ScheduleState(dir);
+      a.acquireLock();
+      a.claim(rec("d0"));
+      a.releaseLock();
+      // B loads its claims, then A claims d1 and releases the lock, then B takes the lock.
+      const late = new ScheduleState(dir);
+      a.acquireLock();
+      a.claim(rec("d1"));
+      a.releaseLock();
+      expect(late.has(rec("d1").keySha256)).toBe(false);
+      late.acquireLock();
+      expect(late.has(rec("d0").keySha256)).toBe(true);
+      expect(late.has(rec("d1").keySha256)).toBe(true);
+      // Re-read replaces the earlier copy: d0 counts once toward runs/day, not twice.
+      expect(late.admittedOn("ops", T0)).toBe(2);
+      late.releaseLock();
+    });
+
+    it("a claims file corrupted before the lock is taken refuses the start and frees the lock", () => {
+      const dir = join(tmp(), "state");
+      const late = new ScheduleState(dir);
+      writeFileSync(join(dir, "claims.jsonl"), "not json\n");
+      expect(() => late.acquireLock()).toThrow(/refusing to start/);
+      expect(existsSync(join(dir, "LOCK"))).toBe(false);
     });
   });
 });

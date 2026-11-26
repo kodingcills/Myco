@@ -221,6 +221,8 @@ export class Scheduler {
   private readonly specs = new Map<string, ScheduleSpec>();
   private readonly inFlight = new Map<string, Set<AbortController>>();
   private readonly hashCache = new Map<string, string>();
+  /** One promise per held concurrency slot; it resolves when the slot is released. */
+  private readonly slots = new Set<Promise<void>>();
   private readonly graceMs: number;
 
   constructor(private readonly opts: SchedulerOptions) {
@@ -243,6 +245,16 @@ export class Scheduler {
 
   running(scheduleId: string): number {
     return this.inFlight.get(scheduleId)?.size ?? 0;
+  }
+
+  /**
+   * Resolves once no run holds a concurrency slot, i.e. every admitted run's executor has
+   * actually settled (a timed-out or killed run's row is written earlier). The service waits
+   * on this before giving up the state-dir lock, so a restart cannot exceed `concurrency`
+   * while an executor that ignores the abort signal is still running.
+   */
+  async idle(): Promise<void> {
+    while (this.slots.size > 0) await Promise.all([...this.slots]);
   }
 
   isPaused(): boolean {
@@ -386,7 +398,16 @@ export class Scheduler {
     // The slot is held until the executor's own promise settles, not until the row is
     // written: a timed-out or killed run whose executor ignores the signal still counts
     // toward `concurrency`, so the budget caps what runs, not only what is reported.
-    const release = () => flights.delete(controller);
+    let freeSlot: () => void = () => {};
+    const slot = new Promise<void>((resolve) => {
+      freeSlot = resolve;
+    });
+    this.slots.add(slot);
+    const release = () => {
+      flights.delete(controller);
+      this.slots.delete(slot);
+      freeSlot();
+    };
     let executorStarted = false;
     const done = this.run(spec, req, keySha, runId, controller, (executing) => {
       executorStarted = true;

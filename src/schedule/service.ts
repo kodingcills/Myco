@@ -168,6 +168,9 @@ async function startLocked(
       cancel();
       await webhook?.close();
       await drain();
+      // Rows are written, but a timed-out or killed run's executor may still be running: keep
+      // the lock (and so the concurrency budget) until every executor has settled.
+      await scheduler.idle();
       state.releaseLock();
     },
   };
