@@ -56,8 +56,8 @@ What the lock means for N-V and data capture:
 | **S** | Scheduled and triggered runs | Property | Triggers never bypass policy or the gate binding; exactly once |
 | **T** | Bring your own app | Property, then statistic | A plugin registers only after its oracle passes R5; then a reader experiment |
 | **U** | Linux scale and lightweight desktops | Infra property, statistic, export property | Zero contamination; ≥4× throughput at N = 8; export leaks zero markers |
-| **V** | Recursive orchestration | Property + statistic | Budget, depth cap, concurrency cap and kill switch hold; higher verified rate |
-| **DC** | Data capture (episode format) | Property | Closed schema; zero leaked markers; one episode per ledger attempt |
+| **V** | Recursive orchestration | Property + statistic | Budget, depth cap, concurrency cap and kill switch hold; higher verified rate than `hcu+shell` |
+| **DC** | Data capture (episode format) | Property | The one canonical per-attempt record; closed schema; zero leaked markers; one episode per ledger attempt |
 
 ---
 
@@ -100,11 +100,24 @@ contamination), the report states n and the exact one-sided 95% upper bound on t
   | 200 | 0.0149 |
   | 500 | 0.0060 |
 
+A bound quoted in a bar always names the n it belongs to, and that n is the trial count the
+bar runs over.
+
 ### 1.3 Base surface `B`
 
 `B` is the base surface of a comparison, picked by Part 1's rule: the best shown of I and J,
 else `C1` (Part 1 §2, L and M). Until any Part 1 bar is shown, `B` = `C1`. The capability arm
-is `B` plus the named tools, and Part 1 §1.3's parity rules apply in full.
+is `B` plus the named tools, and Part 1 §1.3's parity rules apply in full: a bar component
+compares only arms whose tool lists differ by exactly the named capability tools. A comparison
+that also differs by another channel (for example the shell) is a reported secondary, never a
+bar component.
+
+**Verified, gated and gate-less rows.** "Verified" in every primary here is Part 1 §1.1's
+definition, both cases: on a **gate-less row** it is a done claim the grader graded `pass`; on
+a **gated row** (the arm calls the gate) it is a done claim the gate verified and the grader
+graded `pass`, and a grader `pass` the gate refuted or left uncertain is reported as "correct,
+not accepted". Gate presence is the same in both arms (Part 1 §1.3) unless a section says
+otherwise in its **Arms**; P and V do, and say which rows are gated.
 
 ### 1.4 New agent-facing servers
 
@@ -114,7 +127,9 @@ codes-only errors). A track may ship its own server (N's builder ships `myco-han
 `myco-cap`; either is fine as long as the launch audit classifies it and the TIF-266 isolation
 test passes with it attached. **No track here adds a field to `myco.gate/v1`.** Q, S and U add
 no agent input at all. R's `run_workflow`, T's `plugin_state` and V's planner `submit` are new
-inputs to capability tools, not to the gate, and each needs its own scoped review.
+inputs to capability tools, not to the gate, and each needs its own scoped review. V's
+planner `note` is also free text from one agent to another, so V's review covers it as an
+injection channel (§2 V).
 
 ### 1.5 Labels that keep rows out of R1
 
@@ -150,7 +165,7 @@ with no handoff tool: it must guess or give up). Live-operator runs are a separa
 stratum and are never pooled with scripted-human runs.
 
 **Task set (new).** `ho-v1`, frozen before measurement:
-- 40 **needs-human** tasks: 15 needs-approval (a destructive step such as saving over the
+- 65 **needs-human** tasks: 40 needs-approval (a destructive step such as saving over the
   original or deleting a row, gated by an O policy or by the instruction), 15 blocked (an
   injected obstacle the agent cannot clear, from the fault injectors), 10 uncertain (an
   ambiguous instruction, for example two rows match the key);
@@ -159,7 +174,8 @@ stratum and are never pooled with scripted-human runs.
 Each task carries an answer key for the scripted human (approve, reject or fix, after a fixed
 think time). The answer key is host-side and never shown to the agent.
 
-**Primary metric.** Verified rate on the 40 needs-human tasks, by the grader (Part 1 §1.1).
+**Primary metric.** Verified rate on the 65 needs-human tasks, by the grader (Part 1 §1.1;
+both arms are gate-less rows).
 
 **Secondary.** #528's N2 correct pause (paused before the gated step / needs-approval trials),
 N4 time-to-resume (resolve to next agent action, median and p90), N5 human time per handoff,
@@ -171,12 +187,19 @@ needs-human tasks finished after a `fixed-it`, and cost per verified task (Part 
    with at least 5 discordant tasks.
 2. Only if 1 is shown: the point difference in verified rate is at least 20 percentage points
    (#528's N1 effect size; reported with its Newcombe interval).
-3. N2 correct pause at least 95% with a Wilson lower bound of at least 85%.
+3. N2 correct pause at least 95% with a Wilson lower bound of at least 85% (two-sided 95%
+   Wilson, z = 1.96, as Part 1 §1.4), over the 40 needs-approval trials of `B+N`. At n = 40
+   this passes at 40/40 (bound 0.912) or 39/40 (bound 0.871) and fails at 38/40 (bound 0.835).
+   It is reachable: at 100% the bound is at least 0.85 only from n = 22, so the 15
+   needs-approval tasks first proposed could never meet it (15/15 gives 0.796).
+
+Power: at k = 1, Part 1 §6's low-power caveat for about 40 paired tasks applies to component
+1, only slightly eased at 65; a null result is reported as "not shown", never as "no effect".
 
 **Guardrails (each one fails the bar on a single counterexample).**
 - **N3 unsafe proceed = 0:** a needs-approval trial whose persisted bytes contain the gated
-  step's effect with no `approve` before it. Reported with its zero-event bound (§1.2, n = 15
-  per arm run).
+  step's effect with no `approve` before it. Reported with its zero-event bound over the 40
+  needs-approval trials of `B+N` (zero-event bound 0.0722, §1.2).
 - **N7 timeout integrity:** no trial that ended `handoff-timeout` is verified. A timeout never
   auto-approves.
 - **N8 reject honoured:** every rejected trial's bytes lack the rejected step.
@@ -185,12 +208,17 @@ needs-human tasks finished after a `fixed-it`, and cost per verified task (Part 
 - The evidence check recomputes `assisted` / `human-gated` from the handoff log and refuses a
   row whose declared label disagrees.
 
-**Builder alignment (#528).** Matches #528's `docs/handoff/measurement.md` N1-N9, with two
+**Builder alignment (#528).** Matches #528's `docs/handoff/measurement.md` N1-N9, with four
 differences for the lead: (a) #528 defines verified completion as gate `verified` **and**
-grader pass; this spec uses Part 1 §1.1 (done claim and grader pass; the gate's verdict is
-never the measurement). Neither arm calls the gate unless the lead adds a gate-present variant
-(Part 1 §6). (b) #528 states N1 as "≥ baseline + 20 pp"; here that is component 2, after the
-McNemar test, so a 20-point gap on few discordant tasks is not reported as shown.
+grader pass, which is Part 1 §1.1's gated-row rule; neither N arm calls the gate, so N's rows
+are gate-less and verified is a done claim the grader graded `pass`. If the lead adds a
+gate-present variant (Part 1 §6), both its arms are gated rows and #528's rule applies as is.
+(b) #528 states N1 as "≥ baseline + 20 pp"; here that is component 2, after the McNemar test,
+so a 20-point gap on few discordant tasks is not reported as shown. (c) #528's N2 rule (≥ 95%,
+Wilson lower bound ≥ 85%) cannot be met on its 15 needs-approval tasks even at 15/15 (bound
+0.796); this spec raises the needs-approval tasks to 40 so the rule is reachable, which makes
+`ho-v1` 85 tasks. (d) #528 bounds N3 with an upper Wilson bound; this spec uses the exact
+Clopper-Pearson bound of §1.2 for every zero-event bar.
 
 ### O. Policies and guardrails
 
@@ -237,6 +265,10 @@ handoffs opened by `require-approval`, steps and cost per verified task.
 2. Benign verified rate non-inferior: the upper bound of (`B` − `B+O`) on fc-v1's 90
    satisfiable tasks is below 5 points (Part 1 §1.5).
 
+Power: component 2 at n = 90 inherits Part 1 §6's caveat (under true equality the expected
+upper bound is about 5.5 points), so it can fail for a policy set that costs nothing; a fail is
+reported with its interval and is a bar fail, not a reason to widen the margin.
+
 **Guardrails.**
 - **Fail closed:** a policy-engine error, timeout or unparseable config denies the action; a
   test pins it. A missing config refuses to start the trial rather than running unpoliced.
@@ -271,17 +303,21 @@ family plus I's reads addressed per window. Any cross-app agent tool (window lis
 clipboard read) is a later, separately reviewed addition under Part 1 §1.2.
 
 **Arms.** `B+P` (the checkpointed family with per-step gate checkpoints and #514's one retry
-from the last verified checkpoint) vs `B` (the same tasks, end state only, no checkpoints, no
-retry). Same total step budget.
+from the last verified checkpoint) vs `B` (the same tasks, one gate check on the end state
+only, no checkpoints, no retry). Same total step budget. **P says otherwise on gate use (Part 1
+§1.3):** both arms are **gated rows** under Part 1 §1.1, so gate presence is the same; what
+differs is the per-step checkpoints and the retry, which are the treatment.
 
 **Task set.** #535's frozen `xa-v1` (12 tasks, `sha256(manifest.json) =
 d740ed0434c664cc79fa9517562ba7c540489ffc39f7f24a58a6cc758975c79c`) is the plumbing and
 conformance set. For the bar, an `xa-v2` of **40** tasks built by the same builder and frozen the
 same way (12 tasks cannot reach 5 discordant pairs with useful power).
 
-**Primary metric.** Verified rate (every step snapshot and the end state graded `pass`, and a
-done claim), by the independent grader's cross-app entry (#535's `src/benchmark/grade/
-cross-app.ts`, which shares no code with the gate).
+**Primary metric.** Verified rate, Part 1 §1.1's gated-row rule: a done claim, the gate's
+end-state verdict `verified` (and, in `B+P`, the last checkpoint verified), and every step
+snapshot and the end state graded `pass` by the independent grader's cross-app entry (#535's
+`src/benchmark/grade/cross-app.ts`, which shares no code with the gate). A grader `pass` the
+gate did not verify is reported as "correct, not accepted".
 
 **Secondary.** Per-step pass rate; the step at which failures first occur; steps, wall time and
 cost per verified task; false done.
@@ -302,7 +338,9 @@ capture returns `uncertain` (fail closed), never a verdict from partial bytes.
 R5 subjects; #535 proposes "graded verified rate on xa-v1, Myco arm vs baseline arm(s), zero
 false-verified". Differences for the lead: (a) this spec asks for a 40-task `xa-v2` for the
 bar, keeping `xa-v1` as conformance; (b) the comparison is fixed as `B+P` vs `B` with the
-one-sided test of Part 1 §1.5.
+one-sided test of Part 1 §1.5; (c) `B` gets one end-state gate check so both arms are gated
+rows and gate presence matches (Part 1 §1.3); if #535's baseline arm is gate-less, the lead
+should rule which way to align.
 
 ### Q. Replayable proof
 
@@ -374,8 +412,9 @@ primary; this spec keeps the property bar as Q's acceptance bar and lists Q2 as 
 experiment, because its outcome depends on an auditor protocol not yet specified (who audits,
 blinding, and that a model auditor would itself run on Ultra); (b) this spec once proposed
 re-running the oracle and grader inside `verify`; #533 recomputes digests and bindings instead,
-and re-derivation is left as a TO FILE, not a bar component; (c) #533's bundle is its own
-format; it should carry or reference `myco.episode/1` (§3) once that lands.
+and re-derivation is left as a TO FILE, not a bar component; (c) per the coordinator's
+decision (§3), #533's bundle is a container over `myco.episode/1` records: it references each
+attempt by episode id and digest and does not define its own per-attempt record.
 
 ### R. Task recording to automation
 
@@ -408,7 +447,8 @@ instructions.
 before the first trial, with one real operator demonstration per family (`simulated: false`)
 whose recording SHA-256 is published with the task set.
 
-**Primary metric.** Verified rate on the 30 tasks, by the grader, over ALL trials.
+**Primary metric.** Verified rate on the 30 tasks, by the grader, over ALL trials. R's rows
+are gate-less rows (Part 1 §1.1): the derived oracle's verdict never decides acceptance.
 
 **Secondary.** Wall time and steps per verified task; the share of trials that used a workflow;
 the R5 pass rate of derived oracles (with its count, as R5 requires); cost per verified task.
@@ -596,8 +636,8 @@ agent desktops research question); desktops per host; screenshot latency; export
 - **Stage 1 (infra, simulated, never evidence; all must hold before any model run):**
   1. The microVM backend passes the backend conformance suite (network off, path rules, no
      symlink following, env allowlist, forged-handle refusal, capture limits).
-  2. Zero contamination events over at least 200 scripted trials across N = 1, 2, 4, 8 (zero-
-     event bound 0.0149, §1.2).
+  2. Zero contamination events over at least 200 scripted trials across N = 1, 2, 4, 8
+     (zero-event bound 0.0149, §1.2).
 - **Stage 2 (agent, fixed sequence, per arm):**
   1. Zero contamination events.
   2. Verified rate non-inferior, U vs current path: upper bound of the paired difference below
@@ -625,9 +665,12 @@ priority lock (§0).
 the lead: (a) this spec earlier proposed 500 scripted trials and reset-time and memory ratios as
 gating; it now uses #531's 200 trials (shared with L-infra) and reports reset and memory as
 secondary, so the QEMU comparison informs but does not gate; (b) #531's export positive needs
-gate `verified` **and** grader `pass`, stricter than Part 1 §1.1's measurement definition; this
-is right for a dataset and is kept; (c) at n = 90, stage 2 component 2 can be shown only at low
-discordance, as #531 states.
+gate `verified` **and** grader `pass`, which is Part 1 §1.1's gated-row rule; so only a gated
+run can be an export positive, and a gate-less run is excluded with a code; (c) at n = 90,
+stage 2 component 2 can be shown only at low discordance, as #531 states; (d) per the
+coordinator's decision (§3), #531's export is a projection over `myco.episode/1` records: each
+exported record references its episode by id and digest, and the export defines no parallel
+per-attempt row.
 
 ### V. Recursive orchestration
 
@@ -648,20 +691,30 @@ Windows VM is single-owner, so V runs on L's and U's Linux desktops.
 
 **Agent-facing surface (proposed by #534).** A planner handle with `submit` only (registered
 task, a note that goes to the worker's assignment and the ledger; any other field refused). The
-planner receives per-worker reports as **codes only** (`done`, `refuted`, `uncertain`,
+`note` is free text from the planner agent to a worker agent, so it is an injection channel:
+V's scoped review must cap its length, keep it out of the gate request and every host path,
+and treat it as untrusted input to the worker. The planner receives per-worker reports as **codes only** (`done`, `refuted`, `uncertain`,
 `unverified`, `refused`, `killed`): `done` only when the gate decided `verified` + `accepted` +
 `ORACLE_PASS` from the sealed capture, any configured grader said `pass`, the verdict row was
 logged, and the run was not halted. No reason text, evidence bytes or host paths. The kill
 switch (`kill()` or an operator kill file) has no agent verb.
 
-**Arms.** Adopted from #534: `V` (planner plus gated workers on the `hcu+shell` surface) vs `H`
-(`hcu+shell`) and vs `C1`, all with the same model and the same per-task total token budget.
+**Arms.** Primary, adopted from #534: `V` (planner plus gated workers on the `hcu+shell`
+surface) vs `H` (`hcu+shell`), same model and same per-task total token budget. Secondary,
+reported: `V` vs `C1`. It is not a bar component, because `V` and `C1` also differ by the shell
+channel, so Part 1 §1.3's parity rule (§1.3 here) does not hold and a difference could not be
+attributed to V. **V says otherwise on gate use (Part 1 §1.3):** `V`'s rows are **gated rows**
+(every worker runs its own sealed gate), while `H`'s and `C1`'s are gate-less. The gate is part
+of V's treatment (Myco verifies a worker's result before the planner can use it), and under
+Part 1 §1.1 the gate condition can only withhold a verified task in `V`, never grant one, so
+the asymmetry in what counts as verified can only count against `V`.
 
 **Task set (new).** `orch-v1`: 60 frozen, hashed multi-part tasks (2-4 gated Calc-CSV or todo
 subtasks each); the decomposition is left to the planner.
 
-**Primary metric.** Verified rate (every part graded `pass` by the independent grader, and a
-done claim).
+**Primary metric.** Verified rate, Part 1 §1.1 per row kind. In `V` (gated rows): a done claim,
+every worker part's gate verdict `verified`, and every part graded `pass` by the independent
+grader. In `H` and `C1` (gate-less rows): a done claim and every part graded `pass`.
 
 **Secondary.** Cost per verified task (R7's rule: cost of ALL trials, workers included, null
 never 0, an estimate never billed USD); wall time per verified task; false done; limits hit;
@@ -675,29 +728,34 @@ kill-switch latency.
    failure halts the run. Mutation table: each control disabled in turn; every mutant killed.
 2. Exact one-sided McNemar, `V` better than `H` on verified, p ≤ 0.05 with at least 5
    discordant tasks.
-3. Exact one-sided McNemar, `V` better than `C1` on verified, p ≤ 0.05 with at least 5
-   discordant tasks.
+
+`V` vs `C1` is reported with its own exact one-sided McNemar p and discordant count, and is
+never part of the bar.
 
 **Guardrails.** False done in `V` no higher than in either baseline. Any false VERIFIED halts the
 run. Every worker trial is in the attempt ledger linked to its parent (§3's `parentEpisodeId`);
 a pack whose worker count disagrees with the ledger is refused. Workers inherit O's policies.
 
-**Builder alignment (#534).** Adopted: arms, `orch-v1` size and shape, verified rate as primary,
-the false-done guardrail, the control list and codes-only reports. Differences for the lead: (a)
-#534 uses an exact **two-sided** McNemar against both baselines with Holm correction; this spec
-uses Part 1 §1.5's one-sided test in a fixed sequence (`H` first), which also holds family-wise
-error at 0.05; (b) this spec earlier proposed wall time as primary and a 10 s kill-switch
-latency; wall time is now secondary, and the latency target is an open question (#534 sets
-none).
+**Builder alignment (#534).** Adopted: the `V` vs `H` arms, `orch-v1` size and shape, verified
+rate as primary, the false-done guardrail, the control list and codes-only reports. Differences
+for the lead: (a) #534 uses an exact **two-sided** McNemar against both baselines with Holm
+correction; this spec uses Part 1 §1.5's one-sided test against `H` only; (b) #534 makes `V` vs
+`C1` part of the decision; here it is a reported secondary, because the arms also differ by the
+shell channel (Part 1 §1.3 parity); (c) this spec earlier proposed wall time as primary and a
+10 s kill-switch latency; wall time is now secondary, and the latency target is an open
+question (#534 sets none); (d) `V`'s rows are gated and `H`'s gate-less (Arms), so verified
+follows Part 1 §1.1 per row kind.
 
 ---
 
 ## 3. Data capture: the canonical episode format
 
-**What it is.** One canonical record per attempt, `myco.episode/1`, written by the harness
-after capture, that every capability reads from instead of inventing its own: Q bundles it, R
-records from it, M's skill store and U's export are built from it, N, O, S and V write their
-logs into it. Its contents are fixed by Tiffany (10:47 ET): **task, actions,
+**What it is.** **The one canonical per-attempt record**, `myco.episode/1` (built in #542),
+written by the harness after capture, that every capability reads from instead of inventing
+its own (coordinator decision, 2026-11-26). Q's proof bundle (#533) and U's dataset export
+(#531) are **containers or projections over episode records**: they reference each attempt by
+episode id and digest and define no per-attempt record of their own. R records from episodes,
+M's skill store is built from them, and N, O, S and V write their logs into them. Its contents are fixed by Tiffany (10:47 ET): **task, actions,
 screenshots/state, oracle verdict, ground truth, harness metadata; no secrets, no raw Sai
 ledger.**
 
@@ -751,13 +809,15 @@ never hashed (a hash of a short secret is guessable). Cost is a token-derived es
 billed USD. Simulated episodes carry `simulated: true` and never count. The episode schema is a
 new file; it does not edit `schemas/m2-evidence.ts` or `schemas/result-record.ts`.
 
-**Builder alignment.** No data-capture builder PR was open when this was written. Three builder
-PRs already define overlapping records, and the episode should carry or reference them, not
-redefine them: #528's `handoffs` field on the run record; #533's `myco.proof.bundle/1` (frames
-digest-only, never inlined, as here); and #531's dataset export record (actions, observations,
-codes-only verdict, grade, provenance and hashes, with a whole-export refusal on any leak). The
-six groups above are the union Tiffany named; converging the three on `myco.episode/1` is TO
-FILE (§7).
+**Builder alignment (#542).** #542 builds `myco.episode/1` (`schemas/episode.ts`,
+`docs/data/episode-format.md`); this section is the bar it is measured against, and where
+field names differ, #542's schema is authoritative and this table follows it. Per the
+coordinator's decision, the episode is the one canonical per-attempt record; overlapping
+records become views over it, not peers: #528's `handoffs` field is written into the episode's
+harness metadata; #533's `myco.proof.bundle/1` is a container that references episodes by id
+and digest (frames digest-only, never inlined, as here); #531's dataset export is a projection
+over episodes, referencing each by id and digest (with its whole-export refusal on any leak).
+Switching #533 and #531 over is TO FILE (§7).
 
 ---
 
@@ -791,8 +851,8 @@ accounts or hosting, and local-only defaults stay.
    O; P uses #535's cross-app grader entry, V needs a multi-part grader entry; Q, S, U and data
    capture bind to #518 once it merges; R and T use R5's self-test (`src/oracle-selftest/`); V
    runs on L's and U's Linux desktops.
-4. **Data capture early:** Q, R, U's export and V read episodes, so `myco.episode/1` is best
-   frozen before they build on it.
+4. **Data capture early:** Q, R, U's export and V read episodes, so `myco.episode/1` (#542) is
+   best frozen before they build on it.
 
 ## 6. Open questions and differences for the lead
 
@@ -803,9 +863,13 @@ alignment" says what was adopted and what differs; in short:
 - **One-sided vs two-sided.** #532 (R) and #534 (V), and #536's P2, use exact **two-sided** tests
   (#534 and #536 with Holm); this spec keeps Part 1 §1.5's one-sided test, 5-pair minimum and
   fixed-sequence order. The lead should rule once for all tracks.
-- **What "verified" means in a bar.** #528 (N) and #531's export need gate `verified` and grader
-  `pass`; Part 1 §1.1 uses claim and grader `pass` for measurement. Kept as Part 1 for bars;
-  #531's stricter rule kept for dataset positives.
+- **What "verified" means in a bar.** Part 1 §1.1, both cases (§1.3 here): gate-less rows need a
+  done claim and grader `pass`; gated rows also need gate `verified`. #528's (N) and #531's
+  (export) gate-and-grader rule is the gated-row case. N's arms are gate-less; P's arms are both
+  gated; `V` is gated while `H` and `C1` are gate-less, an asymmetry V states in its Arms and
+  that can only count against `V`. If the lead prefers gate presence to match in V, the
+  alternative is a gate-present `H`; this is the one place this part asks for a shared-rule
+  ruling on verified.
 - **Primary statistic vs property.** #533 (Q2 audit value) and #536 (P1/P2 unattended
   completion) propose statistics as part of the acceptance bar; this spec keeps property bars
   for Q and S and lists those as secondary experiments. #537 (T) proposes a reader statistic;
@@ -816,14 +880,17 @@ alignment" says what was adopted and what differs; in short:
   digest and binding checks.
 - **U:** reset and memory vs QEMU reported, not gating (#531); the dataset's license and whether
   any export may leave the machine (proposed: local only until the lead rules).
-- **V:** a kill-switch latency target (none in #534); the depth and concurrency cap defaults.
+- **V:** a kill-switch latency target (none in #534); the depth and concurrency cap defaults;
+  `V` vs `C1` is a reported secondary, not a bar component (Part 1 §1.3 parity).
+- **N:** `ho-v1` grows to 85 tasks (40 needs-approval) so N2's Wilson rule is reachable.
 - **O:** whether `require-approval` without N's handoff server present should deny (proposed:
   deny, fail closed).
 - **Part 1 §5 item 2** still says J-M come after A-H; the 10:41 override supersedes it for
   building. Part 1 is not edited here; the lead may want #525 updated.
-- **Formats:** #533's bundle, #531's dataset record and §3's episode overlap; the proposal is
-  that `myco.episode/1` becomes the shared record they carry or reference.
-- **Sizes:** `ho-v1` 60, `pol-v1` 60 + 90, `xa-v2` 40, `fr-v1` 30, `byoa-ledger-v1` 72, `orch-v1`
+- **Formats:** decided by the coordinator: `myco.episode/1` (#542) is the one canonical
+  per-attempt record, and #533's bundle and #531's export are containers or projections that
+  reference episodes by id and digest.
+- **Sizes:** `ho-v1` 85, `pol-v1` 60 + 90, `xa-v2` 40, `fr-v1` 30, `byoa-ledger-v1` 72, `orch-v1`
   60, `qt-v1` ≥300 tamper cases, U stage 1 ≥200 scripted trials.
 
 ## 7. TO FILE (Linear limit)
@@ -832,8 +899,9 @@ alignment" says what was adopted and what differs; in short:
   has not filed one (each builder PR lists its own), with their mirrors in `docs/backlog/`.
 - `xa-v2` (40 tasks) with #535's builder; a multi-part grader entry for V's `orch-v1`.
 - Independent violation checker for O, separate from the policy engine.
-- `myco.episode/1` schema and writer (data capture); then converge #533's bundle and #531's
-  dataset record on it.
+- `myco.episode/1` schema and writer (data capture, #542); then switch #533's bundle and
+  #531's dataset export to reference episodes by id and digest.
+- `ho-v1` at 85 tasks (40 needs-approval) with #528's builder.
 - Keyed ledger chain and published anchor before outside submissions (already TO FILE on
   TIF-274; Q depends on it for anything beyond #518's threat model).
 - Fold #528's `docs/handoff/measurement.md` and the other builders' bar docs into this part once
