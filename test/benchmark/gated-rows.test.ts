@@ -4,24 +4,33 @@
  * calc-record-edit family) on fc-v1 tasks through a mock transport, graded by the
  * independent grader and joined by the check. Nothing here calls a model.
  */
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { benchmarkArmRowSchema } from "../../schemas/benchmark-ledger.ts";
 import { validateSchema } from "../../schemas/validate.ts";
-import { checkBenchmark, expectedAccepted } from "../../src/benchmark/check.ts";
 import {
+  type BenchmarkArmRow,
+  type CheckResult,
+  checkBenchmark,
+  EVIDENCE_PLANNER,
+  expectedAccepted,
+} from "../../src/benchmark/check.ts";
+import {
+  GATE_STATE_FILE,
   type GatedTrialRecord,
   gatedArmRow,
-  isSimulated,
+  gateEntryFor,
   registerTask,
 } from "../../src/benchmark/gated-rows.ts";
 import { grade } from "../../src/benchmark/grade/grade.ts";
-import { gradeRow } from "../../src/benchmark/grade/row.ts";
+import { type BenchmarkGradeRow, gradeRow } from "../../src/benchmark/grade/row.ts";
 import type { BenchmarkTask } from "../../src/benchmark/taskset.ts";
-import { buildRegistry } from "../../src/gate/gate.ts";
+import type { GateResult, ReasonCode } from "../../src/gate/api.ts";
+import { buildRegistry, specDigest } from "../../src/gate/gate.ts";
 import { runGatedTrial } from "../../src/gate/gated-trial.ts";
 import { GATE_TOOL } from "../../src/gate/mcp-server.ts";
 import type { AgentLaunchPlan } from "../../src/integrity/launch.ts";
@@ -35,19 +44,62 @@ const TASKS = readFileSync(join(BUNDLE, "tasks.jsonl"), "utf8")
   .split("\n")
   .map((l) => JSON.parse(l) as BenchmarkTask);
 const T1 = TASKS[0] as BenchmarkTask;
+const T2 = TASKS[1] as BenchmarkTask;
+const INVALID = TASKS.find((t) => t.faultClass === "invalid-target") as BenchmarkTask;
 const sha = (b: Uint8Array | string) => createHash("sha256").update(b).digest("hex");
+const DOC = new TextEncoder().encode("doc");
+const RUN = "run-1";
+
+/** A decided outcome that is internally consistent for `task`, run `RUN`, bytes `doc`. */
+function decided(
+  verdict: GateResult["verdict"],
+  reasonCodes: ReasonCode[] = [],
+  doc: Uint8Array | null = DOC,
+  task: BenchmarkTask = T1,
+): Extract<GatedTrialRecord["outcome"], { status: "decided" }> {
+  return {
+    status: "decided",
+    receipt: { runId: RUN },
+    result: {
+      verdict,
+      accepted: verdict === "verified",
+      reasonCodes,
+      request: { taskId: task.taskId, runId: RUN },
+      evidenceRefs:
+        doc === null
+          ? []
+          : [
+              {
+                kind: "persisted-state",
+                runId: RUN,
+                path: GATE_STATE_FILE,
+                sha256: sha(doc),
+                bytes: doc.length,
+              },
+            ],
+      ...(verdict === "uncertain"
+        ? {}
+        : {
+            oracle: {
+              family: "calc-record-edit",
+              version: "x",
+              specSha256: specDigest(gateEntryFor(task).spec),
+            },
+          }),
+    },
+  };
+}
 
 function record(over: Partial<GatedTrialRecord> = {}): GatedTrialRecord {
   return {
-    task: T1,
+    taskId: T1.taskId,
     trialKey: "r1-fc-v1-001",
-    outcome: {
-      status: "decided",
-      result: { verdict: "verified", accepted: true, reasonCodes: [] },
-    },
+    runId: RUN,
+    outcome: decided("verified"),
     agentClaim: "done",
     instruction: T1.instruction,
-    persisted: new TextEncoder().encode("doc"),
+    persisted: DOC,
+    persistedFormat: "csv",
     plannerModelId: "claude-sonnet-5-5",
     outputCeiling: 8192,
     cost: { modelUsd: 0.1, wallClockS: 30, vmS: null },
@@ -55,24 +107,43 @@ function record(over: Partial<GatedTrialRecord> = {}): GatedTrialRecord {
   };
 }
 
+const row = (over: Partial<GatedTrialRecord> = {}) => gatedArmRow(record(over), TASKS);
+
+/** A grade row for `r` with the given status (fields consistent with the arm row). */
+function gradeFor(r: BenchmarkArmRow, status: "pass" | "fail" | "ungradable"): BenchmarkGradeRow {
+  return gradeRow(r.trialKey, r.taskId, {
+    graderVersion: "false-completion-grader/1",
+    status,
+    reasons: status === "pass" ? [] : ["x"],
+    fixtureSha256: r.fixtureSha256,
+    persistedSha256: r.persistedSha256,
+    target: status === "ungradable" ? null : "B12",
+    targetSatisfied: status === "ungradable" ? null : status === "pass",
+    mismatches: [],
+    mismatchCount: 0,
+  });
+}
+
 describe("gatedArmRow", () => {
   it("accepts a done the post-stop check verified, and the row is schema-valid and self-consistent", () => {
-    const row = gatedArmRow(record());
-    expect(row).toMatchObject({
+    const r = row();
+    expect(r).toMatchObject({
       arm: "myco-gate",
       taskSetVersion: "fc-v1",
       taskId: "fc-v1-001",
+      faultClass: T1.faultClass,
+      fixtureSha256: T1.fixtureSha256,
       claim: "done",
       gate: { called: true, verdict: "verified" },
       accepted: true,
       cause: null,
       persistedSha256: sha("doc"),
     });
-    expect(validateSchema(row, benchmarkArmRowSchema)).toEqual([]);
-    expect(expectedAccepted(row)).toBe(row.accepted);
+    expect(validateSchema(r, benchmarkArmRowSchema)).toEqual([]);
+    expect(expectedAccepted(r)).toBe(r.accepted);
   });
 
-  const CASES: [string, Partial<GatedTrialRecord>, Partial<ReturnType<typeof gatedArmRow>>][] = [
+  const CASES: [string, Partial<GatedTrialRecord>, Partial<BenchmarkArmRow>][] = [
     [
       "a refused launch audit (the agent never ran)",
       { outcome: { status: "refused" } },
@@ -90,12 +161,7 @@ describe("gatedArmRow", () => {
     ],
     [
       "a done the check refuted",
-      {
-        outcome: {
-          status: "decided",
-          result: { verdict: "refuted", accepted: false, reasonCodes: ["ORACLE_FAIL"] },
-        },
-      },
+      { outcome: decided("refuted", ["ORACLE_FAIL"]) },
       {
         accepted: false,
         gate: { called: true, verdict: "refuted" },
@@ -104,27 +170,23 @@ describe("gatedArmRow", () => {
     ],
     [
       "an uncaptured document",
-      {
-        persisted: null,
-        outcome: {
-          status: "decided",
-          result: { verdict: "uncertain", accepted: false, reasonCodes: ["STATE_MISSING"] },
-        },
-      },
+      { persisted: null, outcome: decided("uncertain", ["STATE_MISSING"], null) },
       {
         accepted: false,
         persistedSha256: null,
         cause: { kind: "harness", detail: "gate: STATE_MISSING" },
       },
     ],
+    ...(
+      ["STATE_UNREADABLE", "AUDIT_FAILED", "FIXTURE_UNREADABLE", "FIXTURE_MISMATCH"] as const
+    ).map((code): [string, Partial<GatedTrialRecord>, Partial<BenchmarkArmRow>] => [
+      `a harness fault ${code}`,
+      { outcome: decided("uncertain", [code]) },
+      { accepted: false, cause: { kind: "harness", detail: `gate: ${code}` } },
+    ]),
     [
       "an oracle that could not decide",
-      {
-        outcome: {
-          status: "decided",
-          result: { verdict: "uncertain", accepted: false, reasonCodes: ["ORACLE_ERROR"] },
-        },
-      },
+      { outcome: decided("uncertain", ["ORACLE_ERROR"]) },
       {
         accepted: false,
         cause: { kind: "oracle", detail: "gate could not decide (ORACLE_ERROR)" },
@@ -132,73 +194,256 @@ describe("gatedArmRow", () => {
     ],
     [
       "no claim at all",
-      {
-        agentClaim: "no-claim",
-        outcome: {
-          status: "decided",
-          result: { verdict: "refuted", accepted: false, reasonCodes: [] },
-        },
-      },
+      { agentClaim: "no-claim", outcome: decided("refuted") },
       { accepted: false, cause: { kind: "agent", detail: "agent made no claim" } },
     ],
   ];
   for (const [name, over, want] of CASES) {
     it(`maps ${name}`, () => {
-      const row = gatedArmRow(record(over));
-      expect(row).toMatchObject(want);
-      expect(validateSchema(row, benchmarkArmRowSchema)).toEqual([]);
-      expect(expectedAccepted(row)).toBe(row.accepted);
+      const r = row(over);
+      expect(r).toMatchObject(want);
+      expect(validateSchema(r, benchmarkArmRowSchema)).toEqual([]);
+      expect(expectedAccepted(r)).toBe(r.accepted);
     });
   }
 
   it("refuses an instruction that is not the task's", () => {
-    expect(() => gatedArmRow(record({ instruction: `${T1.instruction} ` }))).toThrow(
+    expect(() => row({ instruction: `${T1.instruction} ` })).toThrow(
       /instruction is not task fc-v1-001's/,
     );
   });
   it("refuses a gate result whose accepted contradicts its verdict", () => {
-    expect(() =>
-      gatedArmRow(
-        record({
-          outcome: {
-            status: "decided",
-            result: { verdict: "refuted", accepted: true, reasonCodes: [] },
-          },
-        }),
-      ),
-    ).toThrow(/contradicts verdict refuted/);
+    const o = decided("refuted");
+    expect(() => row({ outcome: { ...o, result: { ...o.result, accepted: true } } })).toThrow(
+      /contradicts verdict refuted/,
+    );
   });
   it("refuses a verified trial with no captured document", () => {
-    expect(() => gatedArmRow(record({ persisted: null }))).toThrow(
-      /verified a trial whose document was not captured/,
-    );
+    expect(() => row({ persisted: null })).toThrow(/record says none was captured/);
   });
 });
 
-describe("simulated rows are never evidence", () => {
-  it("the check refuses a simulated row only when asked for evidence", () => {
-    const row = gatedArmRow(record({ plannerModelId: "simulated:scripted" }));
-    expect(isSimulated(row)).toBe(true);
-    const g = gradeRow(row.trialKey, row.taskId, {
-      graderVersion: "false-completion-grader/1",
-      status: "pass",
-      reasons: [],
-      fixtureSha256: row.fixtureSha256,
-      persistedSha256: row.persistedSha256,
-      target: "B12",
-      targetSatisfied: true,
-      mismatches: [],
-      mismatchCount: 0,
+describe("gatedArmRow binds the gate result to this trial (#496 D1-D3, D5)", () => {
+  const o = decided("verified");
+  const REFUSALS: [string, Partial<GatedTrialRecord>, RegExp][] = [
+    // D1: another trial's or run's decision.
+    [
+      "a verdict for another task",
+      { taskId: T2.taskId, instruction: T2.instruction },
+      /checked task fc-v1-001, not fc-v1-002/,
+    ],
+    ["a verdict for another run", { runId: "run-2" }, /sealed for run run-1, not run-2/],
+    [
+      "a request for another run under this receipt",
+      {
+        outcome: { ...o, result: { ...o.result, request: { taskId: T1.taskId, runId: "run-9" } } },
+      },
+      /checked run run-9, not run-1/,
+    ],
+    [
+      "a verified result that names no oracle",
+      { outcome: { ...o, result: { ...o.result, oracle: undefined } } },
+      /verified but names no oracle/,
+    ],
+    [
+      "a verdict decided on another task's spec",
+      {
+        outcome: {
+          ...o,
+          result: {
+            ...o.result,
+            oracle: {
+              family: "calc-record-edit",
+              version: "x",
+              specSha256: specDigest(gateEntryFor(T2).spec),
+            },
+          },
+        },
+      },
+      /decided on a different spec/,
+    ],
+    // D2: the bytes are not the bytes the gate decided on.
+    [
+      "other bytes than the gate read",
+      { persisted: new TextEncoder().encode("clean") },
+      /are not the bytes the gate decided on/,
+    ],
+    [
+      "a verified result without a persisted-state ref",
+      { outcome: { ...o, result: { ...o.result, evidenceRefs: [] } } },
+      /verified without a persisted-state evidence ref/,
+    ],
+    // D3: format and published-task parity.
+    ["an xlsx document (the gate reads CSV only)", { persistedFormat: "xlsx" }, /reads CSV only/],
+    ["a task not in the published set", { taskId: "fc-v1-999" }, /appears 0 times/],
+    ["a schema-invalid output ceiling", { outputCeiling: -5 }, /not schema-valid/],
+    // D5: a registrable task marked unregistrable.
+    [
+      "a registrable task marked unregistrable",
+      { outcome: { status: "unregistrable", reason: "r" } },
+      /registers with the gate/,
+    ],
+  ];
+  for (const [name, over, want] of REFUSALS) {
+    it(`refuses ${name}`, () => {
+      expect(() => row(over)).toThrow(want);
     });
-    const plumbing = checkBenchmark([row], [g], { expectTrials: { "myco-gate": 1 } });
-    expect(plumbing.ok).toBe(true);
-    const asEvidence = checkBenchmark([row], [g], {
+  }
+
+  it("takes faultClass and fixture from the published task, and refuses a forged one", () => {
+    const forgedFixture = TASKS.map((t) =>
+      t.taskId === T1.taskId ? { ...t, fixtureSha256: "0".repeat(64) } : t,
+    );
+    expect(() => gatedArmRow(record(), forgedFixture)).toThrow(
+      /not the fixture its seed generates/,
+    );
+    // A relabelled task set is caught downstream: make-requests pins faultClass to the bundle.
+    expect(row().faultClass).toBe("none");
+    const dup = [...TASKS, T1];
+    expect(() => gatedArmRow(record(), dup)).toThrow(/appears 2 times/);
+  });
+
+  it("an invalid-target task is re-checked against the registry and may be unregistrable", () => {
+    const r = gatedArmRow(
+      record({
+        taskId: INVALID.taskId,
+        instruction: INVALID.instruction,
+        outcome: { status: "unregistrable", reason: "r" },
+      }),
+      TASKS,
+    );
+    expect(r).toMatchObject({ faultClass: "invalid-target", gate: { unregistrable: true } });
+  });
+});
+
+describe("evidence provenance (#496 D4)", () => {
+  const g = (r: BenchmarkArmRow) => gradeFor(r, "pass");
+  it.each([
+    "simulated:scripted",
+    "Simulated:x",
+    "SIMULATED:x",
+    " simulated:x",
+    "\u200bsimulated:x",
+    "\uff53imulated:x",
+    "simulated-x",
+    "sim:x",
+    "dry-run:x",
+    "claude-sonnet-5-5 ",
+    "Claude-sonnet-5-5",
+    "claude-sonnet",
+  ])("refuses planner %j as evidence, and accepts it as plumbing", (planner) => {
+    const r = row({ plannerModelId: planner });
+    expect(checkBenchmark([r], [g(r)], { expectTrials: { "myco-gate": 1 } }).ok).toBe(true);
+    const asEvidence = checkBenchmark([r], [g(r)], {
       expectTrials: { "myco-gate": 1 },
       evidence: true,
     });
     expect(asEvidence.ok).toBe(false);
-    expect(asEvidence.errors).toContain("1 simulated row(s): dry-run rows are never evidence");
+    expect(asEvidence.errors.join("\n")).toMatch(/1 row\(s\) without evidence provenance/);
     expect(asEvidence.r1?.pass).toBe(false);
+  });
+  it.each(["claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2", "claude-haiku-5-5"])(
+    "accepts the Claude model id %j as evidence",
+    (planner) => {
+      expect(EVIDENCE_PLANNER.test(planner)).toBe(true);
+      const r = row({ plannerModelId: planner });
+      const res = checkBenchmark([r], [g(r)], { expectTrials: { "myco-gate": 1 }, evidence: true });
+      expect(res.errors).toEqual([]);
+    },
+  );
+
+  it("the CLI's --evidence flag refuses the same ledger it otherwise accepts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "myco-check-cli-"));
+    try {
+      const r = row({ plannerModelId: "simulated:scripted" });
+      writeFileSync(join(dir, "arm.jsonl"), `${JSON.stringify(r)}\n`);
+      writeFileSync(join(dir, "grades.jsonl"), `${JSON.stringify(g(r))}\n`);
+      const run = (extra: string[]) =>
+        spawnSync(
+          "npx",
+          [
+            "tsx",
+            join(ROOT, "scripts", "benchmark-check.ts"),
+            "--arm",
+            join(dir, "arm.jsonl"),
+            "--grades",
+            join(dir, "grades.jsonl"),
+            "--expect",
+            "myco-gate=1",
+            ...extra,
+          ],
+          { cwd: ROOT, encoding: "utf8" },
+        );
+      const plumbing = run([]);
+      expect(plumbing.status, plumbing.stderr).toBe(0);
+      const evidence = run(["--evidence"]);
+      expect(evidence.status).toBe(1);
+      expect((JSON.parse(evidence.stdout) as CheckResult).errors.join("\n")).toMatch(
+        /without evidence provenance/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe("the check's unregistrable and capture rules", () => {
+  const unreg = (claim: BenchmarkArmRow["claim"]) =>
+    gatedArmRow(
+      record({
+        taskId: INVALID.taskId,
+        instruction: INVALID.instruction,
+        agentClaim: claim,
+        outcome: { status: "unregistrable", reason: "r" },
+      }),
+      TASKS,
+    );
+
+  it("counts only done claims, and only grader fails, in the unregistrable row; R1 notes them", () => {
+    const ok = row();
+    const rows = [
+      ok,
+      { ...unreg("done"), trialKey: "u1" },
+      { ...unreg("done"), trialKey: "u2" },
+      { ...unreg("not-done"), trialKey: "u3" },
+      { ...unreg("no-claim"), trialKey: "u4" },
+    ];
+    const grades = [
+      gradeFor(rows[0] as BenchmarkArmRow, "pass"),
+      gradeFor(rows[1] as BenchmarkArmRow, "fail"),
+      gradeFor(rows[2] as BenchmarkArmRow, "ungradable"),
+      gradeFor(rows[3] as BenchmarkArmRow, "fail"),
+      gradeFor(rows[4] as BenchmarkArmRow, "fail"),
+    ];
+    const res = checkBenchmark(rows, grades, { expectTrials: { "myco-gate": 5 } });
+    expect(res.errors).toEqual([]);
+    expect(res.arms[0]?.unregistrable).toEqual({
+      trials: 4,
+      claimedDone: 2,
+      graderFailClaimedDone: 1,
+    });
+    expect(res.r1).toMatchObject({ pass: true, gatedTrials: 1 });
+    expect(res.r1?.falseAcceptPerTrial.denominator).toBe(5);
+    expect(res.r1?.notes).toEqual([
+      "2 DONE claim(s) on unregistrable tasks were never gated (1 graded fail); they cannot be accepted, so they are not in the false-accept numerator",
+    ]);
+  });
+
+  it("refuses an unregistrable row on a task that is not invalid-target", () => {
+    const r = unreg("done");
+    const forged = { ...r, taskId: T1.taskId, faultClass: "none", fixtureSha256: T1.fixtureSha256 };
+    const res = checkBenchmark([forged], [gradeFor(forged, "fail")], {
+      expectTrials: { "myco-gate": 1 },
+    });
+    expect(res.errors.join("\n")).toMatch(/only an invalid-target task can be unregistrable/);
+  });
+
+  it("refuses an accepted gated row without its captured bytes' sha256", () => {
+    const r = { ...row(), persistedSha256: null };
+    const res = checkBenchmark([r], [gradeFor(r, "ungradable")], {
+      expectTrials: { "myco-gate": 1 },
+    });
+    expect(res.errors.join("\n")).toMatch(/accepted gated row must carry its captured bytes/);
   });
 });
 
@@ -233,14 +478,7 @@ describe("real runGatedTrial on fc-v1 tasks (mock transport, no model)", () => {
 
   /** One trial: the scripted "agent" saves `doc` (or nothing) and claims done. */
   async function gatedTrial(task: BenchmarkTask, doc: string | null) {
-    const tasks = buildRegistry([
-      {
-        id: task.taskId,
-        family: "calc-record-edit",
-        stateFile: "doc.csv",
-        spec: { fixtureSeed: task.fixtureSeed, ...task.intent },
-      },
-    ]);
+    const tasks = buildRegistry([gateEntryFor(task)]);
     const runId = `run-${task.taskId}`;
     const outcome = await runGatedTrial({
       vault,
@@ -274,11 +512,13 @@ describe("real runGatedTrial on fc-v1 tasks (mock transport, no model)", () => {
 
   function baseRecord(task: BenchmarkTask, doc: string): Omit<GatedTrialRecord, "outcome"> {
     return {
-      task,
+      taskId: task.taskId,
       trialKey: `r1-${task.taskId}`,
+      runId: `run-${task.taskId}`,
       agentClaim: "done",
       instruction: task.instruction,
       persisted: new TextEncoder().encode(doc),
+      persistedFormat: "csv",
       plannerModelId: "simulated:scripted",
       outputCeiling: null,
       cost: { modelUsd: null, wallClockS: null, vmS: null },
@@ -318,17 +558,22 @@ describe("real runGatedTrial on fc-v1 tasks (mock transport, no model)", () => {
       const outcome = await gatedTrial(task, doc);
       expect(outcome.status).toBe("decided");
       const persisted = doc === null ? null : new TextEncoder().encode(doc);
-      const row = gatedArmRow({
-        task,
-        trialKey: `r1-${task.taskId}`,
-        outcome,
-        agentClaim: "done",
-        instruction: task.instruction,
-        persisted,
-        plannerModelId: "simulated:scripted",
-        outputCeiling: null,
-        cost: { modelUsd: null, wallClockS: null, vmS: null },
-      });
+      const row = gatedArmRow(
+        {
+          taskId: task.taskId,
+          trialKey: `r1-${task.taskId}`,
+          runId: `run-${task.taskId}`,
+          outcome,
+          agentClaim: "done",
+          instruction: task.instruction,
+          persisted,
+          persistedFormat: "csv",
+          plannerModelId: "simulated:scripted",
+          outputCeiling: null,
+          cost: { modelUsd: null, wallClockS: null, vmS: null },
+        },
+        TASKS,
+      );
       armRows.push(row);
       const fixtureCsv = readFileSync(join(BUNDLE, task.fixtureFile));
       grades.push(
@@ -381,11 +626,11 @@ describe("real runGatedTrial on fc-v1 tasks (mock transport, no model)", () => {
     if (reg.ok) throw new Error("expected unregistrable");
     const pristine = generateFixture(bad.fixtureSeed).csv;
     const rows = [
-      gatedArmRow({ ...baseRecord(ok, honest(ok)), outcome: okOutcome }),
-      gatedArmRow({
-        ...baseRecord(bad, pristine),
-        outcome: { status: "unregistrable", reason: reg.reason },
-      }),
+      gatedArmRow({ ...baseRecord(ok, honest(ok)), outcome: okOutcome }, TASKS),
+      gatedArmRow(
+        { ...baseRecord(bad, pristine), outcome: { status: "unregistrable", reason: reg.reason } },
+        TASKS,
+      ),
     ];
     expect(rows[1]).toMatchObject({
       claim: "done",
@@ -411,15 +656,34 @@ describe("real runGatedTrial on fc-v1 tasks (mock transport, no model)", () => {
       unregistrable: { trials: 1, claimedDone: 1, graderFailClaimedDone: 1 },
     });
     expect(result.r1?.falseAcceptPerTrial.denominator).toBe(2);
-    expect(result.r1?.pass).toBe(true);
+    expect(result.r1).toMatchObject({ pass: true, gatedTrials: 1 });
+    expect(result.r1?.notes).toHaveLength(1);
+  });
+
+  it("the real gate's decision cannot be attached to another trial or to other bytes", {
+    timeout: 60_000,
+  }, async () => {
+    const [a, b] = TASKS.filter((t) => t.faultClass === "none") as [BenchmarkTask, BenchmarkTask];
+    const outcome = await gatedTrial(a, honest(a));
+    expect(outcome.status === "decided" && outcome.result.verdict).toBe("verified");
+    // D1: task a's verified decision on task b's record.
+    expect(() =>
+      gatedArmRow({ ...baseRecord(b, honest(b)), runId: `run-${a.taskId}`, outcome }, TASKS),
+    ).toThrow(/checked task/);
+    // D2: the pristine fixture in place of the bytes the gate verified.
+    expect(() =>
+      gatedArmRow({ ...baseRecord(a, generateFixture(a.fixtureSeed).csv), outcome }, TASKS),
+    ).toThrow(/not the bytes the gate decided on/);
+    // The same decision with the bytes it read is accepted.
+    expect(gatedArmRow({ ...baseRecord(a, honest(a)), outcome }, TASKS).accepted).toBe(true);
   });
 
   it("the check refuses an unregistrable row that claims a gate call or verdict", () => {
     const bad = TASKS.find((t) => t.faultClass === "invalid-target") as BenchmarkTask;
-    const row = gatedArmRow({
-      ...baseRecord(bad, "x"),
-      outcome: { status: "unregistrable", reason: "r" },
-    });
+    const row = gatedArmRow(
+      { ...baseRecord(bad, "x"), outcome: { status: "unregistrable", reason: "r" } },
+      TASKS,
+    );
     const forged = {
       ...row,
       gate: { called: true, verdict: "refuted" as const, unregistrable: true as const },
