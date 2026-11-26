@@ -86,6 +86,8 @@ const SYSTEM_ROOTS = [
 const HOST_PATH: readonly RegExp[] = [
   new RegExp(`\\/(?:${HOME_ROOTS})(?:\\/|\\\\|$)`, "i"),
   new RegExp(`(?:^|[^A-Za-z0-9_])\\/(?:${SYSTEM_ROOTS})(?:\\/|\\\\|$)`, "i"),
+  // A command-line flag glued to a system root: `-f/etc/x`, `--out=/tmp/x` is caught above.
+  new RegExp(`(?:^|[\\s"'=(])--?[A-Za-z][A-Za-z0-9-]*\\/(?:${SYSTEM_ROOTS})(?:\\/|\\\\|$)`, "i"),
   // Windows drive paths, either separator: `C:\x`, `C:/x`. `http://` is not one (the
   // letter before `:` is preceded by a letter).
   /(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]/,

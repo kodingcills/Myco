@@ -59,6 +59,10 @@ describe("leak scan: host paths, one test per bypass", () => {
     ["Windows backslash drive path", j("C:", BS, "Users", BS, "erin")],
     ["Windows JSON-escaped drive path", j("C:", BS, BS, "Users", BS, BS, "erin")],
     ["Windows forward-slash drive path", j("C:", S, "Users", S, "erin")],
+    ["Windows forward-slash drive path, no home root", j("D:", S, "projects", S, "x")],
+    ["redirect to /tmp (doc §6)", j(">", S, "tmp", S, "x")],
+    ["flag glued to /etc (doc §6)", j("-f", S, "etc", S, "x")],
+    ["a system binary (doc §6: fail closed)", j(S, "usr", S, "bin", S, "libreoffice")],
     ["Windows home without a drive", j(BS, "Users", BS, "erin", BS, "x")],
     ["UNC path", j(BS, BS, "fileserver", BS, "share")],
     ["file URL", j("file:", S, S, "srv/share")],
@@ -111,6 +115,9 @@ describe("leak scan: secrets and operator strings in any encoding", () => {
     expect(leaksIn(key, NO_ID)).toContain("secret-shaped");
     const opts = { ...NO_ID, forbiddenStrings: ["zz-op-marker"] };
     expect(leaksIn("note zz%2Dop%2Dmarker", opts)).toContain("forbidden-string");
+    // A JSON-escaped slash inside an operator string is decoded before matching.
+    const slashed = { ...NO_ID, forbiddenStrings: ["out/zz-vault-dir"] };
+    expect(leaksIn(j("cp x out", BS, S, "zz-vault-dir"), slashed)).toContain("forbidden-string");
   });
 
   it("reports a leaking key without echoing it in the path, at any depth below it", () => {

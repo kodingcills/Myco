@@ -51,6 +51,7 @@
 #   n4: blob observations are accepted (dangling references in the container).
 #   n5: an episode whose outcome differs from its gate verdict is accepted.
 #   n6: out-of-order actions are accepted.
+#   n7: an observation following a nonexistent action (or out of order) is accepted.
 #   s1: manifest.json is not scanned for leaks (round-1 V7).
 #   s2: schema.json is not scanned for leaks.
 #   s3: records.jsonl is not scanned for leaks.
@@ -79,6 +80,7 @@
 #   h14: an injected identity is ignored (machine identity only, D2).
 #   h15: identity matching is case-sensitive.
 #   h16: placeholders are not neutralised (`<home>/tmp` refused as a host path).
+#   h18: a flag glued to a system root (`-f/etc/x`) is not matched.
 #   h17: forbiddenStringsFromFiles keeps whole lines only (a vault `NAME=value` value missed, D4).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -154,6 +156,7 @@ M = {
   "n4": [(E, '    if (o.kind !== "ui-status") {\n      return { path: `$.observations.items[${i}]`, detail: "BLOBS_UNSUPPORTED" };\n    }\n', '    if (o.kind !== "ui-status") continue;\n')],
   "n5": [(E, 'if (decided.includes(e.outcome) && e.gate?.verdict !== e.outcome) {', 'if (false) {')],
   "n6": [(E, 'if (a.seq !== i) return', 'if (false) return')],
+  "n7": [(E, 'if (o.seq !== i || (o.afterAction !== null && o.afterAction >= e.actions.items.length)) {', 'if (false) {')],
   "s1": [(E, SCAN_LOOP, SCAN_LOOP + '    if (name === "manifest.json") continue;\n')],
   "s2": [(E, SCAN_LOOP, SCAN_LOOP + '    if (name === "schema.json") continue;\n')],
   "s3": [(E, SCAN_LOOP, SCAN_LOOP + '    if (name === "records.jsonl") continue;\n')],
@@ -181,6 +184,7 @@ M = {
   "h14": [(H, 'const { user, host: fullHost } = options.identity ?? machineIdentity();', 'const { user, host: fullHost } = machineIdentity();')],
   "h15": [(H, '(?:$|[^A-Za-z0-9])`, "i");', '(?:$|[^A-Za-z0-9])`);')],
   "h16": [(H, 'const pathForms = forms.map((f) => f.replace(PLACEHOLDER, "PLACEHOLDER"));', 'const pathForms = forms;')],
+  "h18": [(H, r"--?[A-Za-z][A-Za-z0-9-]*\\/(?:", r"--?NEVER[A-Za-z][A-Za-z0-9-]*\\/(?:")],
   "h17": [(H, 'if (value !== undefined && value.length >= minLength) out.add(value);', '')],
 }
 for edit_args in M[which]:
@@ -190,8 +194,8 @@ EOF
 
 MUTANTS=(d1 d2 d3 d4 d5 d6 d7 d8 d9 d10 d11 d12 d13 d14 f1 f2 f3 f4
   e1 e2 e2b e2c e3 e4 e5 e6 e7 e8 e9 e10 e11 e17 e18 e19 e20 e20b e21
-  n1 n2 n3 n4 n5 n6 s1 s2 s3 s4 t1 t2
-  e12 e13 e14 e15 e16 h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17)
+  n1 n2 n3 n4 n5 n6 n7 s1 s2 s3 s4 t1 t2
+  e12 e13 e14 e15 e16 h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18)
 if [ "$#" -gt 0 ]; then MUTANTS=("$@"); fi
 status=0
 for mutant in "${MUTANTS[@]}"; do

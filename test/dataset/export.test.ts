@@ -475,6 +475,18 @@ describe("exportDataset: a container over episodes", () => {
         "$.gate.accepted",
       ],
       [
+        "observation follows an action that does not exist",
+        readdressed({
+          ...base,
+          observations: {
+            capture: "recorded",
+            withheld: 0,
+            items: [{ seq: 0, afterAction: 9, kind: "ui-status", text: "x" }],
+          },
+        }),
+        "$.observations.items[0]",
+      ],
+      [
         "actions out of order",
         readdressed({
           ...base,
