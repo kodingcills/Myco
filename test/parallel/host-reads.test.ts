@@ -308,7 +308,7 @@ describe("sealMatchesSnapshot", () => {
   });
 
   it("is false when a source hash, path or count differs", () => {
-    for (const sources of [
+    for (const sources of <Record<string, string>[]>[
       { "/snap/0-a.ts": sha("A"), "/snap/1-b.ts": sha("b") },
       { "/src/a.ts": sha("a"), "/snap/1-b.ts": sha("b") },
       { "/snap/0-a.ts": sha("a") },
