@@ -4,6 +4,7 @@
  * refused, only issued registrations run, edited plugins stop running, and every result is
  * labelled with plugin provenance and as not-R1-evidence.
  */
+import { spawn } from "node:child_process";
 import { appendFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -244,6 +245,74 @@ describe("registration requires the R5 self-test for every claimed class", () =>
   });
 });
 
+describe("a plugin edited while it registers is refused (V3)", () => {
+  // The self-test is slow on purpose (each oracle call spins ~300 ms), and another process
+  // edits the plugin 1 s in, so the edit lands after the first tree hash and before the last.
+  const SLOW = `
+const dec = (b) => new TextDecoder().decode(b);
+const enc = (s) => new TextEncoder().encode(s);
+const spin = (ms) => { const end = Date.now() + ms; while (Date.now() < end) {} };
+export default {
+  oracle(doc) {
+    spin(300);
+    if (doc.bytes === null) return { status: "uncertain", code: "FILE_MISSING" };
+    return dec(doc.bytes) === "done-and-saved\\n"
+      ? { status: "verified", code: "OK" }
+      : { status: "refuted", code: "NOT_DONE" };
+  },
+  selftestCases() {
+    const f = "t.txt";
+    return [{
+      id: "c1",
+      intent: {},
+      correct: { fileName: f, bytes: enc("done-and-saved\\n") },
+      corruptions: [
+        { cls: "edit-missing", doc: { fileName: f, bytes: enc("todo-not-saved\\n") } },
+        { cls: "missing-file", doc: { fileName: f, bytes: null } },
+      ],
+    }];
+  },
+};`;
+  const slowPlugin = () =>
+    makePlugin(SLOW, {
+      claims: ["edit-missing", "missing-file"],
+      kinds: ["oracle"],
+      caps: { timeoutMs: 5000, memoryMb: 32, maxInputBytes: 65536, maxOutputBytes: 4096 },
+    });
+
+  it(
+    "an edit landing mid-registration: PLUGIN_CHANGED",
+    async () => {
+      const p = slowPlugin();
+      const editor = spawn(
+        "/bin/sh",
+        ["-c", 'sleep 1; printf "\\n// edited\\n" >> "$0"', join(p.dir, "plugin.mjs")],
+        { stdio: "ignore" },
+      );
+      const exited = new Promise((r) => editor.on("exit", r));
+      const t0 = Date.now();
+      const r = registerPlugin(p.dir);
+      // The edit must have landed inside the registration window for this test to mean anything.
+      expect(Date.now() - t0).toBeGreaterThan(2000);
+      await exited;
+      expect(r).toMatchObject({
+        ok: false,
+        code: "PLUGIN_CHANGED",
+        reasons: ["plugin directory changed during registration"],
+      });
+    },
+    T,
+  );
+
+  it(
+    "the same slow plugin registers when nothing edits it (control)",
+    () => {
+      expect(registerPlugin(slowPlugin().dir)).toMatchObject({ ok: true });
+    },
+    T,
+  );
+});
+
 describe("the example plugin and its over-claiming variants", () => {
   it(
     "csv-ledger registers; its unclaimed corrupt-byte gap is visible in the report",
@@ -338,6 +407,28 @@ describe("only issued, unchanged registrations run; results are labelled", () =>
       expect(runPluginReader(reg, done)).toMatchObject({
         status: "uncertain",
         code: "PLUGIN_CHANGED",
+      });
+    },
+    T,
+  );
+
+  it(
+    "a reader is never run on a format the manifest does not declare (V8)",
+    () => {
+      const { reg } = good();
+      expect(runPluginReader(reg, { fileName: "t.xlsx", bytes: utf8("x") })).toEqual({
+        status: "uncertain",
+        code: "PLUGIN_FORMAT_UNCLAIMED",
+        state: null,
+        codeSource: "host",
+        provenance: reg.provenance,
+        r1Evidence: false,
+        evidenceClass: "plugin-experiment",
+      });
+      // Control: the same reader answers on its declared format.
+      expect(runPluginReader(reg, { fileName: "t.txt", bytes: utf8("x") })).toMatchObject({
+        status: "ok",
+        codeSource: "plugin",
       });
     },
     T,

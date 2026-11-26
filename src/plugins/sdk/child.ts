@@ -4,8 +4,11 @@
  *   node --permission --allow-fs-read=<sdk dir>,<plugin dir> --max-old-space-size=<cap>
  *        --import <sdk>/guard.ts <sdk>/child.ts <plugin entry> <rss cap bytes>
  *
- * with an empty environment. It reads exactly one request from stdin (bounded), imports the
- * plugin, calls it, and writes exactly one response line. Any failure exits non-zero with no
+ * with an empty environment, under the host's OS network layer, with stdin and stdout bound
+ * to regular files (never pipes or sockets). It reads exactly one request from stdin, then
+ * hides `process.stdin`, `process.stdout` and `process.stderr` from plugin code (so no
+ * stream object, and no `net.Socket` class, is reachable through them) and makes `console`
+ * discard output, imports the plugin, calls it, and writes exactly one response line. Any failure exits non-zero with no
  * output, which the host records as `uncertain` with a `PLUGIN_*` code. The host re-parses the
  * response with the closed parser, so nothing here is trusted for the verdict.
  *
@@ -93,6 +96,26 @@ try {
   process.exit(EXIT_BAD_REQUEST);
 }
 
+// From here on plugin code may run. Keep the one stream the child needs, then take all three
+// away from the plugin: a throwing getter, non-configurable, so it cannot be put back.
+const out = process.stdout;
+for (const name of ["stdin", "stdout", "stderr"]) {
+  Object.defineProperty(process, name, {
+    get() {
+      const e = new Error(`PLUGIN_CAP_DENIED: process.${name}`) as Error & { code: string };
+      e.code = "PLUGIN_CAP_DENIED";
+      throw e;
+    },
+    configurable: false,
+  });
+}
+const discard = (): void => {};
+Object.defineProperty(globalThis, "console", {
+  value: Object.freeze(Object.fromEntries(Object.keys(console).map((k) => [k, discard]))),
+  writable: false,
+  configurable: false,
+});
+
 let response: PluginResponse;
 try {
   const mod = (await import(pathToFileURL(entry as string).href)) as { default?: PluginModule };
@@ -110,4 +133,4 @@ try {
 } catch {
   process.exit(EXIT_MALFORMED);
 }
-process.stdout.write(line, () => process.exit(0));
+out.write(line, () => process.exit(0));

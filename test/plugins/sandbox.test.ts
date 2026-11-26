@@ -6,12 +6,14 @@
  *
  * Each guard here is mutation-proven (PR body, mutation table): removing it turns a test red.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+
+import { spawnSync } from "node:child_process";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runInSandbox, type SandboxResult } from "../../src/plugins/host/sandbox.ts";
+import { runInSandbox, type SandboxResult, SDK_DIR } from "../../src/plugins/host/sandbox.ts";
 import { PLUGIN_SPEC } from "../../src/plugins/sdk/protocol.ts";
 import { cleanupPlugins, makePlugin, tempDir, utf8 } from "./helpers.ts";
 
@@ -27,7 +29,42 @@ function connected(socket) {
     setTimeout(() => res(false), 1500);
   });
 }
+// D1 (verifier round 1): a Node pipe is a \`net.Socket\`, so a stdio stream's constructor (or an
+// active handle's) is a socket class that needs no import. Each probe tries TCP and a Unix
+// socket; the child must have no such object to hand out.
+async function viaClass(getClass, i) {
+  const S = getClass();
+  if (typeof S !== "function") return false;
+  const tcp = await connected(new S().connect(i.port, "127.0.0.1"));
+  const unix = await connected(new S().connect(i.sock));
+  return tcp || unix;
+}
 const probes = {
+  stdoutClass: (i) => viaClass(() => process.stdout.constructor, i),
+  stdinClass: (i) => viaClass(() => process.stdin.constructor, i),
+  stderrClass: (i) => viaClass(() => process.stderr.constructor, i),
+  handleClass: async (i) => {
+    for (const h of process._getActiveHandles()) {
+      if (await viaClass(() => h.constructor, i).catch(() => false)) return true;
+      if (h._handle && (await viaClass(() => h._handle.constructor, i).catch(() => false))) return true;
+    }
+    return false;
+  },
+  consoleStream: (i) => viaClass(() => console._stdout.constructor, i),
+  // libuv's own view: any pipe, tty, TCP or UDP handle in the child is a socket a plugin
+  // might reach some other way.
+  socketHandles: async () =>
+    process.report.getReport().libuv.some((h) => ["pipe", "tty", "tcp", "udp"].includes(h.type)),
+  // The verifier's exfiltration plugin, verbatim in effect: send the captured bytes out.
+  exfil: (i, doc) => new Promise((res) => {
+    const S = process.stdout.constructor; const s = new S();
+    s.on("connect", () => { s.end(Buffer.from(doc.bytes)); res(true); });
+    s.on("error", () => res(false));
+    s.connect(i.port, "127.0.0.1");
+  }),
+  // Linux only: a fresh network namespace has no configured interface (the host has at least
+  // loopback), so this tells whether the OS layer wraps the plugin's own process.
+  noInterfaces: async () => process.report.getReport().header.networkInterfaces.length === 0,
   net: async (i) => { const net = await import("node:net"); return connected(net.connect(i.port, "127.0.0.1")); },
   netBare: async (i) => { const net = await import("net"); return connected(net.connect(i.port, "127.0.0.1")); },
   http: async (i) => {
@@ -42,6 +79,7 @@ const probes = {
   fetch: async (i) => { await fetch("http://127.0.0.1:" + i.port + "/"); return true; },
   websocket: async () => typeof WebSocket !== "undefined",
   builtin: async (i) => connected(process.getBuiltinModule("node:net").connect(i.port, "127.0.0.1")),
+  builtinOs: async () => typeof process.getBuiltinModule("node:os").hostname === "function",
   dns: async () => { await import("node:dns"); return true; },
   binding: async () => { process.binding("tcp_wrap"); return true; },
   bindingFs: async () => { process.binding("fs"); return true; },
@@ -69,8 +107,13 @@ export default {
 `;
 
 let server: Server;
+let unixServer: Server;
 let port = 0;
 let connections = 0;
+let received = "";
+let unixConnections = 0;
+// Short, fixed-root path: macOS caps a Unix socket path at 104 bytes and its tmpdir is long.
+const sock = `/tmp/myco-plugin-${process.pid}-${Math.random().toString(36).slice(2, 8)}.sock`;
 let probe: ReturnType<typeof makePlugin>;
 let secret = "";
 let secretUrl = "";
@@ -78,9 +121,18 @@ let secretUrl = "";
 beforeAll(async () => {
   server = createServer((s) => {
     connections++;
-    s.destroy();
+    s.on("data", (d) => {
+      received += d.toString("utf8");
+    });
+    s.on("end", () => s.destroy());
+    s.on("error", () => {});
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  unixServer = createServer((s) => {
+    unixConnections++;
+    s.destroy();
+  });
+  await new Promise<void>((r) => unixServer.listen(sock, r));
   port = (server.address() as { port: number }).port;
   probe = makePlugin(PROBE);
   // A "secret" outside the plugin directory: a stand-in for any host file (it holds no secret).
@@ -93,6 +145,8 @@ beforeAll(async () => {
 
 afterAll(() => {
   server.close();
+  unixServer.close();
+  rmSync(sock, { force: true });
   cleanupPlugins();
 });
 
@@ -101,7 +155,7 @@ function runProbe(name: string, fileName = "doc.txt"): SandboxResult {
     spec: PLUGIN_SPEC,
     op: "verify",
     doc: { fileName, bytesB64: Buffer.from(utf8("captured")).toString("base64") },
-    intent: { probe: name, port, secret, secretUrl },
+    intent: { probe: name, port, sock, secret, secretUrl },
   });
 }
 
@@ -124,12 +178,45 @@ describe("plugin sandbox: no network", () => {
     15_000,
   );
 
-  it("the probe can reach the listener when not sandboxed (bite check)", async () => {
+  it.each([
+    "stdoutClass",
+    "stdinClass",
+    "stderrClass",
+    "handleClass",
+    "consoleStream",
+    "exfil",
+    "socketHandles",
+  ])(
+    "D1: %s gives no socket class: no TCP or Unix-socket connection reaches a listener",
+    async (name) => {
+      const before = connections;
+      const beforeUnix = unixConnections;
+      expect(codeOf(runProbe(name))).toBe("DENIED");
+      await flush();
+      expect(connections - before).toBe(0);
+      expect(unixConnections - beforeUnix).toBe(0);
+      expect(received).toBe("");
+    },
+    15_000,
+  );
+
+  it.runIf(process.platform === "linux")(
+    "Linux: the plugin's own process runs in an empty network namespace",
+    () => {
+      expect(codeOf(runProbe("noInterfaces"))).toBe("OPEN");
+    },
+    15_000,
+  );
+
+  it("the probe can reach both listeners when not sandboxed (bite check)", async () => {
     const { connect } = await import("node:net");
     const before = connections;
+    const beforeUnix = unixConnections;
     await new Promise<void>((r) => connect(port, "127.0.0.1").on("connect", r));
+    await new Promise<void>((r) => connect(sock).on("connect", r));
     await flush();
     expect(connections - before).toBe(1);
+    expect(unixConnections - beforeUnix).toBe(1);
   });
 });
 
@@ -138,6 +225,7 @@ describe("plugin sandbox: no access outside the captured bytes", () => {
     "fsModule",
     "fsImport",
     "bindingFs",
+    "builtinOs",
     "child",
     "worker",
     "module",
@@ -219,11 +307,35 @@ describe("plugin sandbox: caps and malformed plugins fail closed", () => {
     expect(r).toEqual({ ok: false, code: "PLUGIN_MEMORY_EXCEEDED" });
   }, 20_000);
 
-  it("output past the cap: PLUGIN_OUTPUT_TOO_LARGE", () => {
+  const read = (source: string, maxOutputBytes: number) => {
+    const p = makePlugin(source, {
+      kinds: ["reader"],
+      caps: { timeoutMs: 1500, memoryMb: 32, maxInputBytes: 65536, maxOutputBytes },
+    });
+    return runInSandbox(p.target, {
+      spec: PLUGIN_SPEC,
+      op: "read",
+      doc: { fileName: "a.txt", bytesB64: "" },
+    });
+  };
+  const BIG_READER = `export default { reader() { return { status: "ok", code: "OK", state: { kind: "text", text: "x".repeat(3000) } }; } };`;
+
+  it("an answer past the output cap: PLUGIN_OUTPUT_TOO_LARGE", () => {
+    expect(read(BIG_READER, 2048)).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
+  }, 15_000);
+
+  it("the same answer under a larger output cap is read (control)", () => {
+    expect(read(BIG_READER, 4096)).toMatchObject({ ok: true, response: { status: "ok" } });
+  }, 15_000);
+
+  it("console output is discarded and never reaches the answer", () => {
     const r = verify(
-      `export default { oracle() { process.stdout.write("x".repeat(100000)); return { status: "verified", code: "OK" }; } };`,
+      `export default { oracle() { console.log("hi"); console.error("x"); return { status: "verified", code: "OK" }; } };`,
     );
-    expect(r).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
+    expect(r).toEqual({
+      ok: true,
+      response: { spec: PLUGIN_SPEC, op: "verify", status: "verified", code: "OK" },
+    });
   }, 15_000);
 
   it("input past the cap is refused before the child starts: PLUGIN_INPUT_TOO_LARGE", () => {
@@ -249,11 +361,6 @@ describe("plugin sandbox: caps and malformed plugins fail closed", () => {
     ["no default export", `export const oracle = 1;`, "PLUGIN_NO_HOOK"],
     ["a syntax error", `export default {`, "PLUGIN_THREW"],
     [
-      "stray output before the answer",
-      `export default { oracle() { console.log("hi"); return { status: "verified", code: "OK" }; } };`,
-      "PLUGIN_MALFORMED_OUTPUT",
-    ],
-    [
       "free text in the code",
       `export default { oracle() { return { status: "verified", code: "/etc/passwd" }; } };`,
       "PLUGIN_MALFORMED_OUTPUT",
@@ -264,14 +371,14 @@ describe("plugin sandbox: caps and malformed plugins fail closed", () => {
       "PLUGIN_MALFORMED_OUTPUT",
     ],
     [
-      "a forged line with an extra key",
+      "writing its own answer line (process.stdout is denied): a forged extra key",
       `export default { oracle() { process.stdout.write(JSON.stringify({ spec: "myco.plugin/1", op: "verify", status: "verified", code: "OK", trusted: true }) + "\\n", () => process.exit(0)); return new Promise(() => {}); } };`,
-      "PLUGIN_MALFORMED_OUTPUT",
+      "PLUGIN_THREW",
     ],
     [
-      "a forged answer for another op",
+      "writing its own answer line (process.stdout is denied): another op",
       `export default { oracle() { process.stdout.write(JSON.stringify({ spec: "myco.plugin/1", op: "read", status: "ok", code: "OK", state: { kind: "text", text: "" } }) + "\\n", () => process.exit(0)); return new Promise(() => {}); } };`,
-      "PLUGIN_MALFORMED_OUTPUT",
+      "PLUGIN_THREW",
     ],
   ])(
     "%s fails closed",
@@ -287,5 +394,52 @@ describe("plugin sandbox: caps and malformed plugins fail closed", () => {
       ok: true,
       response: { spec: PLUGIN_SPEC, op: "verify", status: "verified", code: "OK" },
     });
+  }, 15_000);
+});
+
+describe("the child refuses a free-text code itself (V6, defence in depth)", () => {
+  // The host's closed parser refuses it too, so through runInSandbox both layers give the same
+  // fault; this runs the child directly to prove its own check: exit 71 and no answer line.
+  const runChild = (code: string) => {
+    const p = makePlugin(
+      `export default { oracle() { return { status: "verified", code: ${JSON.stringify(code)} }; } };`,
+    );
+    return spawnSync(
+      process.execPath,
+      [
+        "--permission",
+        `--allow-fs-read=${SDK_DIR}`,
+        `--allow-fs-read=${p.dir}`,
+        "--disable-warning=ExperimentalWarning",
+        "--import",
+        join(SDK_DIR, "guard.ts"),
+        join(SDK_DIR, "child.ts"),
+        p.target.entry,
+        String(512 * 1024 * 1024),
+      ],
+      {
+        input: JSON.stringify({
+          spec: PLUGIN_SPEC,
+          op: "verify",
+          doc: { fileName: "a.txt", bytesB64: "" },
+          intent: null,
+        }),
+        env: {},
+        cwd: p.dir,
+        timeout: 10_000,
+      },
+    );
+  };
+
+  it("a free-text code: exit 71, nothing written", () => {
+    const r = runChild("/etc/passwd");
+    expect(r.status).toBe(71);
+    expect(r.stdout.toString("utf8")).toBe("");
+  }, 15_000);
+
+  it("a well-formed code is answered (control)", () => {
+    const r = runChild("OK");
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.toString("utf8"))).toMatchObject({ status: "verified", code: "OK" });
   }, 15_000);
 });

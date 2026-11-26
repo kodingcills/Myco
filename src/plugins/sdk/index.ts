@@ -14,7 +14,8 @@
  *    manifest claims, at least one seeded corruption. Myco adds its own read corruptions
  *    (truncations, flipped bytes, a missing file) to every case, so claim a read class only
  *    if your oracle catches ANY such damage, not just the cases you wrote.
- *  - Throwing, hanging, printing, or exceeding a cap is never a pass: the host records it as
+ *  - There is no stdio: `process.stdin/stdout/stderr` throw and `console.*` is discarded.
+ *  - Throwing, hanging, or exceeding a cap is never a pass: the host records it as
  *    `uncertain` with a `PLUGIN_*` code, and during registration it refuses the plugin.
  *
  * This file and `protocol.ts` import nothing else: they load inside the sandbox.

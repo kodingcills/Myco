@@ -83,8 +83,9 @@ was saved). That is all the plugin sees of the trial.
 - **Codes only.** `code` must match `^[A-Z][A-Z0-9_]{0,63}$`. A plugin cannot put prose, a
   path or a value into a verdict.
 - **Never guess.** Return `uncertain` whenever the document cannot be read in full.
-- **Never print.** The answer goes through the SDK; any stray output makes the response
-  malformed, which is `uncertain`.
+- **No stdio.** The answer goes through the SDK. `process.stdin`, `process.stdout` and
+  `process.stderr` throw `PLUGIN_CAP_DENIED` (a hook that touches them is `PLUGIN_THREW`), and
+  `console.*` output is discarded.
 
 ### 1.3 Reader state
 
@@ -108,10 +109,13 @@ One request, one sandboxed child process, one response line:
 1. The host checks the registration (issued by `registerPlugin`, not a look-alike), re-hashes
    the plugin directory (an edited plugin is `PLUGIN_CHANGED`), checks the kind, the file
    extension, the input size and the intent size (64 KiB).
-2. It starts `node --permission` with reads allowed only for the SDK and the plugin
-   directory, an empty environment, the heap cap, and the sandbox guard preloaded.
-3. It sends `{fileName (basename), bytesB64, intent}` on stdin.
-4. It parses exactly one response line with the closed parser.
+2. It starts `node --permission` under the host's OS network layer (an empty network
+   namespace on Linux, a deny-network Seatbelt profile on macOS; with neither, the call is
+   `PLUGIN_NO_NET_ISOLATION` and no plugin runs), with reads allowed only for the SDK and the
+   plugin directory, an empty environment, the heap cap, and the sandbox guard preloaded.
+3. It sends `{fileName (basename), bytesB64, intent}` on stdin. The child's stdin and stdout
+   are regular files, never pipes or sockets.
+4. It parses the child's one response line with the closed parser.
 
 Any failure is `uncertain` with a host code (`codeSource: "host"`):
 
@@ -126,11 +130,12 @@ Any failure is `uncertain` with a host code (`codeSource: "host"`):
 | `PLUGIN_INTENT_INVALID` | intent not JSON or over 64 KiB |
 | `PLUGIN_TIMEOUT` | wall clock over `timeoutMs` (SIGKILL) |
 | `PLUGIN_MEMORY_EXCEEDED` | heap over `memoryMb`, or resident memory over `memoryMb` + 128 MiB runtime allowance |
-| `PLUGIN_OUTPUT_TOO_LARGE` | stdout over `maxOutputBytes` (child killed) |
+| `PLUGIN_NO_NET_ISOLATION` | this host has no OS network layer for plugin children (fail closed) |
+| `PLUGIN_OUTPUT_TOO_LARGE` | the answer over `maxOutputBytes` |
 | `PLUGIN_NO_HOOK` | the module lacks the hook, or has no default export |
 | `PLUGIN_THREW` | the hook or the module threw |
 | `PLUGIN_CRASH` | any other non-zero exit or signal |
-| `PLUGIN_MALFORMED_OUTPUT` | not exactly one closed `myco.plugin/1` response line |
+| `PLUGIN_MALFORMED_OUTPUT` | not a closed `myco.plugin/1` response for the requested op |
 | `PLUGIN_SPAWN_FAILED` | the child could not start |
 
 Every result is labelled:
@@ -205,7 +210,8 @@ Any status other than `verified` is a catch.
 | Test | Proves |
 |---|---|
 | `test/plugins/protocol.test.ts` | manifest and wire are closed; class list equals R5's |
-| `test/plugins/sandbox.test.ts` | no network, no reads outside the plugin, empty env, basename only, every cap, every malformed answer fails closed |
+| `test/plugins/sandbox.test.ts` | no network (incl. the stdio/handle socket-class routes, TCP and Unix socket), no reads outside the plugin, empty env, basename only, every cap, every malformed answer fails closed |
+| `test/plugins/sandbox-os.test.ts` | the OS network layer alone blocks TCP (and Unix sockets on macOS); no OS layer, no plugin run |
 | `test/plugins/registry.test.ts` | self-test required per claimed class; over-claims refused; forged and edited registrations refused; labels |
 | `test/plugins/csv-ledger-e2e.test.ts` | scripted agent + example plugin end to end; plugin never verifies where an independent check does not pass |
 | `test/plugins/sdk-boundary.test.ts` | SDK loads in the sandbox; no plugin module reaches the gate |
