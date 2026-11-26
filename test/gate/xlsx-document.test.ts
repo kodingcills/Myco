@@ -1300,8 +1300,11 @@ describe("the cell model", () => {
     expect(one({ kind: "number", value: 45000, style: "dateTime" })).toBe("2023-03-15");
     expect(one({ kind: "number", value: 45000.5, style: "dateTime" })).toBe(MARKERS.dateTime);
     expect(one({ kind: "number", value: 43538, style: "date" }, true)).toBe("2023-03-15");
-    expect(one({ kind: "isoDate", value: "2023-03-15T00:00:00Z" })).toBe("2023-03-15");
-    expect(one({ kind: "isoDate", value: "2023-02-30" })).toBe(MARKERS.impossibleDate);
+    // t="d" (an ISO cell) is not LibreOffice's: refused, whatever it holds.
+    expect(codeOf(() => one({ kind: "isoDate", value: "2023-03-15T00:00:00Z" }))).toBe(
+      "XLSX_CELL_MALFORMED",
+    );
+    expect(codeOf(() => one({ kind: "isoDate", value: "2023-02-30" }))).toBe("XLSX_CELL_MALFORMED");
   });
 
   it.each([

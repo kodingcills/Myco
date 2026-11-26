@@ -43,7 +43,7 @@ const EXPECTED: Readonly<Record<string, readonly [string, string, string]>> = {
   P29: ["uncertain", "XLSX_XML_MALFORMED", "ungradable"],
   P30: ["uncertain", "XLSX_RATIO_EXCEEDED", "fail"],
   P31: ["uncertain", "XLSX_CELL_MALFORMED", "pass"],
-  P32: ["refuted", "TARGET_MISMATCH", "pass"],
+  P32: ["uncertain", "XLSX_CELL_MALFORMED", "pass"],
   P33: ["refuted", "TARGET_MISMATCH", "fail"],
   P34: ["refuted", "DOCUMENT_COLLATERAL", "fail"],
   P35: ["uncertain", "XLSX_PRESCAN_ENTITY", "pass"],

@@ -849,24 +849,6 @@ export function renderNumber(value: number, cls: NumberClass, system: 1900 | 190
   }
 }
 
-/** A `t="d"` (ISO 8601) cell: a pure date at midnight renders as its day; else a marker. */
-function renderIsoDateCell(raw: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})(T00:00(?::00(?:\.0+)?)?Z?)?$/.exec(raw);
-  if (!m) {
-    return /^\d{4}-\d{2}-\d{2}T/.test(raw) ? MARKERS.dateTime : MARKERS.impossibleDate;
-  }
-  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const date = new Date(Date.UTC(y, mo - 1, d));
-  if (
-    y < 1900 ||
-    date.getUTCFullYear() !== y ||
-    date.getUTCMonth() !== mo - 1 ||
-    date.getUTCDate() !== d
-  )
-    return MARKERS.impossibleDate;
-  return `${m[1]}-${m[2]}-${m[3]}`;
-}
-
 function readStyles(xml: XmlElement | undefined): NumberClass[] {
   if (!xml) return [{ kind: "general" }];
   const custom = new Map<number, string>();
@@ -1187,7 +1169,9 @@ function literalValue(
     case "e":
       return MARKERS.error;
     case "d":
-      return v === undefined || v === "" ? "" : renderIsoDateCell(v);
+      // LibreOffice never writes t="d" (it stores a date as a styled number). #503 read an ISO
+      // day here and verified it while the grader called the cell ungradable: refused.
+      return fail("XLSX_CELL_MALFORMED");
     case "n": {
       if (v === undefined || v === "") return "";
       if (!NUMBER.test(v)) fail("XLSX_CELL_MALFORMED");

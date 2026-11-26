@@ -133,9 +133,9 @@ and `test/fixtures/calc-xlsx-lo-grammar/` (this PR; the command is in its README
 | `XLSX_PRESCAN_SYNTAX` | anything else outside the grammar |
 
 Behind the pre-scan, the reader also refuses (`XLSX_CELL_MALFORMED` / `XLSX_STYLE_MALFORMED`)
-four shapes LibreOffice never writes that #503 verified: `t="str"` without a formula, a number
-not in its canonical spelling (`04242`, `4.242E3`), a non-canonical style index (`s="00"`),
-and a `<dimension>` that is not the used range.
+five shapes LibreOffice never writes that #503 verified: `t="str"` without a formula, a
+`t="d"` cell, a number not in its canonical spelling (`04242`, `4.242E3`), a non-canonical
+style index (`s="00"`), and a `<dimension>` that is not the used range.
 
 ## Consequences
 
