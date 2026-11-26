@@ -136,15 +136,45 @@ def ps_field(pid, field):
     return out.stdout.strip()
 
 
-# Steps that are ended by Ctrl-C wait in a long `sleep`. With a short one, the
-# sleep can exit normally at the instant of the Ctrl-C, and a non-interactive bash
-# then takes the SIGINT as handled by its child and carries on (bash's
-# wait-and-cooperative-exit rule), which is bash's choice, not the wrapper's.
-LONG_WAIT = "while :; do sleep 10; done"
-
-
 def path(name, suffix):
     return os.path.join(WORK, f"{name}.{suffix}")
+
+
+def long_wait(name):
+    """The wait of a step that a signal must end: one long `sleep`.
+
+    A non-interactive bash that gets a SIGINT while it waits for a foreground
+    child takes the SIGINT as handled when that child does not
+    die of it (bash's wait-and-cooperative-exit rule), and then carries on. Two
+    windows give that: a sleep that exits normally at the instant of the Ctrl-C,
+    and the fork of the next sleep, before the child has put SIGINT back to its
+    default (the child then catches it in bash's own handler, execs, and the
+    sleep runs its full length). In either window the step runs on, and the
+    session outlasts any deadline: that is bash's choice, not the wrapper's, which
+    does not send SIGINT again on a shared terminal (CI run 45722931958: scenario
+    d timed out after 15 s that way, with `while :; do sleep 10; done`).
+
+    So the step waits in a `sh` that marks itself waiting once it runs (a fresh
+    exec, so its SIGINT is already back to the default) and then execs one sleep
+    longer than any scenario. A Ctrl-C or a SIGTERM sent once the mark exists (see
+    in_long_wait) kills that sh or sleep, so the step's bash sees its child die of
+    the signal and exits through its EXIT trap, every time. There is no loop: if
+    the sleep ever ended, the step would print STEP-DONE and the scenario would
+    fail loudly instead of hanging."""
+    waiting = path(name, "waiting")
+    return f"sh -c ': > \"{waiting}\"; exec sleep 300'"
+
+
+def in_long_wait(name):
+    """Return once the step waits in the sleep of long_wait, past both windows.
+
+    Every scenario that ends a long_wait step with a signal calls this first."""
+    waiting = path(name, "waiting")
+    end = time.time() + 15
+    while not os.path.exists(waiting):
+        if time.time() > end:
+            fail(f"session {name}: the step never reached its wait (no {waiting})")
+        time.sleep(0.02)
 
 
 def write_step(name, extra="", body=None):
@@ -253,9 +283,10 @@ def scenario_a(fd, name):
 
 
 def scenario_b(fd, name):
-    session(fd, name, write_step(name, body=LONG_WAIT))
+    session(fd, name, write_step(name, body=long_wait(name)))
     s = step_pid(fd, name)
     wrapper_pid()
+    in_long_wait(name)
     send(fd, "\x03")
     rc = session_rc(fd, name, 15, "the session to end on Ctrl-C")
     expect_rc(name, rc, 130)
@@ -267,8 +298,9 @@ def scenario_b(fd, name):
 
 def scenario_c(fd, name):
     done = path(name, "done")
-    session(fd, name, write_step(name, f"trap 'sleep 0.5; touch \"{done}\"' EXIT", LONG_WAIT))
+    session(fd, name, write_step(name, f"trap 'sleep 0.5; touch \"{done}\"' EXIT", long_wait(name)))
     s = step_pid(fd, name)
+    in_long_wait(name)
     os.kill(wrapper_pid(), signal.SIGTERM)
     rc = session_rc(fd, name, 15, "the session to end on SIGTERM")
     if alive(s):
@@ -287,7 +319,7 @@ def deploy_like(fd, name, fast):
 tunnel=$!
 echo "$tunnel" > "{bg}"
 trap 'rm -f "$tmp"; sleep 0.2; kill "$tunnel" 2>/dev/null; touch "{done}"' EXIT"""
-    body = LONG_WAIT
+    body = long_wait(name)
     if fast:
         fifo = path(name, "fifo")
         os.mkfifo(fifo)
@@ -296,6 +328,8 @@ trap 'rm -f "$tmp"; sleep 0.2; kill "$tunnel" 2>/dev/null; touch "{done}"' EXIT"
     step_pid(fd, name)
     wrapper_pid()
     tunnel = background_pid(name)
+    if not fast:
+        in_long_wait(name)
     send(fd, "\x03")
     rc = session_rc(fd, name, 15, "the session to end on Ctrl-C")
     if not os.path.exists(done):
@@ -321,10 +355,11 @@ def scenario_f(fd, name):
     bg = path(name, "bg")
     extra = f"""( trap '' INT; : > "{path(name, "ready")}"; exec sleep 300 ) &
 echo "$!" > "{bg}\""""
-    session(fd, name, write_step(name, extra, LONG_WAIT))
+    session(fd, name, write_step(name, extra, long_wait(name)))
     s = step_pid(fd, name)
     w = wrapper_pid()
     left = background_pid(name)
+    in_long_wait(name)
     mark = len(text())
     send(fd, "\x03")
     found = wait_for(fd, r"vm-session: still waiting after SIGINT[^\n]*", 8,
