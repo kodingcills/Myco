@@ -130,6 +130,8 @@ Both exit 0. The run prints the claim, the persisted state read back from the st
 
 The live path — a real guest, real Calc — is documented in [docs/product/quickstart.md](docs/product/quickstart.md), which states exactly where it stops and why. **It requires a Windows VM and is not runnable on a bare checkout.**
 
+On Linux, [docs/product/linux-path.md](docs/product/linux-path.md) runs the verify loop against a real headless LibreOffice Calc with no VM and no model: `pnpm myco-linux --demo` shows an agent that says it saved, a saved file that disagrees, and `REFUTED`.
+
 ---
 
 ## Reproduce M1
