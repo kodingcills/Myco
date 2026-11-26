@@ -73,6 +73,13 @@ import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
 import { bindToTaskSet, knownTaskSet } from "../benchmark/taskset-binding.ts";
 import { M2_FAULT_CLASSES } from "../faults/security/classes.ts";
 import { clopperPearson, wilson } from "../foundry/stats.ts";
+import {
+  anchorPathFor,
+  crossCheckAttempts,
+  type DisclosedAttempt,
+  verifyAnchor,
+  verifyAttemptLedger,
+} from "./attempt-ledger.ts";
 
 /** Guest load gate: no trial starts at host 1-minute load >= this (eval-runbook §7.3). */
 export const LOAD_GATE = 10;
@@ -102,6 +109,8 @@ export interface PackManifest {
   /** How many of `expectTrials` are unregistrable (required for myco-gate with R1). */
   readonly expectUnregistrable?: Readonly<Partial<Record<Arm, number>>>;
   readonly expectPairs: number | null;
+  /** The attempt ledger's pinned head (required for R1 packs; `attempts.jsonl`). */
+  readonly attempts?: { readonly events: number; readonly headSha256: string };
   readonly runs: { readonly path: string; readonly expect: number } | null;
 }
 
@@ -136,6 +145,13 @@ export interface PackInput {
   readonly arm: readonly unknown[];
   readonly grades: readonly unknown[];
   readonly ops: readonly unknown[];
+  /** The append-only attempt ledger (`attempts.jsonl`), when the pack has one. */
+  readonly attempts?: readonly unknown[];
+  /**
+   * The external attempt anchor (host-side, OUTSIDE the pack: `anchorPathFor(packDir)`), when
+   * it exists. Required for R1 packs.
+   */
+  readonly anchor?: readonly unknown[];
   /**
    * Attempts replaced in place (`superseded.jsonl`, optional; TIF-274 topped-up runs). Never
    * counted: the row in `arm.jsonl` is the re-run.
@@ -621,6 +637,56 @@ export function checkPack(input: PackInput): PackResult {
       );
   }
 
+  // The append-only attempt ledger (TIF-274, lead ruling 14:35Z): required for R1 evidence,
+  // and checked whenever a pack carries or pins one. Every attempt it recorded must be
+  // disclosed, every disclosed trial must be a recorded attempt, and a disclosed harness fault
+  // must match a recorded one (`src/m2/attempt-ledger.ts`).
+  const wantsLedger =
+    manifest !== null &&
+    (manifest.rows.includes("R1") ||
+      manifest.attempts !== undefined ||
+      input.attempts !== undefined);
+  if (wantsLedger) {
+    if (input.attempts === undefined) errors.push("attempts.jsonl: missing (the attempt ledger)");
+    else {
+      const ledger = verifyAttemptLedger(input.attempts);
+      errors.push(...ledger.errors);
+      // Disclosed: the pack's rows and its superseded attempts (#511). A superseded attempt's
+      // harness fault must match a recorded one, and it must end before its replacement starts.
+      const disclosed: DisclosedAttempt[] = [
+        ...armRows.map((r) => ({
+          trialKey: r.trialKey,
+          taskId: r.taskId,
+          arm: r.arm,
+          harnessClass: ops.get(r.trialKey)?.harnessClass ?? null,
+        })),
+        ...supersededAttempts.map((a) => ({
+          trialKey: a.arm.trialKey,
+          taskId: a.arm.taskId,
+          arm: a.arm.arm,
+          harnessClass: a.ops.harnessClass,
+          replacedBy: a.replacedBy,
+        })),
+      ];
+      errors.push(
+        ...crossCheckAttempts(ledger.events, disclosed, manifest?.attempts, ledger.head).map(
+          (e) => `attempt ledger: ${e}`,
+        ),
+      );
+      // The external anchor (lead ruling on #518 D3): required for R1, checked when present.
+      if (input.anchor !== undefined)
+        errors.push(
+          ...verifyAnchor(input.anchor, ledger.events, manifest?.attempts).map(
+            (e) => `attempt anchor: ${e}`,
+          ),
+        );
+      else if (manifest?.rows.includes("R1") === true)
+        errors.push(
+          "attempt anchor: missing (the host-side anchor outside the pack, attempt-anchors/<pack>.jsonl)",
+        );
+    }
+  }
+
   const byArm = (arm: Arm) => armRows.filter((r) => r.arm === arm);
   const gated = byArm("myco-gate");
   const shell = byArm("hcu+shell");
@@ -891,6 +957,7 @@ export function readPack(
     "grades.jsonl",
     "ops.jsonl",
     "superseded.jsonl",
+    "attempts.jsonl",
   ]);
   const runsPath =
     manifest !== null && typeof manifest === "object" && "runs" in manifest
@@ -914,5 +981,20 @@ export function readPack(
   const superseded = existsSync(supersededPath)
     ? readJsonl(supersededPath, "superseded.jsonl", readErrors)
     : [];
-  return { manifest, arm, grades, ops, superseded, readErrors, runs };
+  const attemptsPath = join(dir, "attempts.jsonl");
+  return {
+    manifest,
+    arm,
+    grades,
+    ops,
+    superseded,
+    ...(existsSync(attemptsPath)
+      ? { attempts: readJsonl(attemptsPath, "attempts.jsonl", readErrors) }
+      : {}),
+    ...(existsSync(anchorPathFor(dir))
+      ? { anchor: readJsonl(anchorPathFor(dir), "attempt anchor", readErrors) }
+      : {}),
+    readErrors,
+    runs,
+  };
 }
