@@ -517,6 +517,21 @@ describe("the external anchor (lead ruling on #518 D3)", () => {
     expect(r.r1?.pass).toBe(false);
   });
 
+  it("STATED LIMIT (threat model): a malicious pack author who regenerates ledger, pin AND anchor is not detected", () => {
+    // The harness that writes packs is trusted (lead ruling on #518 D3). Tamper-evidence is
+    // against the checked agent, guest-side processes and accidental harness edits, not against
+    // an author who rewrites everything consistently. Pinned so that boundary stays visible.
+    const { kept, forged } = rewrite();
+    const base = input(kept, manifest({ expectTrials: { "myco-gate": 99 } }));
+    const r = checkPack({
+      ...base,
+      manifest: { ...(base.manifest as object), attempts: forged.head },
+      attempts: forged.events,
+      anchor: anchorFor(forged.events),
+    });
+    expect(r.errors.filter((e) => e.startsWith("attempt"))).toEqual([]);
+  });
+
   it("an honest pack's anchor agrees; an R1 pack without an anchor is refused", () => {
     const base = input(r1Trials(), manifest());
     expect(checkPack(base).errors).toEqual([]);
