@@ -913,6 +913,22 @@ describe("check-pack refuses each tampered pack (survivors M4, M6, M8, M9; N4)",
       /simulated pack without its SIMULATED marker/,
     );
     expect(variant("noexp", (p) => rmSync(join(p, "EXPERIMENT")))).toMatch(/no EXPERIMENT marker/);
+    expect(
+      variant("anacfg", (p) => {
+        const f = join(p, "on", "analysis-config.json");
+        writeFileSync(
+          f,
+          JSON.stringify({ ...JSON.parse(readFileSync(f, "utf8")), retryBudget: 9 }),
+        );
+      }),
+    ).toMatch(/on: analysis-config\.json is not derived from run-config\.json/);
+    // The row marker is #547's shape: the stage, the arm and the stage's seed.
+    expect(jsonl(join(good, "off", "arm.jsonl"))[0]?.experiment).toEqual({
+      id: "corrections-ab",
+      stage: 0,
+      arm: "off",
+      seed: LOADED.prereg.stages["0"].seed,
+    });
     // N4: `analyze` on a pack that passes, with #547 absent, is pending: never exit 0.
     const cli = spawnSync(
       "npx",
@@ -959,13 +975,14 @@ describe("check-pack refuses each tampered pack (survivors M4, M6, M8, M9; N4)",
 });
 
 describe("real runs are gated", () => {
-  it("names every unmet precondition: no GO, the xlsx gate, #546", () => {
+  it("names every unmet precondition: no GO, the xlsx gate (#546 has merged)", () => {
     const r = realRunRefusals(ROOT, LOADED, 1, PUBLISHED).join("\n");
     expect(r).toMatch(/no lead GO/);
     expect(r).toMatch(
       /gate cannot read the task format: .* persist xlsx and the gate reads csv only/,
     );
-    expect(r).toMatch(/#546's cold-boot guard is not merged/);
+    // #546 merged on main (the trial-ops schema has resetBootClass): no longer a refusal.
+    expect(r).not.toMatch(/#546/);
     expect(r).toMatch(/#518's attempt-event vocabulary cannot name .*rate-limit/);
   });
 
@@ -1046,7 +1063,6 @@ describe("real runs are gated", () => {
       liveLaunchSha256: sha,
     }).join("\n");
     expect(all).toMatch(/no lead GO/);
-    expect(all).toMatch(/#546's cold-boot guard is not merged/);
     expect(all).toMatch(/#518's attempt-event vocabulary/);
     expect(all).not.toMatch(/abPlanSha256|--launch-real-trials/);
   });

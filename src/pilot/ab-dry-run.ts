@@ -55,6 +55,18 @@ export interface AbDryRunOptions {
   readonly driver?: PilotDriver;
 }
 
+/** #547 refused the pack, and only because its rows are simulated (no evidence provenance). */
+const provenanceOnlyRefusal = (a: AbAnalysis) => {
+  if (a.status === "analysis-pending") return true;
+  const errs = (a.result as { errors?: readonly string[] } | null)?.errors ?? [];
+  return (
+    a.status === "analysed" &&
+    a.exitCode !== 0 &&
+    errs.length > 0 &&
+    errs.every((e) => /without evidence provenance: dry-run rows are never evidence/.test(e))
+  );
+};
+
 const analysisOk = (a: AbAnalysis, effects: readonly string[]) => {
   if (a.status === "analysis-pending") return true;
   if (a.status !== "analysed" || a.exitCode !== 0) return false;
@@ -115,11 +127,12 @@ export async function abDryRun(
       c.errors.join("; ") || "ok",
     );
     const a = analyzeAbPack(pack, repoRoot, stage === 1 ? packs[0] : undefined);
-    const want =
-      stage === 0 ? ["not-claimed"] : ["corrections-help", "corrections-not-shown-to-help"];
+    // Stage 0: #547 analyses the simulated pack (no effect claim). Stage 1 is confirmatory, so
+    // #547 refuses simulated rows outright: the dry run passes only when that provenance
+    // refusal is #547's ONLY objection (every other check on the pack held).
     step(
       `stage ${stage} analysis (#547)`,
-      analysisOk(a, want),
+      stage === 0 ? analysisOk(a, ["not-claimed"]) : provenanceOnlyRefusal(a),
       a.status === "analysed"
         ? `exit ${a.exitCode}, effect ${(a.result as { effect?: string } | null)?.effect}, discordant ${JSON.stringify((a.result as { discordant?: unknown } | null)?.discordant)}`
         : `${a.status}: ${a.errors.join("; ")}`,
