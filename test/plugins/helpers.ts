@@ -1,7 +1,7 @@
 /**
  * Test helpers for capability track T: build throwaway plugin directories in a temp dir.
  */
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { SandboxTarget } from "../../src/plugins/host/sandbox.ts";
@@ -22,7 +22,9 @@ export function cleanupPlugins(): void {
 }
 
 export function tempDir(prefix = "myco-plugin-test-"): string {
-  const d = mkdtempSync(join(tmpdir(), prefix));
+  // realpath: on macOS tmpdir() is behind a symlink (/var -> /private/var), and the
+  // permission model compares resolved paths.
+  const d = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   made.push(d);
   return d;
 }
