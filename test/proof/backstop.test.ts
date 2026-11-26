@@ -16,6 +16,8 @@ import {
   verifyProofBundle,
 } from "../../src/proof/bundle.ts";
 import { emit, hostRedaction, main } from "../../src/proof/cli.ts";
+import { hashedId } from "../../src/proof/closed.ts";
+import { NO_IDENTITY } from "../../src/proof/identity.ts";
 import { renderProofReport } from "../../src/proof/report.ts";
 import { clone, NO_CTX, rechain, sampleRun } from "./fixture.ts";
 import { exportVerifyReport, plantEverywhere } from "./plant.ts";
@@ -102,16 +104,24 @@ describe("what the backstop reports", () => {
 });
 
 describe("the backstop fails every output closed", () => {
-  it("EXPORT: a closed id that is key-shaped is refused (the allowlist writes it, the backstop stops it)", () => {
-    expect(() => exportProofBundle(runAs(j("sk_", "PLANTEDPLANTED")), NO_CTX)).toThrow(
-      /PROOF_REDACTION/,
-    );
+  it("EXPORT: a closed id that is key-shaped is digested (r3 identity guard; was a backstop refusal)", () => {
+    const key = j("sk_", "PLANTEDPLANTED");
+    const b = exportProofBundle(runAs(key), NO_CTX);
+    expect(b.run.runId).toBe(hashedId(key));
+    expect(serializeProofBundle(b)).not.toContain("PLANTEDPLANTED");
+    // The backstop still refuses it if the allowlist ever wrote it (a forged bundle).
+    const forged = clone(b) as unknown as { run: { runId: string } };
+    forged.run.runId = key;
+    expect(codesOf(JSON.stringify(forged))).toContain("PROOF_REDACTION");
   });
 
-  it("EXPORT: a closed id equal to a registered account name is refused, in any case", () => {
-    expect(exportProofBundle(runAs(GUEST), NO_CTX).run.runId).toBe(GUEST);
-    for (const id of [GUEST, GUEST.toUpperCase()])
-      expect(() => exportProofBundle(runAs(id), ctxUser)).toThrow(/PROOF_REDACTION/);
+  it("EXPORT: a closed id equal to a registered account name is digested, in any case (r3)", () => {
+    expect(exportProofBundle(runAs(GUEST), NO_CTX, NO_IDENTITY).run.runId).toBe(GUEST);
+    for (const id of [GUEST, GUEST.toUpperCase()]) {
+      const b = exportProofBundle(runAs(id), ctxUser, NO_IDENTITY);
+      expect(b.run.runId).toBe(hashedId(id));
+      expect(serializeProofBundle(b).toLowerCase()).not.toContain(GUEST.toLowerCase());
+    }
   });
 
   it("VERIFY: a hand-edited, re-chained bundle whose closed id is a registered name is refused", () => {
@@ -165,10 +175,13 @@ describe("the backstop fails every output closed", () => {
     });
     const b = join(dir, "b.json");
     expect(cliRun(["export", asId, "--out", b]).code).toBe(0);
-    const refused = cliRun(["export", asId, "--out", join(dir, "b2.json"), "--user-file", users]);
-    expect(refused.code).toBe(1);
-    expect(refused.out).toContain("PROOF_REDACTION");
-    expect(refused.out.toLowerCase()).not.toContain(GUEST);
+    // With the file, the name is an identity string: the id is digested (r3), not written.
+    const b2 = join(dir, "b2.json");
+    const digested = cliRun(["export", asId, "--out", b2, "--user-file", users]);
+    expect(digested.code).toBe(0);
+    expect(readFileSync(b2, "utf8").toLowerCase()).not.toContain(GUEST);
+    expect(digested.out.toLowerCase()).not.toContain(GUEST);
+    // A bundle written without the file carries it: verify with the file refuses it.
     const ver = cliRun(["verify", b, "--user-file", users]);
     expect(ver.code).toBe(1);
     expect(ver.out.toLowerCase()).not.toContain(GUEST);

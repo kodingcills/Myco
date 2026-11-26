@@ -60,8 +60,8 @@ events, which must carry the run's task and the run's arm (an anchored run must 
 `hcu+shell` is a valid arm). It does not bind the run id, because the ledger has none.
 
 ```
-npx tsx scripts/proof.ts export RUN.json --out bundle.json [--forbid-file F] [--user-file U]
-npx tsx scripts/proof.ts verify bundle.json [--evidence-dir D] [--episode E] [--expect-head H] [--expect-ledger-head H] [--user-file U]
+npx tsx scripts/proof.ts export RUN.json --out bundle.json [--forbid-file F] [--user-file U] [--identity-file I]
+npx tsx scripts/proof.ts verify bundle.json [--evidence-dir D] [--episode E] [--expect-head H] [--expect-ledger-head H] [--user-file U] [--identity-file I]
 npx tsx scripts/proof.ts report bundle.json --out report.html [verify flags]
 ```
 
@@ -73,7 +73,9 @@ case) feed the **backstop**: the exporting host's account name, home, temp and c
 directories are registered automatically, and if any registered value still appears in an
 output (for example a closed id that equals the guest's account name), the command fails
 closed. Register the guest's account name in `--user-file`. Neither file's contents are ever
-printed.
+printed. `--identity-file` lines (a full name, other names) and `--user-file` lines are also
+**identity strings** for the identity guard (below), with the host's account name, hostname
+and home directory.
 
 ## The verifier
 
@@ -93,8 +95,9 @@ value from the bundle. It refuses (exit 1, a code per error) on:
 | `PROOF_EVIDENCE` / `PROOF_EVIDENCE_DIGEST` / `PROOF_EVIDENCE_MISSING` | a duplicate id, an evidence path that escapes the evidence dir, an original file that changed or is missing |
 | `PROOF_VERDICT` | `accepted` without `verified`, `verified` without `ORACLE_PASS` or `ORACLE_PASS` without `verified`, a verdict for another task or run, or citing evidence not recorded before it |
 | `PROOF_LEDGER_CHAIN` / `PROOF_LEDGER_HEAD` / `PROOF_LEDGER_ANCHOR` | an edited, reordered or truncated ledger; a ledger event that fails #518's own check (`verifyAttemptLedger`: unknown field, unknown arm, a start with an outcome, an end without one, a harness class without `harness-fault` or the reverse); a ledger with no anchor or an anchor with no ledger; an anchor that does not point at exactly one start and one end of the run's trial, for the run's task and arm |
-| `PROOF_EPISODE` | with `--episode`: an episode #542's `validateEpisode` refuses (codes only), an episode whose id is not its content hash, that differs from `run.episode`, whose run id, task, arm, simulated flag or trial key differs from the bundle's, or an episode given for a bundle that references none |
+| `PROOF_EPISODE` | with `--episode`: an episode #542's `validateEpisode` refuses (codes only), an episode whose id is not its content hash, that differs from `run.episode`, whose run id, task, arm, simulated flag or trial key differs from the bundle's, whose gate result disagrees with the bundle's last verdict record (`verdict`, `accepted`, and the reason codes as a multiset when the episode records them; an episode with no gate result must have no verdict record, and one with a gate result must have one), or an episode given for a bundle that references none |
 | `PROOF_ANCHOR_MISMATCH` | a head differs from the one given out of band |
+| `PROOF_IDENTITY` | a string of the bundle that is not a constant of the format (every value and key except schema field names, enum members, `const`s and digests) contains, case-insensitively, a configured identity string (the verifying host's account name, hostname, home directory, an `--identity-file` or `--user-file` line) or a generic identity shape; reported as a count and classes (`identity`, `home-path`, `key-like`), before any other message is built |
 | `PROOF_REDACTION` | the backstop fires: a parsed string value or key carries something it recognises (a secret shape, a host-path shape, a registered literal or account name), in any decoded form |
 
 The exporter runs the same verifier on what it built and refuses to write a bundle that would
@@ -145,14 +148,41 @@ The exporter does not look at what a string says. It looks at which field it is 
 | boolean | as is; any other value is refused | `run.simulated`, `verdict.accepted` |
 | integer | as is; any other value is refused | `checkpoint.checkpoint`, `handoff.checkpoint` |
 | sha256 digest | as is; any other value is refused | `verdict.oracle.specSha256` |
-| id | as is when it matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, else **hashed**: `h-` + its digest (itself a closed id, so equality is still checked) | `run.runId`, `run.taskId`, `action.tool`, `evidence.evidenceId`, `evidence.evidenceKind`, `verdict.taskId`, `verdict.runId`, `verdict.evidence`, `verdict.oracle.family`, `verdict.oracle.version`, `handoff.from`, `handoff.to`, `policy.policyId`, `policy.subject` |
+| id | as is when it matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` **and** passes the identity guard (below), else **hashed**: `h-` + its digest (itself a closed id, so equality is still checked) | `run.runId`, `run.taskId`, `action.tool`, `evidence.evidenceId`, `evidence.evidenceKind`, `verdict.taskId`, `verdict.runId`, `verdict.evidence`, `verdict.oracle.family`, `verdict.oracle.version`, `handoff.from`, `handoff.to`, `policy.policyId`, `policy.subject` |
 | arm | as is when it is `myco-gate` or `hcu+shell`, else as an id | `run.arm` |
-| code | as is when it matches `^[A-Z][A-Z0-9_]{1,63}$`, else **hashed** | `policy.reasonCode` |
+| policy code | as is only when it is a member of the **closed enum** `POLICY_REASON_CODES` (the gate's `REASON_CODES` plus the repo's policy and handoff codes: `POLICY_ALLOW`, `POLICY_DENIED`, `POLICY_ERROR`, `POLICY_INVALID`, `TASK_NOT_ALLOWED`, `HUMAN_REJECTED`, `STILL_PAUSED`, `HANDOFF_TIMEOUT`, `HANDOFF_CANCELLED`, `ATTEMPT_ENDED`), else **hashed**; never a grammar (an upper-case grammar wrote `ZQGPTRR` or an account name in capitals verbatim, #553 r2 N1) | `policy.reasonCode` |
 | media type | as is only when it is a member of the **closed enum** `MEDIA_TYPES` (`application/json`, `image/jpeg`, `image/png`, `text/csv`, `text/plain`), else **hashed**; never a grammar (a `type/subtype` grammar admits `srv/<user>`) | `evidence.mediaType` |
 | text | **always hashed**: a `TextRef` `{sha256, chars}`, the digest of the raw value and its length | `action.summary`, `handoff.summary`, `evidence.path` |
 | artifact | **never written**: its sha256 and byte count only | `evidence.content` |
-| ledger | verbatim, because every field is closed under #518's schema (enums, integers, digests, and ids in #518's grammar `^[A-Za-z0-9._:-]{1,128}$`), NARROWED by Q: every `trialKey` and `taskId` must also match the closed id grammar above (no `:`, starts alphanumeric), since #518's grammar can spell `C:<user>` or `..`; a ledger that fails #518's check or the narrowing is refused, on export and verify | `ledger.lines`; `ledger.trialKey` (the input) is only used to find the trial: the anchor's trial key is taken from the ledger, never from the input |
+| ledger | verbatim, because every field is closed under #518's schema (enums, integers, digests, and ids in #518's grammar `^[A-Za-z0-9._:-]{1,128}$`), NARROWED by Q: every `trialKey` and `taskId` must also match the closed id grammar above (no `:`, starts alphanumeric), since #518's grammar can spell `C:<user>` or `..`; a ledger that fails #518's check or the narrowing is refused, on export and verify; a `trialKey` or `taskId` that carries an identity string cannot be digested (it is under #518's chain), so the export is **refused** (`PROOF_IDENTITY`, the event index, field and class only) | `ledger.lines`; `ledger.trialKey` (the input) is only used to find the trial: the anchor's trial key is taken from the ledger, never from the input |
 | episode | **never written**: its id and digest only | `episode` |
+
+**Identity guard (#553 r3, lead ruling 21:52Z).** A bare username, or any configured identity
+string, is a leak on its own, not only inside a path, and a closed id such as `alice`,
+`ALICE-run-1` or `run.alice` matches the id grammar. So every value the exporter would write
+as is from its input (every id and non-enum arm) is first put to `src/proof/identity.ts`. A
+value that **contains**, case-insensitively, a configured identity string is hashed like any
+value outside the grammar; a ledger id is refused instead (above). The scope is #560's leak
+guard:
+
+- configured strings come from the host at write time (`os.userInfo().username`,
+  `os.hostname()`, `os.homedir()`), the lines of an optional identity file whose path is
+  passed in (`--identity-file`: a full name, other names), `--user-file` lines and the
+  backstop's registered account names. Library callers that pass no identity get the host's;
+- matching is on a normal form (NFKC, lower case, every non-letter, non-digit removed, on
+  both sides), so `Alice`, `ALICE`, `a.l.i.c.e`, `run-alice-1` all contain `alice`, a full name
+  `First Last` matches as `firstlast` and by each word of three or more characters, a
+  hostname matches whole and by its first DNS label, and a home directory whole and by its
+  last segment. A configured string under two characters after normalisation is not matched
+  (stated limit: a one-letter needle would match nearly every id);
+- generic shapes (key-like tokens, home-root and other host paths, `DOMAIN\user`,
+  `user@host`) are the backstop's own patterns, run on the raw value.
+
+Enum members (`MEDIA_TYPES`, `POLICY_REASON_CODES`, the known arms, and every schema enum
+and constant) are constants of this code, not host values, so they are written as is and
+skipped by the verify-time scan. A hit is reported as a class and a location only, never
+the value. Verify (and the exporter's self-verify) re-scans every non-constant string of the
+bundle with the configured identity (`PROOF_IDENTITY`).
 
 **Hashed, not placeholdered.** Every replacement is a digest: no field uses a fixed placeholder,
 so two equal values still compare equal (a verdict's hashed `runId` still binds to the run's).
@@ -194,8 +224,9 @@ report fails closed (`PROOF_REDACTION`; the CLI prints only codes). It reports k
 offsets, never the value.
 
 It is a backstop, not the guarantee. In an honest run it can fire only on a value the
-allowlist writes as is: a closed id that equals a registered account name or a forbidden
-literal, or that looks like a key (`sk_...`). Its known misses (the earlier rounds' "Limits":
+allowlist writes as is: a closed id that equals a forbidden literal. (A closed id that
+contains a registered account name or looks like a key, `sk_...`, is digested by the identity
+guard since #553 r3.) Its known misses (the earlier rounds' "Limits":
 an unlisted URL scheme, a spaced POSIX folder outside the home roots, obfuscated forms) no
 longer matter for export, because no path reaches a bundle in the first place; tests pin that
 those forms never reach a bundle.

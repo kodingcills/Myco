@@ -31,15 +31,36 @@
  * the guess. That is the price of keeping equality checkable; it is stated in the doc.
  */
 import { createHash } from "node:crypto";
+import { REASON_CODES } from "../gate/api.ts";
+import type { IdentityGuard } from "./identity.ts";
 
 /** A closed id: starts alphanumeric, then letters, digits, `.`, `_`, `-`; at most 128. */
 export const CLOSED_ID_SOURCE = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$";
 export const CLOSED_ID = new RegExp(CLOSED_ID_SOURCE);
 export const HEX64_SOURCE = "^[0-9a-f]{64}$";
 export const HEX64 = new RegExp(HEX64_SOURCE);
-/** A reason or policy code, or the hashed form of a value that was not one. */
-export const CODE_SOURCE = "^(?:[A-Z][A-Z0-9_]{1,63}|h-[0-9a-f]{64})$";
-const CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
+/**
+ * The policy reason codes a policy record may carry AS IS: a CLOSED ENUM, never a grammar
+ * (#553 r3, N1: the earlier `[A-Z][A-Z0-9_]*` grammar wrote any upper-case token verbatim,
+ * `ZQGPTRR` or an account name in capitals). The members are the gate's `REASON_CODES` and
+ * the policy and handoff codes the repo's own policy paths emit (`src/schedule/scheduler.ts`,
+ * `src/schedule/runtime.ts`, `src/handoff/policy.ts`). Any other value, however code-like, is
+ * replaced by its hashed form. Adding a member is a reviewed change (`allowlist.test.ts` pins
+ * this list). Track O's own enum replaces the policy half when it lands.
+ */
+export const POLICY_REASON_CODES = [
+  ...REASON_CODES,
+  "POLICY_ALLOW",
+  "POLICY_DENIED",
+  "POLICY_ERROR",
+  "POLICY_INVALID",
+  "TASK_NOT_ALLOWED",
+  "HUMAN_REJECTED",
+  "STILL_PAUSED",
+  "HANDOFF_TIMEOUT",
+  "HANDOFF_CANCELLED",
+  "ATTEMPT_ENDED",
+] as const;
 /**
  * The media types an evidence record may carry AS IS: a CLOSED ENUM, never a grammar.
  * (#553 r1 D1: the earlier `type/subtype` grammar admitted any lower-case two-segment
@@ -59,6 +80,8 @@ export const MEDIA_TYPES = [
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 /** A member of `MEDIA_TYPES`, or the hashed form. */
 export const MEDIA_TYPE_SOURCE = `^(?:${MEDIA_TYPES.map(escapeRe).join("|")}|h-[0-9a-f]{64})$`;
+/** A member of `POLICY_REASON_CODES`, or the hashed form. */
+export const POLICY_CODE_SOURCE = `^(?:${[...new Set(POLICY_REASON_CODES)].map(escapeRe).join("|")}|h-[0-9a-f]{64})$`;
 /**
  * The attempt ledger's own id grammar (#518, `schemas/m2-evidence.ts`): ledger events are
  * carried verbatim, so their trial keys and task ids keep #518's grammar. It is closed too:
@@ -91,14 +114,51 @@ export function hashedId(raw: string): string {
   return `h-${textDigest(raw)}`;
 }
 
-/** An id: written as is when it matches `CLOSED_ID`, else replaced by its hashed form. */
+/**
+ * The closers the EXPORTER uses, bound to an identity guard (`identity.ts`, #553 r3): an id
+ * is written as is only when it matches `CLOSED_ID` AND carries no configured identity string
+ * or generic identity shape; otherwise it is replaced by its hashed form. Enum members
+ * (`MEDIA_TYPES`, `POLICY_REASON_CODES`, `KNOWN_ARMS`) are constants of this code, not host
+ * values, so they are written as is.
+ */
+export interface Allowlist {
+  readonly id: (raw: string) => string;
+  readonly arm: (raw: string) => string;
+  readonly policyCode: (raw: string) => string;
+  readonly mediaType: (raw: string) => string;
+}
+
+export function allowlist(guard: IdentityGuard): Allowlist {
+  const id = (raw: string) =>
+    CLOSED_ID.test(raw) && guard.hit(raw) === null ? raw : hashedId(raw);
+  return {
+    id,
+    arm: (raw) => ((KNOWN_ARMS as readonly string[]).includes(raw) ? raw : id(raw)),
+    policyCode: closedPolicyCode,
+    mediaType: closedMediaType,
+  };
+}
+
+/**
+ * The grammar-only id closer (no identity guard). The exporter never uses it to WRITE a
+ * value (it uses `allowlist(guard).id`); verify uses `sameId` to compare.
+ */
 export function closedId(raw: string): string {
   return CLOSED_ID.test(raw) ? raw : hashedId(raw);
 }
 
-/** A code: as is when it matches the code grammar, else hashed. */
-export function closedCode(raw: string): string {
-  return CODE.test(raw) ? raw : hashedId(raw);
+/**
+ * Whether `emitted` is what an exporter could have written for `raw`: the raw value itself
+ * (a closed id with no identity) or its hashed form (any other value). Either way it binds
+ * the two, and the verifier needs no copy of the exporting host's identity.
+ */
+export function sameId(raw: string, emitted: string | undefined): boolean {
+  return emitted !== undefined && (emitted === closedId(raw) || emitted === hashedId(raw));
+}
+
+/** A policy code: as is when it is a member of `POLICY_REASON_CODES`, else hashed. */
+export function closedPolicyCode(raw: string): string {
+  return (POLICY_REASON_CODES as readonly string[]).includes(raw) ? raw : hashedId(raw);
 }
 
 /** A media type: as is when it is a member of `MEDIA_TYPES` (exact match), else hashed. */
@@ -109,8 +169,14 @@ export function closedMediaType(raw: string): string {
 /** The arms an arm field may carry as is (#518's ledger arms); any other value is an id. */
 export const KNOWN_ARMS = ["myco-gate", "hcu+shell"] as const;
 
+/** The grammar-only arm closer (see `closedId`). */
 export function closedArm(raw: string): string {
   return (KNOWN_ARMS as readonly string[]).includes(raw) ? raw : closedId(raw);
+}
+
+/** `sameId` for an arm field (a known arm is written as is). */
+export function sameArm(raw: string, emitted: string | undefined): boolean {
+  return emitted !== undefined && (emitted === closedArm(raw) || emitted === hashedId(raw));
 }
 
 /** The schema pattern of an arm field. */
@@ -152,7 +218,7 @@ export const FIELD_TREATMENT = {
   "policy.policyId": "id",
   "policy.subject": "id",
   "policy.decision": "enum",
-  "policy.reasonCode": "code",
+  "policy.reasonCode": "policy-code",
   "ledger.lines": "ledger",
   "ledger.trialKey": "ledger-id",
   episode: "reference",

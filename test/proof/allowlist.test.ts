@@ -32,9 +32,9 @@ import { main } from "../../src/proof/cli.ts";
 import {
   CLOSED_ID,
   closedArm,
-  closedCode,
   closedId,
   closedMediaType,
+  closedPolicyCode,
   FIELD_TREATMENT,
   hashedId,
   MEDIA_TYPES,
@@ -290,9 +290,11 @@ describe("the structural replacements themselves", () => {
     }
   });
 
-  it("closedCode, closedMediaType, closedArm: closed values stay, others are hashed", () => {
-    expect(closedCode("POLICY_ALLOW")).toBe("POLICY_ALLOW");
-    expect(closedCode("policy allow")).toBe(hashedId("policy allow"));
+  it("closedPolicyCode, closedMediaType, closedArm: closed values stay, others are hashed", () => {
+    expect(closedPolicyCode("POLICY_ALLOW")).toBe("POLICY_ALLOW");
+    expect(closedPolicyCode("policy allow")).toBe(hashedId("policy allow"));
+    // r3 N1: a code-SHAPED value outside the enum is hashed (the old grammar wrote it as is).
+    expect(closedPolicyCode("ZQGPTRR")).toBe(hashedId("ZQGPTRR"));
     expect(closedMediaType("image/png")).toBe("image/png");
     expect(closedMediaType("C:\\x")).toBe(hashedId("C:\\x"));
     expect(closedArm("hcu+shell")).toBe("hcu+shell");

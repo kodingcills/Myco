@@ -19,7 +19,6 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { validateEpisode } from "../../src/episode/validate.ts";
 import { findLeaks } from "../../src/proof/backstop.ts";
 import {
   exportProofBundle,
@@ -29,13 +28,7 @@ import {
 import { main } from "../../src/proof/cli.ts";
 import { CLOSED_ID } from "../../src/proof/closed.ts";
 import { clone, NO_CTX, rechain, sampleRun } from "./fixture.ts";
-import {
-  expectAbsent,
-  expectEpisodeRefused,
-  exportVerifyReport,
-  plantEverywhere,
-  withoutEpisode,
-} from "./plant.ts";
+import { expectAbsent, exportVerifyReport, plantEverywhere } from "./plant.ts";
 import {
   ANT_KEY,
   BOB,
@@ -56,26 +49,12 @@ import {
 
 /**
  * Steps 1 and 2 for one probe. A value that itself matches the closed id grammar (a
- * key-shaped token such as `id_sk-...`) is written as is in id fields, so the BACKSTOP must
- * refuse the export (fail closed); its error must not carry the value either.
+ * key-shaped token such as `id_sk-...`) used to be written as is in id fields and refused by
+ * the backstop. Since #553 r3 the identity guard digests it (key-like class), so every probe
+ * now exports, verifies and reports with no planted word in any output.
  */
 function battery(value: string, words: readonly string[]): void {
-  if (CLOSED_ID.test(value)) {
-    let message = "";
-    expect(() => {
-      try {
-        exportProofBundle(withoutEpisode(plantEverywhere(value)), NO_CTX);
-      } catch (e) {
-        message = String(e);
-        throw e;
-      }
-    }).toThrow(/PROOF_REDACTION/);
-    expectAbsent(message, words, "export refusal");
-    // With its episode, #542's validator refuses first (fail closed either way).
-    const withEpisode = plantEverywhere(value);
-    if (withEpisode.episode !== undefined && validateEpisode(withEpisode.episode).length > 0)
-      expectEpisodeRefused(withEpisode, words);
-  } else exportVerifyReport(plantEverywhere(value), words);
+  exportVerifyReport(plantEverywhere(value), words);
   const honest = exportProofBundle(sampleRun(), NO_CTX);
   // A forger writes the raw value where the summary digest is.
   const asText = clone(honest);

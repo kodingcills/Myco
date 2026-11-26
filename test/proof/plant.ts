@@ -82,7 +82,8 @@ export function plantEverywhere(value: string): ProofRunInput {
       runId: value,
       verdict: "refuted",
       accepted: false,
-      reasonCodes: ["ORACLE_FAIL"],
+      // The sample episode's gate result (N2: verify cross-checks the two).
+      reasonCodes: ["ORACLE_FAIL", "CLAIM_RECORDED"],
       evidence: [value],
       oracle: { family: value, version: value, specSha256: "a".repeat(64) },
     },

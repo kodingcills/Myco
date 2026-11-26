@@ -2,9 +2,10 @@
  * Track Q (replayable proof) CLI. Local only: no network, no model, no VM.
  *
  *   npx tsx scripts/proof.ts export RUN.json --out BUNDLE.json [--forbid-file F] [--user-file U]
+ *                                   [--identity-file I]
  *   npx tsx scripts/proof.ts verify BUNDLE.json [--expect-head H] [--expect-ledger-head H]
  *                                   [--evidence-dir D] [--episode E] [--forbid-file F]
- *                                   [--user-file U]
+ *                                   [--user-file U] [--identity-file I]
  *   npx tsx scripts/proof.ts report BUNDLE.json --out REPORT.html [verify flags]
  *
  * RUN.json is a `ProofRunInput` (see bundle.ts) with two file conveniences: an evidence
@@ -19,6 +20,12 @@
  * or the host's own account name, home, temp or checkout directory, still appears in an
  * output (for example as a closed id equal to the account name), the command fails closed.
  * Neither file's contents are ever printed.
+ *
+ * Identity guard (#553 r3): export digests any id whose value CONTAINS, case-insensitively,
+ * the host's account name, hostname or home directory, a line of `--identity-file I` (a full
+ * name, other names: one per line; the file is read, never printed) or a `--user-file` entry,
+ * and refuses a ledger id that carries one. Verify and report refuse a bundle with any
+ * non-constant string that carries one (`PROOF_IDENTITY`, classes only).
  *
  * Exit codes: 0 ok; 1 refused (verification failed, export refused, report not written);
  * 2 usage. Output is JSON on stdout; it never echoes a redacted value, and is itself scanned
@@ -38,6 +45,7 @@ import {
   type VerifyOptions,
   verifyProofBundle,
 } from "./bundle.ts";
+import { hostIdentity, type IdentityContext } from "./identity.ts";
 import { parseLedgerJsonl } from "./ledger.ts";
 import { ProofReportError, renderProofReport } from "./report.ts";
 
@@ -84,7 +92,7 @@ class UsageError extends Error {}
 
 /** Each command's flags (exported so the doc test can pin the documented usage). */
 export const KNOWN: Record<string, readonly string[]> = {
-  export: ["--out", "--forbid-file", "--user-file"],
+  export: ["--out", "--forbid-file", "--user-file", "--identity-file"],
   verify: [
     "--expect-head",
     "--expect-ledger-head",
@@ -92,6 +100,7 @@ export const KNOWN: Record<string, readonly string[]> = {
     "--episode",
     "--forbid-file",
     "--user-file",
+    "--identity-file",
   ],
   report: [
     "--out",
@@ -101,6 +110,7 @@ export const KNOWN: Record<string, readonly string[]> = {
     "--episode",
     "--forbid-file",
     "--user-file",
+    "--identity-file",
   ],
 };
 
@@ -117,6 +127,7 @@ function verifyOptions(
   flags: Map<string, string>,
   forbid: readonly string[],
   users: readonly string[],
+  identity: IdentityContext,
 ): VerifyOptions {
   return {
     ...(flags.has("--expect-head") ? { expectHead: flags.get("--expect-head") } : {}),
@@ -128,6 +139,7 @@ function verifyOptions(
       ? { episode: JSON.parse(readFileSync(flags.get("--episode") as string, "utf8")) }
       : {}),
     redaction: forbidRedaction(forbid, users),
+    identity,
   };
 }
 
@@ -221,18 +233,23 @@ export function main(argv: readonly string[], io: CliIo): number {
     const forbid = readLines(flags.get("--forbid-file"));
     const users = readLines(flags.get("--user-file"));
     outCtx = hostRedaction(forbid, users);
+    const identityFile = flags.get("--identity-file");
+    const identity = hostIdentity({
+      ...(identityFile === undefined ? {} : { identityFile }),
+      names: users,
+    });
 
     if (command === "export") {
       const out = flags.get("--out");
       if (out === undefined) throw new UsageError("export needs --out");
-      const bundle = exportProofBundle(loadRunInput(input), hostRedaction(forbid, users));
+      const bundle = exportProofBundle(loadRunInput(input), hostRedaction(forbid, users), identity);
       writeFileSync(out, serializeProofBundle(bundle));
       emit(io, { ok: true, head: bundle.head, records: bundle.records.length }, outCtx);
       return 0;
     }
 
     const text = readFileSync(input, "utf8");
-    const options = verifyOptions(flags, forbid, users);
+    const options = verifyOptions(flags, forbid, users, identity);
     const result = verifyProofBundle(text, options);
     if (command === "verify") {
       emit(io, result, outCtx, true);

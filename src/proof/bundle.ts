@@ -42,25 +42,36 @@
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { m2AttemptEventSchema } from "../../schemas/m2-evidence.ts";
 import { type JsonSchema, validateSchema } from "../../schemas/validate.ts";
 import { GATE_API_VERSION, REASON_CODES } from "../gate/api.ts";
 import { findLeaks, findLeaksDeep, type RedactionContext } from "./backstop.ts";
 import {
+  type Allowlist,
   ARM_SOURCE,
+  allowlist,
   CLOSED_ID_SOURCE,
-  CODE_SOURCE,
-  closedArm,
-  closedCode,
-  closedId,
-  closedMediaType,
   HEX64,
   HEX64_SOURCE,
+  KNOWN_ARMS,
   MEDIA_TYPE_SOURCE,
+  MEDIA_TYPES,
+  POLICY_CODE_SOURCE,
+  POLICY_REASON_CODES,
+  sameArm,
+  sameId,
   type TextRef,
   textDigest,
   textRef,
 } from "./closed.ts";
 import { EPISODE_SCHEMA, type EpisodeRef, projectEpisode } from "./episode-ref.ts";
+import {
+  compileIdentity,
+  hostIdentity,
+  type IdentityClass,
+  type IdentityContext,
+  type IdentityGuard,
+} from "./identity.ts";
 import {
   canonicalJson,
   type LedgerEvent,
@@ -269,7 +280,7 @@ export const BODY_SCHEMAS: Record<RecordKind, JsonSchema> = {
       policyId: ID,
       subject: ID,
       decision: { enum: [...DECISIONS] },
-      reasonCode: { type: "string", pattern: CODE_SOURCE },
+      reasonCode: { type: "string", pattern: POLICY_CODE_SOURCE },
     },
   },
   "ledger-anchor": {
@@ -453,7 +464,7 @@ function need(ok: boolean, field: string): void {
   if (!ok) throw new ProofExportError("PROOF_INPUT", `${field} is not a value of its type`);
 }
 
-function stepBody(step: ProofStep): { kind: RecordKind; body: RecordBody } {
+function stepBody(step: ProofStep, a: Allowlist): { kind: RecordKind; body: RecordBody } {
   const s = step as unknown as Record<string, unknown>;
   switch (step.kind) {
     case "action":
@@ -464,7 +475,7 @@ function stepBody(step: ProofStep): { kind: RecordKind; body: RecordBody } {
         kind: "action",
         body: {
           actor: s.actor as ActionBody["actor"],
-          tool: closedId(s.tool as string),
+          tool: a.id(s.tool as string),
           summary: textRef(s.summary as string),
         },
       };
@@ -479,9 +490,9 @@ function stepBody(step: ProofStep): { kind: RecordKind; body: RecordBody } {
       return {
         kind: "evidence",
         body: {
-          evidenceId: closedId(step.evidenceId),
-          kind: closedId(step.evidenceKind),
-          mediaType: closedMediaType(step.mediaType),
+          evidenceId: a.id(step.evidenceId),
+          kind: a.id(step.evidenceKind),
+          mediaType: a.mediaType(step.mediaType),
           ...(step.path === undefined ? {} : { path: textRef(step.path) }),
           sha256: sha256Hex(bytes),
           bytes: bytes.byteLength,
@@ -509,18 +520,18 @@ function stepBody(step: ProofStep): { kind: RecordKind; body: RecordBody } {
         kind: "verdict",
         body: {
           gateApi: GATE_API_VERSION,
-          taskId: closedId(s.taskId as string),
-          runId: closedId(s.runId as string),
+          taskId: a.id(s.taskId as string),
+          runId: a.id(s.runId as string),
           verdict: s.verdict as VerdictBody["verdict"],
           accepted: s.accepted as boolean,
           reasonCodes: [...(s.reasonCodes as string[])],
-          evidence: (s.evidence as string[]).map(closedId),
+          evidence: (s.evidence as string[]).map(a.id),
           ...(o === undefined
             ? {}
             : {
                 oracle: {
-                  family: closedId(o.family as string),
-                  version: closedId(o.version as string),
+                  family: a.id(o.family as string),
+                  version: a.id(o.version as string),
                   specSha256: o.specSha256 as string,
                 },
               }),
@@ -545,8 +556,8 @@ function stepBody(step: ProofStep): { kind: RecordKind; body: RecordBody } {
       return {
         kind: "handoff",
         body: {
-          from: closedId(s.from as string),
-          to: closedId(s.to as string),
+          from: a.id(s.from as string),
+          to: a.id(s.to as string),
           summary: textRef(s.summary as string),
           ...(s.checkpoint === undefined ? {} : { checkpoint: s.checkpoint as number }),
         },
@@ -559,10 +570,10 @@ function stepBody(step: ProofStep): { kind: RecordKind; body: RecordBody } {
       return {
         kind: "policy",
         body: {
-          policyId: closedId(s.policyId as string),
-          subject: closedId(s.subject as string),
+          policyId: a.id(s.policyId as string),
+          subject: a.id(s.subject as string),
           decision: s.decision as PolicyBody["decision"],
-          reasonCode: closedCode(s.reasonCode as string),
+          reasonCode: a.policyCode(s.reasonCode as string),
         },
       };
     default:
@@ -591,11 +602,49 @@ function chain(
 
 /**
  * Build a bundle from a run. Every value goes through the allowlist (`stepBody`, `closed.ts`)
- * before it is written. Fails closed: a value of the wrong closed type, a broken or unpinned
- * ledger, a run the verifier would refuse, or anything the backstop scanner flags (with
- * `ctx`) throws instead of producing a bundle.
+ * and the identity guard (`identity.ts`) before it is written. Fails closed: a value of the
+ * wrong closed type, a broken or unpinned ledger, a ledger id carrying an identity string, a
+ * run the verifier would refuse, or anything the backstop scanner flags (with `ctx`, and the
+ * identity scan with `identity`) throws instead of producing a bundle.
+ *
+ * `identity` defaults to the writing host's own (`hostIdentity()`: account name, hostname,
+ * home directory), so a caller that passes none is still guarded; `ctx.usernames` (the
+ * backstop's registered account names) are added to it.
  */
-export function exportProofBundle(input: ProofRunInput, ctx: RedactionContext): ProofBundle {
+export function exportProofBundle(
+  input: ProofRunInput,
+  ctx: RedactionContext,
+  identity: IdentityContext = hostIdentity(),
+): ProofBundle {
+  // The backstop's registered account names are identity strings too.
+  const guard = compileIdentity({
+    names: [...identity.names, ...ctx.usernames],
+    homes: identity.homes,
+  });
+  const bundle = assembleProofBundle(input, guard);
+  // Self-verify: the closed schemas, the chain, the bindings, the BACKSTOP scanner and the
+  // identity scan.
+  const result = verifyProofBundle(serializeProofBundle(bundle), {
+    redaction: ctx,
+    identityGuard: guard,
+    ...(input.episode === undefined ? {} : { episode: input.episode }),
+  });
+  if (!result.ok)
+    throw new ProofExportError(
+      result.errors[0]?.code ?? "PROOF_INVALID",
+      result.errors.map((e) => e.message).join("; "),
+    );
+  return bundle;
+}
+
+/**
+ * The allowlist step alone: build the bundle with every value closed and identity-guarded,
+ * WITHOUT the self-verify and its backstop scans. `exportProofBundle` is the only export
+ * path; this is exported so tests can show the allowlist keeps identity strings out with no
+ * help from the backstop.
+ */
+export function assembleProofBundle(input: ProofRunInput, guard: IdentityGuard): ProofBundle {
+  const a = allowlist(guard);
   const raw = input as unknown as Record<string, unknown>;
   need(isStr(raw.runId), "run.runId");
   need(isStr(raw.taskId), "run.taskId");
@@ -604,7 +653,7 @@ export function exportProofBundle(input: ProofRunInput, ctx: RedactionContext): 
   need(Array.isArray(raw.steps), "run.steps");
   const items = input.steps.map((s) => {
     need(s !== null && typeof s === "object", "run.steps");
-    return stepBody(s);
+    return stepBody(s, a);
   });
   let ledger: ProofBundle["ledger"] = null;
   if (input.ledger !== undefined) {
@@ -617,6 +666,18 @@ export function exportProofBundle(input: ProofRunInput, ctx: RedactionContext): 
       head.headSha256 !== input.ledger.head?.headSha256
     )
       throw new ProofExportError("PROOF_LEDGER_HEAD", "the ledger does not match its pinned head");
+    // The ledger is carried verbatim under its own chain, so an id in it cannot be digested:
+    // one that carries an identity string refuses the export (location and class only).
+    events.forEach((e, i) => {
+      for (const field of ["trialKey", "taskId"] as const) {
+        const cls = guard.hit(e[field]);
+        if (cls !== null)
+          throw new ProofExportError(
+            "PROOF_IDENTITY",
+            `ledger event ${i}: ${field} carries a value of class ${cls}`,
+          );
+      }
+    });
     const key = input.ledger.trialKey;
     const start = events.findIndex((e) => e.trialKey === key && e.kind === "start");
     const end = events.findIndex((e) => e.trialKey === key && e.kind === "end");
@@ -643,16 +704,16 @@ export function exportProofBundle(input: ProofRunInput, ctx: RedactionContext): 
     episode = projected.projection.ref;
   }
   const run: ProofBundle["run"] = {
-    runId: closedId(input.runId),
-    taskId: closedId(input.taskId),
-    ...(input.arm === undefined ? {} : { arm: closedArm(input.arm) }),
+    runId: a.id(input.runId),
+    taskId: a.id(input.taskId),
+    ...(input.arm === undefined ? {} : { arm: a.arm(input.arm) }),
     simulated: input.simulated,
     episode,
   };
   const records = chain(run, items);
   const last = records.at(-1);
   if (last === undefined) throw new ProofExportError("PROOF_EMPTY", "a run with no records");
-  const bundle: ProofBundle = {
+  return {
     schema: PROOF_BUNDLE_SCHEMA,
     claim: PROOF_CLAIM,
     run,
@@ -660,17 +721,6 @@ export function exportProofBundle(input: ProofRunInput, ctx: RedactionContext): 
     ledger,
     head: { records: records.length, headSha256: recordSha256(last) },
   };
-  // Self-verify: the closed schemas, the chain, the bindings and the BACKSTOP scanner.
-  const result = verifyProofBundle(serializeProofBundle(bundle), {
-    redaction: ctx,
-    ...(input.episode === undefined ? {} : { episode: input.episode }),
-  });
-  if (!result.ok)
-    throw new ProofExportError(
-      result.errors[0]?.code ?? "PROOF_INVALID",
-      result.errors.map((e) => e.message).join("; "),
-    );
-  return bundle;
 }
 
 export function serializeProofBundle(bundle: ProofBundle): string {
@@ -698,6 +748,15 @@ export interface VerifyOptions {
   readonly evidenceDir?: string;
   /** Extra literals the backstop must refuse (the verifying host's own context). */
   readonly redaction?: RedactionContext;
+  /**
+   * Identity strings no bundle string may contain, case-insensitively (`identity.ts`): the
+   * verifying host's account name, hostname, home, and any configured names. Every string
+   * that is not a constant of the format is checked; a hit refuses the bundle
+   * (`PROOF_IDENTITY`, classes and a count only) before any other message is built.
+   */
+  readonly identity?: IdentityContext;
+  /** A compiled guard (the exporter's own self-verify); used instead of `identity`. */
+  readonly identityGuard?: IdentityGuard;
   /**
    * The attempt's `myco.episode/1` record, parsed. When given, its id and digest are
    * recomputed against `run.episode` and the projected `run` fields are cross-checked.
@@ -815,6 +874,21 @@ export function verifyProofBundle(text: string, options: VerifyOptions = {}): Ve
   if (!parseOk) {
     fail("PROOF_SCHEMA", "not JSON");
     return done();
+  }
+  // The identity scan (#553 r3): before any message that could name a bundle value is built.
+  const guard =
+    options.identityGuard ??
+    (options.identity === undefined ? undefined : compileIdentity(options.identity));
+  if (guard !== undefined) {
+    const hits = findIdentityDeep(parsed, guard);
+    if (hits.length > 0) {
+      const classes = [...new Set(hits.map((h) => h.cls))].sort().join(", ");
+      fail(
+        "PROOF_IDENTITY",
+        `the bundle carries ${hits.length} value(s) containing a configured identity string or shape: ${classes}`,
+      );
+      return done();
+    }
   }
   // Schema paths are built from schema field names and indices only; the validator's own
   // messages (which may quote a value) are never passed on.
@@ -940,14 +1014,11 @@ export function verifyProofBundle(text: string, options: VerifyOptions = {}): Ve
         fail("PROOF_LEDGER_ANCHOR", "the anchor's seqs do not point at the trial's start and end");
       else if (a.startSeq >= a.endSeq)
         fail("PROOF_LEDGER_ANCHOR", "the trial ends before it starts");
-      else if (
-        closedId(s.taskId) !== bundle.run.taskId ||
-        closedId(en.taskId) !== bundle.run.taskId
-      )
+      else if (!sameId(s.taskId, bundle.run.taskId) || !sameId(en.taskId, bundle.run.taskId))
         fail("PROOF_LEDGER_ANCHOR", "the ledger's trial is for another task");
       else if (bundle.run.arm === undefined)
         fail("PROOF_LEDGER_ANCHOR", "a run anchored to a ledger trial must state its arm");
-      else if (closedArm(s.arm) !== bundle.run.arm || closedArm(en.arm) !== bundle.run.arm)
+      else if (!sameArm(s.arm, bundle.run.arm) || !sameArm(en.arm, bundle.run.arm))
         fail("PROOF_LEDGER_ANCHOR", "the ledger's trial is for another arm");
     }
     if (options.expectLedgerHead !== undefined && head.headSha256 !== options.expectLedgerHead)
@@ -969,17 +1040,37 @@ export function verifyProofBundle(text: string, options: VerifyOptions = {}): Ve
         const p = projected.projection;
         if (p.ref.episodeId !== ref.episodeId || p.ref.sha256 !== ref.sha256)
           fail("PROOF_EPISODE", "the episode's id or digest differs from the bundle's reference");
-        if (closedId(p.runId) !== bundle.run.runId)
+        if (!sameId(p.runId, bundle.run.runId))
           fail("PROOF_EPISODE", "run.runId differs from the episode");
-        if (closedId(p.taskId) !== bundle.run.taskId)
+        if (!sameId(p.taskId, bundle.run.taskId))
           fail("PROOF_EPISODE", "run.taskId differs from the episode");
-        if (closedArm(p.arm) !== bundle.run.arm)
+        if (!sameArm(p.arm, bundle.run.arm))
           fail("PROOF_EPISODE", "run.arm differs from the episode");
         if (p.simulated !== bundle.run.simulated)
           fail("PROOF_EPISODE", "run.simulated differs from the episode");
         const anchor = anchors[0]?.body as LedgerAnchorBody | undefined;
         if (p.trialKey !== null && anchor !== undefined && anchor.trialKey !== p.trialKey)
           fail("PROOF_EPISODE", "the anchored ledger trial differs from the episode's trial");
+        // N2 (#553 r3): the episode's gate result against the bundle's verdict record, so a
+        // re-chained verdict flip no longer verifies as cross-checked. An episode with no gate
+        // check has no verdict record; otherwise the LAST verdict record must agree on the
+        // verdict, `accepted` and (when the episode records them) the reason codes.
+        const verdicts = bundle.records.filter((r) => r.kind === "verdict");
+        const last = verdicts.at(-1)?.body as VerdictBody | undefined;
+        const gate = p.gate;
+        if (gate === null) {
+          if (last !== undefined)
+            fail("PROOF_EPISODE", "a verdict record, but the episode has no gate result");
+        } else if (last === undefined)
+          fail("PROOF_EPISODE", "the episode has a gate result, but the bundle has no verdict");
+        else {
+          if (gate.verdict !== last.verdict)
+            fail("PROOF_EPISODE", "the verdict differs from the episode's gate verdict");
+          if (gate.accepted !== last.accepted)
+            fail("PROOF_EPISODE", "accepted differs from the episode's gate result");
+          if (gate.reasonCodes !== null && !sameCodes(gate.reasonCodes, last.reasonCodes))
+            fail("PROOF_EPISODE", "the reason codes differ from the episode's gate result");
+        }
         // Cross-checked only when the episode is valid AND every projected field agrees.
         episodeChecked = errors.length === before;
       }
@@ -992,6 +1083,81 @@ export function verifyProofBundle(text: string, options: VerifyOptions = {}): Ve
     simulated: bundle.run.simulated,
     episodeChecked,
   });
+}
+
+/** Equal as multisets (order is not part of a verdict). */
+function sameCodes(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && [...a].sort().join("\u0000") === [...b].sort().join("\u0000");
+}
+
+// ---------------------------------------------------------------------------------------
+// The identity scan over a parsed bundle
+
+/**
+ * The strings that are constants of the format, never host values: every property name,
+ * enum member and `const` in the bundle, body and ledger-event schemas, plus the closed enums
+ * written through a pattern (media types, policy codes, arms). The identity scan skips them
+ * (an account named `agent` must not refuse every bundle for the actor enum); digests are
+ * skipped too. Every other string, including any unknown key, is scanned.
+ */
+function schemaConstants(schemas: readonly JsonSchema[]): Set<string> {
+  const out = new Set<string>();
+  const walk = (s: unknown) => {
+    if (Array.isArray(s)) {
+      for (const x of s) walk(x);
+      return;
+    }
+    if (s === null || typeof s !== "object") return;
+    const o = s as Record<string, unknown>;
+    if (typeof o.const === "string") out.add(o.const);
+    if (Array.isArray(o.enum)) for (const v of o.enum) if (typeof v === "string") out.add(v);
+    if (o.properties !== null && typeof o.properties === "object")
+      for (const [k, v] of Object.entries(o.properties as Record<string, unknown>)) {
+        out.add(k);
+        walk(v);
+      }
+    for (const k of ["items", "anyOf", "oneOf", "allOf"]) walk(o[k]);
+  };
+  for (const s of schemas) walk(s);
+  return out;
+}
+
+export const FORMAT_CONSTANTS: ReadonlySet<string> = new Set([
+  ...schemaConstants([BUNDLE_SCHEMA, ...Object.values(BODY_SCHEMAS), m2AttemptEventSchema]),
+  ...MEDIA_TYPES,
+  ...POLICY_REASON_CODES,
+  ...KNOWN_ARMS,
+]);
+
+const DIGEST_FORM = /^(?:h-)?[0-9a-f]{64}$/;
+
+/**
+ * Every string value and key of a parsed bundle that carries an identity string or shape,
+ * as a class and the string's ordinal in traversal order. Never the value.
+ */
+export function findIdentityDeep(
+  value: unknown,
+  guard: IdentityGuard,
+): Array<{ cls: IdentityClass; at: number }> {
+  const hits: Array<{ cls: IdentityClass; at: number }> = [];
+  let ordinal = 0;
+  const check = (s: string) => {
+    const at = ordinal++;
+    if (FORMAT_CONSTANTS.has(s) || DIGEST_FORM.test(s)) return;
+    const cls = guard.hit(s);
+    if (cls !== null) hits.push({ cls, at });
+  };
+  const visit = (v: unknown) => {
+    if (typeof v === "string") check(v);
+    else if (Array.isArray(v)) for (const item of v) visit(item);
+    else if (v !== null && typeof v === "object")
+      for (const [k, item] of Object.entries(v)) {
+        check(k);
+        visit(item);
+      }
+  };
+  visit(value);
+  return hits;
 }
 
 /** Read and verify a bundle file. */

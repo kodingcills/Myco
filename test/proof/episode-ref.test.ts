@@ -62,6 +62,9 @@ describe("the episode reference is bound to #542 (src/episode on main)", () => {
       "harness.arm",
       "provenance.runId",
       "provenance.trialKey",
+      "gate.verdict",
+      "gate.accepted",
+      "gate.reasonCodes",
     ]);
   });
 
@@ -85,6 +88,14 @@ describe("the episode reference is bound to #542 (src/episode on main)", () => {
       arm: "myco-gate",
       simulated: true,
       trialKey: "trial-1",
+      gate:
+        ep.gate === null
+          ? null
+          : {
+              verdict: ep.gate.verdict,
+              accepted: ep.gate.accepted,
+              reasonCodes: ep.gate.reasonCodes === null ? null : [...ep.gate.reasonCodes],
+            },
     });
     expect(validateEpisode(sampleEpisode())).toEqual([]);
   });

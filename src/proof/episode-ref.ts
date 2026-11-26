@@ -40,6 +40,9 @@ export const EPISODE_FIELDS_USED = [
   "harness.arm",
   "provenance.runId",
   "provenance.trialKey",
+  "gate.verdict",
+  "gate.accepted",
+  "gate.reasonCodes",
 ] as const;
 
 /** What a bundle carries: the reference, never the episode itself. */
@@ -61,6 +64,12 @@ export interface EpisodeProjection {
   readonly arm: string;
   readonly simulated: boolean;
   readonly trialKey: string | null;
+  /** The episode's gate result (null: no gate check), cross-checked against the verdict. */
+  readonly gate: {
+    readonly verdict: string;
+    readonly accepted: boolean;
+    readonly reasonCodes: readonly string[] | null;
+  } | null;
 }
 
 /** #542's id rule (re-exported from `src/episode/validate.ts`, not re-stated). */
@@ -95,6 +104,14 @@ export function projectEpisode(
       arm: ep.harness.arm,
       simulated: ep.simulated,
       trialKey: ep.provenance.trialKey,
+      gate:
+        ep.gate === null
+          ? null
+          : {
+              verdict: ep.gate.verdict,
+              accepted: ep.gate.accepted,
+              reasonCodes: ep.gate.reasonCodes === null ? null : [...ep.gate.reasonCodes],
+            },
     },
   };
 }
