@@ -14,6 +14,11 @@ client-agnostic setup; the API itself (request, result, reason codes) is
 | OpenAI Codex CLI (`codex exec`) | **run** 2026-11-26, `codex-cli 0.168.0`: verified, refuted and ASSIGNMENT_MISMATCH returned end to end ([transcript](../../examples/mcp-clients/codex-transcript.md), [config](../../examples/mcp-clients/codex.config.md)) |
 | Oh My Pi, Gemini CLI, other MCP agents | example config only; **not run** (see the examples README for why) |
 
+**Quickest path:** `bin/myco init` in your project writes the Claude Code (`.mcp.json`) and
+Codex (`.codex/config.toml`) entries below with your paths filled in, after starting the gate
+once to check it answers ([docs/product/setup.md](../product/setup.md)). The rest of this page
+is what that entry means and how to write it by hand for any other client.
+
 ## 1. Launching the server
 
 Every MCP client needs the same three things: a command, its arguments, and (optionally)

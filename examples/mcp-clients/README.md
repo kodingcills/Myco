@@ -4,6 +4,9 @@ Example configs that start the `myco-gate` stdio MCP server for one trial. The s
 tool schema, verdict shape and security model are in
 [docs/gate/clients.md](../../docs/gate/clients.md).
 
+`bin/myco init` writes the Claude Code and Codex entries into a project with the
+placeholders filled in ([docs/product/setup.md](../../docs/product/setup.md)).
+
 Every file uses the same placeholders. Replace them per trial (the harness writes this
 config, not the agent):
 
