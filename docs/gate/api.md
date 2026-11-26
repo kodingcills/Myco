@@ -171,17 +171,24 @@ root as given, resolved or real; the audit-log path; any other operator path) or
 error message, which can contain one. When something throws, the reason carries only a
 short code: the error's errno-style `code` (`ENOENT`, `EACCES`) if it has one, else its
 class name (`TypeError`, `SyntaxError`), else `error` (`errorCode` in
-`src/gate/reasons.ts`; a `code` or `name` outside a strict `[A-Za-z0-9_]` alphabet is
-ignored). The gate-level reasons are:
+`src/gate/reasons.ts`). A `code` is used only if it matches `^[A-Z][A-Z0-9_]{0,63}$`
+(upper case, a leading letter, at most 64 characters), and a `name` only if it matches
+`^[A-Za-z][A-Za-z0-9_]{0,63}$`; anything else, including a value whose getter throws, is
+ignored, and the message is never used. The gate-level reasons are:
 
 | Reason | Example |
 |---|---|
 | A reader threw or rejected | `could not look: reader threw: EACCES` |
 | The oracle threw | `oracle threw: TypeError` |
 | The decision log could not be written | `decision log write failed: ENOENT` |
-| The gate itself errored (defensive) | `gate error: Error` |
+| The gate itself errored (defensive; no known path reaches it) | `gate error: Error` |
 | The todo-items store does not parse | `could not look: store does not parse (SyntaxError)` |
 | The file reader failed (#478) | `could not look: r1/.myco-todo.json: open failed: EACCES` |
+
+A reader may return its `ReadOutcome` directly instead of a promise: the gate wraps the
+call in `Promise.resolve().then(...)`, so a synchronous return is accepted and a
+synchronous throw is a reader error (`reader threw`). Either way, `verified` still follows
+only an oracle pass over the bytes the reader returned.
 
 **Where operators find the full error.** `GateConfig.onDiagnostic` is called with
 `{ stage, code, error }` (stage `reader`, `oracle`, `decision-log` or `gate`) and the raw

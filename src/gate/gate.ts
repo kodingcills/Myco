@@ -643,7 +643,14 @@ export function createGate(config: GateConfig): Gate {
       // result keeps its request and evidence refs.
       valid = validOracleOutput(output);
     } catch (error) {
-      const corrupt = error instanceof StateCorruptError;
+      // `instanceof` can itself throw (a revoked Proxy, a throwing getPrototypeOf trap); such
+      // a value is an oracle error, not a gate error.
+      let corrupt = false;
+      try {
+        corrupt = error instanceof StateCorruptError;
+      } catch {
+        corrupt = false;
+      }
       // A StateCorruptError's message is written by the family to be agent-facing (no host
       // path, no raw error text; see families.ts); its `cause`, if any, goes to the operator.
       if (corrupt && error.cause !== undefined) diagnose("oracle", error.cause);

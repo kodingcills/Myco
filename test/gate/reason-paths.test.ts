@@ -119,6 +119,32 @@ describe("errorCode: a path-free code, never the message", () => {
     };
     expect(errorCode(hostile)).toBe("error");
   });
+
+  it("an Error whose message holds a path, with a rejected code AND a rejected name, gives 'error', never the message", () => {
+    const raw = Object.assign(new Error("/home/op/evidence/r1/.myco-todo.json"), {
+      code: "/home/op/x",
+      name: "Bad/Name",
+    });
+    expect(errorCode(raw)).toBe("error");
+    expect(errorCode(raw)).not.toContain("/home/op");
+  });
+
+  it("a throwing `name` getter does not hide a valid `code`, and vice versa", () => {
+    const badName = {
+      code: "ENOENT",
+      get name(): string {
+        throw new Error("/home/op/evidence");
+      },
+    };
+    expect(errorCode(badName)).toBe("ENOENT");
+    const badCode = {
+      name: "TypeError",
+      get code(): string {
+        throw new Error("/home/op/evidence");
+      },
+    };
+    expect(errorCode(badCode)).toBe("TypeError");
+  });
 });
 
 describe("reader threw: code only (custom readers)", () => {
@@ -158,6 +184,33 @@ describe("reader threw: code only (custom readers)", () => {
       expect(seen[0]).toEqual({ stage: "reader", code: "EACCES", error: raw });
     });
   }
+
+  it("a reader error with a path in its message and neither a usable code nor name is reported as 'error' (in process and over MCP)", async () => {
+    const root = tempRoot();
+    const raw = Object.assign(new Error(`EACCES: open '${join(root, "r1", STORE)}'`), {
+      code: join(root, "r1"),
+      name: `Err${root}`,
+    });
+    const seen: GateDiagnostic[] = [];
+    const both = await bothWays({
+      tasks: registry(),
+      reader: {
+        describe: root,
+        read: async () => {
+          throw raw;
+        },
+      },
+      assignment: TRIAL,
+      onDiagnostic: (d) => seen.push(d),
+    });
+    for (const result of both.results) {
+      expect(result.verdict).toBe("uncertain");
+      expect(result.reasonCodes).toEqual(["STATE_UNREADABLE"]);
+      expect(result.reasons).toEqual(["could not look: reader threw: error"]);
+    }
+    expectClean(both, [...spellings(root), raw.message, raw.name]);
+    expect(seen[0]).toEqual({ stage: "reader", code: "error", error: raw });
+  });
 
   it("a reader error whose `code` is itself a path is reported by class name", async () => {
     const root = tempRoot();
@@ -201,6 +254,37 @@ describe("oracle threw: code only", () => {
     }
     expectClean(both, [...spellings(root), raw.message]);
     expect(seen[0]).toEqual({ stage: "oracle", code: "TypeError", error: raw });
+  });
+
+  it("an oracle that throws a revoked Proxy (instanceof itself throws) is an oracle error, not a gate error", async () => {
+    const root = tempRoot();
+    writeState(root, "r1", STORE, todoStore(S01_ITEMS));
+    const { proxy, revoke } = Proxy.revocable(new Error(`at ${root}`), {});
+    revoke();
+    const throwing: OracleFamily = {
+      ...(FAMILIES.get("todo-items") as OracleFamily),
+      decide() {
+        throw proxy;
+      },
+    };
+    const seen: GateDiagnostic[] = [];
+    const both = await bothWays({
+      tasks: registry(new Map([...FAMILIES, ["todo-items", throwing]])),
+      reader: fileEvidenceReader(root),
+      assignment: TRIAL,
+      onDiagnostic: (d) => seen.push(d),
+    });
+    for (const result of both.results) {
+      expect(result.verdict).toBe("uncertain");
+      expect(result.reasonCodes).toEqual(["ORACLE_ERROR"]);
+      expect(result.reasons).toEqual(["oracle threw: error"]);
+    }
+    expectClean(both, spellings(root));
+    // bothWays checks twice (in process, then over MCP): one diagnostic each.
+    expect(seen.map((d) => [d.stage, d.code])).toEqual([
+      ["oracle", "error"],
+      ["oracle", "error"],
+    ]);
   });
 
   it("the todo-items family reports a corrupt store by class name, not the parser's text", async () => {

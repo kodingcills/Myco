@@ -23,9 +23,16 @@ export function errorCode(error: unknown): string {
   if ((typeof error !== "object" && typeof error !== "function") || error === null) {
     return "error";
   }
+  // Each property is read on its own: a throwing getter (or Proxy trap) on one does not
+  // hide a usable value on the other.
   try {
-    const { code, name } = error as { code?: unknown; name?: unknown };
+    const { code } = error as { code?: unknown };
     if (typeof code === "string" && CODE.test(code)) return code;
+  } catch {
+    // A throwing getter: try the name.
+  }
+  try {
+    const { name } = error as { name?: unknown };
     if (typeof name === "string" && NAME.test(name)) return name;
   } catch {
     // A throwing getter: fall through.

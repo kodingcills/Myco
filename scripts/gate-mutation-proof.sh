@@ -39,6 +39,9 @@
 #   mA: errorCode accepts any string `name` (follow-up 2).
 #   mB: a throwing onDiagnostic sink is not contained (follow-up 2).
 #   mC: a reader that throws synchronously escapes readWithin (follow-up 2).
+#   mD: errorCode falls back to the error's message instead of "error" (follow-up 2 round 2 D1).
+#   mF: `instanceof StateCorruptError` is not guarded, so a revoked Proxy thrown by the
+#       oracle escapes to "gate error" (follow-up 2 round 2 nit).
 # mL, mM, mN, mP, mQ and mR are caught only on Linux, where the binding applies; elsewhere
 # their tests skip. mO's test forces the binding on, and mS/mT's tests run everywhere.
 set -euo pipefail
@@ -140,11 +143,15 @@ elif which == "mC":
     edit("src/gate/gate.ts", """      Promise.resolve()
         .then(() => reader.read(runId, stateFile))
         .catch(""", "      reader.read(runId, stateFile).catch(")
+elif which == "mD":
+    edit("src/gate/reasons.ts", "  return \"error\";\n}", "  return String(error?.message ?? \"error\");\n}")
+elif which == "mF":
+    edit("src/gate/gate.ts", "      try {\n        corrupt = error instanceof StateCorruptError;\n      } catch {\n        corrupt = false;\n      }", "      corrupt = error instanceof StateCorruptError;")
 EOF
 }
 
 status=0
-for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9 mE mG mH mI mJ mK mL mM mN mO mP mQ mR mS mT mU mV mW mX mY mZ mA mB mC; do
+for mutant in m1 m2 m3 m4 m5 m6 m7 m8 m9 mE mG mH mI mJ mK mL mM mN mO mP mQ mR mS mT mU mV mW mX mY mZ mA mB mC mD mF; do
   if [[ "$mutant" =~ ^m[LMNPQR]$ ]] && [[ "$(uname -s)" != Linux ]]; then
     echo "$mutant: skipped (the /proc/self/fd binding applies on Linux only)"
     continue
