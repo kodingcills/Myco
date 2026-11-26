@@ -20,6 +20,7 @@
  * records the harness's word that the agent stopped (see verdict-integrity.md §2.3).
  */
 
+import { HANDOFF_SERVER_CLASS } from "../handoff/agent-server.ts";
 import type { LaunchAudit } from "../integrity/launch.ts";
 import { type AgentLaunchPlan, auditAgentLaunch } from "../integrity/launch.ts";
 import type {
@@ -75,6 +76,14 @@ export interface GatedTrialOptions {
    * function has no notion of an evidence run, so the ledger check is the enforcement point.
    */
   readonly corrections?: GateConfig["corrections"];
+  /**
+   * Capability track N: the launch plan may start the `myco-handoff` MCP server (its two tools
+   * are classified `agent-local` by `HANDOFF_SERVER_CLASS`). Off when absent, so a plan with the
+   * server fails the audit closed unless the operator opted in. Only that one server class is
+   * added: this is not a general way to widen the audit. The handoff never reaches the gate,
+   * the vault or the verdict (docs/handoff/security.md §4).
+   */
+  readonly allowHandoffServer?: boolean;
 }
 
 export type GatedTrialOutcome =
@@ -111,7 +120,13 @@ export async function runGatedTrial(opts: GatedTrialOptions): Promise<GatedTrial
     );
   // One copy, audited and launched: a caller mutating its plan afterwards changes neither.
   const plan = frozenPlan(opts.plan);
-  const audit = auditAgentLaunch(plan, { runId: opts.runId, extraServers: GATE_SERVER_CLASS });
+  const audit = auditAgentLaunch(plan, {
+    runId: opts.runId,
+    extraServers:
+      opts.allowHandoffServer === true
+        ? { ...GATE_SERVER_CLASS, ...HANDOFF_SERVER_CLASS }
+        : GATE_SERVER_CLASS,
+  });
   if (!audit.ok) return { status: "refused", audit };
 
   const receipt = opts.vault.seal(opts.runId, {

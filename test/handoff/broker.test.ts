@@ -1,0 +1,355 @@
+/**
+ * Track N: the handoff broker's state machine, timeouts (fail closed), the policy trigger and
+ * the pause gate. Fake clock: no sleeping, no network, no model.
+ */
+import { describe, expect, it, vi } from "vitest";
+import { handoffLogSchema } from "../../schemas/handoff.ts";
+import { validateSchema } from "../../schemas/validate.ts";
+import { HandoffBroker, type HandoffNotice, type HandoffStatus } from "../../src/handoff/broker.ts";
+import { memoryHandoffEventSink } from "../../src/handoff/events.ts";
+import { guardAction, type HandoffPolicy } from "../../src/handoff/policy.ts";
+import {
+  assistanceOf,
+  MAX_HANDOFF_TIMEOUT_MS,
+  MIN_HANDOFF_TIMEOUT_MS,
+  noteRejection,
+} from "../../src/handoff/protocol.ts";
+import { FakeClock, flush } from "./helpers.ts";
+
+const INF = Number.POSITIVE_INFINITY;
+
+function setup(timeoutMs = 60_000) {
+  const clock = new FakeClock();
+  const events = memoryHandoffEventSink();
+  const notices: HandoffNotice[] = [];
+  const ends: string[] = [];
+  const broker = new HandoffBroker({
+    runId: "run-1",
+    taskId: "df-s01",
+    timeoutMs,
+    clock,
+    events,
+    notifier: { notify: (n) => void notices.push(n) },
+    onAttemptEnd: (e) => ends.push(e),
+  });
+  const agent = broker.agentChannel();
+  const operator = broker.operatorChannel();
+  const policy = broker.policyTrigger();
+  return { clock, events, notices, ends, broker, agent, operator, policy };
+}
+
+describe("handoff broker: request, notify, resolve, resume", () => {
+  it("an agent request pauses until the human approves, then resumes with the note", async () => {
+    const s = setup();
+    const call = s.agent.request({ reason: "needs-approval", note: "ok to overwrite?" }, INF);
+    await flush();
+    expect(s.notices).toHaveLength(1);
+    expect(s.notices[0]).toMatchObject({
+      handoffId: "ho-1",
+      reason: "needs-approval",
+      source: "agent",
+    });
+    expect(s.operator.pending().map((p) => p.handoffId)).toEqual(["ho-1"]);
+    s.clock.advance(4_000);
+    const r = s.operator.resolve({
+      handoffId: "ho-1",
+      outcome: "approve",
+      via: "cli",
+      note: "yes",
+    });
+    expect(r.ok).toBe(true);
+    expect(await call).toEqual({
+      status: "resumed",
+      handoffId: "ho-1",
+      outcome: "approve",
+      humanNote: "yes",
+    });
+    const log = s.broker.log();
+    expect(log.assistance).toBe("human-gated");
+    expect(log.attemptEnd).toBeNull();
+    expect(log.entries[0]).toMatchObject({
+      resolution: "approve",
+      resolvedBy: "operator:cli",
+      operatorLabel: "operator",
+      durationMs: 4_000,
+      requestedAt: "2026-11-26T15:00:00.000Z",
+      resolvedAt: "2026-11-26T15:00:04.000Z",
+    });
+    expect(validateSchema(log, handoffLogSchema)).toEqual([]);
+    expect(s.events.events.map((e) => e.event)).toEqual(["requested", "resolved"]);
+  });
+
+  it("a bounded wait returns paused, and await picks the resolution up later", async () => {
+    const s = setup();
+    const first = s.agent.request({ reason: "blocked", note: "dialog will not close" }, 1_000);
+    s.clock.advance(1_000);
+    expect(await first).toEqual({ status: "paused", handoffId: "ho-1" });
+    const again = s.agent.await("ho-1", 1_000);
+    s.operator.resolve({ handoffId: "ho-1", outcome: "fixed-it", via: "watch-view" });
+    expect(await again).toMatchObject({ status: "resumed", outcome: "fixed-it", humanNote: null });
+    // Awaiting a closed handoff returns its final status at once.
+    expect(await s.agent.await("ho-1", 1_000)).toMatchObject({ status: "resumed" });
+    expect(s.broker.log().assistance).toBe("assisted");
+  });
+
+  it("reject tells the agent not to proceed", async () => {
+    const s = setup();
+    const call = s.agent.request({ reason: "needs-approval", note: "delete row 4?" }, INF);
+    s.operator.resolve({ handoffId: "ho-1", outcome: "reject", via: "cli", note: "keep it" });
+    expect(await call).toEqual({ status: "rejected", handoffId: "ho-1", humanNote: "keep it" });
+  });
+
+  it("refuses a second request while one is pending, and bad reasons and notes", async () => {
+    const s = setup();
+    void s.agent.request({ reason: "uncertain", note: "which sheet?" }, INF);
+    expect(await s.agent.request({ reason: "uncertain", note: "again" }, INF)).toEqual({
+      status: "refused",
+      code: "HANDOFF_PENDING",
+    });
+    const t = setup();
+    const cases: [unknown, unknown, string][] = [
+      ["approve", "x", "INVALID_REASON"],
+      ["UNCERTAIN", "x", "INVALID_REASON"],
+      [undefined, "x", "INVALID_REASON"],
+      ["uncertain", 7, "NOTE_NOT_STRING"],
+      ["uncertain", "x".repeat(281), "NOTE_TOO_LONG"],
+      ["uncertain", "line\nbreak", "NOTE_CONTROL_CHAR"],
+      ["uncertain", "\u001b[2Jclear", "NOTE_CONTROL_CHAR"],
+      ["uncertain", "see /home/alice/file.csv", "NOTE_HOST_PATH"],
+      ["uncertain", "key sk-abcdefghijklmnop", "NOTE_SECRET_SHAPED"],
+    ];
+    for (const [reason, note, code] of cases)
+      expect(await t.agent.request({ reason, note }, INF)).toEqual({ status: "refused", code });
+    expect(t.operator.pending()).toEqual([]);
+    expect(t.broker.log().entries).toEqual([]);
+  });
+
+  it("validates the operator's resolve input", async () => {
+    const s = setup();
+    void s.agent.request({ reason: "uncertain", note: "?" }, INF);
+    const bad: [Record<string, unknown>, string][] = [
+      [{ handoffId: "ho-9", outcome: "approve", via: "cli" }, "UNKNOWN_HANDOFF"],
+      [{ handoffId: "../x", outcome: "approve", via: "cli" }, "UNKNOWN_HANDOFF"],
+      [{ handoffId: "ho-1", outcome: "timeout", via: "cli" }, "INVALID_OUTCOME"],
+      [{ handoffId: "ho-1", outcome: "approve", via: "agent" }, "INVALID_VIA"],
+      [
+        { handoffId: "ho-1", outcome: "approve", via: "cli", operatorLabel: "Alice Smith" },
+        "INVALID_OPERATOR_LABEL",
+      ],
+      [
+        { handoffId: "ho-1", outcome: "approve", via: "cli", note: "C:\\Users\\a" },
+        "NOTE_HOST_PATH",
+      ],
+    ];
+    for (const [input, code] of bad)
+      expect(s.operator.resolve(input as never)).toEqual({ ok: false, code });
+    expect(s.operator.resolve({ handoffId: "ho-1", outcome: "approve", via: "cli" }).ok).toBe(true);
+    expect(s.operator.resolve({ handoffId: "ho-1", outcome: "reject", via: "cli" })).toEqual({
+      ok: false,
+      code: "ALREADY_RESOLVED",
+    });
+  });
+
+  it("a notifier that throws never resolves or fails the handoff", async () => {
+    const clock = new FakeClock();
+    const diags: string[] = [];
+    const broker = new HandoffBroker({
+      runId: "r",
+      taskId: "t",
+      clock,
+      timeoutMs: 5_000,
+      notifier: {
+        notify: () => {
+          throw new Error("no display");
+        },
+      },
+      onDiagnostic: (m) => diags.push(m),
+    });
+    const op = broker.operatorChannel();
+    const call = broker.agentChannel().request({ reason: "uncertain", note: "?" }, INF);
+    await flush();
+    expect(diags.join("")).toMatch(/notifier failed/);
+    expect(op.pending()).toHaveLength(1);
+    op.resolve({ handoffId: "ho-1", outcome: "approve", via: "cli" });
+    expect((await call).status).toBe("resumed");
+  });
+});
+
+describe("handoff timeouts fail closed", () => {
+  it("a handoff nobody answers ends the attempt as handoff-timeout, never approved", async () => {
+    const s = setup(30_000);
+    const call = s.agent.request({ reason: "needs-approval", note: "proceed?" }, INF);
+    s.clock.advance(29_999);
+    expect(s.operator.pending()).toHaveLength(1);
+    s.clock.advance(1);
+    const status: HandoffStatus = await call;
+    expect(status).toEqual({ status: "ended", code: "HANDOFF_TIMEOUT" });
+    expect(s.ends).toEqual(["handoff-timeout"]);
+    const log = s.broker.log();
+    expect(log.attemptEnd).toBe("handoff-timeout");
+    expect(log.entries[0]).toMatchObject({
+      resolution: "timeout",
+      resolvedBy: "host:timeout",
+      operatorLabel: null,
+      humanNote: null,
+      durationMs: 30_000,
+    });
+    expect(log.entries.some((e) => e.resolution === "approve")).toBe(false);
+    expect(s.events.events.map((e) => e.event)).toEqual(["requested", "resolved", "attempt-ended"]);
+    expect(validateSchema(log, handoffLogSchema)).toEqual([]);
+  });
+
+  it("after a timeout: a late human resolve, new requests and policy pauses are all refused", async () => {
+    const s = setup(1_000);
+    void s.agent.request({ reason: "blocked", note: "stuck" }, INF);
+    s.clock.advance(1_000);
+    expect(s.operator.resolve({ handoffId: "ho-1", outcome: "approve", via: "cli" })).toEqual({
+      ok: false,
+      code: "ALREADY_RESOLVED",
+    });
+    expect(await s.agent.request({ reason: "uncertain", note: "now?" }, INF)).toEqual({
+      status: "ended",
+      code: "HANDOFF_TIMEOUT",
+    });
+    expect(await s.agent.await("ho-1", 0)).toEqual({ status: "ended", code: "HANDOFF_TIMEOUT" });
+    expect(
+      await s.policy.forcePause({ policyId: "o.save", reason: "needs-approval", note: "x" }),
+    ).toEqual({ status: "ended", code: "HANDOFF_TIMEOUT" });
+    expect(await s.policy.awaitClear()).toBe("ended");
+    expect(s.broker.log().entries).toHaveLength(1);
+  });
+
+  it("a paused long-poll that sees the timeout gets ended, not paused", async () => {
+    const s = setup(2_000);
+    const call = s.agent.request({ reason: "uncertain", note: "?" }, 5_000);
+    s.clock.advance(2_000);
+    expect(await call).toEqual({ status: "ended", code: "HANDOFF_TIMEOUT" });
+  });
+
+  it("the timeout is configurable within bounds and rejects anything else", () => {
+    for (const bad of [
+      0,
+      MIN_HANDOFF_TIMEOUT_MS - 1,
+      MAX_HANDOFF_TIMEOUT_MS + 1,
+      1.5,
+      Number.NaN,
+      INF,
+    ])
+      expect(() => new HandoffBroker({ runId: "r", taskId: "t", timeoutMs: bad })).toThrow(
+        RangeError,
+      );
+    expect(new HandoffBroker({ runId: "r", taskId: "t" }).timeoutMs).toBe(15 * 60 * 1000);
+    expect(new HandoffBroker({ runId: "r", taskId: "t", timeoutMs: 5_000 }).timeoutMs).toBe(5_000);
+  });
+
+  it("closing the trial cancels a pending handoff (host:harness), never approves it", async () => {
+    const s = setup();
+    const call = s.agent.request({ reason: "uncertain", note: "?" }, INF);
+    s.broker.close();
+    expect(await call).toEqual({ status: "ended", code: "HANDOFF_CANCELLED" });
+    expect(s.broker.log().entries[0]).toMatchObject({
+      resolution: "cancelled",
+      resolvedBy: "host:harness",
+    });
+    expect(s.broker.log().assistance).toBe("human-gated");
+    expect(s.clock.pending).toBe(0);
+  });
+});
+
+describe("policy trigger (track O interface) and pause gate", () => {
+  const savePolicy: HandoffPolicy = {
+    id: "o.save-needs-approval",
+    evaluate: (a) =>
+      a.tool === "save"
+        ? { policyId: "o.save", reason: "needs-approval", note: "saving the file" }
+        : null,
+  };
+
+  it("a policy forces a pause; approve forwards the action, the record names the policy", async () => {
+    const s = setup();
+    expect(await guardAction(savePolicy, s.policy, { tool: "type", args: {} })).toEqual({
+      kind: "proceed",
+      handoffId: null,
+    });
+    const d = guardAction(savePolicy, s.policy, { tool: "save", args: {} });
+    await flush();
+    expect(s.notices[0]).toMatchObject({ source: "policy", policyId: "o.save" });
+    s.operator.resolve({ handoffId: "ho-1", outcome: "approve", via: "watch-view" });
+    expect(await d).toEqual({ kind: "proceed", handoffId: "ho-1" });
+    expect(s.broker.log().entries[0]).toMatchObject({ source: "policy", policyId: "o.save" });
+  });
+
+  it("reject denies, fixed-it skips, timeout ends; a throwing policy denies", async () => {
+    const s = setup(10_000);
+    const d1 = guardAction(savePolicy, s.policy, { tool: "save", args: {} });
+    await flush();
+    s.operator.resolve({ handoffId: "ho-1", outcome: "reject", via: "cli" });
+    expect(await d1).toMatchObject({ kind: "deny", code: "HUMAN_REJECTED" });
+    const d2 = guardAction(savePolicy, s.policy, { tool: "save", args: {} });
+    await flush();
+    s.operator.resolve({ handoffId: "ho-2", outcome: "fixed-it", via: "cli" });
+    expect(await d2).toEqual({ kind: "skip", handoffId: "ho-2" });
+    const boom: HandoffPolicy = {
+      id: "o.boom",
+      evaluate: () => {
+        throw new Error("x");
+      },
+    };
+    expect(await guardAction(boom, s.policy, { tool: "save", args: {} })).toMatchObject({
+      kind: "deny",
+      code: "POLICY_ERROR",
+    });
+    const d3 = guardAction(savePolicy, s.policy, { tool: "save", args: {} });
+    await flush();
+    s.clock.advance(10_000);
+    expect(await d3).toEqual({ kind: "ended", code: "HANDOFF_TIMEOUT" });
+    expect(s.broker.log().attemptEnd).toBe("handoff-timeout");
+  });
+
+  it("no action passes the pause gate while an agent handoff is open", async () => {
+    const s = setup();
+    void s.agent.request({ reason: "blocked", note: "?" }, INF);
+    const passed = vi.fn();
+    const g = guardAction(savePolicy, s.policy, { tool: "type", args: {} }).then(passed);
+    await flush();
+    expect(passed).not.toHaveBeenCalled();
+    s.operator.resolve({ handoffId: "ho-1", outcome: "approve", via: "cli" });
+    await g;
+    expect(passed).toHaveBeenCalledWith({ kind: "proceed", handoffId: null });
+  });
+
+  it("a policy pause while a handoff is open joins it instead of opening a second", async () => {
+    const s = setup();
+    const a = s.agent.request({ reason: "uncertain", note: "?" }, INF);
+    const p = s.policy.forcePause({ policyId: "o.x", reason: "needs-approval", note: "y" });
+    expect(s.operator.pending()).toHaveLength(1);
+    s.operator.resolve({ handoffId: "ho-1", outcome: "approve", via: "cli" });
+    expect((await a).status).toBe("resumed");
+    expect((await p).status).toBe("resumed");
+    expect(s.broker.log().entries).toHaveLength(1);
+  });
+
+  it("refuses a malformed policy request", async () => {
+    const s = setup();
+    expect(
+      await s.policy.forcePause({ policyId: "Bad Id", reason: "uncertain", note: "x" }),
+    ).toEqual({
+      status: "refused",
+      code: "INVALID_POLICY_ID",
+    });
+  });
+});
+
+describe("assistance label", () => {
+  it("is derived from the resolutions", () => {
+    expect(assistanceOf([])).toBe("unassisted");
+    expect(assistanceOf([{ resolution: "approve" }])).toBe("human-gated");
+    expect(assistanceOf([{ resolution: "timeout" }, { resolution: "reject" }])).toBe("human-gated");
+    expect(assistanceOf([{ resolution: "approve" }, { resolution: "fixed-it" }])).toBe("assisted");
+  });
+
+  it("note hygiene accepts plain short text", () => {
+    expect(noteRejection("Is it OK to overwrite Sheet1?", 280)).toBeNull();
+    expect(noteRejection("", 280)).toBeNull();
+  });
+});
