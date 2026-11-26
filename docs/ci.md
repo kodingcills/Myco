@@ -128,6 +128,24 @@ the newer one.
 An automatic retry is deferred to TIF-264. Until then, a no-runner cancellation
 costs one manual re-run.
 
+## vitest "Timeout calling onTaskUpdate"
+
+**Symptom.** `check (macos-latest)` fails with every test passed and
+`Errors 1 error`: `Error: [vitest-worker]: Timeout calling "onTaskUpdate"`.
+
+**Cause.** A vitest worker's progress RPC to the main process has a fixed 60 s
+reply timeout, and the worker only reads the reply when its event loop gets a
+turn. vitest moves between tests without one, so a file of synchronous tests
+(`spawnSync` and friends) starves the loop for the whole file. On macOS runners
+`test/guest-egress.test.ts` took 61-80 s in every failing run.
+
+**Fix in place.** `vitest.config.ts` loads `test/setup/yield-to-event-loop.ts`,
+which yields one event-loop iteration before and after every test, so only a
+single synchronous test over 60 s can trigger it. If it comes back, find that
+test and make its child processes async (`spawn`), as
+`test/df005-contract-gates.test.ts` does. Do not re-run it away and do not set
+`dangerouslyIgnoreUnhandledErrors`.
+
 ## What needs a maintainer
 
 - **First-time contributors.** Depending on the repository's Actions setting, a fork
