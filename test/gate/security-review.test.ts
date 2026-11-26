@@ -281,7 +281,7 @@ function findNamed(root: ts.Node, segment: string): ts.Node[] {
 
 /**
  * `text` with every comment blanked to spaces (newlines kept), so offsets still line up.
- * Comments are found as the leading trivia of each token in the AST, so `//` or `/*` inside
+ * Comments are found in the trivia before each token in the AST, so `//` or `/*` inside
  * a string or template literal is code, not a comment.
  */
 const BLANKED = new Map<string, string>();
@@ -289,7 +289,8 @@ function blankComments(source: ts.SourceFile): string {
   const cached = BLANKED.get(source.fileName);
   if (cached !== undefined) return cached;
   const text = source.getFullText();
-  const chars = [...text];
+  // UTF-16 units, as TypeScript's offsets count them (a spread would split by code point).
+  const chars = text.split("");
   const blank = (pos: number, end: number) => {
     for (let i = pos; i < end; i++) if (chars[i] !== "\n") chars[i] = " ";
   };
@@ -297,6 +298,9 @@ function blankComments(source: ts.SourceFile): string {
     if (ts.isJSDoc(node)) return;
     const children = node.getChildren(source);
     if (children.length === 0 || node.kind === ts.SyntaxKind.EndOfFileToken) {
+      // Trivia before a token holds comments on the previous token's line ("trailing", in
+      // TypeScript's terms) and comments on later lines ("leading"): blank both.
+      ts.forEachTrailingCommentRange(text, node.getFullStart(), blank);
       ts.forEachLeadingCommentRange(text, node.getFullStart(), blank);
     }
     for (const child of children) visit(child);
