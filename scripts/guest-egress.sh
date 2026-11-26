@@ -13,6 +13,8 @@
 # usage:
 #   guest-egress.sh status    read-only: the live netdev check and the UTM network config
 #   guest-egress.sh verify    exit 0 only if the running guest AND UTM match the allowlist exactly
+#   guest-egress.sh verify-all  read-only: like verify, but list EVERY refusal (argv index and
+#                             fixed text only, never a value) instead of stopping at the first
 #   guest-egress.sh deny      set "isolate from host" (stops the VM; takes the VM lock)
 #   guest-egress.sh allow     clear it, for base-image maintenance only (takes the lock)
 #   guest-egress.sh probe     from inside the guest, try the internet and the host; JSON
@@ -21,15 +23,18 @@
 # 2 usage or environment; 10 the VM lock is held.
 #
 # `verify` accepts exactly ONE configuration and refuses everything else
-# (TIF-275 rounds 2-3, verifier D1-D6). The live half is
-# scripts/guest_egress_check.py, which reads the guest's EXACT argv from the
-# kernel (not `ps`, which flattens it) and requires: no element containing
-# whitespace; `-nodefaults`; exactly one `-netdev` and no `-nic`/`-net`; no
-# `-readconfig`/`-set`/`-qmp`/`-monitor`/`-gdb`; a `user` netdev with only
-# id, restrict, hostfwd; every `restrict` on; hostfwd exactly
-# {tcp:127.0.0.1:2222-:22}; no `-object filter-*` and no `netdev=` except the
-# one NIC device's; chardevs only UTM's own (spiceport, spicevmc, pty, the
-# swtpm unix socket); -serial/-parallel only chardev references.
+# (TIF-275 rounds 2-3 and the allowlist follow-up, verifier D1-D9). The live half
+# is scripts/guest_egress_check.py. It reads the guest's EXACT argv from the
+# kernel (not `ps`, which flattens it): exactly argc strings, never the
+# environment, and an empty argv[0] is refused. Every option must be on a fixed
+# ALLOWLIST taken from UTM's launch, with its value in UTM's shape; anything not
+# on it (-object, -qmp, -qmp-pretty, -monitor, -vnc, a positional, ...) and any
+# JSON-form value is refused. Then: no element containing whitespace;
+# `-nodefaults`; exactly one `user` -netdev with only id, restrict, hostfwd;
+# every `restrict` on; hostfwd exactly {tcp:127.0.0.1:2222-:22}; `netdev=` only
+# on the one virtio-net-pci; chardevs only UTM's (spiceport, spicevmc, the pty
+# term0, the swtpm socket). The list and how to update it:
+# docs/security/guest-egress.md.
 #   UTM config: exactly one NIC, emulated, isolate-from-host true, exactly one
 #     port forward TCP 127.0.0.1:2222 -> guest :22 (compared as one string).
 # Anything that cannot be read or parsed is a failure, never a pass.
@@ -82,6 +87,22 @@ cmd_verify() {
   [ -n "$cfg" ] || die "could not read UTM's network configuration; cannot prove egress is closed (TIF-275)"
   [ "$cfg" = "$EXPECTED_UTM" ] || die "UTM network configuration is not the allowlist: got '$cfg', want '$EXPECTED_UTM' (TIF-275, runbook §3.4)"
   echo "guest-egress: egress closed: one restricted user netdev, no guestfwd, hostfwd exactly tcp:127.0.0.1:2222-:22; UTM config matches"
+}
+
+# Every live refusal, then the UTM comparison; exit 1 if any fails. The Python
+# side prints only fixed text and argv indexes (the same messages as `live`).
+cmd_verify_all() {
+  local rc=0 cfg
+  python3 -I "$(cd "$(dirname "$0")" && pwd)/guest_egress_check.py" verify-all || rc=1
+  cfg=$(utm_net_config)
+  if [ -z "$cfg" ]; then
+    echo "FAIL: could not read UTM's network configuration; cannot prove egress is closed"; rc=1
+  elif [ "$cfg" != "$EXPECTED_UTM" ]; then
+    echo "FAIL: UTM network configuration is not the allowlist: got '$cfg', want '$EXPECTED_UTM'"; rc=1
+  else
+    echo "ok: UTM config matches"
+  fi
+  return "$rc"
 }
 
 cmd_status() {
@@ -156,6 +177,7 @@ PS1
 case "${1:-}" in
   status) cmd_status ;;
   verify) cmd_verify ;;
+  verify-all) cmd_verify_all ;;
   deny) cmd_set true ;;
   allow) cmd_set false ;;
   probe) cmd_probe ;;

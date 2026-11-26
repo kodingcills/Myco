@@ -394,26 +394,28 @@ port 8765 through `ssh -L`, since the agent listens on the guest's loopback.
 
 **Every reset and every deploy checks it.** After the boot gate, `scripts/reset-trial-vm.sh`
 runs `scripts/guest-egress.sh verify`, and `agent/bootstrap/deploy-to-vm.sh` runs it before it
-copies anything. The deploy refuses outright under `MYCO_GUEST_EGRESS=open`. `verify` checks
-the following, and has three known open gaps (D7–D9, listed in
-`docs/security/guest-egress.md` under "Known open gaps"; their fix must merge before real data
-or credentials touch the guest):
+copies anything. The deploy refuses outright under `MYCO_GUEST_EGRESS=open`. `verify` accepts
+exactly one configuration:
 
 - **In the live QEMU process**, whose argv is read exactly from the kernel (`KERN_PROCARGS2`),
   not from `ps`:
+  - exactly argc strings are read and an empty argv[0] is refused; no mode prints an element
+    the allowlist has not accepted (refusals name the argv index only), so an environment
+    string left in the argv area by a process that rewrote it is never printed;
+  - every option must be on a fixed allowlist taken from UTM's launch, with its value in UTM's
+    shape; anything else is refused, including `-object` (any form), `-qmp`, `-qmp-pretty`,
+    `-monitor`, `-nic`, `-net`, `-global`, `-vnc`, a positional argument and any JSON value;
   - no argv element may contain whitespace, and `-nodefaults` must be present;
   - exactly one `-netdev`, of type `user`, with `restrict=on`, no `guestfwd` or other options,
-    and hostfwd rules of exactly `tcp:127.0.0.1:2222-:22`;
-  - no `-nic`, `-net`, `-readconfig`, `-set`, `-qmp`, `-monitor` or `-gdb` (`-qmp-pretty` is
-    not yet refused: D8);
-  - no comma-form `-object filter-*`, and no `netdev=` except the one NIC device's (a JSON-form
-    `-object` is not yet parsed: D7);
-  - chardevs only UTM's own (`spiceport`, `spicevmc`, `pty`, the swtpm unix socket), and
-    `-serial`/`-parallel` only `chardev:<id>`.
+    and hostfwd rules of exactly `tcp:127.0.0.1:2222-:22`; `netdev=` only on the one NIC;
+  - chardevs only UTM's own (`spiceport`, `spicevmc`, the one pty `term0`, the swtpm socket),
+    and `-serial` only `chardev:term0`.
 - **In UTM:** one emulated NIC with "isolate from host" on and that one port forward.
 
-A second NIC, a `0.0.0.0` bind, an extra forward, a comma-form filter, a TCP chardev, and the
-unparseable inputs `docs/security/guest-egress.md` lists all fail. A failing reset prints:
+Anything else fails, including a second NIC, a `0.0.0.0` bind, an extra forward, a filter, a
+TCP chardev, an option UTM does not write, or anything it cannot read or parse. After a UTM
+upgrade, a refused option is updated as `docs/security/guest-egress.md` describes ("Updating
+the list"). `docs/security/guest-egress.md` lists every case. A failing reset prints:
 
 ```
 reset-trial-vm: guest egress is not closed: refusing to call this guest ready. Run 'scripts/guest-egress.sh deny', then reset again (TIF-275, runbook §3.4)
@@ -424,8 +426,10 @@ Commands (each takes the VM lock where it changes anything; check `lsof` first a
 ```bash
 scripts/guest-egress.sh status   # read-only: UTM flag and network config, the live netdev check
 scripts/guest-egress.sh verify   # exit 0 only if the live guest AND UTM match the allowlist exactly
+scripts/guest-egress.sh verify-all  # read-only: like verify, but lists EVERY refusal (argv index + fixed text, no values)
 scripts/guest-egress.sh probe    # from inside the guest: DNS, 3 internet TCP targets, the host; JSON
-python3 -I scripts/guest_egress_check.py argv   # the running guest's exact argv (argv only, no environment)
+python3 -I scripts/guest_egress_check.py argv   # the guest's argv; elements no rule accepts print as <redacted argv[N]>
+python3 -I scripts/guest_egress_check.py names  # option names only, each marked allowed / NOT ALLOWED (safe to paste)
 scripts/guest-egress.sh deny     # set the flag (force-stops the VM; reset afterwards)
 scripts/guest-egress.sh allow    # clear it: base-image maintenance ONLY
 ```
