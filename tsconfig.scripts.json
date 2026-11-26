@@ -27,6 +27,7 @@
     "scripts/c1-spike.ts",
     "scripts/c1-sweep.ts",
     "scripts/myco-run.ts",
+    "scripts/writer-lo-fixtures.ts",
     "scripts/linux-run.ts",
     "scripts/myco-gate.ts"
   ]
