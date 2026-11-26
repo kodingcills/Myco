@@ -491,6 +491,15 @@ maintenance window and was proven closed (verify plus the TIF-275 probes) before
 No agent, token, credential or data has entered it. Evidence:
 `docs/research/experiments/tif-98-trial-base-v2-2026-11-26-run3/`.
 
+**Idle-stage exclusions (disclosed).** The build's idle stage waits until no `\Microsoft\Windows`
+task is running, except three tasks matched by full path that are logged in every sample but not
+counted: `Multimedia\SystemSoundsService` and `Wininet\CacheTask` (always running; ruling
+05:37Z), and `WDI\ResolutionHost` (ruling 20:3xZ, for the `trial-base-v3` rebuild from cold
+boots). On a cold boot, ResolutionHost ran in 85 of 103 samples through the 60-minute deadline
+with the guest otherwise idle (CPU 2–6%). It never appeared on the fast-booted `trial-base-v2`
+builds. The explanation (the Diagnostic Policy Service resolving the slow-boot event that a cold
+boot logs) is **unconfirmed**.
+
 | | `trial-base-v2` (default) | `clean-base` (rollback) |
 |---|---|---|
 | Memory state | none (disk-only, cold boot) | none (disk-only, cold boot) |

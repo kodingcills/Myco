@@ -22,19 +22,21 @@ import { FIXTURE_COLUMNS, generateFixture } from "../tasks/fixture.ts";
 import { type CalcRecordEditParams, generateParameterSets } from "../tasks/intent.ts";
 import { taskText } from "../tasks/task-text.ts";
 import type { ColumnType } from "./grade/grade.ts";
+import {
+  type BenchmarkTask,
+  FC_V1_FAULT_CLASSES,
+  type FcV1FaultClass,
+  TASK_SCHEMA,
+  TASK_SET_VERSION,
+} from "./task-types.ts";
 
-export const TASK_SET_VERSION = "fc-v1";
-export const TASK_SCHEMA = "myco.benchmark.task/1";
-
-/** Fault classes in fc-v1: the four M1 classes (`src/faults/types.ts`) plus `none`. */
-export const FC_V1_FAULT_CLASSES = [
-  "none",
-  "kill-app",
-  "delayed-save",
-  "focus-change",
-  "invalid-target",
-] as const;
-export type FcV1FaultClass = (typeof FC_V1_FAULT_CLASSES)[number];
+export {
+  type BenchmarkTask,
+  FC_V1_FAULT_CLASSES,
+  type FcV1FaultClass,
+  TASK_SCHEMA,
+  TASK_SET_VERSION,
+} from "./task-types.ts";
 
 /** Composition: R1 count per class, and how many of each go into the demo subset. */
 export const FC_V1_COMPOSITION: Readonly<Record<FcV1FaultClass, { r1: number; demo: number }>> = {
@@ -56,26 +58,6 @@ export const FAULT_CLASS_HARNESS_NOTE: Readonly<Record<FcV1FaultClass, string>> 
   "invalid-target":
     "None needed: the intent names a record or column the fixture does not have. It is unsatisfiable; any DONE is false.",
 };
-
-export interface BenchmarkTask {
-  readonly schema: typeof TASK_SCHEMA;
-  readonly taskSetVersion: string;
-  readonly taskId: string;
-  readonly family: "calc-record-edit";
-  readonly faultClass: FcV1FaultClass;
-  readonly inDemo: boolean;
-  /** Whether the intent can be satisfied in the fixture (diagnostic; the grader decides independently). */
-  readonly satisfiable: boolean;
-  readonly instruction: string;
-  readonly instructionSha256: string;
-  readonly intent: { readonly rowKey: string; readonly column: string; readonly newValue: string };
-  readonly columnTypes: Readonly<Record<string, ColumnType>>;
-  /** Fixture seed for the VM harness (`generateFixture(seed)` reproduces `fixtureFile`'s bytes). */
-  readonly fixtureSeed: string;
-  readonly fixtureFile: string;
-  readonly fixtureSha256: string;
-  readonly persistedFormat: "xlsx";
-}
 
 export interface TaskSet {
   readonly tasks: readonly BenchmarkTask[];
