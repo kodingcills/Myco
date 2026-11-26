@@ -382,7 +382,7 @@ describe("exportDataset: a container over episodes", () => {
       expect(record.label).toBe(ep.gate.verdict === "verified" ? "positive" : "negative");
       // The capture path is free text: hashed, never written.
       expect(record.capture).toMatchObject({ format: "csv", size: DOC.byteLength });
-      expect(record.capture.path).toMatch(/^h-[0-9a-f]{64}$/);
+      expect(record.capture.path).toMatch(/^h-[0-9a-f]{60}$/);
       expect(record.desktop).toMatchObject({ backend: c.desktop.backend, image: c.desktop.image });
     }
     const manifest = JSON.parse(readFileSync(join(a, "manifest.json"), "utf8"));
@@ -794,7 +794,7 @@ describe("exportDataset: a container over episodes", () => {
     const dir = out();
     exportDataset([candidate(1, { desktop: { backend: "bad backend!" } })], { outDir: dir });
     const record = JSON.parse(readFileSync(join(dir, "records.jsonl"), "utf8"));
-    expect(record.desktop.backend).toMatch(/^h-[0-9a-f]{64}$/);
+    expect(record.desktop.backend).toMatch(/^h-[0-9a-f]{60}$/);
   });
 
   // Planted-marker tests: each marker is built at runtime so this file never matches the

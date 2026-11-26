@@ -450,7 +450,7 @@ describe("#559 round 2 (prepared): arms, the container backstop, strict h- idemp
     }
   });
 
-  it("free text that merely starts with h- is hashed, never kept (only an exact h-<64 hex> is)", () => {
+  it("free text that merely starts with h- is hashed, never kept (only an exact h-<60 hex> is)", () => {
     const words = ["QzPLANTEDhfirst", "QzPLANTEDhlast"];
     for (const text of [
       `h-C:\\Users\\${words[0]} ${words[1]}`,
@@ -458,7 +458,7 @@ describe("#559 round 2 (prepared): arms, the container backstop, strict h- idemp
       `h-${"a".repeat(63)}`,
     ]) {
       const closed = closeEpisode(candidate(text).episode);
-      expect(closed.task.instruction, text).toMatch(/^h-[0-9a-f]{64}$/);
+      expect(closed.task.instruction, text).toMatch(/^h-[0-9a-f]{60}$/);
       expect(closed.task.instruction).not.toBe(text);
       expect(words.filter((w) => canonicalJson(closed).includes(w))).toEqual([]);
       expect(

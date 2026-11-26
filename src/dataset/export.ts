@@ -49,6 +49,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
+  DATASET_EXCLUSION_CODES,
   DATASET_MANIFEST_SCHEMA_ID,
   DATASET_RECORD_SCHEMA_ID,
   datasetManifestSchema,
@@ -115,20 +116,8 @@ export interface ExportCandidate {
   readonly desktop: DesktopFacts;
 }
 
-export const EXCLUSION_CODES = [
-  "MISSING_GATE",
-  "MISSING_GRADE",
-  "MISSING_CAPTURE",
-  "GATE_MALFORMED",
-  "GATE_NOT_BOUND",
-  "GATE_EPISODE_MISMATCH",
-  "GRADE_NOT_BOUND",
-  "GATE_UNCERTAIN",
-  "GRADE_UNGRADABLE",
-  "GATE_GRADER_DISAGREE",
-  "NOT_CLAIMED",
-  "NEGATIVES_NOT_REQUESTED",
-] as const;
+/** The exclusion codes; the manifest schema closes `counts.excluded` over the same list. */
+export const EXCLUSION_CODES = DATASET_EXCLUSION_CODES;
 export type ExclusionCode = (typeof EXCLUSION_CODES)[number];
 
 export type Classification =
@@ -914,7 +903,8 @@ function checkContainer(dir: string, hygiene?: HygieneOptions): string[] {
     }
   }
 
-  // The manifest's counts, recomputed.
+  // The manifest's counts, recomputed. The schema already closes `counts.excluded` (known codes,
+  // non-negative integers); the code and integer checks below stay as a backstop.
   const c = manifest.counts;
   const excludedValues = Object.entries(c.excluded);
   const excludedOk = excludedValues.every(

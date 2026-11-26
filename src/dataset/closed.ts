@@ -12,9 +12,9 @@
  *
  *  - a CLOSED field (enum, digest, timestamp, blob file, reason code, version) is written as is
  *    when it matches its grammar; anything else refuses the export, naming the field;
- *  - an id is written as is when it matches `CLOSED_ID`, else as `h-<sha256>`;
+ *  - an id is written as is when it matches `CLOSED_ID`, else as `h-<60 hex>`;
  *  - FREE TEXT (the instruction, typed text, shell commands, UI status, the capture path) is
- *    always `h-<sha256>`; short free tokens (key and app names) are kept only as closed tokens;
+ *    always `h-<60 hex>`; key and app names are kept only from closed vocabularies (F1);
  *  - the record's desktop facts (`backend`, `image`) are ids.
  *
  * Self-contained on purpose: `src/dataset` may not import `src/episode` or `src/gate`
@@ -49,14 +49,21 @@ const HEX64 = /^[0-9a-f]{64}$/;
  * an arm has no `.`, `_`, `/`, `\\` or upper case: `c:users.x`, `C:Users`, `myco-gate:users.x`).
  */
 export const ARM_GRAMMAR = /^[a-z][a-z0-9+-]{1,31}(?::[a-z0-9][a-z0-9-]{0,31})?$/;
-const HASHED = /^h-[0-9a-f]{64}$/;
-const HASHED_SHORT = /^h-[0-9a-f]{60}$/;
+/**
+ * The one hashed form (lead ruling 2026-11-26 23:06Z), the same on every export surface (the
+ * episode export uses it too): `h-` plus the first 60 hex (240 bits) of the tagged sha256. It
+ * carries no input text and fits the 64-character token cap. Idempotence matches exactly this
+ * form; no other `h-` string (64 hex, 59 or 61 hex, upper case) counts as already hashed.
+ */
+export const HASHED = /^h-[0-9a-f]{60}$/;
 
 export const EXPORT_TEXT_TAG = "myco.dataset.export-text/1";
 
 export function exportDigest(raw: string): string {
   return createHash("sha256").update(`${EXPORT_TEXT_TAG}\u0000${raw}`, "utf8").digest("hex");
 }
+
+export const hashed = (raw: string): string => `h-${exportDigest(raw).slice(0, 60)}`;
 
 export type Treatment =
   | { readonly kind: "text" }
@@ -222,7 +229,7 @@ function treat(
   switch (t.kind) {
     case "text":
       // Idempotent: an already-hashed value is closed and carries nothing.
-      return HASHED.test(value) ? value : `h-${exportDigest(value)}`;
+      return HASHED.test(value) ? value : hashed(value);
     // An id or token that would be kept verbatim but holds an identity string (even joined,
     // `<Name>2`) is digested instead (lead ruling 21:52Z).
     case "id":
@@ -230,13 +237,11 @@ function treat(
       if (HASHED.test(value)) return value;
       return (CLOSED_ID.test(value) || t.also?.test(value) === true) && !holds(value, joined)
         ? value
-        : `h-${exportDigest(value)}`;
+        : hashed(value);
     case "token":
       // Idempotent: an exact `h-<60 hex>` is already closed (it carries nothing).
-      if (HASHED_SHORT.test(value)) return value;
-      return t.vocabulary.test(value) && !holds(value, joined)
-        ? value
-        : `h-${exportDigest(value).slice(0, 60)}`;
+      if (HASHED.test(value)) return value;
+      return t.vocabulary.test(value) && !holds(value, joined) ? value : hashed(value);
     case "closed":
       if (!t.grammar.test(value)) throw new OpenValueError(templateOf(path));
       return value;
@@ -295,14 +300,26 @@ function accepts(t: Treatment | undefined, value: string): boolean {
     case "id":
       return CLOSED_ID.test(value) || t.also?.test(value) === true || HASHED.test(value);
     case "token":
-      return t.vocabulary.test(value) || HASHED_SHORT.test(value);
+      return t.vocabulary.test(value) || HASHED.test(value);
     case "closed":
       return t.grammar.test(value);
   }
 }
 
-/** Every string leaf of a JSON value with its path, iteratively (no recursion: a deep value cannot overflow). */
-function stringLeaves(value: unknown): Array<readonly [string, string]> {
+/** A key that may appear in a reported path: a plain identifier (every schema key is one). */
+const SAFE_KEY = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+/**
+ * Every string leaf of a JSON value with its path, iteratively (no recursion: a deep value cannot
+ * overflow). Paths go into refusals, so a key is never echoed unless it is a plain identifier
+ * that holds no identity string (#559 round 2, B1, as `scanForLeaks` masks a leaking key): any
+ * other key appears as `<key>`, and is itself returned as a leaf at that masked path, so an
+ * identity in a key is still found.
+ */
+function stringLeaves(
+  value: unknown,
+  joined: readonly JoinedIdentity[] = [],
+): Array<readonly [string, string]> {
   const out: Array<readonly [string, string]> = [];
   const stack: Array<readonly [unknown, string]> = [[value, "$"]];
   while (stack.length > 0) {
@@ -314,7 +331,11 @@ function stringLeaves(value: unknown): Array<readonly [string, string]> {
       const entries = Object.entries(node);
       for (let i = entries.length - 1; i >= 0; i--) {
         const [k, v] = entries[i] as [string, unknown];
-        stack.push([v, `${path}.${k}`]);
+        if (SAFE_KEY.test(k) && !holds(k, joined)) stack.push([v, `${path}.${k}`]);
+        else {
+          stack.push([v, `${path}.<key>`]);
+          out.push([`${path}.<key>`, k]);
+        }
       }
     }
   }
@@ -358,10 +379,10 @@ export function joinedIdentity(
 ): Array<{ readonly kind: string; readonly path: string }> {
   const fields = table === "episode" ? EPISODE_FIELD_TREATMENT : RECORD_FIELD_TREATMENT;
   const out: Array<{ kind: string; path: string }> = [];
-  for (const [path, v] of stringLeaves(value)) {
+  for (const [path, v] of stringLeaves(value, joined)) {
     const t = fields[templateOf(path)];
     if (t === undefined || t.kind === "text" || (t.kind === "closed" && t.exempt)) continue;
-    if (HASHED.test(v) || HASHED_SHORT.test(v)) continue;
+    if (HASHED.test(v)) continue;
     const folded = fold(v);
     for (const [kind, id] of joined) {
       const f = fold(id);
@@ -380,7 +401,7 @@ export function manifestIdentity(
   joined: readonly JoinedIdentity[],
 ): Array<{ readonly kind: string; readonly path: string }> {
   const out: Array<{ kind: string; path: string }> = [];
-  for (const [path, v] of stringLeaves(value)) {
+  for (const [path, v] of stringLeaves(value, joined)) {
     if (
       HEX64.test(v) ||
       /^blobs\/[0-9a-f]{64}\.[a-z]+$/.test(v) ||

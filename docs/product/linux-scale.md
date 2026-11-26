@@ -176,7 +176,7 @@ set's declared fixture digest, and U's desktop facts. It writes one directory:
 - `episodes/<episodeId>.json`: each exported episode in its **closed** form, as canonical JSON
   (`src/dataset/closed.ts`, TIF-265; #553's allowlist pattern). No free text leaves the
   machine: typed text, shell commands, UI status and the instruction are written as
-  `h-<sha256>`, ids that are not closed ids are hashed, a closed field (enum, digest, timestamp,
+  `h-<60 hex>`, ids that are not closed ids are hashed, a closed field (enum, digest, timestamp,
   version) holding anything else refuses the export (`OPEN_VALUE`), and the record's
   `desktop.backend` / `desktop.image` (ids or `name/N`) and `capture.path` (hashed) are closed
   too. The leak scan still runs on the raw episode and record, so a planted marker or a secret
@@ -211,9 +211,17 @@ set's declared fixture digest, and U's desktop facts. It writes one directory:
 - **Key and app names** (F1, lead ruling 2026-11-26 22:18Z) are written verbatim only from a
   closed vocabulary: a known key or key combination (`KNOWN_KEYS`) or a registered app id
   (`REGISTERED_APPS`: `localc`, `lowriter`, `soffice`, `libreoffice`, `scalc`, `swriter`).
-  Anything else is `h-<60 hex>`, since the schema caps both fields at 64 characters.
+  Anything else, including an `h-` string that is not exactly `h-<60 hex>`, is hashed.
+- **One hashed form** (lead ruling 2026-11-26 23:06Z), the same as the episode export's: every
+  hashed value is `h-` plus the first 60 hex digits (240 bits) of the sha256 under the tag
+  `myco.dataset.export-text/1`. It carries no input text and fits the 64-character key and app
+  cap. Closing is idempotent for exactly that form; no other `h-` string (64 hex, 59 or 61 hex,
+  upper case) counts as already hashed.
 - **`validateContainer`** never throws. Every problem is `CODE location`, with a fixed code from
-  `CONTAINER_PROBLEM_CODES`, and a foreign entry name appears only as `h-<12 hex>`. It refuses:
+  `CONTAINER_PROBLEM_CODES`. A location never echoes foreign text: a foreign entry name appears
+  only as `h-<12 hex>`, a JSON key that is not a plain identifier, or that holds an identity,
+  appears as `<key>`, and the manifest's `counts.excluded` is closed over the exclusion codes
+  (each a non-negative integer), so no other key can appear there. It refuses:
   - links, non-regular files and hard links, and files over 64 MiB;
   - JSON nested deeper than 32;
   - record lines that fail `datasetRecordSchema` or the closed record-field grammar, or that

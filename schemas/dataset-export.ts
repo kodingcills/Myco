@@ -6,7 +6,7 @@ import type { JsonSchema } from "./validate.ts";
  *
  *  - `episodes/<episodeId>.json`  each exported episode in its CLOSED form (src/dataset/closed.ts,
  *                                 TIF-265): canonical JSON with no free text (typed text,
- *                                 commands, UI status and the instruction are `h-<sha256>`), ids
+ *                                 commands, UI status and the instruction are `h-<60 hex>`), ids
  *                                 closed or hashed; content-addressed by the closed content;
  *  - `records.jsonl`  one `myco.dataset.record/3` per exported episode, sorted by episode id.
  *                     A record references its episode by id and digest and carries ONLY
@@ -45,6 +45,25 @@ const relPath: JsonSchema = {
   type: "string",
   pattern: "^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127})*$",
 };
+
+/**
+ * Why a candidate was excluded. The manifest's `counts.excluded` is closed over these codes
+ * (#559 round 2, B1): no other key can appear, so a key can never carry foreign text.
+ */
+export const DATASET_EXCLUSION_CODES = [
+  "MISSING_GATE",
+  "MISSING_GRADE",
+  "MISSING_CAPTURE",
+  "GATE_MALFORMED",
+  "GATE_NOT_BOUND",
+  "GATE_EPISODE_MISMATCH",
+  "GRADE_NOT_BOUND",
+  "GATE_UNCERTAIN",
+  "GRADE_UNGRADABLE",
+  "GATE_GRADER_DISAGREE",
+  "NOT_CLAIMED",
+  "NEGATIVES_NOT_REQUESTED",
+] as const;
 
 export const DATASET_RECORD_SCHEMA_ID = "myco.dataset.record/3";
 export const DATASET_MANIFEST_SCHEMA_ID = "myco.dataset.manifest/3";
@@ -144,8 +163,14 @@ export const datasetManifestSchema: JsonSchema = {
         negative: { type: "integer", minimum: 0 },
         /** Exported episodes labelled `simulated: true`. */
         simulated: { type: "integer", minimum: 0 },
-        /** Excluded candidates by exclusion code (counts only; integers checked by the exporter). */
-        excluded: { type: "object" },
+        /** Excluded candidates by exclusion code: only known codes, each a count (closed, B1). */
+        excluded: {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            DATASET_EXCLUSION_CODES.map((code) => [code, { type: "integer", minimum: 0 }]),
+          ),
+        },
       },
     },
     records: {

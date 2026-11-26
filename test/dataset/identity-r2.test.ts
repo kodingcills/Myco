@@ -156,7 +156,7 @@ describe("the identity file and the floor", () => {
   it("the floor is 3 characters: a 3-character identity is matched, a 2-character one is not", () => {
     const three: JoinedIdentity[] = [["username", "zqx"]];
     const ep = candidate({}, { taskId: "zqx-1" }).episode;
-    expect(closeEpisode(ep, three).task.id).toMatch(/^h-[0-9a-f]{64}$/);
+    expect(closeEpisode(ep, three).task.id).toMatch(/^h-[0-9a-f]{60}$/);
     const two: JoinedIdentity[] = [["username", "zq"]];
     expect(closeEpisode(candidate({}, { taskId: "zq-1" }).episode, two).task.id).toBe("zq-1");
   });
@@ -181,7 +181,7 @@ describe("S1-S3: exemptions, idempotence, case folding", () => {
   });
 
   it("S2: an already-hashed id stays as it is, even when an identity's letters occur in the hash", () => {
-    const hashedId = `h-${"abcd".repeat(16)}`;
+    const hashedId = `h-${"abcd".repeat(15)}`;
     const ep = candidate({}, { taskId: "task-1" }).episode;
     const closed = closeEpisode({ ...ep, task: { ...ep.task, id: hashedId } }, [
       ["username", "abcd"],
@@ -223,7 +223,7 @@ describe("S1-S3: exemptions, idempotence, case folding", () => {
         candidate({}, { taskId: written.normalize("NFKC") }).episode,
         joined,
       );
-      expect(/^h-[0-9a-f]{64}$/.test(closed.task.id), `${configured} / ${written}`).toBe(true);
+      expect(/^h-[0-9a-f]{60}$/.test(closed.task.id), `${configured} / ${written}`).toBe(true);
     }
   });
 });
