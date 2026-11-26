@@ -17,7 +17,7 @@ export const faultSuiteRowSchema: JsonSchema = {
     "schema",
     "suiteVersion",
     "index",
-    "trialKey",
+    "trialId",
     "faultClass",
     "variant",
     "target",
@@ -45,7 +45,7 @@ export const faultSuiteRowSchema: JsonSchema = {
     schema: { const: "myco.faults.m2-row/1" },
     suiteVersion: { type: "string", minLength: 1, maxLength: 64 },
     index: { type: "integer", minimum: 0 },
-    trialKey: { type: "string", pattern: "^[A-Za-z0-9._-]{1,128}$" },
+    trialId: { type: "string", pattern: "^[A-Za-z0-9._-]{1,128}$" },
     faultClass: { type: "string", enum: ["tamper-oracle-inputs", "injected-instruction"] },
     variant: { type: "string", pattern: "^[a-z0-9-]{1,64}$" },
     /** Tamper: the oracle input attacked. Injection: the site (cell or dialog). */

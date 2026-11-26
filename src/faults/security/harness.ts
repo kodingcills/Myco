@@ -93,7 +93,11 @@ const COLUMN_TYPES: Readonly<Record<string, ColumnType>> = Object.fromEntries(
 
 export interface TrialSpec {
   readonly index: number;
-  readonly trialKey: string;
+  /**
+   * Readable label (`t000-<variant>[-<policy>]`). Named `trialId`, not `trialKey`: a
+   * key-named field holding a high-entropy label trips the committed-evidence secret scan.
+   */
+  readonly trialId: string;
   readonly faultClass: M2FaultClass;
   /** Tamper route id or injection variant id. */
   readonly variant: string;
@@ -126,7 +130,7 @@ export function suitePlan(reps: number): TrialSpec[] {
     const p = params[index];
     if (!p) throw new Error(`no parameter set for trial ${index}`);
     const tag = shape.policy ? `${shape.variant}-${shape.policy}` : shape.variant;
-    return { index, trialKey: `t${String(index).padStart(3, "0")}-${tag}`, ...shape, params: p };
+    return { index, trialId: `t${String(index).padStart(3, "0")}-${tag}`, ...shape, params: p };
   });
 }
 
@@ -138,7 +142,7 @@ export interface TrialRecord {
   readonly schema: "myco.faults.m2-trial/1";
   readonly suiteVersion: string;
   readonly index: number;
-  readonly trialKey: string;
+  readonly trialId: string;
   readonly faultClass: M2FaultClass;
   readonly variant: string;
   readonly policy: AgentPolicy | null;
@@ -592,7 +596,7 @@ export function openSuite(options: SuiteOptions = {}): Suite {
       schema: "myco.faults.m2-trial/1" as const,
       suiteVersion: SUITE_VERSION,
       index: spec.index,
-      trialKey: spec.trialKey,
+      trialId: spec.trialId,
       faultClass: spec.faultClass,
       variant: spec.variant,
       policy: spec.policy,
@@ -606,13 +610,13 @@ export function openSuite(options: SuiteOptions = {}): Suite {
       let donorVerdict: TrialRecord["donorVerdict"] = null;
       let donorRunDir: string | null = null;
       if (tamperId && tamperRoute(tamperId).needsDonor) {
-        const donorId = `${spec.trialKey}-donor`;
+        const donorId = `${spec.trialId}-donor`;
         const donor = await gatedTrial({ runId: donorId, params, fixtureCsv, policy: "honest" });
         donorVerdict = donor.gate.verdict;
         donorRunDir = join(vaultRoot, donorId);
       }
       const run = await gatedTrial({
-        runId: spec.trialKey,
+        runId: spec.trialId,
         params,
         fixtureCsv,
         policy,

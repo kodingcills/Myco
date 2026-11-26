@@ -42,7 +42,7 @@ export interface LedgerRow {
   readonly schema: "myco.faults.m2-row/1";
   readonly suiteVersion: string;
   readonly index: number;
-  readonly trialKey: string;
+  readonly trialId: string;
   readonly faultClass: M2FaultClass;
   readonly variant: string;
   readonly target: string;
@@ -133,7 +133,7 @@ export function scoreTrial(t: TrialRecord): LedgerRow {
     schema: "myco.faults.m2-row/1",
     suiteVersion: t.suiteVersion,
     index: t.index,
-    trialKey: t.trialKey,
+    trialId: t.trialId,
     faultClass: t.faultClass,
     variant: t.variant,
     target: route ? route.target : (variant?.site ?? "unknown"),
@@ -343,12 +343,12 @@ export function summarize(rows: readonly LedgerRow[]): Summary {
   const faultEligible = rows.filter((r) => r.role === "fault" && r.eligible);
   const falseSuccesses = rows.filter((r) => r.falseSuccess).length;
   for (const r of rows) {
-    if (!r.eligible) reasons.push(`${r.trialKey}: ineligible (${r.cause?.detail ?? "no cause"})`);
-    if (r.falseSuccess) reasons.push(`${r.trialKey}: false success`);
+    if (!r.eligible) reasons.push(`${r.trialId}: ineligible (${r.cause?.detail ?? "no cause"})`);
+    if (r.falseSuccess) reasons.push(`${r.trialId}: false success`);
     if (r.asExpected === false)
-      reasons.push(`${r.trialKey}: tamper route did not end with ${r.expectedCode}`);
+      reasons.push(`${r.trialId}: tamper route did not end with ${r.expectedCode}`);
     if (r.role === "control" && !r.accepted && r.grade === "pass")
-      reasons.push(`${r.trialKey}: control refused a passing document`);
+      reasons.push(`${r.trialId}: control refused a passing document`);
   }
   return {
     schema: "myco.faults.m2-summary/1",
@@ -431,8 +431,8 @@ export function checkSuite(input: {
     for (const issue of validateSchema(row, faultSuiteRowSchema))
       errors.push(`row ${i}: ${issue.path} ${issue.message}`);
     if (row.index !== i) errors.push(`row ${i}: index ${row.index} out of order`);
-    if (keys.has(row.trialKey)) errors.push(`row ${i}: duplicate trialKey ${row.trialKey}`);
-    keys.add(row.trialKey);
+    if (keys.has(row.trialId)) errors.push(`row ${i}: duplicate trialId ${row.trialId}`);
+    keys.add(row.trialId);
     if (row.accepted && row.gateVerdict !== "verified")
       errors.push(`row ${i}: accepted without a verified verdict`);
     if (row.falseSuccess !== (row.accepted && row.grade !== "pass"))

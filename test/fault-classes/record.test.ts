@@ -109,7 +109,7 @@ describe("check", () => {
 
   it("catches a host path in a row", () => {
     const bad = trials.map((t, i) =>
-      i === 0 ? { ...t, trialKey: "x", harnessError: "/home/someone/secret" } : t,
+      i === 0 ? { ...t, trialId: "x", harnessError: "/home/someone/secret" } : t,
     );
     const text = jsonl(bad);
     const r = check({ trials: text, ...record(text) });
@@ -181,7 +181,7 @@ describe("scoring rules", () => {
     const text = jsonl(trials.map((x) => (x === t ? broken : x)));
     const s = JSON.parse(record(text).summary) as Summary;
     expect(s.rows).toBe(ROWS);
-    expect(s.bar.reasons.some((r) => r.includes(`${t.trialKey}: ineligible (harness error`))).toBe(
+    expect(s.bar.reasons.some((r) => r.includes(`${t.trialId}: ineligible (harness error`))).toBe(
       true,
     );
   });
