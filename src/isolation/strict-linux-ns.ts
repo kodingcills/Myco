@@ -245,24 +245,82 @@ export function checkSpec(spec: StrictTrialSpec): void {
   if (readdirSync(root).length !== 0)
     throw new StrictIsolationError("STRICT_NS_BAD_ROOT", "root is not empty");
 
-  const systemSources = [...SYSTEM_DIRS.map((d) => `/${d}`), ...ETC_BINDS];
+  // Compare REAL paths (#551 round-1 D2): a hide entry that is, or sits under, a symlink
+  // into a system bind is visible at its target inside the trial. Both the lexical and the
+  // real form of each system source are checked (on merged-/usr hosts /lib -> /usr/lib).
+  const systemSources = systemBindSources();
+  const realRoot = realPathOf(root);
   for (const h of spec.hide) {
     if (typeof h !== "string" || !path.isAbsolute(h) || !SAFE_PATH.test(h))
       throw new StrictIsolationError(
         "STRICT_NS_BAD_SPEC",
         "hide entries must be absolute plain paths",
       );
-    // A hide dir inside the trial root could be exposed through /workspace or /evidence.
-    if (within(path.resolve(h), path.resolve(root)))
-      throw new StrictIsolationError("STRICT_NS_HIDE_OVERLAP", "hide dir inside the trial root");
-    // A hide dir under a system bind would be visible read-only.
-    for (const s of systemSources)
-      if (within(path.resolve(h), s))
-        throw new StrictIsolationError("STRICT_NS_HIDE_OVERLAP", `hide dir under ${s}`);
+    if (!SAFE_PATH.test(realPathOf(h)))
+      throw new StrictIsolationError(
+        "STRICT_NS_BAD_SPEC",
+        "hide entry resolves to a non-plain path",
+      );
+    for (const form of new Set([path.resolve(h), realPathOf(h)])) {
+      // A hide dir inside the trial root could be exposed through /workspace or /evidence.
+      if (within(form, realRoot))
+        throw new StrictIsolationError("STRICT_NS_HIDE_OVERLAP", "hide dir inside the trial root");
+      // A hide dir under a system bind would be visible read-only.
+      for (const s of systemSources)
+        if (within(form, s))
+          throw new StrictIsolationError("STRICT_NS_HIDE_OVERLAP", `hide dir under ${s}`);
+    }
   }
   for (const s of systemSources)
-    if (within(path.resolve(root), s))
+    if (within(realRoot, s))
       throw new StrictIsolationError("STRICT_NS_BAD_ROOT", `root under ${s}`);
+}
+
+/** Every host dir the view binds read-only, lexical and resolved. */
+function systemBindSources(): string[] {
+  const out = new Set<string>();
+  for (const s of [...SYSTEM_DIRS.map((d) => `/${d}`), ...ETC_BINDS]) {
+    out.add(s);
+    out.add(realPathOf(s));
+  }
+  return [...out];
+}
+
+/**
+ * The real path of `p`, resolving every symlink in it. A missing tail is appended to the
+ * real path of its deepest existing ancestor, so a hide entry that does not exist yet is
+ * still compared where it would land.
+ */
+export function realPathOf(p: string, depth = 0): string {
+  const abs = path.resolve(p);
+  if (depth > 40) throw new StrictIsolationError("STRICT_NS_BAD_SPEC", "symlink loop");
+  try {
+    return realpathSync(abs);
+  } catch {
+    const parent = path.dirname(abs);
+    if (parent === abs) return abs;
+    const realParent = realPathOf(parent, depth + 1);
+    // A dangling symlink: follow it by hand to where it would land.
+    let link: string | undefined;
+    try {
+      if (lstatSync(abs).isSymbolicLink()) link = readlinkSync(abs);
+    } catch {
+      /* missing: append below */
+    }
+    if (link !== undefined) return realPathOf(path.resolve(realParent, link), depth + 1);
+    return path.join(realParent, path.basename(abs));
+  }
+}
+
+/** What the self-check probes for each hide entry: the entry and its real path. */
+export function hideProbes(hide: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const h of hide) {
+    out.add(path.resolve(h));
+    // checkSpec refused any entry whose real path is not plain, so this is script-safe.
+    out.add(realPathOf(h));
+  }
+  return [...out];
 }
 
 /* ------------------------------------------------------------------ in-namespace scripts */
@@ -615,28 +673,70 @@ export function trialPids(pidNs: string): number[] {
 /* ------------------------------------------------------------------ host-side file capture */
 
 /**
- * Read a file the trial may have planted, from the host, without following symlinks and
- * without blocking on a FIFO (#541 round-1 D2). Anything but a regular file is refused.
+ * Read `rel` beneath the harness-owned directory `base` (normally `paths.workspace`), from
+ * the host, without following a symlink at ANY path component and without blocking on a
+ * FIFO (#541 round-1 D2, #551 round-1 D1). The trial controls everything under its
+ * workspace, so it can turn any sub-directory into a symlink to a sibling trial; `lstat` +
+ * `O_NOFOLLOW` on the full path only guards the last component. Instead this walks one
+ * component at a time from a directory fd, like `openat(dirfd, name, O_NOFOLLOW)`: each
+ * step opens `/proc/self/fd/<dirfd>/<name>`, where the kernel resolves the magic link to
+ * the pinned directory itself and `O_NOFOLLOW` applies to `<name>`. A symlink anywhere
+ * gives ELOOP; a swap between steps cannot redirect an fd already held. `base` itself must
+ * be a real directory (no symlink anywhere in it). Anything but a regular file is refused.
  */
-export function readTrialFile(file: string, maxBytes = 64 * 1024 * 1024): Buffer {
-  let st: ReturnType<typeof lstatSync>;
+export function readTrialFile(base: string, rel: string, maxBytes = 64 * 1024 * 1024): Buffer {
+  // The walk needs Linux /proc/self/fd; the backend is Linux-only anyway.
+  if (process.platform !== "linux")
+    throw new StrictIsolationError("STRICT_NS_UNSUPPORTED_PLATFORM", process.platform);
+  if (typeof base !== "string" || !path.isAbsolute(base))
+    throw new StrictIsolationError("STRICT_NS_BAD_FILE", "base must be absolute");
+  if (typeof rel !== "string" || rel === "" || path.isAbsolute(rel) || rel.includes("\0"))
+    throw new StrictIsolationError("STRICT_NS_BAD_FILE", "path must be relative");
+  const parts = rel.split("/").filter((c) => c !== "" && c !== ".");
+  if (parts.length === 0 || parts.includes(".."))
+    throw new StrictIsolationError("STRICT_NS_BAD_FILE", "path must stay beneath the base");
+  let real: string;
   try {
-    st = lstatSync(file);
+    real = realpathSync(base);
   } catch {
-    throw new StrictIsolationError("STRICT_NS_BAD_FILE", "missing");
+    throw new StrictIsolationError("STRICT_NS_BAD_FILE", "base missing");
   }
-  if (!st.isFile()) throw new StrictIsolationError("STRICT_NS_BAD_FILE", "not a regular file");
+  if (real !== path.resolve(base))
+    throw new StrictIsolationError("STRICT_NS_BAD_FILE", "base is not a real directory");
+
+  const DIR = fsc.O_RDONLY | fsc.O_DIRECTORY | fsc.O_NOFOLLOW;
+  let dirFd: number;
+  try {
+    dirFd = openSync(real, DIR);
+  } catch {
+    throw new StrictIsolationError("STRICT_NS_BAD_FILE", "base open refused");
+  }
   let fd: number;
   try {
-    fd = openSync(file, fsc.O_RDONLY | fsc.O_NOFOLLOW | fsc.O_NONBLOCK);
-  } catch {
-    throw new StrictIsolationError("STRICT_NS_BAD_FILE", "open refused");
+    for (const name of parts.slice(0, -1)) {
+      let next: number;
+      try {
+        next = openSync(`/proc/self/fd/${dirFd}/${name}`, DIR);
+      } catch {
+        throw new StrictIsolationError("STRICT_NS_BAD_FILE", "directory component refused");
+      }
+      closeSync(dirFd);
+      dirFd = next;
+    }
+    try {
+      fd = openSync(
+        `/proc/self/fd/${dirFd}/${parts[parts.length - 1]}`,
+        fsc.O_RDONLY | fsc.O_NOFOLLOW | fsc.O_NONBLOCK,
+      );
+    } catch {
+      throw new StrictIsolationError("STRICT_NS_BAD_FILE", "open refused");
+    }
+  } finally {
+    closeSync(dirFd);
   }
   try {
     const fst = fstatSync(fd);
-    // Swapped between lstat and open: refuse.
-    if (!fst.isFile() || fst.ino !== st.ino || fst.dev !== st.dev)
-      throw new StrictIsolationError("STRICT_NS_BAD_FILE", "changed during capture");
+    if (!fst.isFile()) throw new StrictIsolationError("STRICT_NS_BAD_FILE", "not a regular file");
     if (fst.size > maxBytes) throw new StrictIsolationError("STRICT_NS_BAD_FILE", "too large");
     const buf = Buffer.alloc(fst.size);
     let off = 0;
@@ -774,6 +874,8 @@ export function strictLinuxNs(options: StrictBackendOptions = {}): StrictBackend
     };
 
     // Do not trust the setup: check every property AS THE AGENT before handing it out.
+    // Each hide entry is probed at its lexical AND its real path (#551 round-1 D2).
+    const probes = hideProbes(spec.hide);
     let check: StrictExecResult;
     try {
       check = await runInTrial(
@@ -781,14 +883,14 @@ export function strictLinuxNs(options: StrictBackendOptions = {}): StrictBackend
         target,
         limits,
         "/bin/sh",
-        ["-c", selfCheckScript(spec.hide, root)],
+        ["-c", selfCheckScript(probes, root)],
         baseEnv,
         { timeoutMs: 15_000 },
       );
     } catch (e) {
       return await fail("STRICT_NS_SELFCHECK_FAILED", String((e as Error).message));
     }
-    const failures = evaluateSelfCheck(check.stdout, { nonce, hideCount: spec.hide.length });
+    const failures = evaluateSelfCheck(check.stdout, { nonce, hideCount: probes.length });
     if (check.code !== 0 || failures.length > 0)
       return await fail(
         "STRICT_NS_SELFCHECK_FAILED",

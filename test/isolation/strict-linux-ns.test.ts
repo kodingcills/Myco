@@ -24,7 +24,9 @@ import {
   AGENT_UID,
   checkSpec,
   evaluateSelfCheck,
+  hideProbes,
   readTrialFile,
+  realPathOf,
   runInTrial,
   StrictIsolationError,
   type StrictTrialDesktop,
@@ -122,6 +124,63 @@ describe("strict-linux-ns: spec checks (fail closed before the kernel)", () => {
     );
     // The run root containing the trial root is the normal case.
     expect(await codeOf(() => checkSpec(spec(root, { hide: [run] })))).toBe("no error");
+  });
+
+  it("#551 D2: compares hide entries by REAL path, not lexically", async () => {
+    const run = mkRun();
+    const root = path.join(run, "t");
+    mkdirSync(root);
+    // A hide entry that is a symlink into a system bind (the verifier's /srv/vrunlink layout).
+    symlinkSync("/usr/share", path.join(run, "vrunlink"));
+    expect(await codeOf(() => checkSpec(spec(root, { hide: [path.join(run, "vrunlink")] })))).toBe(
+      "STRICT_NS_HIDE_OVERLAP",
+    );
+    // ... a path beneath such a link, including one that does not exist yet ...
+    expect(
+      await codeOf(() =>
+        checkSpec(spec(root, { hide: [path.join(run, "vrunlink", "no-such-run")] })),
+      ),
+    ).toBe("STRICT_NS_HIDE_OVERLAP");
+    // ... a dangling link that would land under a system bind ...
+    symlinkSync("/usr/no-such-myco-dir", path.join(run, "dangling"));
+    expect(await codeOf(() => checkSpec(spec(root, { hide: [path.join(run, "dangling")] })))).toBe(
+      "STRICT_NS_HIDE_OVERLAP",
+    );
+    // ... and a link that resolves inside the trial root.
+    symlinkSync(root, path.join(run, "intoroot"));
+    expect(await codeOf(() => checkSpec(spec(root, { hide: [path.join(run, "intoroot")] })))).toBe(
+      "STRICT_NS_HIDE_OVERLAP",
+    );
+    // The self-check probes both the entry and where it really lands.
+    expect(hideProbes([path.join(run, "vrunlink")])).toEqual([
+      path.join(run, "vrunlink"),
+      realpathSync("/usr/share"),
+    ]);
+    expect(hideProbes([run])).toEqual([run]);
+  });
+
+  it("refuses a root under a system dir even when that dir is empty-rooted", async () => {
+    // Exercises the root-under-system-dir refusal without the non-empty check firing first.
+    const subdirs = (d: string): string[] => {
+      try {
+        return readdirSync(d, { withFileTypes: true })
+          .filter((e) => e.isDirectory())
+          .map((e) => path.join(d, e.name));
+      } catch {
+        return [];
+      }
+    };
+    const sys = ["/usr", "/bin", "/sbin", "/lib", "/lib64"].map((d) => realPathOf(d));
+    const level1 = sys.flatMap(subdirs);
+    const empty = [...level1, ...level1.flatMap(subdirs)].find((d) => {
+      try {
+        return readdirSync(d).length === 0 && realpathSync(d) === d;
+      } catch {
+        return false;
+      }
+    });
+    if (!empty) return; // no empty dir under a system bind on this host
+    expect(await codeOf(() => checkSpec(spec(empty)))).toBe("STRICT_NS_BAD_ROOT");
   });
 
   it("refuses an Xvfb display rather than pretending to give one", async () => {
@@ -225,29 +284,69 @@ describe("strict-linux-ns: self-check evaluation", () => {
   });
 });
 
-describe("strict-linux-ns: host-side capture of trial files (no follow, no block)", () => {
-  it("reads a regular file", () => {
-    const run = mkRun();
-    writeFileSync(path.join(run, "f"), "hello");
-    expect(readTrialFile(path.join(run, "f")).toString()).toBe("hello");
-  });
-  it("refuses a symlink, a directory, a FIFO (without hanging) and an oversize file", async () => {
-    const run = mkRun();
-    writeFileSync(path.join(run, "target"), "x");
-    symlinkSync(path.join(run, "target"), path.join(run, "link"));
-    mkdirSync(path.join(run, "dir"));
-    writeFileSync(path.join(run, "big"), "0123456789");
-    expect(await codeOf(() => readTrialFile(path.join(run, "link")))).toBe("STRICT_NS_BAD_FILE");
-    expect(await codeOf(() => readTrialFile(path.join(run, "dir")))).toBe("STRICT_NS_BAD_FILE");
-    expect(await codeOf(() => readTrialFile(path.join(run, "big"), 4))).toBe("STRICT_NS_BAD_FILE");
-    expect(await codeOf(() => readTrialFile(path.join(run, "missing")))).toBe("STRICT_NS_BAD_FILE");
-    if (process.platform === "linux") {
+describe.runIf(process.platform === "linux")(
+  "strict-linux-ns: host-side capture of trial files (no follow at any component, no block)",
+  () => {
+    it("reads a regular file, at the top and in a sub-directory", () => {
+      const run = mkRun();
+      writeFileSync(path.join(run, "f"), "hello");
+      mkdirSync(path.join(run, "out", "deep"), { recursive: true });
+      writeFileSync(path.join(run, "out", "deep", "saved.csv"), "A,1\n");
+      expect(readTrialFile(run, "f").toString()).toBe("hello");
+      expect(readTrialFile(run, "out/deep/saved.csv").toString()).toBe("A,1\n");
+      expect(readTrialFile(run, "./out//deep/saved.csv").toString()).toBe("A,1\n");
+    });
+    it("refuses a symlink, a directory, a FIFO (without hanging) and an oversize file", async () => {
+      const run = mkRun();
+      writeFileSync(path.join(run, "target"), "x");
+      symlinkSync(path.join(run, "target"), path.join(run, "link"));
+      mkdirSync(path.join(run, "dir"));
+      writeFileSync(path.join(run, "big"), "0123456789");
+      expect(await codeOf(() => readTrialFile(run, "link"))).toBe("STRICT_NS_BAD_FILE");
+      expect(await codeOf(() => readTrialFile(run, "dir"))).toBe("STRICT_NS_BAD_FILE");
+      expect(await codeOf(() => readTrialFile(run, "big", 4))).toBe("STRICT_NS_BAD_FILE");
+      expect(await codeOf(() => readTrialFile(run, "missing"))).toBe("STRICT_NS_BAD_FILE");
       const r = spawn("mkfifo", [path.join(run, "fifo")]);
       await new Promise((res) => r.on("close", res));
-      expect(await codeOf(() => readTrialFile(path.join(run, "fifo")))).toBe("STRICT_NS_BAD_FILE");
-    }
-  });
-});
+      expect(await codeOf(() => readTrialFile(run, "fifo"))).toBe("STRICT_NS_BAD_FILE");
+    });
+    it("#551 D1: refuses a symlinked DIRECTORY component (relative and absolute) into a sibling", async () => {
+      // Lay out trials/A and trials/B; B saved the right answer, A saved nothing.
+      const run = mkRun();
+      const wsA = path.join(run, "trials", "A", "workspace");
+      const wsB = path.join(run, "trials", "B", "workspace");
+      mkdirSync(path.join(wsB, "out"), { recursive: true });
+      mkdirSync(wsA, { recursive: true });
+      writeFileSync(path.join(wsB, "saved.csv"), "B,1\n");
+      writeFileSync(path.join(wsB, "out", "saved.csv"), "B,1\n");
+      // What an agent in A can plant from inside /workspace.
+      symlinkSync("../../B/workspace", path.join(wsA, "rel"));
+      symlinkSync(wsB, path.join(wsA, "abs"));
+      mkdirSync(path.join(wsA, "real"));
+      symlinkSync(path.join(wsB, "out"), path.join(wsA, "real", "mid"));
+      for (const rel of [
+        "rel/saved.csv",
+        "abs/saved.csv",
+        "abs/out/saved.csv",
+        "real/mid/saved.csv",
+      ])
+        expect(await codeOf(() => readTrialFile(wsA, rel))).toBe("STRICT_NS_BAD_FILE");
+      // Escapes by name are refused before any open.
+      for (const rel of ["../B/workspace/saved.csv", "/etc/hostname", "", "."])
+        expect(await codeOf(() => readTrialFile(wsA, rel))).toBe("STRICT_NS_BAD_FILE");
+    });
+    it("refuses a base that is itself reached through a symlink", async () => {
+      const run = mkRun();
+      mkdirSync(path.join(run, "real"));
+      writeFileSync(path.join(run, "real", "f"), "x");
+      symlinkSync(path.join(run, "real"), path.join(run, "link"));
+      expect(await codeOf(() => readTrialFile(path.join(run, "link"), "f"))).toBe(
+        "STRICT_NS_BAD_FILE",
+      );
+      expect(await codeOf(() => readTrialFile("relative", "f"))).toBe("STRICT_NS_BAD_FILE");
+    });
+  },
+);
 
 /* ================================================================== namespaces */
 
@@ -400,12 +499,43 @@ describe.skipIf(!probe.available)("strict-linux-ns: in namespaces", () => {
     expect(readFileSync(victim, "utf8")).toBe("B-ORIGINAL,1\n");
     expect(snapshot(run, [a.paths.workspace])).toEqual(before);
     // The symlink A planted is refused by host-side capture.
-    expect(await codeOf(() => readTrialFile(path.join(a.paths.workspace, "record.csv")))).toBe(
+    expect(await codeOf(() => readTrialFile(a.paths.workspace, "record.csv"))).toBe(
       "STRICT_NS_BAD_FILE",
     );
     // B still works and sees only its own file.
     const rb = await b.exec("/bin/cat", ["/workspace/record.csv"]);
     expect(rb.stdout).toBe("B-ORIGINAL,1\n");
+  }, 60_000);
+
+  it("#551 D1: host capture refuses a directory symlink the agent plants toward a sibling", async () => {
+    const { run, roots } = runLayout(["A", "B"]);
+    const a = await make(roots.A!, run, "A");
+    const b = await make(roots.B!, run, "B");
+    const rb = await b.exec("/bin/sh", [
+      "-c",
+      "mkdir -p /workspace/out && echo B,1 > /workspace/out/saved.csv && echo B,1 > /workspace/saved.csv",
+    ]);
+    expect(rb.code).toBe(0);
+    // As the agent in A: a relative link (needs no host path) and an absolute one aimed by
+    // the host path the agent reads from /proc/self/mountinfo.
+    const ra = await a.exec("/bin/sh", [
+      "-c",
+      String.raw`set -e
+ln -s ../../B/workspace /workspace/rel
+host=$(awk '$5=="/workspace"{print $4}' /proc/self/mountinfo)
+ln -s "$(dirname "$(dirname "$host")")/B/workspace" /workspace/abs
+mkdir /workspace/mine && echo A,0 > /workspace/mine/saved.csv
+echo PLANTED "$host"`,
+    ]);
+    expect(ra.stdout).toContain("PLANTED");
+    expect(ra.stdout).toContain(path.join(run, "trials", "A", "workspace"));
+    // Without the per-component walk these would return B's bytes.
+    expect(readFileSync(path.join(a.paths.workspace, "rel", "saved.csv"), "utf8")).toBe("B,1\n");
+    for (const rel of ["rel/saved.csv", "rel/out/saved.csv", "abs/saved.csv", "abs/out/saved.csv"])
+      expect(await codeOf(() => readTrialFile(a.paths.workspace, rel))).toBe("STRICT_NS_BAD_FILE");
+    // A's own file in a real sub-directory still reads.
+    expect(readTrialFile(a.paths.workspace, "mine/saved.csv").toString()).toBe("A,0\n");
+    expect(readTrialFile(b.paths.workspace, "out/saved.csv").toString()).toBe("B,1\n");
   }, 60_000);
 
   it("D1 even with full capabilities in the trial's namespace: the run root is not in it", async () => {
