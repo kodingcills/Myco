@@ -22,9 +22,19 @@
  *  - empty environment (no secrets, no proxy settings reach a plugin);
  *  - Node permission model: reads only the SDK directory and the plugin directory; no
  *    writes, child processes, workers, addons, WASI;
- *  - bounded input (the manifest's `maxInputBytes`, under the host ceiling), bounded output
- *    (the answer file is refused over the cap), wall-clock timeout (SIGKILL), V8 heap cap
- *    (`--max-old-space-size`) and a resident-memory watchdog in the child;
+ *  - bounded input (the manifest's `maxInputBytes`, under the host ceiling), wall-clock
+ *    timeout (SIGKILL), V8 heap cap (`--max-old-space-size`) and a resident-memory watchdog in
+ *    the child;
+ *  - bounded output WHILE the child runs (verifier round 3 on #537, D3), not only after it
+ *    exits: every child runs under `RLIMIT_FSIZE` (`ulimit -f`, set by `/bin/sh` in
+ *    `LIMIT_WRAPPER` before the OS layer and node start), so the kernel refuses any write that
+ *    would take a file past the cap plus at most one 512-byte block. The child can write only
+ *    the answer file (the permission model denies every path write; `fs` is denied), so the
+ *    host disk holds at most `maxOutputBytes + 1024` bytes of plugin output per call, whatever
+ *    route the plugin finds to that file. Node ignores SIGXFSZ, so a write past the limit fails
+ *    with EFBIG instead; the child is then stopped by its own error or the wall-clock kill, and
+ *    the host reports `PLUGIN_OUTPUT_TOO_LARGE` whenever the file is over the cap. Core dumps
+ *    are off (`ulimit -c 0`), so a crash writes nothing to the plugin directory either;
  *  - the plugin gets the captured bytes and a basename over stdin, never a host path of the
  *    trial.
  * Every failure is a `SandboxFault` with a `PLUGIN_*` code; callers turn it into `uncertain`.
@@ -97,6 +107,37 @@ export const SEATBELT_PROFILE =
  */
 const LINUX_INIT = ["/bin/sh", "-c", 'unset PWD; "$@"; exit $?', "sh"] as const;
 
+/**
+ * The outermost layer of every plugin child, on both platforms (D3): `/bin/sh` sets the file
+ * size limit (`ulimit -f`, in 512-byte blocks, given as `$1`) and turns core dumps off, then
+ * `exec`s the OS layer with an empty environment (`env -i`: the shell may export `PWD`,
+ * `SHLVL` or `_`). rlimits are inherited across `exec`, `unshare` and `sandbox-exec`, so node
+ * and anything it could start run under them. If either limit cannot be set the call exits 90
+ * and fails closed (`PLUGIN_SPAWN_FAILED`); detection runs the same wrapper, so a host where it
+ * cannot work never runs a plugin (`PLUGIN_NO_NET_ISOLATION`).
+ */
+export const LIMIT_WRAPPER = [
+  "/bin/sh",
+  "-c",
+  'ulimit -c 0 && ulimit -f "$1" || exit 90; shift; exec /usr/bin/env -i "$@"',
+  "sh",
+] as const;
+
+const EXIT_LIMIT_FAILED = 90;
+const FSIZE_BLOCK = 512;
+
+/** The `ulimit -f` value for an output cap: the smallest whole number of 512-byte blocks
+ * strictly larger than the cap, so an answer of exactly `maxOutput` bytes still fits and any
+ * file the kernel lets reach the limit is over the cap. */
+export function fsizeBlocks(maxOutput: number): number {
+  return Math.floor(maxOutput / FSIZE_BLOCK) + 1;
+}
+
+/** The full command prefix for one call: the limit wrapper, then the OS layer. */
+function limitedPrefix(prefix: readonly string[], maxOutput: number): string[] {
+  return [...LIMIT_WRAPPER, String(fsizeBlocks(maxOutput)), ...prefix];
+}
+
 /** A child under the Linux prefix proves the PID namespace: its parent is the init, PID 1. */
 const LINUX_PROBE = "process.exit(process.ppid === 1 ? 0 : 3)";
 
@@ -109,10 +150,23 @@ export type NetworkIsolation =
   | { readonly kind: "netns" | "seatbelt"; readonly prefix: readonly string[] }
   | { readonly kind: "none" };
 
-function works(prefix: readonly string[], probe = "0"): boolean {
-  const [cmd, ...args] = prefix;
-  if (cmd === undefined || !existsSync(cmd)) return false;
-  const r = spawnSync(cmd, [...args, process.execPath, "-e", probe], {
+/** Output cap the detection probe runs under, and the limit it must then see. */
+const PROBE_OUTPUT_CAP = 4096;
+/**
+ * Every detection probe also proves the D3 limits reach node through the whole prefix: the
+ * soft and hard file-size limit is the expected byte count, and core dumps are off. Node's
+ * diagnostic report gives the raw rlimit values (bytes, despite the `_blocks` name).
+ */
+const LIMIT_PROBE = `{const u=process.report.getReport().userLimits;const f=${fsizeBlocks(PROBE_OUTPUT_CAP) * FSIZE_BLOCK};if(u.file_size_blocks.soft!==f||u.file_size_blocks.hard!==f||u.core_file_size_blocks.soft!==0)process.exit(4)}`;
+
+/** Whether a plugin child can run under `osPrefix` with the D3 limits in force (exported for
+ * `sandbox-os.test.ts`). */
+export function works(osPrefix: readonly string[], probe = "0"): boolean {
+  if (!existsSync(LIMIT_WRAPPER[0]) || !existsSync("/usr/bin/env")) return false;
+  if (!existsSync(osPrefix[0] ?? "")) return false;
+  const [cmd, ...args] = limitedPrefix(osPrefix, PROBE_OUTPUT_CAP);
+  if (cmd === undefined) return false;
+  const r = spawnSync(cmd, [...args, process.execPath, "-e", `${LIMIT_PROBE};${probe}`], {
     env: {},
     stdio: "ignore",
     timeout: 10_000,
@@ -197,10 +251,11 @@ export function runInSandbox(
     writeFileSync(join(io, "in.json"), input, { mode: 0o600 });
     inFd = openSync(join(io, "in.json"), "r");
     outFd = openSync(join(io, "out.json"), "w", 0o600);
+    const [cmd, ...prefixArgs] = limitedPrefix(isolation.prefix, maxOutput);
     const r = spawnSync(
-      isolation.prefix[0] as string,
+      cmd as string,
       [
-        ...isolation.prefix.slice(1),
+        ...prefixArgs,
         process.execPath,
         "--permission",
         `--allow-fs-read=${SDK_DIR}`,
@@ -224,8 +279,12 @@ export function runInSandbox(
       },
     );
     const errCode = (r.error as (Error & { code?: string }) | undefined)?.code;
+    if (r.error !== undefined && errCode !== "ETIMEDOUT") return fault("PLUGIN_SPAWN_FAILED");
+    // Checked before the exit status: a plugin that overflowed and then hung, crashed or ran
+    // out of memory is reported as what it did to the disk.
+    if (fstatSync(outFd).size > maxOutput) return fault("PLUGIN_OUTPUT_TOO_LARGE");
     if (errCode === "ETIMEDOUT") return fault("PLUGIN_TIMEOUT");
-    if (r.error !== undefined) return fault("PLUGIN_SPAWN_FAILED");
+    if (r.status === EXIT_LIMIT_FAILED) return fault("PLUGIN_SPAWN_FAILED");
     // Under the Linux init, node's own signal death arrives as 128 + signal (134 SIGABRT,
     // 133 SIGTRAP); on macOS node is the direct child and the signal is reported as such.
     if (
@@ -240,7 +299,6 @@ export function runInSandbox(
     if (r.status === 70) return fault("PLUGIN_THREW");
     if (r.status === 71) return fault("PLUGIN_MALFORMED_OUTPUT");
     if (r.status !== 0 || r.signal !== null) return fault("PLUGIN_CRASH");
-    if (fstatSync(outFd).size > maxOutput) return fault("PLUGIN_OUTPUT_TOO_LARGE");
     return parseAnswer(readFileSync(join(io, "out.json"), "utf8"), request);
   } catch {
     return fault("PLUGIN_SPAWN_FAILED");

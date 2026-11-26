@@ -131,12 +131,12 @@ Any failure is `uncertain` with a host code (`codeSource: "host"`):
 | `PLUGIN_TIMEOUT` | wall clock over `timeoutMs` (SIGKILL) |
 | `PLUGIN_MEMORY_EXCEEDED` | heap over `memoryMb`, or resident memory over `memoryMb` + 128 MiB runtime allowance |
 | `PLUGIN_NO_NET_ISOLATION` | this host has no OS layer for plugin children (fail closed). On Ubuntu 24.04 and later, unprivileged user namespaces are blocked by AppArmor by default (`kernel.apparmor_restrict_unprivileged_userns=1`), so every plugin call there is `PLUGIN_NO_NET_ISOLATION` until an operator allows them (CI sets the sysctl to 0 on its ephemeral runners) |
-| `PLUGIN_OUTPUT_TOO_LARGE` | the answer over `maxOutputBytes` |
+| `PLUGIN_OUTPUT_TOO_LARGE` | the answer file went over `maxOutputBytes`. The kernel's file-size limit stops it there while the child runs, so at most `maxOutputBytes` + 1024 bytes ever reach the host disk |
 | `PLUGIN_NO_HOOK` | the module lacks the hook, or has no default export |
 | `PLUGIN_THREW` | the hook or the module threw |
 | `PLUGIN_CRASH` | any other non-zero exit or signal |
 | `PLUGIN_MALFORMED_OUTPUT` | not a closed `myco.plugin/1` response for the requested op |
-| `PLUGIN_SPAWN_FAILED` | the child could not start |
+| `PLUGIN_SPAWN_FAILED` | the child could not start, or the output and core limits could not be set (fail closed) |
 
 Every result is labelled:
 

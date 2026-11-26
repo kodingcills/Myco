@@ -124,6 +124,12 @@ const probes = {
   hostPath: async (_i, doc) => /[\\/]/.test(doc.fileName),
   bytesSeen: async (_i, doc) => doc.bytes !== null && new TextDecoder().decode(doc.bytes) === "captured",
   write: async () => { const fs = await import("node:fs"); fs.writeFileSync("x.txt", "x"); return true; },
+  // Y5 (verifier round 3 on #537): \`fs\` must not even load. The path probes above are also
+  // stopped by the permission model, but an fd write (\`fs.writeSync(1, ...)\`) is not.
+  fsLoads: async () => typeof (await import("node:fs")).writeSync === "function",
+  fsBareLoads: async () => typeof (await import("fs")).writeSync === "function",
+  fsPromisesLoads: async () => typeof (await import("node:fs/promises")).writeFile === "function",
+  fsFdWrite: async () => { const fs = await import("node:fs"); fs.writeSync(1, "x"); return true; },
 };
 export default {
   async oracle(doc, intent) {
@@ -308,6 +314,10 @@ describe("plugin sandbox: no access outside the captured bytes", () => {
     "dataUrl",
     "kill",
     "write",
+    "fsLoads",
+    "fsBareLoads",
+    "fsPromisesLoads",
+    "fsFdWrite",
   ])(
     "%s is denied",
     (name) => {
@@ -591,4 +601,209 @@ describe("the child refuses a free-text code itself (V6, defence in depth)", () 
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout.toString("utf8"))).toMatchObject({ status: "verified", code: "OK" });
   }, 15_000);
+});
+
+/**
+ * D3 (verifier round 3 on #537): output is bounded WHILE the child runs, not only after it
+ * exits. A plugin can reach the real answer stream through a `node:stream` prototype hook (the
+ * child's own `out.write` calls it with the stream as `this`), so the bound has to hold for any
+ * write to the answer file: the kernel's file-size limit (`LIMIT_WRAPPER`, `ulimit -f`).
+ *
+ * A watcher process (the test's own event loop is blocked by the synchronous runner) samples
+ * every file under a private TMPDIR every few milliseconds and reports the largest size and
+ * allocation it saw, so the test sees the host disk during the call, not after cleanup.
+ */
+describe("D3: plugin output is bounded on the host disk during the call", () => {
+  const CAP = 4096;
+  /** What the kernel may let through: the cap rounded up to the next 512-byte block. */
+  const HARD_BOUND = CAP + 1024;
+  const MIB = 1024 * 1024;
+
+  const WATCHER = String.raw`
+const { readdirSync, statSync, existsSync } = require("node:fs");
+const { join } = require("node:path");
+const [root, stop] = process.argv.slice(1);
+let maxSize = 0, maxAlloc = 0, seen = 0;
+function walk(d) {
+  let es = [];
+  try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
+  for (const e of es) {
+    const p = join(d, e.name);
+    if (e.isDirectory()) { walk(p); continue; }
+    try {
+      const st = statSync(p);
+      if (e.name === "out.json") { seen++; maxSize = Math.max(maxSize, st.size); maxAlloc = Math.max(maxAlloc, st.blocks * 512); }
+    } catch {}
+  }
+}
+process.stdout.write("ready\n");
+const deadline = Date.now() + 30000;
+while (!existsSync(stop) && Date.now() < deadline) {
+  walk(root);
+  const t = Date.now() + 2; while (Date.now() < t) {}
+}
+process.stdout.write(JSON.stringify({ maxSize, maxAlloc, seen }) + "\n");
+`;
+
+  /** Runs one sandboxed call with its io directory under a watched TMPDIR. */
+  async function watched(run: () => SandboxResult) {
+    const root = tempDir("myco-plugin-d3-");
+    const stop = join(root, "..", `${root.split("/").pop()}.stop`);
+    const w = spawn(process.execPath, ["-e", WATCHER, root, stop], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    let out = "";
+    w.stdout?.on("data", (d) => {
+      out += d.toString("utf8");
+    });
+    await new Promise<void>((r) => {
+      const t = setInterval(() => {
+        if (out.includes("ready")) {
+          clearInterval(t);
+          r();
+        }
+      }, 5);
+    });
+    const prev = process.env.TMPDIR;
+    process.env.TMPDIR = root;
+    const started = Date.now();
+    let result: SandboxResult;
+    try {
+      result = run();
+    } finally {
+      if (prev === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = prev;
+    }
+    const ms = Date.now() - started;
+    writeFileSync(stop, "");
+    await new Promise<void>((r) => w.on("exit", () => r()));
+    rmSync(stop, { force: true });
+    const line = out.split("\n").find((l) => l.startsWith("{")) ?? "{}";
+    return {
+      result,
+      ms,
+      leftover: readdirSync(root),
+      ...(JSON.parse(line) as { maxSize: number; maxAlloc: number; seen: number }),
+    };
+  }
+
+  const verifyWith = (source: string, timeoutMs: number) => {
+    const p = makePlugin(source, {
+      caps: { timeoutMs, memoryMb: 64, maxInputBytes: 65536, maxOutputBytes: CAP },
+    });
+    return () =>
+      runInSandbox(p.target, {
+        spec: PLUGIN_SPEC,
+        op: "verify",
+        doc: { fileName: "a.txt", bytesB64: "" },
+        intent: null,
+      });
+  };
+
+  // The verifier's probe, bounded so that a mutated (uncapped) run cannot fill the disk of the
+  // machine running the mutation: 64 MiB, 16 384 times the cap, through the prototype hook.
+  const HOOK_64MIB = `import { Writable } from "node:stream";
+const orig = Writable.prototype.write;
+Writable.prototype.write = function (chunk, ...rest) {
+  const big = Buffer.alloc(1024 * 1024, 65);
+  for (let i = 0; i < 64; i++) orig.call(this, big);
+  return orig.call(this, chunk, ...rest);
+};
+export default { oracle() { return { status: "refuted", code: "X" }; } };`;
+
+  it("a plugin writing 64 MiB through a stream prototype hook never puts more than the cap on disk", async () => {
+    const w = await watched(verifyWith(HOOK_64MIB, 5000));
+    expect(w.result).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
+    expect(w.seen).toBeGreaterThan(0); // the watcher did see the answer file
+    expect(w.maxSize).toBeGreaterThan(CAP); // the plugin did push past the cap ...
+    expect(w.maxSize).toBeLessThanOrEqual(HARD_BOUND); // ... and the kernel stopped it there
+    expect(w.maxAlloc).toBeLessThanOrEqual(HARD_BOUND + 64 * 1024);
+    expect(w.leftover).toEqual([]);
+  }, 30_000);
+
+  // The verifier's probe verbatim in effect: an endless 16 MiB write loop. Without the limit
+  // this wrote 14.5 GB in one 10 s call; with it the disk holds the cap and the call ends at
+  // the time cap at the latest, killed, with nothing left behind.
+  it("an endless write loop is killed at the time cap with the disk still at the cap", async () => {
+    const w = await watched(
+      verifyWith(
+        `import { Writable } from "node:stream";
+const orig = Writable.prototype.write;
+Writable.prototype.write = function () {
+  const big = Buffer.alloc(16 * 1024 * 1024, 65);
+  for (;;) { try { orig.call(this, big); } catch {} }
+};
+export default { oracle() { return { status: "refuted", code: "X" }; } };`,
+        1500,
+      ),
+    );
+    expect(w.result).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
+    expect(w.maxSize).toBeGreaterThan(CAP);
+    expect(w.maxSize).toBeLessThanOrEqual(HARD_BOUND);
+    expect(w.ms).toBeLessThan(1500 + 5000);
+    expect(w.leftover).toEqual([]);
+  }, 30_000);
+
+  it("a plugin that overflows and then hangs is reported as the overflow, not the timeout", async () => {
+    const w = await watched(
+      verifyWith(
+        `import { Writable } from "node:stream";
+const orig = Writable.prototype.write;
+Writable.prototype.write = function () {
+  this.on("error", () => {});
+  const big = Buffer.alloc(1024 * 1024, 65);
+  for (let i = 0; i < 8; i++) { try { orig.call(this, big); } catch {} }
+  setInterval(() => {}, 1000);
+  return true;
+};
+export default { oracle() { return { status: "refuted", code: "X" }; } };`,
+        1500,
+      ),
+    );
+    expect(w.result).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
+    expect(w.ms).toBeGreaterThanOrEqual(1400); // it really hung until the time cap
+    expect(w.maxSize).toBeLessThanOrEqual(HARD_BOUND);
+  }, 30_000);
+
+  it("an honest answer far past the cap is stopped on disk too, not just refused afterwards", async () => {
+    const p = makePlugin(
+      `export default { reader() { return { status: "ok", code: "OK", state: { kind: "text", text: "x".repeat(${2 * MIB}) } }; } };`,
+      {
+        kinds: ["reader"],
+        caps: { timeoutMs: 5000, memoryMb: 64, maxInputBytes: 65536, maxOutputBytes: CAP },
+      },
+    );
+    const w = await watched(() =>
+      runInSandbox(p.target, {
+        spec: PLUGIN_SPEC,
+        op: "read",
+        doc: { fileName: "a.txt", bytesB64: "" },
+      }),
+    );
+    expect(w.result).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
+    expect(w.maxSize).toBeLessThanOrEqual(HARD_BOUND);
+  }, 30_000);
+
+  it("an answer of exactly the cap still fits under the kernel limit (control)", async () => {
+    // {"spec":"myco.plugin/1","op":"read","status":"ok","code":"OK","state":{"kind":"text","text":"..."}}\n
+    const overhead =
+      `${JSON.stringify({ spec: PLUGIN_SPEC, op: "read", status: "ok", code: "OK", state: { kind: "text", text: "" } })}\n`
+        .length;
+    const p = makePlugin(
+      `export default { reader() { return { status: "ok", code: "OK", state: { kind: "text", text: "x".repeat(${CAP - overhead}) } }; } };`,
+      {
+        kinds: ["reader"],
+        caps: { timeoutMs: 5000, memoryMb: 64, maxInputBytes: 65536, maxOutputBytes: CAP },
+      },
+    );
+    const w = await watched(() =>
+      runInSandbox(p.target, {
+        spec: PLUGIN_SPEC,
+        op: "read",
+        doc: { fileName: "a.txt", bytesB64: "" },
+      }),
+    );
+    expect(w.result).toMatchObject({ ok: true, response: { status: "ok" } });
+    expect(w.maxSize).toBe(CAP);
+  }, 30_000);
 });

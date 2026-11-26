@@ -8,14 +8,17 @@
  * These tests exercise the OS layer ALONE: a plain `node` child with no permission model, no
  * guard and ordinary pipes, so nothing but the OS layer stands between it and the listener.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   detectNetworkIsolation,
+  fsizeBlocks,
+  LIMIT_WRAPPER,
   type NetworkIsolation,
   networkIsolation,
+  works,
 } from "../../src/plugins/host/sandbox.ts";
 import { PLUGIN_SPEC } from "../../src/plugins/sdk/protocol.ts";
 import { cleanupPlugins, makePlugin } from "./helpers.ts";
@@ -133,6 +136,72 @@ describe("the OS network layer", () => {
     },
     20_000,
   );
+});
+
+/**
+ * D3 (verifier round 3 on #537): detection runs every OS layer under the file-size limit and
+ * refuses one under which node does not see exactly the expected limit, so a host where the
+ * limit cannot reach the plugin never runs a plugin.
+ */
+describe("the output limit is part of the OS layer (D3)", () => {
+  const passThrough = ["/bin/sh", "-c", 'exec "$@"', "sh"];
+
+  it.runIf(SUPPORTED)(
+    "a layer that leaves the limit alone is accepted (control)",
+    () => {
+      expect(works(passThrough)).toBe(true);
+    },
+    20_000,
+  );
+
+  it.runIf(SUPPORTED)(
+    "a layer under which node sees another file-size limit is refused",
+    () => {
+      expect(works(["/bin/sh", "-c", 'ulimit -f 1; exec "$@"', "sh"])).toBe(false);
+    },
+    20_000,
+  );
+
+  /** The limits a plain node sees under `outer`, optionally followed by the limit wrapper. */
+  const limitsSeen = (outer: string, wrapped: boolean) => {
+    const script =
+      "const u = process.report.getReport().userLimits;" +
+      "process.stdout.write(JSON.stringify({ f: u.file_size_blocks.soft, c: u.core_file_size_blocks.soft }))";
+    const r = spawnSync(
+      "/bin/sh",
+      [
+        "-c",
+        `${outer}; exec "$@"`,
+        "sh",
+        ...(wrapped ? [...LIMIT_WRAPPER, "9"] : []),
+        process.execPath,
+        "-e",
+        script,
+      ],
+      { env: {}, encoding: "utf8" },
+    );
+    return JSON.parse(r.stdout || "{}") as { f?: number | string; c?: number | string };
+  };
+
+  it.runIf(SUPPORTED)(
+    "the wrapper turns core dumps off and sets the file limit, whatever the host had",
+    (ctx) => {
+      const raise = "ulimit -c 1024";
+      const bare = limitsSeen(raise, false);
+      // Bite check: the host really had core dumps on for this child (skipped where the hard
+      // limit is 0 and cannot be raised, so the case cannot be set up).
+      if (bare.c === undefined || bare.c === 0) ctx.skip();
+      expect(bare.c).toBe(1024 * 512);
+      expect(limitsSeen(raise, true)).toEqual({ f: 9 * 512, c: 0 });
+    },
+    20_000,
+  );
+
+  it("the limit is the smallest whole number of 512-byte blocks above the cap", () => {
+    expect(fsizeBlocks(4096)).toBe(9);
+    expect(fsizeBlocks(4095)).toBe(8);
+    expect(fsizeBlocks(1)).toBe(1);
+  });
 });
 
 /**
