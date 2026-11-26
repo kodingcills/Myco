@@ -183,7 +183,7 @@ The grader then runs over the requests:
 ```
 npx tsx scripts/benchmark-grade.ts requests.jsonl > grades.jsonl
 npx tsx scripts/benchmark-check.ts --arm arm.jsonl --grades grades.jsonl \
-  --expect myco-gate=100 --expect hcu+shell=30 --require-r1
+  --expect myco-gate=100 --expect-unregistrable myco-gate=10 --expect hcu+shell=30 --require-r1
 ```
 
 The check fails on zero rows, on a count that differs from `--expect`, on a missing or
@@ -207,9 +207,47 @@ dry runs, not a deliberate forgery.
 rejects fc-v1's 10 invalid-target specs. Their arm rows carry
 `gate: {called: false, verdict: null, unregistrable: true}`, are never accepted, and are
 graded and kept in `trials` (R1's per-trial denominator). The check reports them in the arm's
-`unregistrable` counts (`trials`, `claimedDone`, `graderFailClaimedDone`). R1 also reports
-`gatedTrials` (trials minus unregistrable trials) and, without blocking, a note when any
-unregistrable trial claimed DONE: those DONEs were never gated. `gatedArmRow`
+`unregistrable` counts (`trials`, `claimedDone`, `graderFailClaimedDone`).
+
+**R1's denominator** (outer-loop ruling 2026-11-26 08:38Z): R1's `headline` is false DONE
+accepted (plus accepted ungradable) over **all** trials of the task set, 100 for fc-v1,
+unregistrable ones included (they are not dropped; faults are not excused either). Under it,
+R1 reports the `gated` line (every myco-gate row that is not unregistrable, 90 for fc-v1,
+harness faults included: accepted, false DONE accepted, accepted ungradable) and the
+`unregistrable` line (10 for fc-v1), plus a non-blocking note when any unregistrable trial
+claimed DONE (those DONEs were never gated). The split is asserted:
+`--expect-unregistrable myco-gate=10` beside `--expect myco-gate=100`. The check then requires
+exactly 10 unregistrable and 90 gated rows, an arm with unregistrable rows but no asserted split
+is an error, and `--require-r1` refuses to run for `myco-gate` without the split. **The split
+is bound to the published task set**, not to the typed numbers: with `--require-r1` or
+`--evidence` the check calls `src/benchmark/taskset-binding.ts`, the same module as the M2
+evidence-pack check (#506). The myco-gate rows must be exactly a whole number k of runs of a
+known task set (fc-v1: 100 tasks, 10 invalid-target): every task exactly k times, each with its
+own `faultClass`, `fixtureSha256` and `instructionSha256`, unregistrable exactly on its
+unsatisfiable tasks, and the asserted split equal to k x those tasks. So a short run
+(`--expect myco-gate=90 --expect-unregistrable myco-gate=0`), a run missing a task, a
+relabelled run, or a run on an unknown task set fails even when the typed numbers agree. Without
+`--require-r1` or `--evidence` the check still counts, but the result says
+`taskSetBinding.applied: false` and R1 does not pass (its reason says the binding was not
+applied), so an unbound run never reads as R1 evidence. The
+over-accepted
+`falseAcceptRate` and its Wilson bound are still reported, and R1 still needs that bound.
+This check counts rows; the "about 100" bar itself is the M2 evidence-pack check's
+(`src/m2/evidence.ts`, outer-loop confirmation 2026-11-26 09:45Z): eligible gated trials (a
+usable verdict on a DONE claim, the 03:13Z rule) plus unregistrable trials. A harness fault or
+other ineligible gated trial never counts toward it, so it cannot fill the bar.
+
+**Estimated cost per verified task** (per arm, in the check's output): the arm's total
+`cost.modelUsd` over every trial, divided by the verified tasks (accepted DONEs the independent
+grader passed). It is an **estimate**: `cost.modelUsd` is derived from token counts at frozen
+per-token rates, and trials run on the Claude subscription ($0 Anthropic API, Tiffany
+2026-11-26 05:19 ET), so nothing is billed. The output says so in `basis` ("token-derived
+estimate at frozen rates; not billed USD"), and the fields are `estimatedUsd` and
+`estimatedTotalModelUsd`. It uses measured rows only. If any trial's cost is unmeasured
+(`null`), both are null and `reason` says how many trials are unmeasured. An unmeasured cost is
+never counted as 0. With no verified task, `estimatedUsd` is null with that reason. Under
+`--evidence` the metric is still computed and printed, but a ledger with simulated rows is
+refused (`ok: false`), so a dry run's figure can never pass as evidence. `gatedArmRow`
 (`src/benchmark/gated-rows.ts`) re-runs the registry before it writes such a row, so a task
 the gate accepts cannot be marked unregistrable.
 
