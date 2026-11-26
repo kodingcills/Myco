@@ -21,8 +21,9 @@
 #     (exit 9); resume is only for gate pauses / operator stops.
 #
 # Host gates, checked before each trial (exit and resume later; never run
-# through them): 1-min load > 14 (exit 4), swap free < 300 MB (exit 6). A
-# healthy run sits at load 8-10 because QEMU is the load.
+# through them): net load > 14 (exit 4), swap free < 300 MB (exit 6). Net load
+# is the 1-min load minus the guest's own QEMU cores (scripts/load-gate.sh,
+# TIF-218): the raw load counts the guest itself, which alone held it at 11-14.
 #
 # AC power is NOT a gate (Tiffany via outer loop, 2026-11-22): charger state
 # must never block a run. It is recorded per row as `acPower` so the JSONL
@@ -37,6 +38,7 @@ PROGRESS="$OUT/progress.log"
 cd "$WS" || exit 1
 mkdir -p "$OUT/runs" || exit 1
 source "$WS/scripts/vm-lock.sh"
+source "$WS/scripts/load-gate.sh"
 vm_lock_acquire m1-sweep.sh "$PROGRESS" || exit "$?"
 trap vm_lock_release EXIT
 
@@ -68,13 +70,12 @@ for i in $(seq 0 29); do
   # charger state must not block a run, and a row that ran on battery is still
   # valid evidence. The value goes into the row so the JSONL shows it.
   AC_POWER=no; pmset -g batt | head -1 | grep -q "AC Power" && AC_POWER=yes
-  LOAD1=$(sysctl -n vm.loadavg | awk '{print $2}')
-  SWAP_FREE=$(sysctl -n vm.swapusage | sed -E 's/.*free = ([0-9.]+)M.*/\1/')
-  if awk -v l="$LOAD1" 'BEGIN{exit !(l>14.0)}'; then
-    echo "PAUSED_LOAD $LOAD1 at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit 4
-  fi
-  if awk -v f="${SWAP_FREE:-9999}" 'BEGIN{exit !(f<300)}'; then
-    echo "PAUSED_SWAP free=${SWAP_FREE}M at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit 6
+  # Host gate (TIF-218, scripts/load-gate.sh): net load = 1-min load minus the
+  # guest's own QEMU cores; pause above 14 (exit 4) or below 300 MB swap free
+  # (exit 6). Unreadable load or swap pauses (fail closed).
+  GATE=$(lg_now_decide); GATE_RC=$?
+  if [ "$GATE_RC" -ne 0 ]; then
+    echo "$GATE at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit "$GATE_RC"
   fi
 
   FS=$(field "$i" fixtureSeed); RK=$(field "$i" rowKey); CL=$(field "$i" column); NV=$(field "$i" newValue)

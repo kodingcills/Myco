@@ -1,0 +1,11 @@
+vm-session: holding /tmp/myco-win11.vm.lock as 65121 vm-session.sh
+load-gate: 08:07:44Z state a: vm-stopped
+load-gate: 08:17:52Z reset trial-base-v2
+load-gate: 08:20:49Z state b: v2-idle
+load-gate: 08:30:58Z state c: v2-resets (3 back to back)
+load-gate: 08:33:48Z reset 1 done
+load-gate: 08:36:56Z reset 2 done
+load-gate: 08:39:51Z reset 3 done
+load-gate: 08:39:52Z reset clean-base
+load-gate: 08:43:41Z state d: clean-base-idle
+load-gate: 08:54:23Z stopped; done
