@@ -58,14 +58,131 @@ function guestArgv(net: string[] = ["-netdev", GOOD_NETDEV], extra: string[] = [
 }
 const SWTPM = [LAUNCHER, "/Applications/UTM.app/Contents/Frameworks/swtpm.0.framework/swtpm.0"];
 
-/** A KERN_PROCARGS2 buffer: int32 argc, exec path, NUL padding, argv, environment. */
-function procargs(argv: string[]): Buffer {
+/**
+ * UTM's full default launch for myco-win11 as the allowlist models it. The 13
+ * elements in 10-round3-verify-live.txt are copied verbatim (every -chardev,
+ * -mon, -netdev, -serial and -nodefaults); the rest is UTM 5.0.9's argument
+ * builder for a wizard-default Windows 11 ARM64 VM (HVF, NVMe, virtio-ramfb,
+ * TPM, SPICE). Host paths are placeholders.
+ */
+const VM_DATA = "/Users/u/Library/Containers/com.utmapp.UTM/Data/Documents/myco-win11.utm/Data";
+const DISK = "drive4D2F3A10-1B2C-4D5E-8F90-A1B2C3D4E5F6";
+function utmDefaultArgv(): string[] {
+  return [
+    LAUNCHER,
+    QEMU_BIN,
+    "-L",
+    "/Applications/UTM.app/Contents/Resources/qemu",
+    "-S",
+    "-spice",
+    `unix=on,addr=${UUID}.spice,disable-ticketing=on,image-compression=off,playback-compression=off,streaming-video=off,gl=on`,
+    "-chardev",
+    "spiceport,name=org.qemu.monitor.qmp.0,id=org.qemu.monitor.qmp",
+    "-mon",
+    "chardev=org.qemu.monitor.qmp,mode=control",
+    "-nodefaults",
+    "-vga",
+    "none",
+    "-device",
+    "virtio-net-pci,mac=4A:50:C3:24:9B:33,netdev=net0",
+    "-netdev",
+    GOOD_NETDEV,
+    "-device",
+    "virtio-ramfb-gl",
+    "-device",
+    "intel-hda",
+    "-device",
+    "hda-duplex",
+    "-chardev",
+    "pty,id=term0",
+    "-serial",
+    "chardev:term0",
+    "-cpu",
+    "host",
+    "-smp",
+    "cpus=6,sockets=1,cores=6,threads=1",
+    "-machine",
+    "virt,highmem=on",
+    "-accel",
+    "hvf",
+    "-drive",
+    "if=pflash,format=raw,unit=0,file.filename=/Applications/UTM.app/Contents/Resources/qemu/edk2-aarch64-code.fd,file.locking=off,readonly=on",
+    "-drive",
+    `unit=1,if=pflash,format=raw,file=${VM_DATA}/efi_vars.fd`,
+    "-boot",
+    "menu=on",
+    "-m",
+    "6144",
+    "-device",
+    "nec-usb-xhci,id=usb-bus",
+    "-device",
+    "usb-tablet,bus=usb-bus.0",
+    "-device",
+    "usb-mouse,bus=usb-bus.0",
+    "-device",
+    "usb-kbd,bus=usb-bus.0",
+    "-device",
+    "qemu-xhci,id=usb-controller-0",
+    "-chardev",
+    "spicevmc,name=usbredir,id=usbredirchardev0",
+    "-device",
+    "usb-redir,chardev=usbredirchardev0,id=usbredirdev0,bus=usb-controller-0.0",
+    "-chardev",
+    "spicevmc,name=usbredir,id=usbredirchardev1",
+    "-device",
+    "usb-redir,chardev=usbredirchardev1,id=usbredirdev1,bus=usb-controller-0.0",
+    "-chardev",
+    "spicevmc,name=usbredir,id=usbredirchardev2",
+    "-device",
+    "usb-redir,chardev=usbredirchardev2,id=usbredirdev2,bus=usb-controller-0.0",
+    "-device",
+    `nvme,drive=${DISK},serial=${DISK},bootindex=0`,
+    "-drive",
+    `if=none,media=disk,id=${DISK},file=${VM_DATA}/${UUID}.qcow2,discard=unmap,detect-zeroes=unmap`,
+    "-device",
+    "virtio-serial",
+    "-device",
+    "virtserialport,chardev=org.qemu.guest_agent,name=org.qemu.guest_agent.0",
+    "-chardev",
+    "spiceport,name=org.qemu.guest_agent.0,id=org.qemu.guest_agent",
+    "-device",
+    "virtserialport,chardev=vdagent,name=com.redhat.spice.0",
+    "-chardev",
+    "spicevmc,id=vdagent,debug=0,name=vdagent",
+    "-device",
+    "virtserialport,chardev=charchannel1,id=channel1,name=org.spice-space.webdav.0",
+    "-chardev",
+    "spiceport,name=org.spice-space.webdav.0,id=charchannel1",
+    "-chardev",
+    `socket,id=chrtpm0,path=${UUID}.swtpm`,
+    "-tpmdev",
+    "emulator,id=tpm0,chardev=chrtpm0",
+    "-device",
+    "tpm-tis-device,tpmdev=tpm0",
+    "-name",
+    "myco-win11",
+    "-uuid",
+    UUID,
+    "-rtc",
+    "base=localtime",
+  ];
+}
+
+/**
+ * A KERN_PROCARGS2 buffer as xnu writes it: int32 argc, the exec path NUL-padded
+ * to a multiple of 8 (the pointer size), argv, then the environment.
+ */
+function procargs(
+  argv: string[],
+  env = `${ENV_SECRET}\0HOME=/nowhere\0`,
+  execPath?: string,
+): Buffer {
   const argc = Buffer.alloc(4);
   argc.writeInt32LE(argv.length);
-  const exec = Buffer.from(`${argv[0]}\0\0\0\0`);
+  const path = Buffer.from(`${execPath ?? argv[0]}\0`);
+  const exec = Buffer.concat([path, Buffer.alloc((8 - (path.length % 8)) % 8)]);
   const args = Buffer.from(`${argv.join("\0")}\0`);
-  const env = Buffer.from(`${ENV_SECRET}\0HOME=/nowhere\0`);
-  return Buffer.concat([argc, exec, args, env]);
+  return Buffer.concat([argc, exec, args, Buffer.from(env)]);
 }
 
 let dir = "";
@@ -101,10 +218,10 @@ function run(
     { mode: 0o755 },
   );
   const env = { PATH: `${stub}:/usr/bin:/bin`, HOME: dir, MYCO_PROCARGS_DIR: pa };
-  const r =
-    args[0] === "argv"
-      ? spawnSync("python3", ["-I", CHECK, "argv"], { encoding: "utf8", env })
-      : spawnSync("bash", [SCRIPT, ...args], { encoding: "utf8", env });
+  // argv/names/live call the Python check directly; anything else goes through the script.
+  const r = ["argv", "names", "live"].includes(args[0])
+    ? spawnSync("python3", ["-I", CHECK, args[0]], { encoding: "utf8", env })
+    : spawnSync("bash", [SCRIPT, ...args], { encoding: "utf8", env });
   return {
     ...r,
     psRan: existsSync(join(dir, "ps.marker")),
@@ -217,10 +334,13 @@ describe("guest-egress.sh verify refuses: network options (D1-D3)", () => {
     refuse(withNet("-netdev", GOOD_NETDEV, "-netdev", "user,id=net1,restrict=on"), "found 2");
   });
   it("a -nic beside the netdev", () => {
-    refuse(withNet("-netdev", GOOD_NETDEV, "-nic", "user,model=virtio"), "-nic/-net present");
+    refuse(
+      withNet("-netdev", GOOD_NETDEV, "-nic", "user,model=virtio"),
+      "-nic is not in the launch allowlist",
+    );
   });
   it("a legacy -net beside the netdev", () => {
-    refuse(withNet("-netdev", GOOD_NETDEV, "-net", "user"), "-nic/-net present");
+    refuse(withNet("-netdev", GOOD_NETDEV, "-net", "user"), "-net is not in the launch allowlist");
   });
   it("the double-dash spelling --netdev counts as a second NIC", () => {
     refuse(withNet("-netdev", GOOD_NETDEV, "--netdev", "user,id=net1"), "found 2");
@@ -309,65 +429,277 @@ describe("guest-egress.sh verify refuses: tunnels past slirp (D5)", () => {
         "-chardev",
         "socket,id=c1,host=203.0.113.9,port=10",
       ],
-      "filter-redirector attaches",
+      "-object is not in the launch allowlist (can attach filter-redirector",
     );
   });
   it("-object filter-mirror (one-way exfil)", () => {
     refuse(
       ["-object", "filter-mirror,id=m0,netdev=net0,queue=tx,outdev=c0"],
-      "filter-mirror attaches",
+      "-object is not in the launch allowlist",
     );
   });
   it("-object type=filter-dump", () => {
-    refuse(["-object", "type=filter-dump,id=d0,netdev=net0,file=/tmp/x"], "filter-dump attaches");
+    refuse(
+      ["-object", "type=filter-dump,id=d0,netdev=net0,file=/tmp/x"],
+      "-object is not in the launch allowlist",
+    );
   });
   it("any other -object that references a netdev", () => {
-    refuse(["-object", "colo-compare,id=cc,netdev=net0"], "-object references a netdev");
+    refuse(["-object", "colo-compare,id=cc,netdev=net0"], "-object is not in the launch allowlist");
   });
   it("a second NIC device on the same netdev", () => {
-    refuse(["-device", "e1000,netdev=net0"], "netdev references");
+    refuse(["-device", "e1000,netdev=net0"], "-device e1000 is not in the allowlist");
   });
   it("a netdev= reference outside any -device", () => {
-    refuse(["-global", "virtio-net-pci.netdev=net0,netdev=net0"], "netdev= outside a -device");
+    refuse(["-global", "virtio-net-pci.netdev=net0"], "-global is not in the launch allowlist");
   });
   it("a TCP socket chardev (host=)", () => {
     refuse(
       ["-chardev", "socket,id=c0,host=203.0.113.9,port=9"],
-      "-chardev backend not in UTM's allowlist",
+      "-chardev socket other than UTM's swtpm socket is refused",
     );
   });
   it("a socket chardev listening on a port (no host=)", () => {
-    refuse(["-chardev", "socket,id=c0,port=9,server=on"], "not in UTM's allowlist");
+    refuse(["-chardev", "socket,id=c0,port=9,server=on"], "socket other than UTM's swtpm");
   });
   it("a udp chardev", () => {
     refuse(["-chardev", "udp,id=c0,host=203.0.113.9,port=9"], "not in UTM's allowlist");
   });
   it("a unix socket chardev other than UTM's swtpm one", () => {
-    refuse(["-chardev", "socket,id=c0,path=/tmp/x.sock"], "not in UTM's allowlist");
+    refuse(["-chardev", "socket,id=c0,path=/tmp/x.sock"], "socket other than UTM's swtpm");
   });
   it("a virtserialport on a host socket", () => {
     refuse(
       ["-chardev", "socket,id=c0,host=203.0.113.9,port=9", "-device", "virtserialport,chardev=c0"],
-      "not in UTM's allowlist",
+      "socket other than UTM's swtpm",
     );
   });
   it("-serial tcp:", () => {
-    refuse(["-serial", "tcp:203.0.113.9:9"], "is not a chardev reference");
+    refuse(["-serial", "tcp:203.0.113.9:9"], "-serial tcp:203.0.113.9:9 is not in the allowlist");
   });
   it("-serial udp:", () => {
-    refuse(["-serial", "udp:203.0.113.9:9"], "is not a chardev reference");
+    refuse(["-serial", "udp:203.0.113.9:9"], "is not in the allowlist");
   });
   it("-serial telnet:", () => {
-    refuse(["-serial", "telnet:0.0.0.0:23,server"], "is not a chardev reference");
+    refuse(["-serial", "telnet:0.0.0.0:23,server"], "is not in the allowlist");
   });
   it("-parallel tcp:", () => {
-    refuse(["-parallel", "tcp:203.0.113.9:9"], "is not a chardev reference");
+    refuse(["-parallel", "tcp:203.0.113.9:9"], "-parallel is not in the launch allowlist");
   });
   it("-monitor tcp:", () => {
-    refuse(["-monitor", "tcp:203.0.113.9:9"], "-monitor is not part of UTM's launch");
+    refuse(["-monitor", "tcp:203.0.113.9:9"], "-monitor is not in the launch allowlist");
   });
   it("-qmp tcp:", () => {
-    refuse(["-qmp", "tcp:203.0.113.9:9"], "-qmp is not part of UTM's launch");
+    refuse(["-qmp", "tcp:203.0.113.9:9"], "-qmp is not in the launch allowlist");
+  });
+});
+
+describe("follow-up: option allowlist (D7, D8, unknown options)", () => {
+  const refuse = (argv: string[], why: string) => {
+    const r = run([argv]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(why);
+    return r;
+  };
+  const withExtra = (...extra: string[]) => [...utmDefaultArgv(), ...extra];
+
+  it("passes UTM's full default launch (live elements + argument builder)", () => {
+    const r = run([utmDefaultArgv(), SWTPM]);
+    expect(r.stderr).toBe("");
+    expect(r.status).toBe(0);
+  });
+
+  it("D7: a JSON -object filter-redirector pair on net0 to two ptys", () => {
+    refuse(
+      withExtra(
+        "-chardev",
+        "pty,id=c0",
+        "-chardev",
+        "pty,id=c1",
+        "-object",
+        '{"qom-type":"filter-redirector","id":"r0","netdev":"net0","queue":"tx","outdev":"c0"}',
+        "-object",
+        '{"qom-type":"filter-redirector","id":"r1","netdev":"net0","queue":"rx","indev":"c1"}',
+      ),
+      "-object is not in the launch allowlist",
+    );
+  });
+  it("D7: a JSON -object filter-mirror on net0 to a spiceport", () => {
+    refuse(
+      withExtra(
+        "-chardev",
+        "spiceport,name=x.0,id=sp0",
+        "-object",
+        '{"qom-type":"filter-mirror","id":"m0","netdev":"net0","queue":"tx","outdev":"sp0"}',
+      ),
+      "-object is not in the launch allowlist",
+    );
+  });
+  it("D7: the --object spelling", () => {
+    refuse(
+      withExtra("--object", '{"qom-type":"filter-mirror","netdev":"net0"}'),
+      "--object is not in",
+    );
+  });
+  it("D7: JSON form on an allowlisted option (-device)", () => {
+    refuse(
+      withExtra("-device", '{"driver":"virtio-net-pci","netdev":"net0"}'),
+      "-device in JSON form is refused",
+    );
+  });
+  it("D7: JSON form on an allowlisted option (-chardev)", () => {
+    refuse(
+      withExtra("-chardev", '{"id":"c0","backend":{"type":"pty"}}'),
+      "-chardev in JSON form is refused",
+    );
+  });
+  it("D7: JSON form for the netdev itself", () => {
+    const argv = utmDefaultArgv().map((a) =>
+      a === GOOD_NETDEV ? '{"type":"user","id":"net0","restrict":true}' : a,
+    );
+    refuse(argv, "in JSON form is refused");
+  });
+  it("D7: a second pty chardev", () => {
+    refuse(withExtra("-chardev", "pty,id=c0"), "-chardev pty other than UTM's term0 is refused");
+  });
+  it("D7: UTM's pty with an extra option", () => {
+    const argv = utmDefaultArgv().map((a) => (a === "pty,id=term0" ? "pty,id=term0,logfile=x" : a));
+    refuse(argv, "pty other than UTM's term0");
+  });
+  it("a device wired to the pty instead of a SPICE chardev", () => {
+    refuse(
+      withExtra("-device", "virtserialport,chardev=term0,name=x"),
+      "chardev=term0 is not one of UTM's SPICE",
+    );
+  });
+  it("the monitor moved off UTM's spiceport", () => {
+    const argv = utmDefaultArgv().map((a) =>
+      a === "chardev=org.qemu.monitor.qmp,mode=control" ? "chardev=term0,mode=control" : a,
+    );
+    refuse(argv, "-mon chardev=term0,mode=control is not in the allowlist");
+  });
+  it("D8: -qmp-pretty on a TCP listener", () => {
+    refuse(
+      withExtra("-qmp-pretty", "tcp:0.0.0.0:4444,server=on,wait=off"),
+      "-qmp-pretty is not in the launch allowlist (a QMP monitor can add netdevs and filters at run time (D8))",
+    );
+  });
+  it("D8: the --qmp-pretty spelling", () => {
+    refuse(
+      withExtra("--qmp-pretty", "tcp:0.0.0.0:4444,server=on,wait=off"),
+      "--qmp-pretty is not in the launch allowlist",
+    );
+  });
+  it("an unknown option (no special reason)", () => {
+    refuse(withExtra("-frobnicate", "x"), "-frobnicate is not in the launch allowlist");
+  });
+  it("the round-3 N10 listeners and channels", () => {
+    refuse(withExtra("-vnc", "0.0.0.0:0"), "-vnc is not in the launch allowlist");
+    refuse(withExtra("-debugcon", "tcp:203.0.113.9:9"), "-debugcon is not in the launch allowlist");
+    refuse(withExtra("-incoming", "tcp:0.0.0.0:4444"), "-incoming is not in the launch allowlist");
+    refuse(withExtra("-display", "vnc=0.0.0.0:1"), "-display is not in the launch allowlist");
+    refuse(withExtra("-add-fd", "fd=3,set=1"), "-add-fd is not in the launch allowlist");
+  });
+  it("SPICE on a TCP port instead of a unix socket", () => {
+    const argv = utmDefaultArgv().map((a) =>
+      a.startsWith("unix=on,") ? "port=5930,addr=0.0.0.0,disable-ticketing=on" : a,
+    );
+    refuse(argv, "-spice option port= is not in the allowlist");
+  });
+  it("an extra SPICE TCP port beside the unix socket", () => {
+    const argv = utmDefaultArgv().map((a) => (a.startsWith("unix=on,") ? `${a},tls-port=5931` : a));
+    refuse(argv, "-spice option tls-port= is not in the allowlist");
+  });
+  it("a network block device as a drive", () => {
+    refuse(
+      withExtra("-drive", "if=none,id=d9,file=nbd://203.0.113.9:10809/x"),
+      "file=nbd://203.0.113.9:10809/x is not in the allowed shape",
+    );
+  });
+  it("a drive that names its own block driver", () => {
+    refuse(
+      withExtra("-drive", "if=none,id=d9,driver=http,url=x"),
+      "-drive option driver= is not in the allowlist",
+    );
+  });
+  it("a positional argument (QEMU takes it as a disk image)", () => {
+    refuse(withExtra("disk.img"), "positional argument 'disk.img'");
+  });
+  it("netdev= on an allowlisted device that is not the NIC", () => {
+    refuse(withExtra("-device", "usb-storage,netdev=net0"), "netdev= on a usb-storage device");
+  });
+  it("a device option given twice", () => {
+    refuse(withExtra("-device", "virtio-rng-pci,id=a,id=b"), "-device option id= given twice");
+  });
+  it("a device not in the allowlist (vhost-vsock is a guest-host channel)", () => {
+    refuse(
+      withExtra("-device", "vhost-vsock-pci,guest-cid=3"),
+      "-device vhost-vsock-pci is not in the allowlist",
+    );
+  });
+});
+
+describe("follow-up: an empty argv[0] never exposes the environment (D9)", () => {
+  // argv[0] is empty; the real argv has no -nodefaults, and the environment's
+  // first string is "-nodefaults". The old parser skipped the empty argv[0] as
+  // padding, read "-nodefaults" from the environment and passed.
+  const PLANTED = "MYCO_PLANTED_SECRET=sk-planted-do-not-print";
+  const argv = ["", ...utmDefaultArgv().filter((a) => a !== "-nodefaults")];
+  const buf = () => procargs(argv, `-nodefaults\0${PLANTED}\0`, QEMU_BIN);
+
+  for (const mode of ["verify", "status", "live", "argv", "names"]) {
+    it(`refuses, and prints nothing from the environment (${mode})`, () => {
+      const r = run([buf()], GOOD_UTM, [mode]);
+      const all = `${r.stdout}${r.stderr}`;
+      expect(all).toContain("empty argv[0]");
+      expect(all).not.toContain("sk-planted-do-not-print");
+      expect(all).not.toContain("MYCO_PLANTED_SECRET");
+      // status is read-only and always exits 0; it reports the failure.
+      expect(r.status).toBe(mode === "status" ? 0 : 1);
+    });
+  }
+
+  it("argv mode never prints a secret that is the first environment string", () => {
+    // The verifier's D9 shape: the shifted parse would print exactly this string.
+    const r = run([procargs(argv, `${PLANTED}\0HOME=/nowhere\0`, QEMU_BIN)], GOOD_UTM, ["argv"]);
+    expect(r.status).toBe(1);
+    expect(`${r.stdout}${r.stderr}`).not.toContain("sk-planted-do-not-print");
+  });
+
+  it("refuses an empty exec path", () => {
+    const r = run([procargs(utmDefaultArgv(), `${ENV_SECRET}\0`, "")]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("empty exec path");
+  });
+
+  it("refuses padding that is not NUL", () => {
+    const b = procargs(utmDefaultArgv());
+    const end = b.indexOf(0, 4);
+    if ((end - 4 + 1) % 8 === 0) throw new Error("fixture needs padding");
+    b[end + 1] = 0x41;
+    const r = run([b]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("malformed exec path padding");
+  });
+});
+
+describe("names mode: option names only", () => {
+  it("prints each option name and whether it is allowed, never a value or the environment", () => {
+    const r = run([utmDefaultArgv()], GOOD_UTM, ["names"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("-nodefaults\tallowed\n");
+    expect(r.stdout).toContain("-netdev\tallowed\n");
+    expect(r.stdout).not.toContain("NOT ALLOWED");
+    expect(r.stdout).not.toContain("restrict=on");
+    expect(r.stdout).not.toContain(UUID);
+    expect(r.stdout).not.toContain("do-not-print-me");
+  });
+
+  it("marks an option that is not on the list", () => {
+    const r = run([[...utmDefaultArgv(), "-qmp-pretty", "tcp:0.0.0.0:4444"]], GOOD_UTM, ["names"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("-qmp-pretty\tNOT ALLOWED\n");
+    expect(r.stdout).not.toContain("4444");
   });
 });
 

@@ -101,6 +101,16 @@ refusal cases (filters, other netdev references, TCP/UDP/telnet/socket backends,
 `-monitor`, an element with whitespace, a missing `-nodefaults`, malformed procargs buffers)
 are host-side tests in `test/guest-egress.test.ts`, each with a mutation shown to be caught.
 
+## 8. Follow-up: option allowlist (no VM run)
+
+The allowlist follow-up (D7–D9 from PR #482's round-3 verdict) was built without the VM. The
+host-side tests in `test/guest-egress.test.ts` cover it. One read-only step on the live guest
+is still owed before merge: `python3 -I scripts/guest_egress_check.py names`, committed here as
+`11-allowlist-live-names.txt`, plus a `verify` exit 0. Why: section 7 records 13 of the 104
+live elements, so the options UTM's argument builder adds (`-L`, `-S`, `-drive`, `-cpu`, …)
+are modelled from UTM 5.0.9's builder, not read from this guest. If one is missing, `verify`
+fails closed and the reset refuses the guest.
+
 ## Reproduce
 
 ```bash

@@ -76,29 +76,76 @@ This choice over the alternatives:
   - **The live QEMU command line, read exactly.** `scripts/guest_egress_check.py` reads each
     candidate process's argv from the kernel (`sysctl` `KERN_PROCARGS2`), not from `ps`.
     `ps` joins argv with spaces, so `-name "x -netdev user,…,restrict=on"` would look like a
-    real netdev while QEMU added its default, unrestricted NIC (round 3, D6). Only the argv
-    strings are decoded; the environment block after them is never decoded or printed.
+    real netdev while QEMU added its default, unrestricted NIC (round 3, D6).
+    - **Exactly argc strings, never the environment.** The argv starts at the exec path
+      rounded up to the pointer size (8), which is how xnu pads it. An empty argv[0] is
+      refused: it looks like padding, and skipping it read the first environment string as
+      the last argument (follow-up, D9). No mode (`live`, `argv`, `names`) prints anything
+      from the environment block.
     - **Process:** exactly one guest process, identified by argv[0] (`QEMULauncher` running a
       qemu binary, or a qemu binary).
     - **Shape:** no argv element may contain whitespace, and `-nodefaults` must be present as
       its own element. Without it QEMU adds a default NIC.
-    - **Network options:** every `-netdev`, `-nic` and `-net` is parsed, single- and
-      double-dash. There must be exactly one `-netdev` and no `-nic` or `-net`.
-      `-readconfig`, `-set`, `-qmp`, `-monitor` and `-gdb` are refused.
-    - **The netdev:** it must be `user`, with only `id`, `restrict` and `hostfwd`, so a
-      `guestfwd` or any other option is refused. Every `restrict` must be `on`. The `hostfwd`
-      set must be exactly `{tcp:127.0.0.1:2222-:22}`.
-    - **Nothing else on the netdev's packets** (round 3, D5). `-object filter-*`
-      (redirector, mirror, dump, …) attaches before slirp and can tunnel past `restrict=on`,
-      so it is refused. So is any `-object` naming a netdev, and any `netdev=` reference
-      other than the single NIC `-device`'s.
-    - **No host-network channel** (round 3, D5). Chardevs are limited to the ones UTM's
-      default launch uses, confirmed on the live guest on 2026-11-26: `spiceport`,
-      `spicevmc`, `pty`, and the swtpm unix socket `socket,id=chrtpm0,path=<VM-UUID>.swtpm`.
-      Anything else is refused: `socket` with `host=` or `port=`, `udp`, another unix
-      socket. `-serial` and `-parallel` may only be `chardev:<id>` or `none`, so `tcp:`,
-      `udp:` and `telnet:` are refused. That also covers a `virtserialport` on a host socket,
-      whose chardev is refused.
+    - **Every option is on a fixed allowlist** (follow-up to round 3, D7/D8). Rounds 1–3
+      refused named bad options, and each round found one the list did not name: a JSON-form
+      `-object` filter, `-qmp-pretty`. Now an option not on the list below is refused,
+      whatever it is, and so is any positional argument (QEMU takes one as a disk image), any
+      `-opt=value` form and any value in JSON form (`{…}`). Both `-x` and `--x` spellings are
+      checked against the same list.
+    - **The netdev:** exactly one `-netdev`. It must be `user`, with only `id`, `restrict` and
+      `hostfwd`, so a `guestfwd` or any other option is refused. Every `restrict` must be
+      `on`. The `hostfwd` set must be exactly `{tcp:127.0.0.1:2222-:22}`.
+    - **Nothing else on the netdev's packets** (D5, D7). `-object` is not on the list, in any
+      form, so no `filter-redirector`/`filter-mirror`/`filter-dump` can attach before slirp.
+      `-global` is not on the list either. `netdev=` may appear only once, on the one
+      `virtio-net-pci` device, naming the netdev's id.
+    - **No host-network channel** (D5, D7). Chardevs are exactly UTM's: `spiceport` and
+      `spicevmc` (name, id, debug only), the one pty `pty,id=term0`, and the swtpm socket
+      `socket,id=chrtpm0,path=<VM-UUID>.swtpm`. A second pty is refused: a pty was the
+      `outdev` of round 3's D7 tunnel. A `-device chardev=` must name a SPICE chardev.
+      `-serial` is exactly `chardev:term0`, and `-mon` is exactly UTM's QMP on its spiceport.
+
+    **The allowlist** (`ALLOWED` and `FLAGS` in `scripts/guest_egress_check.py`). "Live"
+    means the element is in `docs/research/experiments/tif-275-egress/10-round3-verify-live.txt`.
+    "Builder" means UTM 5.0.9's QEMU argument builder writes it for this VM type
+    (wizard-default Windows 11 ARM64: HVF, NVMe, virtio-ramfb, TPM, SPICE). The committed
+    evidence lists 13 of the live launch's 104 elements, so the builder entries still need
+    one read-only `names` run on the live guest (below).
+
+    | Option | Value allowed | Source |
+    |---|---|---|
+    | `-nodefaults` | none (required) | live |
+    | `-S` | none | builder (UTM starts paused, resumes over QMP) |
+    | `-netdev` | one, as above | live |
+    | `-device` | a driver from `DEVICE_DRIVERS` (one NIC `virtio-net-pci`; display, sound, USB, `usb-redir`, `nvme`/`virtio-blk-pci`, `virtio-serial`, `virtserialport`, `tpm-tis-device`, `virtio-rng-pci`, …), then `key=value` with no `,` `{` or whitespace in values; `netdev=` only on the NIC; `chardev=` only to a SPICE chardev | live (NIC), builder (rest) |
+    | `-chardev` | `spiceport,name=…,id=…`; `spicevmc,name=…,id=…[,debug=N]`; exactly `pty,id=term0`; exactly the swtpm socket | live |
+    | `-mon` | exactly `chardev=org.qemu.monitor.qmp,mode=control`, on the spiceport | live |
+    | `-serial` | exactly `chardev:term0` | live |
+    | `-spice` | `unix=on` required; `addr` a path; `disable-ticketing`, compression, `streaming-video`, `gl`, `rendernode`. No `port`/`tls-port` | live (unix), builder (rest) |
+    | `-tpmdev` | exactly `emulator,id=tpm0,chardev=chrtpm0` | builder (its chardev is live) |
+    | `-drive` | `if` pflash/none, `format` raw/qcow2, `file`/`file.filename` a path with no `:` (so no `nbd:`, `http:`, `json:`), `unit`, `index`, `readonly`, `media`, `id`, `discard`, `detect-zeroes`, `cache`, `file.locking`. No `driver=` | builder |
+    | `-L` | an absolute path | builder |
+    | `-cpu`, `-smp`, `-machine virt[,…]`, `-accel hvf\|tcg`, `-m`, `-boot`, `-rtc`, `-vga none` | numeric or word values only | builder |
+    | `-name`, `-uuid` | a word; a UUID | builder |
+
+    Kept off the list, with the reason the refusal prints: `-object`, `-qmp`, `-qmp-pretty`,
+    `-monitor`, `-gdb`, `-readconfig`, `-set`, `-global`, `-nic`, `-net`, `-parallel`,
+    `-debugcon`, `-incoming`, `-vnc`, `-display`, `-add-fd`.
+
+    **Updating the list when UTM changes.** After a UTM upgrade, or a VM setting change, the
+    next reset may refuse an option UTM now writes. That failure is closed, never open.
+    1. With the VM lock free, run `python3 -I scripts/guest_egress_check.py names`. It prints
+       each option NAME of the live launch with `allowed` or `NOT ALLOWED`, and no values, so
+       its output is safe to paste into a PR.
+    2. For each `NOT ALLOWED` name, read what the option can do in QEMU's documentation. If
+       it can open a socket, attach to a netdev, add a monitor, or load configuration, do not
+       add it; change the UTM setting that produced it instead.
+    3. Otherwise add it to `ALLOWED` with the tightest value rule that UTM's value fits (use
+       `argv` mode to see the value; it may contain host paths, so don't paste it). Add the
+       option to the `utmDefaultArgv()` fixture and a refusal test for a bad value of it in
+       `test/guest-egress.test.ts`.
+    4. Re-run `scripts/guest-egress.sh verify` on the live guest and commit the `names`
+       output to the evidence pack.
   - **UTM's configuration.** There must be exactly one NIC, in emulated mode, with "isolate
     from host" on and exactly one port forward: TCP `127.0.0.1:2222` → guest `:22`. This is
     compared as one exact string.
@@ -106,17 +153,21 @@ This choice over the alternatives:
   Anything it cannot read or parse is a failure. That includes:
   - an unreadable process list, an unreadable UTM, and a process whose argv cannot be read
     for a fixture run;
-  - a malformed or truncated procargs buffer;
-  - an option without `=`, an escaped comma, a `-netdev=` form, and a `-netdev` with no
-    value.
+  - a malformed or truncated procargs buffer, an empty exec path, non-NUL padding and an
+    empty argv[0];
+  - an option without `=`, an escaped comma, a JSON value, a `-netdev=` form, and an option
+    with no value.
 
   `test/guest-egress.test.ts` has a negative case for each rule, fed fixed `KERN_PROCARGS2`
   byte buffers. A mutation that removes each rule fails at least one test (PR #482, rounds
-  2–3).
+  2–3, and the allowlist follow-up).
 - **What `verify` cannot see.** It checks what QEMU was started with and what UTM is
   configured to start. Two things are outside it:
-  - Changes made at run time through a QMP monitor. UTM's QMP is a SPICE port, not a host
-    socket, and `-qmp`/`-monitor` are refused.
+  - Changes made at run time through a QMP monitor. UTM's QMP is a SPICE port reached
+    through SPICE's unix socket, not a host TCP socket. No other monitor can be configured:
+    `-qmp`, `-qmp-pretty` and `-monitor` are off the allowlist, `-mon` must be UTM's exact
+    value, and `-spice` must be `unix=on` with no TCP port. Any local process that can open
+    UTM's SPICE socket can still reach that QMP, as UTM itself does.
   - Anything inside QEMU or UTM themselves.
 - The UTM setting is a persistent VM property, not something each reset applies. If anyone
   clears it, in the GUI or with `guest-egress.sh allow`, the next reset refuses the guest

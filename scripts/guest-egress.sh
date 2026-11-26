@@ -21,15 +21,18 @@
 # 2 usage or environment; 10 the VM lock is held.
 #
 # `verify` accepts exactly ONE configuration and refuses everything else
-# (TIF-275 rounds 2-3, verifier D1-D6). The live half is
-# scripts/guest_egress_check.py, which reads the guest's EXACT argv from the
-# kernel (not `ps`, which flattens it) and requires: no element containing
-# whitespace; `-nodefaults`; exactly one `-netdev` and no `-nic`/`-net`; no
-# `-readconfig`/`-set`/`-qmp`/`-monitor`/`-gdb`; a `user` netdev with only
-# id, restrict, hostfwd; every `restrict` on; hostfwd exactly
-# {tcp:127.0.0.1:2222-:22}; no `-object filter-*` and no `netdev=` except the
-# one NIC device's; chardevs only UTM's own (spiceport, spicevmc, pty, the
-# swtpm unix socket); -serial/-parallel only chardev references.
+# (TIF-275 rounds 2-3 and the allowlist follow-up, verifier D1-D9). The live half
+# is scripts/guest_egress_check.py. It reads the guest's EXACT argv from the
+# kernel (not `ps`, which flattens it): exactly argc strings, never the
+# environment, and an empty argv[0] is refused. Every option must be on a fixed
+# ALLOWLIST taken from UTM's launch, with its value in UTM's shape; anything not
+# on it (-object, -qmp, -qmp-pretty, -monitor, -vnc, a positional, ...) and any
+# JSON-form value is refused. Then: no element containing whitespace;
+# `-nodefaults`; exactly one `user` -netdev with only id, restrict, hostfwd;
+# every `restrict` on; hostfwd exactly {tcp:127.0.0.1:2222-:22}; `netdev=` only
+# on the one virtio-net-pci; chardevs only UTM's (spiceport, spicevmc, the pty
+# term0, the swtpm socket). The list and how to update it:
+# docs/security/guest-egress.md.
 #   UTM config: exactly one NIC, emulated, isolate-from-host true, exactly one
 #     port forward TCP 127.0.0.1:2222 -> guest :22 (compared as one string).
 # Anything that cannot be read or parsed is a failure, never a pass.
