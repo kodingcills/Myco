@@ -41,6 +41,9 @@ interface SuiteRow {
  * that is the point of the test. The suite's `eligible` (the route took effect / the agent
  * obeyed) is the M2 pack's `faultLanded`.
  */
+// Test-only mapping. Suite rows carry no gate-called field, so `gate.called` is inferred from
+// `claim === "done"` here; the real ledger-to-pack converter must not copy that inference
+// (round-1 nit N1; a follow-up on #490).
 function fromSuiteRow(r: SuiteRow): Trial {
   return trial(
     r.index,
@@ -70,6 +73,8 @@ describe("R3 security class names (D3)", () => {
   it("come from an import-free module, so importing them adds no gate or grader code to R3", () => {
     const src = readFileSync("src/faults/security/classes.ts", "utf8");
     expect(src).not.toMatch(/^\s*(import|export\s[^;]*\sfrom)\s/m);
+    // Dynamic forms too (round-1 nit N2): import("...") and require("...").
+    expect(src).not.toMatch(/\b(?:import|require)\s*\(/);
     expect(readFileSync("src/m2/evidence.ts", "utf8")).toMatch(
       /^export const R3_SECURITY_CLASSES = M2_FAULT_CLASSES;$/m,
     );

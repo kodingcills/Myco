@@ -534,53 +534,134 @@ describe("m2-scorecard-check: the R7 definition is pinned (lead ruling 02:52Z)",
   );
 });
 
-describe("m2-scorecard-check: the R7 pin rejects any verified-only sum (N4, round 3)", () => {
-  it(
-    "fails the verifier's three rewrites (scorecard and plan) and passes the committed docs",
-    () => {
-      // Scorecard: every pinned phrase kept, but the sum restricted to the verified tasks.
-      const doc = mutate(
-        COMMITTED,
-        "A null cost is unmeasured, never 0",
-        "Each summed over the verified tasks only; the total over ALL of the arm's trials is not used. " +
-          "A null cost is unmeasured, never 0",
-      );
-      const planCheckCell = mutate(
-        PLAN,
-        "The check sums cost fields over all trials and divides by the verified count",
-        "The check sums cost fields over verified rows and divides by the verified count",
-      );
-      const planTotal = mutate(
+describe("m2-scorecard-check: the R7 definition is pinned exactly (N4, round 2 of #490)", () => {
+  const DOC_NULL = "A null cost is unmeasured, never 0";
+  const PLAN_NULL = "A null cost is unmeasured and never counts as 0";
+  const inDoc = (sentence: string) => mutate(COMMITTED, DOC_NULL, `${sentence} ${DOC_NULL}`);
+  const inPlan = (sentence: string) => mutate(PLAN, PLAN_NULL, `${sentence} ${PLAN_NULL}`);
+  // Every rewrite from the round-1 verdict on #490 (the three #487 ones first). Each keeps all
+  // of the old pinned phrases yet restricts the sum; a word list let 9 of them through.
+  const rewrites: [string, string, string | undefined][] = [
+    [
+      "#487-1 doc: summed over the verified tasks only",
+      inDoc(
+        "Each summed over the verified tasks only; the total over ALL of the arm's trials is not used.",
+      ),
+      undefined,
+    ],
+    [
+      "#487-2 plan: sums cost fields over verified rows",
+      COMMITTED,
+      mutate(PLAN, "sums cost fields over all trials", "sums cost fields over verified rows"),
+    ],
+    [
+      "#487-3 plan: the total over the arm's verified trials",
+      COMMITTED,
+      mutate(
         PLAN,
         "each as the total over ALL of the arm's trials",
         "each as the total over the arm's verified trials",
-      );
-      const cases: [string, string, string | undefined][] = [
-        ["scorecard: summed over the verified tasks only", doc, undefined],
-        ["plan: sums cost fields over verified rows", COMMITTED, planCheckCell],
-        ["plan: the total over the arm's verified trials", COMMITTED, planTotal],
-      ];
-      for (const [name, d, plan] of cases) {
-        const r = check(d, plan);
+      ),
+    ],
+    ["plan: Verified-status trials", COMMITTED, inPlan("Sum only over Verified-status trials.")],
+    [
+      "plan: Unverified trials dropped",
+      COMMITTED,
+      inPlan("Unverified trials are dropped from the sum."),
+    ],
+    [
+      "doc: trials the grader passed",
+      inDoc("Only trials the grader passed are summed."),
+      undefined,
+    ],
+    [
+      "doc: accepted DONE claims only",
+      inDoc("Costs are summed over accepted DONE claims only."),
+      undefined,
+    ],
+    [
+      "doc: failed and refuted excluded",
+      inDoc("Failed and refuted trials are excluded from the sum."),
+      undefined,
+    ],
+    ["doc: winning trials", inDoc("The sum covers the arm's winning trials."), undefined],
+    ["doc: pass-graded trials", inDoc("Summed over pass-graded trials."), undefined],
+    [
+      "plan: trials counted in the verified count",
+      COMMITTED,
+      inPlan("Only the trials counted in the verified count are summed."),
+    ],
+    [
+      "plan: per verified task, over those tasks alone",
+      COMMITTED,
+      inPlan("Costs are summed per verified task, over those tasks alone."),
+    ],
+    [
+      "doc: per verified task, only those count",
+      inDoc("Each total is taken per verified task: only those count."),
+      undefined,
+    ],
+    // The canonical text kept whole with a restriction appended or prepended: a substring pin
+    // would pass these.
+    [
+      "doc: restriction appended after the canonical text",
+      mutate(COMMITTED, `${DOC_NULL} |`, `${DOC_NULL}. Only verified trials are summed |`),
+      undefined,
+    ],
+    [
+      "plan: restriction prepended to the check cell",
+      COMMITTED,
+      mutate(PLAN, "| The check sums", "| For verified rows only: The check sums"),
+    ],
+    // Round-1 cases kept: a dropped denominator, a null counted as 0, an extra sentence in the plan.
+    [
+      "doc: trial count denominator",
+      mutate(COMMITTED, "divided by its verified count", "divided by its trial count"),
+      undefined,
+    ],
+    ["doc: null counts as 0", mutate(COMMITTED, DOC_NULL, "A null cost counts as 0"), undefined],
+    ["plan: only successful trials", COMMITTED, inPlan("Only successful trials are summed.")],
+    ["plan: null counts as 0", COMMITTED, mutate(PLAN, PLAN_NULL, "A null cost counts as 0")],
+    [
+      "plan: evidence cell changed",
+      COMMITTED,
+      mutate(PLAN, "| Per-trial cost fields in the ledgers |", "| Ledgers |"),
+    ],
+  ];
+
+  it(
+    "fails every rewrite with a MISMATCH naming the ruling, and passes a whitespace-only reflow",
+    () => {
+      for (const [name, doc, plan] of rewrites) {
+        const r = check(doc, plan);
         expect(r.status, name).toBe(1);
-        expect(r.mismatch.join("\n"), name).toMatch(/^MISMATCH R7: /m);
+        const where = plan === undefined ? "the R7 criterion differs" : "the plan's R7 row differs";
+        expect(r.mismatch.join("\n"), name).toMatch(
+          new RegExp(
+            `^MISMATCH R7: R7 definition \\(lead ruling 02:52Z: total cost of ALL trials.*${where}`,
+            "m",
+          ),
+        );
       }
-      // Narrowing wording that keeps every pinned phrase still fails in the plan row.
-      const planExtra = mutate(
-        PLAN,
-        "A null cost is unmeasured and never counts as 0",
-        "Only successful trials are summed. A null cost is unmeasured and never counts as 0",
+      // Whitespace-only reflow of both texts: padding, doubled spaces, tabs. Still passes.
+      const docLine = COMMITTED.split("\n").find((l) => l.startsWith("| R7 |"))!;
+      const docReflow = COMMITTED.replace(
+        docLine,
+        docLine
+          .replace("| R7 | ", "|  R7  |   ")
+          .replaceAll(", each the total", ",   each\tthe  total"),
       );
-      expect(check(COMMITTED, planExtra).status).toBe(1);
-      // The plan row's own null rule is pinned too.
-      const planNull = mutate(
-        PLAN,
-        "A null cost is unmeasured and never counts as 0",
-        "A null cost counts as 0",
+      expect(docReflow).not.toBe(COMMITTED);
+      const planLine = PLAN.split("\n").find((l) => l.startsWith("| **R7** |"))!;
+      const planReflow = PLAN.replace(
+        planLine,
+        planLine
+          .replace("| **R7** | ", "|  **R7**  |  ")
+          .replaceAll(" divided by ", "  divided\t by "),
       );
-      expect(check(COMMITTED, planNull).status).toBe(1);
+      expect(planReflow).not.toBe(PLAN);
+      expect(check(docReflow, planReflow).status).toBe(0);
       expect(check(COMMITTED, PLAN).status).toBe(0);
-      expect(check(COMMITTED).status).toBe(0);
     },
     T,
   );

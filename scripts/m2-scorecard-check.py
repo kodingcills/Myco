@@ -27,10 +27,11 @@ Rows. Each row has five cells: id, criterion, status, evidence, recomputed.
 Pass bars quoted in a criterion cell are claims too: each is checked against the code
 constant the evidence check uses AND against the plan's row (docs/product/m2-plan-draft.md
 §2.1), so the doc, the code and the plan cannot drift apart. R7's definition (the lead's
-ruling: the total over ALL of the arm's trials divided by its verified count, a null cost
-never 0) is quoted verbatim in both the R7 criterion and the plan's R7 row, and either fails
-if it restricts the sum: "verified" may only appear as "per verified task" or "verified
-count", and no cost sum may run over accepted, successful or passing rows.
+ruling 02:52Z: the total over ALL of the arm's trials divided by its verified count, a null
+cost never 0) is pinned exactly: the R7 criterion cell must equal R7_CANONICAL_CRITERION and
+the plan's R7 row must equal PLAN_R7_CANONICAL, cell by cell, compared after collapsing
+whitespace only. Any other change to either text is a MISMATCH; a deliberate rewording means
+editing the canonical text here in the same change, where a reviewer sees it.
 
 Claims and the sweep work as in the M1 checker: `ok`, `MISMATCH`, `unchecked` (with a
 reason, and its doc phrase must still be present), `artifact` (a consistency check the doc
@@ -88,26 +89,26 @@ IDENTIFIER_PINS: dict[str, tuple[str, ...]] = {
     "process": ("m2-evidence-check", "m2-", "m2", "m2-evidence"),
     "how": ("python3", "m2-scorecard-check"),
 }
-# R7's definition, verbatim in the R7 criterion (lead ruling 02:52Z; src/m2/evidence.ts costField).
-R7_RULING = (
-    "the total over ALL of the arm's trials",
-    "divided by its verified count",
-    "A null cost is unmeasured, never 0",
+# R7's definition, pinned exactly (lead ruling 02:52Z: total cost of ALL trials of the arm /
+# the arm's verified count; a null cost is never 0; src/m2/evidence.ts costField). Compared
+# after collapsing whitespace only, so any rewording fails. Change it here, on purpose, or not
+# at all.
+R7_RULING_NOTE = ("lead ruling 02:52Z: total cost of ALL trials of the arm / the arm's verified count; "
+                  "a null cost is never 0")
+R7_CANONICAL_CRITERION = (
+    "Cost per verified task for both head-to-head arms: model cost, wall clock and VM time, each the "
+    "total over ALL of the arm's trials (failed and refuted trials still cost money) divided by its "
+    "verified count (accepted DONE the grader passes). A null cost is unmeasured, never 0"
 )
-# The plan's R7 row states the same ruling in its own words; pinned verbatim there too.
-PLAN_R7_RULING = (
-    "the total over ALL of the arm's trials",
-    "divided by the arm's `verified` count",
-    "A null cost is unmeasured and never counts as 0",
-    "sums cost fields over all trials",
-)
-# In R7 wording, "verified" may only name the row (per verified task) or the denominator
-# (verified count). Any other use, or a cost sum over accepted / successful / passing rows,
-# narrows the sum the ruling takes over ALL of the arm's trials.
-R7_VERIFIED_OK = re.compile(r"per verified task|`?verified`? count", re.IGNORECASE)
-R7_NARROWING = re.compile(
-    r"\bverified\b|\b(?:accepted|successful|succeeded|passing|passed)\s+(?:rows?|trials?|tasks?|attempts?|runs?)\b",
-    re.IGNORECASE,
+# The plan's R7 row (docs/product/m2-plan-draft.md §2.1), every cell after the id: criterion,
+# pass bar (the definition), evidence, how it is recomputed (the check).
+PLAN_R7_CANONICAL = (
+    "**Cost per verified task**",
+    "Reported for both R2 arms: model cost, wall clock and VM time, each as the total over ALL of "
+    "the arm's trials (failed and refuted trials still cost) divided by the arm's `verified` count, "
+    "with the denominators. A null cost is unmeasured and never counts as 0",
+    "Per-trial cost fields in the ledgers",
+    "The check sums cost fields over all trials and divides by the verified count",
 )
 IDENTIFIERS = frozenset(w for pin in IDENTIFIER_PINS.values() for w in pin)
 
@@ -384,7 +385,8 @@ FIGURES = {"R1": figures_r1, "R2": figures_r2, "R3": figures_r3, "R7": figures_r
 
 # -- claims -------------------------------------------------------------------------------
 def plan_row(plan: str, n: str) -> str:
-    return next((line for line in plan.splitlines() if line.startswith(f"| **{n}** |")), "")
+    row = re.compile(rf"\|\s*\*\*{n}\*\*\s*\|")
+    return next((line for line in plan.splitlines() if row.match(line)), "")
 
 
 def grab(pattern: str, text: str) -> str:
@@ -417,20 +419,44 @@ def check_bars(r: Report, const: dict, plan: str) -> None:
             f"src/m2/evidence.ts R3_SECURITY_CLASSES = {const['r3SecurityClasses']}", "the two security classes")
     r.unchecked("R7", "a null cost is never 0", "a counting rule (src/m2/evidence.ts costField), not a figure",
                 "A null cost is unmeasured, never 0")
-    # The lead's R7 ruling (02:52Z): total cost of ALL of the arm's trials / the arm's verified count.
-    for phrase in R7_RULING:
-        r.quote("R7", "R7 definition (lead ruling)", phrase, source="the lead's R7 ruling; src/m2/evidence.ts costField")
-    # The plan's R7 row must say the same (the ruling: "scorecard and plan wording state this").
-    plan_r7 = plan_row(plan, "R7")
-    for phrase in PLAN_R7_RULING:
-        r.artifact("R7", f"plan R7 row says {phrase!r}", phrase in plan_r7,
-                   "the lead's R7 ruling; docs/product/m2-plan-draft.md §2.1 row R7")
-    for label, text in (("the R7 criterion", criterion_cell(r.segment("R7"))), ("the plan's R7 row", plan_r7)):
-        narrowed = r7_narrowing(text)
-        if narrowed:
-            r.fail("R7", "R7 definition (lead ruling)",
-                   f"{label} restricts the cost sum ({', '.join(repr(n) for n in narrowed)}); "
-                   "the ruling sums over ALL of the arm's trials and divides by the verified count")
+    # The lead's R7 ruling (02:52Z), pinned exactly in the scorecard and in the plan's R7 row.
+    cell = criterion_cell(r.segment("R7"))
+    diff = first_difference(norm_ws(cell), R7_CANONICAL_CRITERION)
+    r.check("R7", f"R7 definition ({R7_RULING_NOTE})", diff is None,
+            "scripts/m2-scorecard-check.py R7_CANONICAL_CRITERION", cell.strip() or "| R7 |",
+            detail="" if diff is None else f"the R7 criterion differs from the canonical text: {diff}")
+    plan_r7 = plan_cells(plan_row(plan, "R7"))
+    if len(plan_r7) != len(PLAN_R7_CANONICAL):
+        pdiff = f"expected {len(PLAN_R7_CANONICAL)} cells after the id, found {len(plan_r7)}"
+    else:
+        pdiff = next((f"cell {k + 2}: {d}" for k, (got, want) in enumerate(zip(plan_r7, PLAN_R7_CANONICAL))
+                      if (d := first_difference(got, want)) is not None), None)
+    if pdiff is None:
+        r.artifact("R7", f"plan R7 row ({R7_RULING_NOTE})",
+                   True, "docs/product/m2-plan-draft.md §2.1 row R7 = scripts/m2-scorecard-check.py PLAN_R7_CANONICAL")
+    else:
+        r.fail("R7", f"R7 definition ({R7_RULING_NOTE})",
+               f"the plan's R7 row differs from PLAN_R7_CANONICAL: {pdiff}")
+
+
+def norm_ws(text: str) -> str:
+    """Collapse every whitespace run to one space and strip: the only normalisation the R7 pin allows."""
+    return " ".join(text.split())
+
+
+def plan_cells(row: str) -> list[str]:
+    """The cells after the id of a plan row `| **Rn** | a | b | ... |`, whitespace-normalised."""
+    cells = row.strip().split("|")
+    return [norm_ws(c) for c in cells[2:-1]] if len(cells) > 3 else []
+
+
+def first_difference(got: str, want: str) -> str | None:
+    """None when equal; else where the texts part, as a short quoted context."""
+    if got == want:
+        return None
+    k = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), min(len(got), len(want)))
+    lo = max(0, k - 30)
+    return f"at character {k}, found {got[lo:k + 40]!r}, canonical {want[lo:k + 40]!r}"
 
 
 def criterion_cell(row_segment: str) -> str:
@@ -438,12 +464,6 @@ def criterion_cell(row_segment: str) -> str:
     line = row_segment.split("\n", 1)[0]
     cells = line.split("|")
     return cells[2] if len(cells) > 2 else line
-
-
-def r7_narrowing(text: str) -> list[str]:
-    """Wording in an R7 definition that restricts the sum to verified (or successful) trials."""
-    rest = R7_VERIFIED_OK.sub(" ", text)
-    return [m.group(0) for m in R7_NARROWING.finditer(rest)]
 
 
 def check_rows(r: Report, evidence_root: Path) -> Counter:
