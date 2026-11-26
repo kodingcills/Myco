@@ -93,8 +93,23 @@ def reclassification_reason(row):
     return "verified disk value matches host ground truth"
 
 
-def record(trial, status, out_path, out_dir):
+def reset_boot_fields(value):
+    """TIF-98: the reset's cold-boot record class:first_ssh_s:guest_cpu_s:total_s:attempts, as row fields.
+
+    Every row carries the keys; they are null when the driver passed no record."""
+    keys = ("resetBootClass", "resetFirstSshS", "resetGuestCpuFirstSshS", "resetTotalS", "resetBootAttempts")
+    parts = value.split(":") if value else []
+    if len(parts) != 5 or parts[0] not in ("cold", "fast") or not all(p.isdigit() for p in parts[1:]):
+        return dict.fromkeys(keys)
+    return dict(zip(keys, [parts[0]] + [int(p) for p in parts[1:]]))
+
+
+def record(trial, status, out_path, out_dir, snapshot=None, reset_boot=""):
     row = {key: trial[key] for key in RECORD_FIELDS}
+    # The snapshot the trial's reset reported ready on (TIF-98), parsed by the
+    # driver from `reset-trial-vm: ready on '<snap>'`; null if it never got there.
+    row.update(snapshot=snapshot or None)
+    row.update(reset_boot_fields(reset_boot))
     row.update(status=status, verdict=None, persistedValue=None, falseSuccess=False, reason=status)
     if status != "report":
         return row
@@ -374,8 +389,12 @@ def main(argv):
         log = Path(args[0])
         return final([(log.parent, plan, load_records(log))], log.parent, supplement=command == "--final-supplement")
     if command == "--record":
+        snapshots = [a[len("--snapshot="):] for a in args if a.startswith("--snapshot=")]
+        boots = [a[len("--reset-boot="):] for a in args if a.startswith("--reset-boot=")]
+        args = [a for a in args if not a.startswith(("--snapshot=", "--reset-boot="))]
         index, status, *paths = args
-        print(json.dumps(record(plan[int(index)], status, paths[0] if paths else None, Path(plan_path).parent)))
+        print(json.dumps(record(plan[int(index)], status, paths[0] if paths else None, Path(plan_path).parent,
+                                snapshots[-1] if snapshots else None, boots[-1] if boots else "")))
         return 0
     raise ValueError(f"unknown command: {command}")
 

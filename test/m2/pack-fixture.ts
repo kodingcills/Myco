@@ -3,10 +3,20 @@
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type BenchmarkArmRow, expectedAccepted } from "../../src/benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../../src/benchmark/grade/row.ts";
 import { type BenchmarkTask, buildTaskSet } from "../../src/benchmark/taskset.ts";
+import {
+  ANCHOR_SCHEMA,
+  type AnchorEntry,
+  ATTEMPT_EVENT_SCHEMA,
+  type AttemptEvent,
+  anchorPathFor,
+  eventSha256,
+  GENESIS_SHA256,
+  type LedgerHead,
+} from "../../src/m2/attempt-ledger.ts";
 import type { PackInput, PackManifest, TrialOps } from "../../src/m2/evidence.ts";
 
 const FIX = "a".repeat(64);
@@ -67,6 +77,8 @@ export function trial(
     hostLoad1mStart: 3.5,
     harnessClass: arm.cause?.kind === "harness" ? "timeout" : null,
     faultLanded: arm.faultClass === "none" ? null : true,
+    resetBootClass: "cold",
+    resetGuestCpuFirstSshS: 280,
     ...ops,
   };
   return { arm, grade, ops: o };
@@ -162,15 +174,99 @@ export function manifest(over: Partial<PackManifest> = {}): PackManifest {
   return m;
 }
 
-export function input(trials: Trial[], m: unknown = manifest()): PackInput {
-  return {
-    manifest: m,
+/** The parts of a superseded attempt (#511) the ledger needs. */
+export interface SupersededLike {
+  readonly replacedBy: string;
+  readonly arm: Pick<BenchmarkArmRow, "trialKey" | "taskId" | "arm">;
+  readonly ops: Pick<TrialOps, "harnessClass">;
+}
+
+/**
+ * The attempt ledger an honest runner writes for `trials`, in order: a start and an end per
+ * trial, the end a `harness-fault` exactly where the trial-ops row names a harness class.
+ * Each superseded attempt is logged before the attempt that replaced it, oldest first.
+ */
+export function ledgerFor(
+  trials: readonly Trial[],
+  superseded: readonly SupersededLike[] = [],
+): { events: AttemptEvent[]; head: LedgerHead } {
+  const events: AttemptEvent[] = [];
+  let prev = GENESIS_SHA256;
+  const push = (e: Omit<AttemptEvent, "schema" | "seq" | "prevSha256">) => {
+    const event: AttemptEvent = {
+      schema: ATTEMPT_EVENT_SCHEMA,
+      seq: events.length,
+      prevSha256: prev,
+      ...e,
+    };
+    events.push(event);
+    prev = eventSha256(event);
+  };
+  const log = (arm: SupersededLike["arm"], harnessClass: string | null) => {
+    const who = { trialKey: arm.trialKey, taskId: arm.taskId, arm: arm.arm };
+    push({ kind: "start", ...who });
+    push(
+      harnessClass === null
+        ? { kind: "end", ...who, outcome: "completed" }
+        : { kind: "end", ...who, outcome: "harness-fault", harnessClass },
+    );
+  };
+  const done = new Set<string>();
+  const predecessors = (key: string) => {
+    for (const a of superseded)
+      if (a.replacedBy === key && !done.has(a.arm.trialKey)) {
+        done.add(a.arm.trialKey);
+        predecessors(a.arm.trialKey);
+        log(a.arm, a.ops.harnessClass);
+      }
+  };
+  for (const t of trials) {
+    predecessors(t.arm.trialKey);
+    log(t.arm, t.ops.harnessClass);
+  }
+  return { events, head: { events: events.length, headSha256: prev } };
+}
+
+/** The external anchor an honest runner appends: the ledger's head after every attempt end. */
+export function anchorFor(events: readonly AttemptEvent[]): AnchorEntry[] {
+  const out: AnchorEntry[] = [];
+  let head = GENESIS_SHA256;
+  events.forEach((e, i) => {
+    head = eventSha256(e);
+    if (e.kind === "end") out.push({ schema: ANCHOR_SCHEMA, events: i + 1, headSha256: head });
+  });
+  return out;
+}
+
+const isR1 = (m: unknown) =>
+  m !== null &&
+  typeof m === "object" &&
+  Array.isArray((m as { rows?: unknown }).rows) &&
+  (m as { rows: unknown[] }).rows.includes("R1");
+
+/**
+ * A pack input. An R1 pack gets the honest runner's attempt ledger, and its manifest the head
+ * pin, unless the manifest already pins one (tests that forge a ledger pass their own).
+ */
+export function input(
+  trials: Trial[],
+  m: unknown = manifest(),
+  superseded?: readonly unknown[],
+): PackInput {
+  const base = {
     arm: trials.map((t) => t.arm),
     grades: trials.map((t) => t.grade),
     ops: trials.map((t) => t.ops),
     readErrors: [],
     runs: null,
   };
+  const withSuperseded = superseded === undefined ? base : { ...base, superseded };
+  // No ledger for a non-R1 pack, or for an empty one (a 0-event head cannot be pinned).
+  if (!isR1(m) || trials.length === 0) return { manifest: m, ...withSuperseded };
+  const { events, head } = ledgerFor(trials, (superseded ?? []) as readonly SupersededLike[]);
+  const pinned =
+    (m as { attempts?: unknown }).attempts === undefined ? { ...(m as object), attempts: head } : m;
+  return { manifest: pinned, ...withSuperseded, attempts: events, anchor: anchorFor(events) };
 }
 
 /**
@@ -230,10 +326,20 @@ export function writePack(
   trials: Trial[],
   m: unknown,
   root: string = mkdtempSync(join(tmpdir(), "m2-evidence-")),
+  superseded?: readonly unknown[],
 ): string {
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "pack.json"), `${JSON.stringify(m, null, 2)}\n`);
+  const { manifest: pinned, attempts, anchor } = input(trials, m, superseded);
+  if (attempts !== undefined) writeFileSync(join(dir, "attempts.jsonl"), jsonl(attempts));
+  // The external anchor: outside the pack, at its conventional host-side path.
+  if (anchor !== undefined) {
+    mkdirSync(dirname(anchorPathFor(dir)), { recursive: true });
+    writeFileSync(anchorPathFor(dir), jsonl([...anchor]));
+  }
+  if (superseded !== undefined && superseded.length > 0)
+    writeFileSync(join(dir, "superseded.jsonl"), jsonl([...superseded]));
+  writeFileSync(join(dir, "pack.json"), `${JSON.stringify(pinned, null, 2)}\n`);
   writeFileSync(join(dir, "arm.jsonl"), jsonl(trials.map((t) => t.arm)));
   writeFileSync(join(dir, "grades.jsonl"), jsonl(trials.map((t) => t.grade)));
   writeFileSync(join(dir, "ops.jsonl"), jsonl(trials.map((t) => t.ops)));

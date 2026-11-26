@@ -261,6 +261,15 @@ MCP server.
 | `todo-items` | `persistedStoreOracle` (the oracle `myco-run` uses) | the app's JSON store | `{ "items": ["…", …] }` |
 | `calc-record-edit` (version 2) | whole-document check (`src/gate/calc-document.ts`): the saved sheet must equal the pristine fixture with the edit applied | the saved sheet as CSV | `{ "fixtureSeed", "rowKey", "column", "newValue" }`, plus optionally `"fixtureFile"` and `"fixtureSha256"` (both or neither; see *Sealed fixture*) |
 | `calc-multi-step` (version 1) | per-checkpoint whole-document checks (TIF-270) | the saved sheet as CSV | `{ "fixtureSeed", "steps": [ { "rowKey", "column", "newValue" }, … ] }` (2-10 steps) |
+| `cross-app-steps` (version 1) | per-step checkpoints over a multi-app task (PDF -> Calc -> Writer; capability track P, `src/gate/cross-app.ts`), each from that step's own snapshot of every document | several files: `step-<k>/sheet.csv` and `step-<k>/report.txt` per step, `end/sheet.csv` (the `stateFile`) and `end/report.txt`, plus the sealed `source.pdf` | `{ "fixtureSeed", "source": { "file", "sha256" }, "reportTitle", "steps": [ { "app": "calc" \| "writer", "edits": [ { "rowKey", "column", "newValue" }, … ] }, … ] }`; see [cross-app.md](cross-app.md) |
+
+A family may read more than one persisted file (`OracleFamily.stateFiles`, capability track P):
+the registry records the list (`GateTask.stateFiles`, `stateFile` first), and the gate reads
+every file through the operator's reader with the same rules as `stateFile` before any oracle
+runs. Any one missing is `uncertain` STATE_MISSING, any one unreadable `uncertain`
+STATE_UNREADABLE; each file read is an `evidenceRefs` entry of kind `persisted-state`. The
+sealed-vault reader serves the task's `stateFile` only, so a multi-file task on the vault path
+is `uncertain` until the vault captures every listed file (see cross-app.md).
 
 **Whole-document rule (calc-record-edit v2, calc-multi-step; lead ruling R1).** `verified`
 needs every cell of the saved sheet, header included, to equal the pristine fixture with the

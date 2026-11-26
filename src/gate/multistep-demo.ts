@@ -24,6 +24,7 @@
 import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import type { AppState } from "../core/state.ts";
 import { FakeSpreadsheetApp } from "../fake/app.ts";
 import { dataRowsForSeed, FIXTURE_COLUMNS } from "../tasks/fixture.ts";
 import type { GateResult } from "./api.ts";
@@ -119,14 +120,25 @@ export interface MsReport {
   };
 }
 
+/**
+ * Optional observer of the fake sheet after each agent action (the live watch view's frame
+ * series, src/watch). Read-only: it sees the app state, never the gate or the evidence.
+ */
+export type MsFrameObserver = (runId: string, state: AppState) => void;
+
 /** The scripted agent: open the guest sheet in the fake app, make its edits, save, stop. */
-export async function scriptedAgent(guestFile: string, edits: readonly CellEdit[]): Promise<void> {
+export async function scriptedAgent(
+  guestFile: string,
+  edits: readonly CellEdit[],
+  frame?: (state: AppState) => void,
+): Promise<void> {
   const app = new FakeSpreadsheetApp({
     filePath: guestFile,
     rows: dataRowsForSeed(MS_SPEC.fixtureSeed) + 1,
     cols: FIXTURE_COLUMNS.length,
   });
   const state = await app.observe();
+  frame?.(state);
   const cells = state.nodes.filter((node) => node.role === "cell");
   const header = cells.filter((node) => /^[A-Z]+1$/.test(node.id));
   for (const edit of edits) {
@@ -145,8 +157,10 @@ export async function scriptedAgent(guestFile: string, edits: readonly CellEdit[
     };
     await app.act({ kind: "click", ref: refFor() });
     await app.act({ kind: "setValue", ref: refFor(), value: edit.newValue });
+    if (frame) frame(await app.observe());
   }
   await app.act({ kind: "keyPress", keys: "ctrl+s" });
+  if (frame) frame(await app.observe());
 }
 
 function asExpected(trial: MultiStepTrialRecord, want: ExpectedTrial): boolean {
@@ -160,7 +174,7 @@ function asExpected(trial: MultiStepTrialRecord, want: ExpectedTrial): boolean {
 }
 
 export async function runMultiStepMockDemo(
-  options: { readonly outDir?: string } = {},
+  options: { readonly outDir?: string; readonly onFrame?: MsFrameObserver } = {},
 ): Promise<MsReport> {
   const outDir = options.outDir ?? mkdtempSync(join(tmpdir(), "myco-gate-ms-demo-"));
   const evidenceRoot = join(outDir, "evidence");
@@ -200,7 +214,11 @@ export async function runMultiStepMockDemo(
               );
             },
             async runAgent({ attempt, fromCheckpoint }) {
-              await scriptedAgent(guestFile, scenario.script(attempt, fromCheckpoint));
+              await scriptedAgent(
+                guestFile,
+                scenario.script(attempt, fromCheckpoint),
+                options.onFrame && ((state) => options.onFrame?.(runId, state)),
+              );
               return { claim: `All ${MS_SPEC.steps.length} steps done and saved.` };
             },
             async capture() {
