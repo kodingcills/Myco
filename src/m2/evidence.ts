@@ -343,6 +343,11 @@ export function checkPack(input: PackInput): PackResult {
 
   const benchmark = checkBenchmark(input.arm, input.grades, {
     expectTrials: manifest?.expectTrials ?? {},
+    // The asserted split, so the shared ledger check counts it too (TIF-274). The task-set
+    // binding runs below (`bindToTaskSet`), with the multiset only for R1 packs.
+    ...(manifest?.expectUnregistrable === undefined
+      ? {}
+      : { expectUnregistrable: manifest.expectUnregistrable }),
   });
   errors.push(...benchmark.errors.map((e) => `ledger: ${e}`));
 
