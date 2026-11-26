@@ -518,13 +518,36 @@ arms must share all of the following. Anything that differs is a documented devi
 | Condition | How it is held constant |
 |---|---|
 | Task family and parameters | The sweep's final 30 parameter sets, copied verbatim into the baseline run (§4.4a) — same `{fixtureSeed,rowKey,column,newValue}` per trial. The generator that produced them (`generateParameterSets`, `src/tasks/intent.ts`) is the family definition; the *list used* is data, recorded with its hash in both reports. |
-| Initial state | Per-trial cold restore via `scripts/reset-trial-vm.sh`. Myco uses its preserved `clean-base`. C1 and C2 each restore a clean derivative of that base with Cua installed (§2.1). Record the snapshot name and reset wall time per row. |
+| Initial state | Per-trial cold restore via `scripts/reset-trial-vm.sh`, both arms from the **same base**. In a comparison run the Myco arm restores `clean-base`, and C1 and C2 each restore `cua-c1-base`, a clean derivative of that base with Cua installed (§2.1). See the snapshot rule below. Record the snapshot name (`snapshot`) and reset wall time per row. |
 | Fixture file | Host-generated CSV → guest `.xlsx` by `WindowsFixtureConverter` (isolated throwaway profile). The **same fixture bytes** for trial *i* in both arms: the baseline gets fixture *i*, not a re-generated one. |
 | Guest software | Same VM, same LibreOffice 26.8.3 ARM64, same Windows build. No LibreOffice settings are changed for either arm (AutoCorrect stays on — see §3.4). |
 | Desktop geometry | Both arms run at the same display resolution; the baseline's `--grounding_width/height` equal the captured screenshot size. Resolution recorded. |
 | Agent isolation | One trial per guest state, no concurrent sessions. After either arm's trial: cleanup + reset before the next trial (M1-019 semantics). **Open risk (2026-11-22):** one spike run logged `killed=[] removed=[] residue=[]` while `soffice.bin` was still alive in the guest; it was reaped by hand and the guest is clean. The kill path was checked and looks correct (`guest-health.ts` targets both soffice images, the kill loop runs before the empty-targets early return, `WindowsBackend.kill` re-lists and reports only disappeared pids), so the cause is unresolved. Until it is explained, **verify the guest after every trial and record any trial that needed a manual reap** rather than trusting the cleanup's own success message. |
 | Trial order | The Myco arm's 30 trials must come from the M1-013 sweep. **As of 2026-11-21 the sweep is in progress, not finished**: `/tmp/m1-013/sweep/trials.jsonl` had four rows and `progress.log` had reached trial 4 at 19:02Z when this was written; it is still running and the numbers will change. Earlier sweep attempts outside the Coordinator-declared final sweep are excluded. Every trial started in the final sweep counts, even if it fails before emitting a row (rule 8, §5). The join in §4.4 is therefore **contingent on the sweep completing and the Coordinator declaring it final**; nothing in this doc presumes a sweep number. The baseline arm runs **the same parameter sets, in the same order**, as the sweep's final parameter list — not a re-derived index (§4.4a). |
 | Attempts | One scored attempt per trial, in both arms. There are **no scored retries** (rule 8, §5): only the first attempt counts. A re-run for diagnosis is recorded as a separate row labelled `diagnostic re-run` and is never used in the pass rate or the paired sign test. |
+
+**Snapshot rule for comparison runs (TIF-98, 2026-11-26).** Since 2026-11-26 the Myco trial
+drivers reset to `trial-base-v2` by default. That is `clean-base` with its pending maintenance
+done, and its resets measured about 64 s faster (runbook §3.5). The baseline arms have no
+`trial-base-v2` derivative: `cua-c1-base` derives from `clean-base`. So, until one exists:
+
+- **Any Myco-vs-baseline comparison pins the Myco arm to `clean-base`.** Launch its driver with
+  `MYCO_COMPARISON_RUN=1 MYCO_TRIAL_SNAPSHOT=clean-base`. `scripts/m1-sweep.sh` and
+  `scripts/m1-corrupt-suite.sh` refuse a comparison run (exit 11) unless `MYCO_TRIAL_SNAPSHOT`
+  is explicitly `clean-base` (`scripts/trial-snapshot.sh`). They also refuse any
+  `MYCO_COMPARISON_RUN` other than empty, `0` or `1`, so a typo never means "not a comparison".
+- **The join refuses mixed bases, fail-closed.** `scripts/row7-compare.py` refuses to pair a Myco
+  row whose `snapshot` is not in the baseline's base family. A Myco row on `trial-base-v2`
+  cannot be paired with C1's `cua-c1-base`. A row with no `snapshot` key predates the field and
+  counts as `clean-base`. Any new comparator that pairs Myco rows with a baseline arm must apply
+  the same check, so a comparison launched without the flag still cannot be reported.
+- Each `OUT` pins its snapshot in `OUT/snapshot` on the first run, and a resume on a different
+  snapshot is refused (exit 11). Every Myco row carries `snapshot`, parsed from the reset's
+  `ready on '<snap>'` line: the name the reset reports it restored, not an observed identity of
+  the guest. A mixed or mismatched comparison is visible in the rows themselves.
+- **Non-comparison Myco runs** (for example R1 false-done) use the `trial-base-v2` default.
+- Rebasing C1/C2 onto a `trial-base-v2` derivative is queued work (VM time). Once it exists, a
+  comparison can run both arms on `trial-base-v2` instead.
 
 ### 2.1 The operator interface — pinned to `main`, not invented here
 
@@ -732,7 +755,8 @@ entries (to be kept current in the report):
 | Baseline uses a host-side driver; Myco uses its runtime | by design | scoring judge is shared and blind |
 | Baseline may need a PyAutoGUI runner in the guest | baseline only | runs through the reviewed `launch` op; no UIA/UNO |
 | **Step budget is asymmetric**: baseline 30 model actions, Myco a fixed 5-step program with no budget concept in the runner | by construction | generous direction, stated in §3.2;  `steps` never compared side by side (§4.2 reports it per arm) |
-| **Reset hygiene may differ in practice**: the baseline gets a scripted `clean-base` cold restore; the Myco rows inherit whatever the sweep did, including degraded resets under load | both intend identical, neither guaranteed | `resetMs` + AC/battery state recorded per row; a row whose `resetMs` exceeds 2× the 152 s measured maximum (log 39) is flagged and the comparison table reports how many were flagged |
+| **Trial base (TIF-98, 2026-11-26)**: the Myco drivers' default moved to `trial-base-v2`; the baseline arms stay on `cua-c1-base`, a `clean-base` derivative | not in a comparison run: the Myco arm is pinned to `clean-base` | enforced by the drivers (`MYCO_COMPARISON_RUN=1` requires `MYCO_TRIAL_SNAPSHOT=clean-base`, exit 11; a malformed flag is refused) and at the join (`row7-compare.py` refuses a Myco row outside the baseline's base family); `OUT/snapshot` pin and a per-row `snapshot` field; rebasing C1/C2 onto a `trial-base-v2` derivative is queued (§2) |
+| **Reset hygiene may differ in practice**: the baseline gets a scripted cold restore of its `clean-base` derivative (`cua-c1-base`); the Myco rows inherit whatever the sweep did, including degraded resets under load | both intend identical, neither guaranteed | `resetMs` + AC/battery state recorded per row; a row whose `resetMs` exceeds 2× the 152 s measured maximum (log 39) is flagged and the comparison table reports how many were flagged |
 | Screenshot capture is GDI window-capture, not full-desktop | both capture, baseline-only consumer | same op, same rect policy |
 | VM reset cost differs by time of day (cold restore 134–152 s measured, log 39) | both | reset timing is a metric, not a deviation |
 | Host load changes task wall time | both | host load + battery state recorded from `pmset` |
@@ -1183,9 +1207,9 @@ The numbered list in §9.2 records the original questions.
 
 | # | Question | Decision |
 |---|---|---|
-| 1 | Install Cua Driver in the guest | **YES, gated.** Only after the M1-013 sweep **and** the corrupted run have finished, and only with the Coordinator's explicit go (it owns the host and VM). **Take a new snapshot before installing**, to preserve the Myco arm's `clean-base`. |
+| 1 | Install Cua Driver in the guest | **YES, gated.** Only after the M1-013 sweep **and** the corrupted run have finished, and only with the Coordinator's explicit go (it owns the host and VM). **Take a new snapshot before installing**, to preserve the Myco arm's `clean-base`. *(Note, 2026-11-26: the Myco drivers now default to `trial-base-v2`. Comparison runs still put the Myco arm on `clean-base`, §2.)* |
 | 2 | Planner model | **Paid Claude Sonnet 5.5 via the Anthropic API** (§8.4: $1.13-$5.58 per 30 trials). **Local Ollama (`qwen3.8-uncensored`) stays wired as the fallback.** See §9.1 for what the run needs. |
-| 3 | Run C2 | **YES.** C1 and C2 are reported separately. Each trial gets its own clean-base restore from the Cua-enabled snapshot (§2.1). |
+| 3 | Run C2 | **YES.** C1 and C2 are reported separately. Each trial gets its own clean-base restore from the Cua-enabled snapshot (§2.1). *(Note, 2026-11-26: that snapshot is `cua-c1-base`, a `clean-base` derivative. The matching Myco arm of a comparison is pinned to `clean-base`, §2.)* |
 | 5, 7 | Frontier third column; public-score arm (B1/B2) | **Not now.** No frontier column, no public-score arm. |
 | 8 | External subset (M1-027 / TIF-58) | **Deferred until after M1 sign-off.** |
 | 6 | CheaperInference vision probe | Moot: that provider is out of credit and is not used. |
@@ -1229,7 +1253,7 @@ The initial recommendation was Cua Driver with a local planner. The options belo
    sub-arm and **≈6.25 h** for C1 and C2 together, each with its own reset and deploy (per-trial arithmetic in §2.1), plus the same
    again for the corrupted arm if §7 is in scope. The Coordinator owns the host and is running the
    sweep now.
-   **Ask for it chunked if that helps**: every row begins from its own `clean-base` restore, so a
+   **Ask for it chunked if that helps**: every row begins from its own cold restore (of the `clean-base` lineage in a comparison run, §2), so a
    chunk boundary is just another row boundary and the run is resumable — so the window can be split
    however suits (for the two-arm run, 2 × ~3.1 h is as valid as one ~6.25 h block), and *safer*,
    because a host sleep or a UTM wedge otherwise costs the whole run
