@@ -219,8 +219,9 @@ function run(
   );
   const env = { PATH: `${stub}:/usr/bin:/bin`, HOME: dir, MYCO_PROCARGS_DIR: pa };
   // argv/names/live call the Python check directly; anything else goes through the script.
-  const r = ["argv", "names", "live"].includes(args[0])
-    ? spawnSync("python3", ["-I", CHECK, args[0]], { encoding: "utf8", env })
+  const mode = args[0] ?? "";
+  const r = ["argv", "names", "live"].includes(mode)
+    ? spawnSync("python3", ["-I", CHECK, mode], { encoding: "utf8", env })
     : spawnSync("bash", [SCRIPT, ...args], { encoding: "utf8", env });
   return {
     ...r,
