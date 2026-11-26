@@ -36,15 +36,19 @@ Notes per client:
   args, env, cwd } } }` (`MCPStdioServerConfig` in `@oh-my-pi/pi-coding-agent` 19.2.1).
   Oh My Pi may resolve `env` values as variable names or `!command` lines, which is one
   more reason to leave `env` empty for this server.
+- **Claude Code and Oh My Pi** use the same JSON (`claude-code.mcp.json` and
+  `oh-my-pi.mcp.json` are byte-identical); each is kept under its own name so each client
+  has a file to copy.
 - **Gemini CLI.** `trust: false` keeps Gemini CLI's per-call confirmation;
   `includeTools` limits it to the one gate tool. Gemini CLI itself needs a Google login or
   API key, which this change does not use (no credentials, 2026-11-26 ruling).
 - **Codex CLI.** Run on 2026-11-26 (`codex-cli 0.168.0`, its existing ChatGPT login; Codex
   is approved only for this compatibility check). The MCP server config went in as `-c`
-  overrides with `--ignore-user-config`, so no user config was read or changed. Codex
-  called `myco_gate_check` and returned `verified` (df-s01), `refuted` (df-s02) and
-  `uncertain`/`ASSIGNMENT_MISMATCH` (naming another trial). Its `--json` events do not
-  show MCP `isError`, so gate on `accepted` and `reasonCodes`.
+  overrides with `--ignore-user-config`, so the user's `config.toml` was not loaded or
+  changed. Codex called `myco_gate_check` and returned `verified` (df-s01), `refuted`
+  (df-s02) and `uncertain`/`ASSIGNMENT_MISMATCH` (naming another trial). Its `--json`
+  events show MCP `isError: true` as the tool item's `"status":"failed"` (not as a
+  field in `result`); gate on `accepted` and `reasonCodes`.
 - **Antigravity** and other MCP hosts that accept the `mcpServers` shape can use
   `generic.mcp.json`; none was run.
 

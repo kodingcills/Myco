@@ -118,11 +118,16 @@ Gate decision log (`--audit`, verbatim):
 - Codex read the tool's schema from `tools/list` and sent only `taskId`, `runId` and
   `claim`. It got `structuredContent` as `structured_content` and passed the verdict
   through unchanged.
-- **Codex's `--json` events do not show the MCP `isError` flag.** The `result` has only
-  `content` and `structured_content`. So the stream cannot tell the `refuted` answer
-  (`isError: false`) apart from the rejected `ASSIGNMENT_MISMATCH` request
-  (`isError: true` from the server, see clients.md §3). A harness should judge by
-  `accepted` and `reasonCodes`, which come through intact, and not by the client's error flag.
+- **Codex surfaces MCP `isError` as the tool item's `status`.** The `result` of an
+  `mcp_tool_call` item has only `content` and `structured_content`, with no field named
+  `isError`. The server's `isError: true` shows up as the item's `"status":"failed"` in
+  the `item.completed` event. `error` stays `null` and the gate's result is still in
+  `result`. In this run, the `refuted` answer (server `isError: false`) is
+  `"status":"completed"`, and the rejected `ASSIGNMENT_MISMATCH` request (server
+  `isError: true`, see clients.md §3) is `"status":"failed"`. A harness should still
+  decide "done" by `structured_content.accepted` and `reasonCodes`. Treat `status: "failed"`
+  as "the request was rejected", not as "the work is wrong".
+  (Corrected in round 2: an earlier version wrongly said Codex does not show `isError`.)
 - The `ASSIGNMENT_MISMATCH` reason names the bound task and run (`df-s02`/`demo-df-s02`).
   These are IDs, not host paths, which matches the codes-only reason rule.
 

@@ -67,7 +67,9 @@ prompt.
 
 The result is the `GateResult` from [api.md](api.md#result), returned twice: as
 `structuredContent` and as JSON text in `content[0].text` (for clients that ignore
-`structuredContent`). A real reply (`tools/call` for an honest df-s01 run):
+`structuredContent`). A real reply (`tools/call` for an honest df-s01 run against the
+test fixture's 4-item store, `todoStore` in `test/gate/helpers.ts`, 300 bytes; the mock
+demo's store is a different 168-byte file):
 
 ```json
 {"jsonrpc":"2.0","id":3,"result":{
@@ -91,9 +93,11 @@ The result is the `GateResult` from [api.md](api.md#result), returned twice: as
   is then `uncertain`. Naming another task:
   `{"verdict":"uncertain","accepted":false,"reasonCodes":["ASSIGNMENT_MISMATCH"],"evidenceRefs":[],…}`.
 
-Gate on `reasonCodes`, not `reasons`: codes are stable; reasons are for people. Do not
-gate on the client's error flag either: Codex CLI's `--json` events do not show
-`isError` at all (2026-11-26 run), so `accepted` and `reasonCodes` are what reach every client.
+Gate on `reasonCodes`, not `reasons`: codes are stable; reasons are for people. Clients
+surface `isError` in their own way: Codex CLI's `--json` events (2026-11-26 run) put it
+in the `mcp_tool_call` item's `status` (`"failed"` for `isError: true`, `"completed"`
+otherwise), not in `result`. So decide "done" by `accepted` and `reasonCodes`, which
+reach every client unchanged.
 
 ## 4. Plain JSON-RPC (no MCP client)
 
