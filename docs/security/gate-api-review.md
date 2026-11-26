@@ -19,8 +19,8 @@ reader (`src/gate/sealed.ts`) and the vault and ledger it sits on (`src/integrit
 FILE items 1-6. Items 7-8 there are context.
 
 **CLI scope.** The CLI reads no agent JSON: the request is built from argv flags
-(`cli.ts:75-88`, `cli.ts:172-182`), so its size is bounded by the OS, and the only JSON it
-parses is the operator's trusted `--tasks` file (`cli.ts:114-115`). Oversized or deep agent
+(`cli.ts:79-92`, `cli.ts:176-186`), so its size is bounded by the OS, and the only JSON it
+parses is the operator's trusted `--tasks` file (`cli.ts:118-119`). Oversized or deep agent
 JSON reaches the gate only through `myco-gate mcp` (H-01, H-07, H-09).
 
 **Out of scope, by decision.** Nothing here builds hosting, billing or accounts. Local-only
@@ -89,7 +89,7 @@ PR, with no ordering condition left.
 
 - **Today** the caller is authenticated by the OS process boundary. The operator spawns one
   `myco-gate mcp` process per trial with the assignment in argv (`operatorGate`,
-  `cli.ts:106-142`), and only the parent process can write its stdin. There is no listener,
+  `cli.ts:110-146`), and only the parent process can write its stdin. There is no listener,
   no shared state across trials, and one serial request loop. The realistic attacker is the
   agent: it wants a false `verified`, another trial's verdict, or to crash or confuse the
   gate.
@@ -227,7 +227,7 @@ issue.
 
 - **Where:** `api.ts:384-393` (accepted when it is a string of at most 4000 UTF-16 units,
   any code points, NUL and lone surrogates included), echoed in `GateResult.request.claim`
-  and written by `--audit` (`cli.ts:134`).
+  and written by `--audit` (`cli.ts:138`).
 - **Why it is only Info:** the claim is the agent's own text, returned to the agent, and
   recorded for audit by design ("recorded for the ledger, never read by the oracle",
   `api.ts:133`). The gate never reads it into a verdict (`gate.test.ts` "the claim never
@@ -260,7 +260,7 @@ issue.
 ### H-05: No per-trial check limit and no queue bound in `myco-gate mcp` (Low; defer)
 
 - **Where:** `gate.ts:878-890`: `check` has no counter. `myco-gate mcp` serves until stdin
-  closes (`cli.ts:190-194`). The retry budget, merged with #514, lives in the harness loop
+  closes (`cli.ts:194-198`). The retry budget, merged with #514, lives in the harness loop
   (`multistep.ts:71`, `retryBudget: 0 | 1`, checked at `multistep.ts:111-112`), not in the
   gate.
 - **Exploit sketch:** in the mock/dev MCP mode the reader is `fileEvidenceReader`, which
@@ -400,7 +400,7 @@ key-id option in `vault.ts` is real format work: it changes the seal manifest's 
 |---|---|---|---|---|
 | H-10 | 1, tenant-namespace the vault | `vault.ts:303-305` (`runDir = join(root, runId)`), `vault.ts:322` | Optional `namespace` in `VaultOptions`, validated like a run id, prefixing `runDir`; absent means today's layout. Hosted ids must also be unique after case folding (H-08) | Nothing multi-tenant runs; adds an unused option |
 | H-11 | 2, persisted receipt store | `vault.ts:98-102`, `gated-trial.ts` | A `ReceiptStore` interface with an in-memory default; hosted backs it with a store the agent cannot reach | `gated-trial.ts` is unlocked now (#514 merged), but locally the receipt never leaves one process: the interface would have one implementation and no caller |
-| H-12 | 3, concurrent-safe ledger | `ledger.ts:41-53` (read the head, then `appendFileSync`), `cli.ts:134` | One chain per (tenant, eval), appends serialised per chain (a lock file or a single writer); row format unchanged | Locally one serial process writes (`serveStdio` handles requests one at a time, `mcp-server.ts:180-206`), so no fork today |
+| H-12 | 3, concurrent-safe ledger | `ledger.ts:41-53` (read the head, then `appendFileSync`), `cli.ts:138` | One chain per (tenant, eval), appends serialised per chain (a lock file or a single writer); row format unchanged | Locally one serial process writes (`serveStdio` handles requests one at a time, `mcp-server.ts:180-206`), so no fork today |
 | H-13 | 4, per-tenant vault keys | `vault.ts:251-262` | A `keyId` in the seal manifest plus a key-lookup callback in `VaultOptions`; single-key default | Changes the manifest format; no second key exists |
 | H-14 | 5, host paths out of the seal manifest | `vault.ts:95`, `vault.ts:328-331` | Record oracle sources as `{ id, sha256 }` relative to a configured oracle root | Locally the paths never reach the agent: agent-facing error text carries `integrity:<code>` only (`sealed.ts:20-21`, `sealed-gate.test.ts` "its host path never reaches the agent") |
 | H-15 | 6, operator-bound caller identity | `gate.ts:435-464`, `api.ts:151-191` | Optional `GateConfig.caller`, echoed as optional `GateResult.caller` (additive `v1`); request unchanged | `gate.ts`/`api.ts` are locked by #503; no transport authenticates a caller yet |
