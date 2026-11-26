@@ -96,6 +96,24 @@ describe("reset-trial-vm.sh snapshot allowlist", () => {
     expect(r.calls).not.toContain("vm.sh restore clean-base");
   });
 
+  // Round 1 N2 / N3.
+  it("refuses an explicit empty argument instead of falling back to the default", () => {
+    const r = run("");
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("refusing an empty snapshot argument");
+    expect(r.calls).toBe("");
+  });
+
+  it("refuses a live snapshot as the default from MYCO_TRIAL_SNAPSHOT; an explicit argument still may", () => {
+    const viaEnv = run(undefined, { env: { MYCO_TRIAL_SNAPSHOT: "clean-base-live" } });
+    expect(viaEnv.status).toBe(1);
+    expect(viaEnv.stderr).toContain("a live snapshot is never the default");
+    expect(viaEnv.calls).toBe("");
+    const explicit = run("clean-base-live", { env: { MYCO_TRIAL_SNAPSHOT: "clean-base-live" } });
+    expect(explicit.status).toBe(0);
+    expect(explicit.calls).toContain("vm.sh restore clean-base-live");
+  });
+
   it.each(["trial-base-v3", "clean-base;true", "../clean-base"])(
     "MYCO_TRIAL_SNAPSHOT=%j is held to the same allowlist, without touching the VM",
     (name) => {
@@ -169,14 +187,21 @@ describe("reset-trial-vm.sh guest egress check (TIF-275)", () => {
 describe("trial drivers use the default trial snapshot", () => {
   const read = (p: string) => readFileSync(join(__dirname, "..", p), "utf8");
 
+  // Round 2: the drivers resolve the snapshot themselves (scripts/trial-snapshot.sh, the
+  // same rule: MYCO_TRIAL_SNAPSHOT, else trial-base-v2), pin it in OUT and pass it
+  // explicitly. test/trial-snapshot.test.ts covers that path.
   it.each(["scripts/m1-sweep.sh", "scripts/m1-corrupt-suite.sh"])(
-    "%s resets with no snapshot argument, so the default and MYCO_TRIAL_SNAPSHOT apply",
+    "%s resets through ts_reset with the resolved snapshot",
     (driver) => {
-      const calls = read(driver).match(/bash scripts\/reset-trial-vm\.sh[^\n]*/g) ?? [];
-      expect(calls.length).toBeGreaterThan(0);
-      for (const c of calls) expect(c).toMatch(/^bash scripts\/reset-trial-vm\.sh >>/);
+      expect(read(driver)).toContain('ts_reset "$SNAP" "$PROGRESS"');
     },
   );
+
+  it("trial-snapshot.sh resolves the same default as reset-trial-vm.sh", () => {
+    expect(read("scripts/trial-snapshot.sh")).toContain(
+      "local snap=$" + "{MYCO_TRIAL_SNAPSHOT:-trial-base-v2}",
+    );
+  });
 
   it("scripts/reset-bench.sh benches trial-base-v2 unless MYCO_BENCH_SNAPSHOT says otherwise", () => {
     // Split so the shell ${...} is not read as a JS template placeholder.

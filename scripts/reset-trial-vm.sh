@@ -29,6 +29,15 @@ if ! vm_lock_owned_by_parent; then
 fi
 
 SNAPSHOT=${1:-${MYCO_TRIAL_SNAPSHOT:-trial-base-v2}}
+# An explicit empty argument is a caller bug, not a request for the default.
+if [ "$#" -ge 1 ] && [ -z "$1" ]; then
+  echo "reset-trial-vm: refusing an empty snapshot argument" >&2; exit 1
+fi
+# A live snapshot is never a default: the live path wedges UTM under rapid cycling
+# (runbook §3.3). Name it as an argument if one reset onto it is really meant.
+if [ "$#" -eq 0 ] && [[ "${MYCO_TRIAL_SNAPSHOT:-}" == *-live ]]; then
+  echo "reset-trial-vm: refusing MYCO_TRIAL_SNAPSHOT=$MYCO_TRIAL_SNAPSHOT: a live snapshot is never the default" >&2; exit 1
+fi
 # Where vm.sh lives. Override with MYCO_VM_SCRIPTS to point at a stub.
 #
 # Footgun this guards: a test that means to stub but forgets to export the

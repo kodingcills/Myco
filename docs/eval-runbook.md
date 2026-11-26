@@ -495,7 +495,24 @@ MYCO_TRIAL_SNAPSHOT=clean-base scripts/m1-sweep.sh OUT # a whole sweep on the ro
 MYCO_BENCH_SNAPSHOT=clean-base scripts/reset-bench.sh reset 5 out.jsonl   # bench onto clean-base
 ```
 
-An explicit argument wins over `MYCO_TRIAL_SNAPSHOT`, and every name must pass the allowlist.
+An explicit argument wins over `MYCO_TRIAL_SNAPSHOT`, and every name must pass the allowlist. A
+`*-live` snapshot is refused as a default (`MYCO_TRIAL_SNAPSHOT`), and so is an empty argument.
+
+**The sweep drivers pin the snapshot per `OUT`** (`scripts/trial-snapshot.sh`):
+
+- `m1-sweep.sh` and `m1-corrupt-suite.sh` write the resolved snapshot to `OUT/snapshot` on the
+  first run, and refuse a resume that resolves a different one (`REFUSED_SNAPSHOT_MISMATCH`,
+  exit 11).
+- An `OUT` with rows but no pin was started before pinning existed, on `clean-base`. It is
+  refused until `MYCO_TRIAL_SNAPSHOT` names its snapshot (`REFUSED_SNAPSHOT_UNKNOWN`, exit 11).
+- Every row carries `snapshot`, parsed from the reset's `ready on '<snap>'` line (`null` when
+  the reset failed). A reset that reports ready on a different snapshot aborts the run
+  (`ABORT_SNAPSHOT_MISMATCH`, exit 12).
+
+**Comparison runs** (Myco against a baseline arm) keep both arms on the same base. The baseline
+arms run on `cua-c1-base`, a `clean-base` derivative, so the Myco arm of a comparison runs with
+`MYCO_COMPARISON_RUN=1 MYCO_TRIAL_SNAPSHOT=clean-base`. The drivers refuse a comparison run
+without that (exit 11). See `docs/baseline/screenshot-agent.md` §2.
 `clean-base` and `clean-base-live` are never modified or deleted. A new trial base is a new
 versioned snapshot (`trial-base-v3`, and so on), never an overwrite: `build-trial-base.sh`
 refuses an existing name.
@@ -1292,8 +1309,9 @@ If the sweep was launched without `$OUT.commit`, compare against the commit the 
 worktree or clone was created at. **Guest configuration** (RAM, vCPUs, the trial snapshot)
 has no check: no command in the repo records it. Do not resume across a VM rebuild, a RAM or CPU
 change, a re-taken snapshot, or a change of trial snapshot; start a fresh `OUT` instead. The
-default trial snapshot moved from `clean-base` to `trial-base-v2` on 2026-11-26 (§3.5). Resume a
-sweep started before that with `MYCO_TRIAL_SNAPSHOT=clean-base` exported in the supervisor's
+default trial snapshot moved from `clean-base` to `trial-base-v2` on 2026-11-26 (§3.5). The
+drivers enforce this (`OUT/snapshot`, exit 11). Resume a sweep started before that with
+`MYCO_TRIAL_SNAPSHOT=clean-base` exported in the supervisor's
 shell, or start a fresh `OUT`.
 
 - **Parameters.** On first run it writes `$OUT/params.json` (the 30 sets from
@@ -1306,7 +1324,9 @@ shell, or start a fresh `OUT`.
   appear, one to one with their hashes; otherwise `SEED_CHECK_FAILED` and exit 8. History: the
   pilot driver dropped the seed, and every trial ran on one sheet (log 47).
 - **Gates and exit codes.** Checked before every trial; the driver exits rather than running
-  through them: 4 = net load > 14 (1-min load minus the guest's QEMU cores), 6 = swap free
+  through them: 11 = snapshot refused (pin mismatch, unknown pin, or a comparison run not on
+  `clean-base`, §3.5), 12 = a reset reported ready on a different snapshot, 4 = net load > 14
+  (1-min load minus the guest's QEMU cores), 6 = swap free
   < 300 MB or unreadable. Power is NOT a gate (Tiffany:
   never pause or gate VM work on charger state); `acPower` is recorded per row. There is **no
   exit 3** (the old on-battery gate is gone). Re-running the driver on the same `OUT` resumes
@@ -1441,6 +1461,7 @@ from recorded evidence and print a `RECLASSIFIED` line when the stored false-suc
 |---|---|
 | 0 | Full suite passed all coverage and evidence gates, or the supplemental batch recorded its manifest and passed its evidence checks. |
 | 1 | Driver or manifest error. |
+| 11 / 12 | Snapshot refused before any trial (pin mismatch, unknown pin, or a comparison run not on `clean-base`), or a reset reported ready on a different snapshot (§3.5). |
 | 4 / 6 | Paused for net one-minute load above 14 (load minus the guest's QEMU cores), or swap free below 300 MB. Resume in the same directory when the gate clears. **Exit 3 (on battery) is no longer emitted** — power is recorded, never enforced. |
 | 7 / 9 | Seed or CSV SHA-256 mismatch detected in this trial / already present at startup. Use a fresh output directory. |
 | 8 | Final audit failed. Inspect `summary.json`, `summary.txt` and `ledger.jsonl`. |

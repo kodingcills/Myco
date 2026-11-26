@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# trial-snapshot.sh: which snapshot a trial driver resets to, pinned per $OUT
+# (TIF-98). Source it from scripts/m1-sweep.sh and scripts/m1-corrupt-suite.sh.
+#
+# Why: the default trial snapshot moved from clean-base to trial-base-v2. A
+# sweep resumed after a load pause, or after the switch, must not silently mix
+# the two, and every row must say which snapshot its trial ran on.
+#
+#   ts_resolve
+#       Print the snapshot this run uses: $MYCO_TRIAL_SNAPSHOT, else
+#       trial-base-v2. Refuses (rc 11), with the reason on stderr:
+#         - a *-live snapshot from the variable: the live path wedges UTM under
+#           rapid cycling (runbook §3.3), so a whole sweep never rides it;
+#         - a comparison run (MYCO_COMPARISON_RUN=1) that does not explicitly
+#           set MYCO_TRIAL_SNAPSHOT=clean-base. The baseline arms (C1/C2:
+#           cua-c1-base) are clean-base derivatives, and both arms of a
+#           comparison must start from the same base (m1-state acceptance #7;
+#           docs/baseline/screenshot-agent.md §2). There is no trial-base-v2
+#           derivative for the baseline arms yet.
+#   ts_pin <out_dir> <trials.jsonl> <snapshot>
+#       First run: write <snapshot> to <out_dir>/snapshot. Resume: refuse
+#       (rc 11) unless it matches. An existing <trials.jsonl> with rows but no
+#       pin file was started before pinning existed (on clean-base, the default
+#       then): refuse unless MYCO_TRIAL_SNAPSHOT names the snapshot explicitly,
+#       then pin that.
+#   ts_reset <snapshot> <progress.log>
+#       Run the reset with the snapshot named explicitly, append its output to
+#       the progress log, and set TS_READY to the snapshot its
+#       `reset-trial-vm: ready on '<snap>'` line names (empty if none). Returns
+#       the reset's status, or 12 if it reported ready on a different snapshot.
+#       MYCO_RESET_SCRIPT overrides the reset script (tests only).
+#
+# Every message goes to stderr; callers append it to their progress log.
+
+ts_resolve() {
+  local snap=${MYCO_TRIAL_SNAPSHOT:-trial-base-v2}
+  case "$snap" in
+    *-live)
+      echo "REFUSED_SNAPSHOT: MYCO_TRIAL_SNAPSHOT=$snap is a live snapshot; a sweep never runs on the live path (runbook §3.3)" >&2
+      return 11 ;;
+  esac
+  if [ "${MYCO_COMPARISON_RUN:-}" = 1 ] && [ "${MYCO_TRIAL_SNAPSHOT:-}" != clean-base ]; then
+    echo "REFUSED_SNAPSHOT: a comparison run (MYCO_COMPARISON_RUN=1) must set MYCO_TRIAL_SNAPSHOT=clean-base: the baseline arms run on cua-c1-base, a clean-base derivative, and both arms must start from the same base (docs/baseline/screenshot-agent.md §2)" >&2
+    return 11
+  fi
+  printf '%s\n' "$snap"
+}
+
+ts_pin() {
+  local out=$1 log=$2 snap=$3 pinned
+  if [ -f "$out/snapshot" ]; then
+    pinned=$(tr -d '\r\n' < "$out/snapshot")
+    if [ "$pinned" != "$snap" ]; then
+      echo "REFUSED_SNAPSHOT_MISMATCH: $out was started on '$pinned', this run resolves '$snap'; resume with MYCO_TRIAL_SNAPSHOT=$pinned, or start a fresh OUT" >&2
+      return 11
+    fi
+    return 0
+  fi
+  if [ -s "$log" ] && [ -z "${MYCO_TRIAL_SNAPSHOT:-}" ]; then
+    echo "REFUSED_SNAPSHOT_UNKNOWN: $log has rows but $out has no snapshot pin (started before 2026-11-26, on clean-base); set MYCO_TRIAL_SNAPSHOT to the snapshot it was started on, or start a fresh OUT" >&2
+    return 11
+  fi
+  printf '%s\n' "$snap" > "$out/snapshot"
+}
+
+ts_reset() {
+  local snap=$1 progress=$2 script=${MYCO_RESET_SCRIPT:-scripts/reset-trial-vm.sh} capture rc
+  capture=$(mktemp "${TMPDIR:-/tmp}/trial-reset.XXXXXX") || return 1
+  bash "$script" "$snap" > "$capture" 2>&1
+  rc=$?
+  cat "$capture" >> "$progress"
+  TS_READY=$(sed -n "s/^reset-trial-vm: ready on '\\([^']*\\)'\$/\\1/p" "$capture" | tail -n 1)
+  rm -f "$capture"
+  [ "$rc" -eq 0 ] || return "$rc"
+  if [ "$TS_READY" != "$snap" ]; then
+    echo "SNAPSHOT_READY_MISMATCH: asked for '$snap', the reset reported ready on '${TS_READY:-nothing}'" >&2
+    return 12
+  fi
+  return 0
+}
