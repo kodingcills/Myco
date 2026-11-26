@@ -1,9 +1,10 @@
 /**
  * Track Q (replayable proof) CLI. Local only: no network, no model, no VM.
  *
- *   npx tsx scripts/proof.ts export RUN.json --out BUNDLE.json [--forbid-file F]
+ *   npx tsx scripts/proof.ts export RUN.json --out BUNDLE.json [--forbid-file F] [--user-file U]
  *   npx tsx scripts/proof.ts verify BUNDLE.json [--expect-head H] [--expect-ledger-head H]
  *                                   [--evidence-dir D] [--episode E] [--forbid-file F]
+ *                                   [--user-file U]
  *   npx tsx scripts/proof.ts report BUNDLE.json --out REPORT.html [verify flags]
  *
  * RUN.json is a `ProofRunInput` (see bundle.ts) with two file conveniences: an evidence
@@ -15,7 +16,9 @@
  * contents are never printed. Export registers no secret VALUES of its own: it redacts the
  * host's home, temp and checkout directories and account name, the generic secret and path
  * shapes, and every `--forbid-file` line (redacted as `[redacted:vault-key]`, whatever the
- * line is: put secret values there too).
+ * line is: put secret values there too). `--user-file` names a file of account names (the
+ * guest's account, say), one per line: each is redacted as `[redacted:user]` and refused as a
+ * whole word in any letter case; its contents are never printed.
  *
  * Exit codes: 0 ok; 1 refused (verification failed, export refused, report not written);
  * 2 usage. Output is JSON on stdout; it never echoes a redacted value, and is itself scanned
@@ -44,7 +47,10 @@ export interface CliIo {
 }
 
 /** The exporting host's own context: its account name and directories. */
-export function hostRedaction(extra: readonly string[] = []): RedactionContext {
+export function hostRedaction(
+  extra: readonly string[] = [],
+  users: readonly string[] = [],
+): RedactionContext {
   let username = "";
   try {
     username = userInfo().username;
@@ -55,7 +61,7 @@ export function hostRedaction(extra: readonly string[] = []): RedactionContext {
     secrets: [],
     vaultKeys: [...extra],
     hostPaths: [homedir(), tmpdir(), process.cwd()].filter((p) => p.length > 1),
-    usernames: username === "" ? [] : [username],
+    usernames: [...(username === "" ? [] : [username]), ...users],
   };
 }
 
@@ -78,8 +84,15 @@ class UsageError extends Error {}
 
 /** Each command's flags (exported so the doc test can pin the documented usage). */
 export const KNOWN: Record<string, readonly string[]> = {
-  export: ["--out", "--forbid-file"],
-  verify: ["--expect-head", "--expect-ledger-head", "--evidence-dir", "--episode", "--forbid-file"],
+  export: ["--out", "--forbid-file", "--user-file"],
+  verify: [
+    "--expect-head",
+    "--expect-ledger-head",
+    "--evidence-dir",
+    "--episode",
+    "--forbid-file",
+    "--user-file",
+  ],
   report: [
     "--out",
     "--expect-head",
@@ -87,10 +100,12 @@ export const KNOWN: Record<string, readonly string[]> = {
     "--evidence-dir",
     "--episode",
     "--forbid-file",
+    "--user-file",
   ],
 };
 
-function readForbid(path: string | undefined): string[] {
+/** One literal per non-empty line (used for `--forbid-file` and `--user-file`). */
+function readLines(path: string | undefined): string[] {
   if (path === undefined) return [];
   return readFileSync(path, "utf8")
     .split("\n")
@@ -98,7 +113,11 @@ function readForbid(path: string | undefined): string[] {
     .filter((l) => l.length > 0);
 }
 
-function verifyOptions(flags: Map<string, string>, forbid: readonly string[]): VerifyOptions {
+function verifyOptions(
+  flags: Map<string, string>,
+  forbid: readonly string[],
+  users: readonly string[],
+): VerifyOptions {
   return {
     ...(flags.has("--expect-head") ? { expectHead: flags.get("--expect-head") } : {}),
     ...(flags.has("--expect-ledger-head")
@@ -108,12 +127,12 @@ function verifyOptions(flags: Map<string, string>, forbid: readonly string[]): V
     ...(flags.has("--episode")
       ? { episode: JSON.parse(readFileSync(flags.get("--episode") as string, "utf8")) }
       : {}),
-    redaction: forbidRedaction(forbid),
+    redaction: forbidRedaction(forbid, users),
   };
 }
 
-function forbidRedaction(forbid: readonly string[]): RedactionContext {
-  return { secrets: [], vaultKeys: [...forbid], hostPaths: [], usernames: [] };
+function forbidRedaction(forbid: readonly string[], users: readonly string[]): RedactionContext {
+  return { secrets: [], vaultKeys: [...forbid], hostPaths: [], usernames: [...users] };
 }
 
 /**
@@ -199,20 +218,21 @@ export function main(argv: readonly string[], io: CliIo): number {
     if (positional.length !== 1) throw new UsageError(`${command} takes exactly one input file`);
     const input = positional[0] as string;
     if (!existsSync(input)) throw new UsageError(`no such file: ${command} input`);
-    const forbid = readForbid(flags.get("--forbid-file"));
-    outCtx = hostRedaction(forbid);
+    const forbid = readLines(flags.get("--forbid-file"));
+    const users = readLines(flags.get("--user-file"));
+    outCtx = hostRedaction(forbid, users);
 
     if (command === "export") {
       const out = flags.get("--out");
       if (out === undefined) throw new UsageError("export needs --out");
-      const bundle = exportProofBundle(loadRunInput(input), hostRedaction(forbid));
+      const bundle = exportProofBundle(loadRunInput(input), hostRedaction(forbid, users));
       writeFileSync(out, serializeProofBundle(bundle));
       emit(io, { ok: true, head: bundle.head, records: bundle.records.length }, outCtx);
       return 0;
     }
 
     const text = readFileSync(input, "utf8");
-    const options = verifyOptions(flags, forbid);
+    const options = verifyOptions(flags, forbid, users);
     const result = verifyProofBundle(text, options);
     if (command === "verify") {
       emit(io, result, outCtx, true);
@@ -227,7 +247,7 @@ export function main(argv: readonly string[], io: CliIo): number {
     const html = renderProofReport(
       JSON.parse(text) as ProofBundle,
       result,
-      options.redaction ?? forbidRedaction(forbid),
+      options.redaction ?? forbidRedaction(forbid, users),
     );
     writeFileSync(out, html);
     emit(io, { ok: true, head: result.head }, outCtx);

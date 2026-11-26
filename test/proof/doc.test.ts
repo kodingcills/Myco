@@ -66,6 +66,28 @@ describe("docs/architecture/replayable-proof.md matches the code", () => {
     }
   });
 
+  it("#548 D1/D3: the UNC class and the username forms are documented, with their limits", () => {
+    expect(DOC).toContain("**The UNC shape covers the whole");
+    expect(DOC).toContain("**Usernames are caught in exactly these forms:**");
+    expect(DOC).toContain("The aim is that no secret");
+    expect(DOC).not.toContain("No secret, absolute host path, username or vault key may be");
+    expect(DOC).toContain("`--user-file`");
+    const limits = DOC.slice(DOC.indexOf("**Limits.**"), DOC.indexOf("Planted-marker tests"));
+    for (const item of ["plain prose", "**POSIX** path outside the home roots", "`x_CORP\\user`"])
+      expect(limits, item).toContain(item);
+    // Each documented UNC form is caught.
+    for (const form of [
+      "\\\\?\\UNC\\nas\\Plantfirst ZqPLANTEDlast\\x",
+      "\\\\.\\UNC\\nas\\Plantfirst ZqPLANTEDlast\\x",
+      "\\\\nas/homes/Plantfirst ZqPLANTEDlast/x",
+      "//nas/Plantfirst ZqPLANTEDlast/x",
+      "smb://nas/homes/Plantfirst ZqPLANTEDlast/x",
+      "desktop-7\\Plantfirst ZqPLANTEDlast",
+      "zqplantedguest@DESKTOP-7 ~ %",
+    ])
+      expect(findLeaks(form), form).not.toEqual([]);
+  });
+
   it("an unchecked episode reference is stated in the doc", () => {
     expect(DOC).toContain("**not\ncross-checked**");
     expect(DOC).toContain("episodeChecked: false");

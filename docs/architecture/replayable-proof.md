@@ -43,8 +43,8 @@ events, which must carry the run's task and the run's arm (an anchored run must 
 `hcu+shell` is a valid arm). It does not bind the run id, because the ledger has none.
 
 ```
-npx tsx scripts/proof.ts export RUN.json --out bundle.json [--forbid-file F]
-npx tsx scripts/proof.ts verify bundle.json [--evidence-dir D] [--episode E] [--expect-head H] [--expect-ledger-head H]
+npx tsx scripts/proof.ts export RUN.json --out bundle.json [--forbid-file F] [--user-file U]
+npx tsx scripts/proof.ts verify bundle.json [--evidence-dir D] [--episode E] [--expect-head H] [--expect-ledger-head H] [--user-file U]
 npx tsx scripts/proof.ts report bundle.json --out report.html [verify flags]
 ```
 
@@ -53,7 +53,9 @@ written by the harness, never by the agent. `RUN.json` may name `episodeFile`, t
 episode. `--forbid-file` lines are extra literals to redact and refuse; export registers no
 secret values of its own (it redacts the host's home, temp and checkout directories, its
 account name, every forbid-file line, and the generic shapes), so put secret values in the
-forbid file too.
+forbid file too. `--user-file` lines are account names to redact and refuse as whole words in
+any letter case: register the guest's account name there (the exporting host's own account is
+registered automatically). Neither file's contents are ever printed.
 
 ## The verifier
 
@@ -107,13 +109,15 @@ So:
 
 ### Redaction
 
-No secret, absolute host path, username or vault key may be in a bundle or report.
+The aim is that no secret, absolute host path, username or vault key is in a bundle or
+report. What is enforced is exactly the shapes and registered literals below; anything
+outside them is a stated limit (item 5), not a guarantee.
 
 1. The exporter rewrites every string: registered literals first (secret values, vault keys,
    the host's home, temp and checkout directories), then generic shapes (POSIX, Windows drive,
-   UNC and rootless backslash paths, `~user` homes, `file:` URLs, private keys, bearer and
-   vendor key shapes, `key=value` credentials), then the account name as a whole word. A
-   token that still leaks once decoded is replaced whole.
+   UNC and rootless backslash paths, network file URLs, `~user` homes, `file:` URLs, private
+   keys, bearer and vendor key shapes, `key=value` credentials), then the account-name shapes
+   and the registered account names. A token that still leaks once decoded is replaced whole.
    - Every scan also runs over each **decoded form** of the string: JSON escapes (`\/`, `\t`,
      `\u002f`), percent-encoding (`%2F`) and HTML entities (`&#47;`), stacked up to three deep.
    - A path is not recognised by an allow-list of characters before it (any character left off
@@ -124,12 +128,26 @@ No secret, absolute host path, username or vault key may be in a bundle or repor
      non-alphanumeric character, so `.../home/a`, `../../Users/a`, `v2/Users/a`,
      `build-/home/a`, `/Users\a` and drive-relative `C:Users\a` are all caught.
    - **The user segment after a home root may contain spaces** (`C:\Users\First Last\x`), as
-     may every segment of a UNC path after the host (`\\nas\homes\First Last`). It runs to
-     the next separator and stops only at a character no account name may contain. These
+     may every segment of a Windows drive path (`D:\Profiles\First Last\x`), of a UNC path
+     after the host, and of a network file URL. A segment runs to the next separator and stops
+     only at a character no account name may contain. **The UNC shape covers the whole
+     class:** `\\nas\homes\First Last`, either or mixed separators (`\\nas/homes/a`,
+     `//nas/a`), the long-path and device prefixes (`\\?\UNC\nas\a`, `\\.\UNC\nas\a`,
+     `\\?\C:\Users\a`), double-escaped backslashes, and every encoded form of each. A URL
+     scheme's `://` is not a UNC host (`https://host/x` stays); the network file schemes
+     `smb`, `cifs`, `afp`, `nfs`, `webdav`, `dav(s)` and `(s)ftp(s)` are caught. These
      whitespace-tolerant shapes run **before** the drive, backslash and POSIX shapes, which stop
      at whitespace: run after them, the part before the space is replaced and the surname is
      left with no root to flag it. For the same reason, a string whose **decoded** form holds
-     such a path with whitespace in it (`C:\u005cUsers\u005cFirst Last`) is replaced whole.
+     such a path with whitespace in it (`C:\u005cUsers\u005cFirst Last`,
+     `%5C%5Cnas%5CFirst Last`) is replaced whole.
+   - **Usernames are caught in exactly these forms:** a registered account name (the
+     exporting host's own, and every `--user-file` line) as a whole word in **any letter
+     case**; `DOMAIN\user` as `whoami` and Windows prompts print it (a domain of letters,
+     digits, `.` and `-`, a backslash, then a user segment that may contain spaces); `user@host`
+     as POSIX prompts, `scp` and e-mail print it; and a user folder inside any path shape
+     above. These over-match too: a relative `dir\file`, a literal `word\nword` escape, an
+     e-mail address or `git@host` is redacted.
    - This over-matches (`src/home/x`, or the rest of a sentence after `C:\Users\`, is redacted
      too). It is not a proof that nothing identifying can get through: see the limits below.
      Vendor key prefixes may follow anything but a letter.
@@ -144,9 +162,18 @@ No secret, absolute host path, username or vault key may be in a bundle or repor
    written. Leak reports name kinds and offsets, never the value.
 5. **Limits.** The scanners recognise shapes and registered literals, so they cannot flag a
    fragment that no longer looks like a path (which is why step 1's order matters). Not caught
-   today: obfuscated forms (a soft hyphen inside `Users`, a fullwidth `／`), paths outside the
-   home roots behind a character the generic shape skips (`run.../tmp/x/y`), and a name an
-   agent writes in plain prose. These are hardening items for the shared scanner (TO FILE).
+   today:
+   - an account name that is not registered and is not in one of the forms above, such as a
+     name written in plain prose (`logged in as Alice`) or after a prompt with no `@`;
+   - a spaced folder in a **POSIX** path outside the home roots (`/srv/First Last/x` keeps
+     `Last/x`): only home roots, Windows drive, UNC and network-URL segments may span spaces;
+   - a `DOMAIN\user` with `_`, `:`, `.`, `-` or a separator directly before the domain
+     (`x_CORP\user`), and a `user@host` whose host does not start with a letter
+     (`a@10.0.0.1`);
+   - obfuscated forms (a soft hyphen inside `Users`, a fullwidth `／`, a tab inside
+     `Documents and Settings`), and paths outside the home roots behind a character the generic
+     shape skips (`run.../tmp/x/y`).
+   These are hardening items for the shared scanner (TO FILE).
 
 Planted-marker tests (`test/proof/redaction.test.ts`) plant fake secrets, key shapes, a vault
 key (plain and percent-encoded), a username and macOS, Linux and Windows home paths in every

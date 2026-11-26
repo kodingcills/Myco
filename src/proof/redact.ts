@@ -1,15 +1,20 @@
 /**
  * Track Q (replayable proof): redaction for proof bundles and reports.
  *
- * A proof bundle is meant to be shared, so it must never carry a secret, an absolute host
- * path, a username or a vault key. Two layers, both fail closed:
+ * A proof bundle is meant to be shared, so it must not carry a secret, an absolute host path,
+ * a username or a vault key, as far as the shapes and literals below recognise them. Two
+ * layers, both fail closed:
  *  1. `redactText` rewrites every string the exporter puts in a bundle: registered literal
- *     values first (secrets, vault keys, host paths, usernames), then generic shapes
+ *     values first (secrets, vault keys, host paths), then generic shapes
  *     (home roots `Users`/`home`/`root`/`Documents and Settings`/`DOCUME~N` after any
- *     non-alphanumeric character, with spaces allowed in the user segment, UNC paths,
- *     absolute POSIX and Windows paths, `~user` homes, `var/folders`, `file:` URLs,
- *     key-shaped tokens). A token that still leaks once decoded (JSON escapes,
- *     percent-encoding, HTML entities) is replaced whole.
+ *     non-alphanumeric character, with spaces allowed in the user segment; UNC paths in every
+ *     separator and prefix form and network file URLs, with spaces allowed in every segment;
+ *     Windows drive paths, also with spaced segments; absolute POSIX paths, `~user` homes,
+ *     `var/folders`, `file:` URLs, key-shaped tokens; then the account-name shapes
+ *     `DOMAIN\user` and `user@host`, and registered account names in any letter case). A
+ *     token that still leaks once decoded (JSON escapes, percent-encoding, HTML entities) is
+ *     replaced whole. What is NOT caught is listed under "Limits" in
+ *     docs/architecture/replayable-proof.md.
  *  2. The scanners refuse anything left:
  *     - `findLeaksDeep` scans every parsed string value AND every object key of a value
  *       (the verifier runs it over the parsed bundle);
@@ -38,7 +43,7 @@ export interface RedactionContext {
   readonly vaultKeys: readonly string[];
   /** Absolute host directories (home, temp, checkout): removed wherever they appear. */
   readonly hostPaths: readonly string[];
-  /** Account names: removed as whole words. */
+  /** Account names: removed as whole words, in any letter case. */
   readonly usernames: readonly string[];
 }
 
@@ -124,22 +129,62 @@ const HOME_ROOT = new RegExp(
   "gi",
 );
 /**
- * UNC paths (`\\host\share\...`), with every segment after the host allowed to carry
- * spaces: a share or folder is often named after its user (`\\nas\homes\First Last`).
+ * UNC paths, with every segment after the host allowed to carry spaces: a share or folder is
+ * often named after its user (`\\nas\homes\First Last`). R2-D1 closes the whole class:
+ *  - either separator, mixed or repeated, after a `\\` or `//` host (`\\nas/homes/a`,
+ *    `//nas/a`, a double-escaped `\\\\nas\\a`);
+ *  - the Win32 long-path and device prefixes `\\?\` and `\\.\` (the lone `?` or `.` is the
+ *    "host", then `UNC`, the server and the share are ordinary segments; `\\?\C:\Users\a` is
+ *    caught by the home-root shape, which runs first, and the drive shape);
+ *  - a URL scheme's `://` never matches (`:` may not precede), so `https://host/x` stays; the
+ *    network file schemes are caught by `NET_URL` below.
  */
 const UNC_SPACED = new RegExp(
-  String.raw`(?<![A-Za-z0-9._-])\\{2}[^\s\\/"<>|:*?]+(?:\\+${USER_SEG})+`,
+  String.raw`(?<![A-Za-z0-9._:-])[\\/]{2,}(?:[?.]|[^\s\\/"<>|:*?]+)(?:[\\/]+${USER_SEG})+`,
   "g",
 );
+/** Network file URLs (`smb://nas/homes/First Last/x`): every segment may carry spaces. */
+const NET_URL = new RegExp(
+  String.raw`(?<![A-Za-z0-9+.-])(?:smb|cifs|afp|nfs|webdav|davs?|s?ftps?):\/\/[^\s\\/"<>|*?]+(?:[\\/]+${USER_SEG})*`,
+  "gi",
+);
+/**
+ * Windows drive paths with spaces in any segment (D3: `D:\Profiles\First Last\x` outside the
+ * home roots). The space-free `WINDOWS_ABS` below still catches the rest.
+ */
+const WINDOWS_SPACED = new RegExp(String.raw`[A-Za-z]:[\\/]${USER_SEG}(?:[\\/]+${USER_SEG})*`, "g");
 const VAR_FOLDERS = /(?<![A-Za-z0-9])var[\\/]+folders(?:[\\/]+[^\s"'`<>|\\/]+)*/gi;
 
+/**
+ * Account names in the forms a harness prints them (D3): `whoami` and Windows prompts print
+ * `DOMAIN\user` (a NetBIOS or DNS domain, then a backslash, then a user segment that may carry
+ * spaces), and POSIX prompts, `scp` and e-mail print `user@host`. Both are redacted as
+ * usernames and refused by the scanners. Over-matching (a relative `dir\file`, an e-mail
+ * address, `git@host`) is redacted, never leaked.
+ */
+const DOMAIN_USER = new RegExp(
+  String.raw`(?<![A-Za-z0-9._:\\/-])[A-Za-z0-9][A-Za-z0-9.-]{0,62}\\(?![\\/])${USER_SEG}`,
+  "g",
+);
+const USER_AT_HOST =
+  /(?<![A-Za-z0-9._+-])[A-Za-z0-9_][A-Za-z0-9._+-]*@[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)*/g;
+const USERNAME_SHAPES: readonly RegExp[] = [DOMAIN_USER, USER_AT_HOST];
+
 /** The shapes whose match may span whitespace: a token-by-token rewrite cannot remove them. */
-const SPACE_SPANNING: readonly RegExp[] = [HOME_ROOT, UNC_SPACED];
+const SPACE_SPANNING: readonly RegExp[] = [
+  HOME_ROOT,
+  UNC_SPACED,
+  NET_URL,
+  WINDOWS_SPACED,
+  DOMAIN_USER,
+];
 
 const PATH_SHAPES: readonly RegExp[] = [
   // Whitespace-tolerant shapes first (see HOME_ROOT): they must see the whole path.
   HOME_ROOT,
   UNC_SPACED,
+  NET_URL,
+  WINDOWS_SPACED,
   FILE_URL,
   WINDOWS_ABS,
   BACKSLASH_ABS,
@@ -168,9 +213,12 @@ function literals(ctx: RedactionContext): Array<readonly [string, string]> {
 }
 
 function usernameRes(ctx: RedactionContext): RegExp[] {
-  return ctx.usernames
-    .filter((u) => u.length >= MIN_LITERAL)
-    .map((u) => new RegExp(`(?<![A-Za-z0-9_])${escapeRe(u)}(?![A-Za-z0-9_])`, "g"));
+  return (
+    ctx.usernames
+      .filter((u) => u.length >= MIN_LITERAL)
+      // Case-insensitive (D3): Windows account names are (`qzuser` is `Qzuser` and `QZUSER`).
+      .map((u) => new RegExp(`(?<![A-Za-z0-9_])${escapeRe(u)}(?![A-Za-z0-9_])`, "gi"))
+  );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -275,6 +323,7 @@ function plainLeaks(
   for (const re of usernameRes(ctx)) scan(re, "username");
   for (const re of SECRET_SHAPES) scan(re, "secret");
   for (const re of PATH_SHAPES) scan(re, "host-path");
+  for (const re of USERNAME_SHAPES) scan(re, "username");
   return out;
 }
 
@@ -330,6 +379,7 @@ function redactPlain(input: string, ctx: RedactionContext): string {
   for (const [value, placeholder] of literals(ctx)) out = out.split(value).join(placeholder);
   for (const re of SECRET_SHAPES) out = out.replace(re, PLACEHOLDER.secret);
   for (const re of PATH_SHAPES) out = out.replace(re, PLACEHOLDER.hostPath);
+  for (const re of USERNAME_SHAPES) out = out.replace(re, PLACEHOLDER.username);
   for (const re of usernameRes(ctx)) out = out.replace(re, PLACEHOLDER.username);
   return out;
 }

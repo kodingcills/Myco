@@ -332,7 +332,7 @@ describe("scanner bypasses: every encoded or prefixed host path or key is caught
   it("ordinary text stays clean in every decoded form (no false refusal)", () => {
     for (const ok of [
       "a%20b 50% done &amp; ok &lt;tag&gt;",
-      "line\\nnext \\t tab",
+      "line \\n next \\t tab",
       "https://example.org/a/b?x=%2Fy",
       "ratio 3:4, C: drive, path a/b/c, ~/notes, task_list_items, risk-assessment",
       "home page, root cause, users list, the users/ folder, myhome/x, rooted/x",
@@ -544,6 +544,34 @@ const absentFrom = (text: string, words: readonly string[]) => {
   expect(text).not.toContain("PLANTED");
 };
 
+/**
+ * The full battery for one value: the scanner flags it, `redactText` leaves no leak and no
+ * user word, the verifier refuses a hand-edited re-chained bundle carrying it, and the
+ * exporter writes a bundle with no user word that verifies.
+ */
+function expectNeverExported(value: string, words: readonly string[], ctx = NO_CTX): void {
+  expect(findLeaks(value, ctx), "findLeaks").not.toEqual([]);
+  const redacted = redactText(value, ctx);
+  expect(findLeaks(redacted, ctx), "redactText").toEqual([]);
+  absentFrom(redacted, words);
+  const b = clone(exportProofBundle(sampleRun(), ctx));
+  (b.records[1]?.body as { summary: string }).summary = value;
+  expect(
+    verifyProofBundle(serializeProofBundle(rechain(b)), { redaction: ctx }).errors.map(
+      (e) => e.code,
+    ),
+    "verifier",
+  ).toEqual(["PROOF_REDACTION"]);
+  const run = sampleRun();
+  const steps = [
+    { kind: "action" as const, actor: "harness" as const, tool: "shell", summary: value },
+    ...run.steps,
+  ];
+  const text = serializeProofBundle(exportProofBundle({ ...run, steps }, ctx));
+  absentFrom(text, words);
+  expect(verifyProofBundle(text, { redaction: ctx }).ok).toBe(true);
+}
+
 describe("R3-D1: Windows homes with spaces, Documents and Settings, 8.3 and UNC", () => {
   for (const [name, value, words] of SPACED) {
     it(name, () => {
@@ -653,5 +681,246 @@ describe("CLI export -> verify -> report: no user word in any output", () => {
       );
     }
     expect(cliRun(["verify", bundle, "--forbid-file", forbid]).code).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Verifier round 1 on #548, D1: the whole UNC class (long-path and device prefixes, mixed and
+// forward separators, double-escaped, network file URLs), each with a spaced and a plain user
+// folder. D2: the encoded-UNC half of the whole-string rule, once per decoder. D3: account
+// names as `whoami` and prompts print them, case-insensitive registered names, and spaced
+// Windows paths outside the home roots.
+const BOB = j("Plant", "bob");
+const SMITH = j("Zq", "PLANTEDsmith");
+const BS = "\\";
+const UNC_CLASS: ReadonlyArray<readonly [string, string, readonly string[]]> = [
+  [
+    "D1 long-path UNC, spaced user",
+    j(BS, BS, "?", BS, "UNC", BS, "nas", BS, "homes", BS, FIRST, " ", LAST, BS, "out"),
+    [FIRST, LAST],
+  ],
+  [
+    "D1 long-path UNC, plain user",
+    j(BS, BS, "?", BS, "UNC", BS, "nas", BS, GUEST, BS, "x"),
+    [GUEST],
+  ],
+  [
+    "D1 device UNC, spaced user",
+    j(BS, BS, ".", BS, "UNC", BS, "nas", BS, FIRST, " ", LAST, BS, "x"),
+    [FIRST, LAST],
+  ],
+  [
+    "D1 long-path drive into a spaced profile",
+    j(BS, BS, "?", BS, "C:", BS, "Users", BS, FIRST, " ", LAST, BS, "x"),
+    [FIRST, LAST],
+  ],
+  [
+    "D1 long-path drive, spaced folder outside the home roots",
+    j(BS, BS, "?", BS, "D:", BS, "Profiles", BS, FIRST, " ", LAST, BS, "x"),
+    [FIRST, LAST],
+  ],
+  [
+    "D1 mixed separators, spaced user",
+    j("copy ", BS, BS, "nas/homes/", BOB, " ", SMITH, "/x.csv"),
+    [BOB, SMITH],
+  ],
+  ["D1 mixed separators, plain user", j(BS, BS, "nas/", GUEST, "/x"), [GUEST]],
+  ["D1 forward-slash UNC, spaced share", j("//nas/", FIRST, " ", LAST, "/x"), [FIRST, LAST]],
+  ["D1 forward-slash UNC, homes share", j("//nas/homes/", FIRST, " ", LAST, "/x"), [FIRST, LAST]],
+  ["D1 forward-slash UNC, plain user after a command", j("copy //nas/", GUEST, "/x.csv"), [GUEST]],
+  [
+    "D1 forward-slash UNC at the end of the string",
+    j("open //nas/homes/", FIRST, " ", LAST),
+    [FIRST, LAST],
+  ],
+  [
+    "D1 double-escaped backslash UNC",
+    j(BS, BS, BS, BS, "nas", BS, BS, "homes", BS, BS, FIRST, " ", LAST, BS, BS, "x"),
+    [FIRST, LAST],
+  ],
+  ["D1 smb URL, plain user", j("smb://nas/homes/", GUEST, "/x"), [GUEST]],
+  ["D1 smb URL, spaced user", j("open smb://nas/homes/", FIRST, " ", LAST, "/x"), [FIRST, LAST]],
+  ["D1 afp URL, plain user", j("afp://mac.local/", GUEST), [GUEST]],
+  // D2: encoded UNC with whitespace, once per decoder (and stacked), replaced whole.
+  [
+    "D2 JSON-escaped UNC",
+    j("\\u005c\\u005cnas\\u005c", FIRST, " ", LAST, "\\u005cx"),
+    [FIRST, LAST],
+  ],
+  ["D2 percent-encoded UNC", j("%5C%5Cnas%5C", FIRST, " ", LAST, "%5Cx"), [FIRST, LAST]],
+  ["D2 entity-encoded UNC", j("&#92;&#92;nas&#92;homes&#92;", FIRST, " ", LAST), [FIRST, LAST]],
+  [
+    "D2 percent-encoded forward-slash UNC",
+    j("%2F%2Fnas%2F", FIRST, " ", LAST, "%2Fx"),
+    [FIRST, LAST],
+  ],
+  [
+    "D2 JSON-escaped long-path UNC",
+    j("\\u005c\\u005c?\\u005cUNC\\u005cnas\\u005c", FIRST, " ", LAST, "\\u005cx"),
+    [FIRST, LAST],
+  ],
+  [
+    "D2 stacked: entity over percent",
+    j("&#37;5C&#37;5Cnas&#37;5C", FIRST, " ", LAST, "&#37;5Cx"),
+    [FIRST, LAST],
+  ],
+  [
+    "D2 percent-encoded smb URL, spaced user",
+    j("smb:%2F%2Fnas%2Fhomes%2F", FIRST, " ", LAST, "%2Fx"),
+    [FIRST, LAST],
+  ],
+  [
+    "D1 long-path UNC, spaced user at the end of the string",
+    j("open ", BS, BS, "?", BS, "UNC", BS, "nas", BS, "homes", BS, FIRST, " ", LAST),
+    [FIRST, LAST],
+  ],
+  [
+    "D3 percent-encoded spaced drive path at the end of the string",
+    j("cd D:%5CProfiles%5C", FIRST, " ", LAST),
+    [FIRST, LAST],
+  ],
+  // D3: spaced Windows drive paths outside the home roots.
+  [
+    "D3 spaced folder outside the home roots",
+    j("D:", BS, "Profiles", BS, FIRST, " ", LAST, BS, "x"),
+    [FIRST, LAST],
+  ],
+  [
+    "D3 spaced folder outside the home roots, at the end",
+    j("cd D:", BS, "Profiles", BS, FIRST, " ", LAST),
+    [FIRST, LAST],
+  ],
+  [
+    "D3 percent-encoded spaced drive path",
+    j("D:%5CProfiles%5C", FIRST, " ", LAST, "%5Cx"),
+    [FIRST, LAST],
+  ],
+  // D3: account names as harnesses print them.
+  ["D3 whoami DOMAIN\\user, spaced", j("desktop-7", BS, FIRST, " ", LAST), [FIRST, LAST]],
+  ["D3 whoami DOMAIN\\user, plain", j("whoami: CORP", BS, GUEST), [GUEST]],
+  ["D3 DNS domain\\user", j("corp.example", BS, GUEST, " logged on"), [GUEST]],
+  ["D3 percent-encoded DOMAIN\\user, spaced", j("desktop-7%5C", FIRST, " ", LAST), [FIRST, LAST]],
+  ["D3 user@host prompt", j(GUEST, "@DESKTOP-7 ~ %"), [GUEST]],
+  ["D3 user@host:path from scp", j("scp a ", GUEST, "@nas.local:x"), [GUEST]],
+];
+
+describe("#548 D1-D3: the UNC class, encoded UNC and account-name forms", () => {
+  for (const [name, value, words] of UNC_CLASS) it(name, () => expectNeverExported(value, words));
+
+  it("D3: a registered account name is matched in any letter case", () => {
+    const name = j("qz", "planteduser");
+    const ctx = { ...NO_CTX, usernames: [name] };
+    for (const value of [
+      `logged in as ${name[0]?.toUpperCase()}${name.slice(1)}`,
+      `logged in as ${name.toUpperCase()}`,
+    ])
+      expectNeverExported(value, [name, name.toUpperCase(), "Qzplanteduser"], ctx);
+  });
+
+  it("URLs, media types and escapes after whitespace stay clean (no false refusal)", () => {
+    for (const ok of [
+      "https://example.org/a/b",
+      "see http://host:8080/x/y and ftp-like text",
+      "a // comment, and // another",
+      "text/csv, myco.gate/v1, react@18, @types/node",
+      "ratio 1//2",
+    ])
+      expect(findLeaks(ok), ok).toEqual([]);
+  });
+
+  it("a literal word\\nword escape is read as DOMAIN\\user and over-redacted, never leaked", () => {
+    const value = "line\\nnext";
+    expect(findLeaks(value).map((l) => l.kind)).toContain("username");
+    expect(redactText(value, NO_CTX)).toBe(PLACEHOLDER.username);
+  });
+
+  it("D3 limit, pinned: a POSIX spaced folder outside the home roots keeps the surname", () => {
+    // Stated in the doc's Limits; if this starts failing, the limit was closed: update the doc.
+    const out = redactText(j("/srv/", FIRST, " ", LAST, "/x"), NO_CTX);
+    expect(out).toContain(LAST);
+  });
+});
+
+describe("#548 D1/D3 through the real CLI: export -> verify -> report", () => {
+  it("the verifier's D1 probe and the D3 forms leave no user word in any output", () => {
+    const dir = mkdtempSync(join(tmpdir(), "proof-548-"));
+    const value = j(
+      "robocopy ",
+      BS,
+      BS,
+      "?",
+      BS,
+      "UNC",
+      BS,
+      "nas",
+      BS,
+      "homes",
+      BS,
+      FIRST,
+      " ",
+      LAST,
+      BS,
+      "out D:",
+      BS,
+      "b ; copy ",
+      BS,
+      BS,
+      "nas/homes/",
+      BOB,
+      " ",
+      SMITH,
+      "/x.csv ; ",
+      "desktop-7",
+      BS,
+      GUEST,
+      " ; ",
+      GUEST,
+      "@DESKTOP-7 ~ %",
+    );
+    const words = [FIRST, LAST, BOB, SMITH, GUEST];
+    const bundle = join(dir, "b.json");
+    const exp = cliRun(["export", writeRun(dir, value), "--out", bundle]);
+    expect(exp.code).toBe(0);
+    absentFrom(exp.out, words);
+    absentFrom(readFileSync(bundle, "utf8"), words);
+    const ver = cliRun(["verify", bundle]);
+    expect(ver.code).toBe(0);
+    absentFrom(ver.out, words);
+    const html = join(dir, "r.html");
+    const rep = cliRun(["report", bundle, "--out", html]);
+    expect(rep.code).toBe(0);
+    absentFrom(rep.out, words);
+    absentFrom(readFileSync(html, "utf8"), words);
+  });
+
+  it("--user-file registers the guest account: redacted in any case, refused by verify", () => {
+    const dir = mkdtempSync(join(tmpdir(), "proof-548u-"));
+    const guest = j("qz", "plantedguest");
+    const users = join(dir, "users.txt");
+    writeFileSync(users, `${guest}\n`);
+    const bundle = join(dir, "b.json");
+    const exp = cliRun([
+      "export",
+      writeRun(dir, `ran as ${guest.toUpperCase()} today`),
+      "--out",
+      bundle,
+      "--user-file",
+      users,
+    ]);
+    expect(exp.code).toBe(0);
+    const text = readFileSync(bundle, "utf8");
+    expect(text.toLowerCase()).not.toContain(guest);
+    expect(text).toContain(`ran as ${PLACEHOLDER.username} today`);
+    expect(cliRun(["verify", bundle, "--user-file", users]).code).toBe(0);
+    // A hand-edited bundle carrying the name in another case is refused only with the file.
+    const b = clone(JSON.parse(text) as ProofBundle);
+    (b.records[0]?.body as { summary: string }).summary = `ran as ${guest}`;
+    const edited = join(dir, "edited.json");
+    writeFileSync(edited, serializeProofBundle(rechain(b)));
+    expect(cliRun(["verify", edited]).code).toBe(0);
+    const refused = cliRun(["verify", edited, "--user-file", users]);
+    expect(refused.code).toBe(1);
+    expect(refused.out).toContain("PROOF_REDACTION");
+    expect(refused.out.toLowerCase()).not.toContain(guest);
   });
 });
