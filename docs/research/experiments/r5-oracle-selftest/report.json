@@ -72,6 +72,78 @@
       "reasons": []
     },
     {
+      "oracle": "calc-record-edit/gate",
+      "version": "gate-family-2",
+      "claims": [
+        "edit-missing",
+        "wrong-value",
+        "wrong-target",
+        "collateral",
+        "truncated",
+        "missing-file"
+      ],
+      "cases": 10,
+      "controlsVerified": 10,
+      "perClass": {
+        "edit-missing": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
+        },
+        "wrong-value": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
+        },
+        "wrong-target": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
+        },
+        "collateral": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
+        },
+        "truncated": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 0
+        },
+        "corrupt-byte": {
+          "claimed": false,
+          "runs": 0,
+          "caught": 0,
+          "expectedStatus": 0
+        },
+        "partial-save": {
+          "claimed": false,
+          "runs": 0,
+          "caught": 0,
+          "expectedStatus": 0
+        },
+        "missing-main-part": {
+          "claimed": false,
+          "runs": 0,
+          "caught": 0,
+          "expectedStatus": 0
+        },
+        "missing-file": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
+        }
+      },
+      "pass": true,
+      "reasons": []
+    },
+    {
       "oracle": "writer-doc-edit",
       "version": "1",
       "claims": [
@@ -844,6 +916,706 @@
       "claimed": true,
       "status": "uncertain",
       "code": "read-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-01",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-01",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-01",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-01",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-01",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-01",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": false
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-01",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-02",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-02",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-02",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-02",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-02",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-02",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": false
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-02",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-03",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-03",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-03",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-03",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-03",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-03",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": false
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-03",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-04",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-04",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-04",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-04",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-04",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-04",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": false
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-04",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-05",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-05",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-05",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-05",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-05",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-05",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": false
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-05",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-06",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-06",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-06",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-06",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-06",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-06",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": false
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-06",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-07",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-07",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-07",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-07",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-07",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-07",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": false
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-07",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-08",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-08",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-08",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-08",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-08",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-08",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": false
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-08",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-09",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-09",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-09",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-09",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-09",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-09",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": false
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-09",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-10",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-10",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-10",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-10",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-10",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-10",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": false
+    },
+    {
+      "oracle": "calc-record-edit/gate",
+      "caseId": "calc-10",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
       "ok": true,
       "expectedStatus": true
     },

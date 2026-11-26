@@ -61,6 +61,11 @@ function safeVerify<I>(
   }
 }
 
+function sameBytes(a: Uint8Array | null, b: Uint8Array | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.length === b.length && a.every((byte, i) => byte === b[i]);
+}
+
 export function runSelfTest<I>(
   oracle: OracleUnderTest<I>,
   cases: readonly SelfTestCase<I>[],
@@ -79,6 +84,21 @@ export function runSelfTest<I>(
       expectedStatus: control?.status === "verified",
     });
     for (const { cls, doc } of c.corruptions) {
+      // A corruption that did not change the document tests nothing. Never run the oracle on
+      // it: record a harness fault, which fails the bar whether or not the class is claimed.
+      if (sameBytes(doc.bytes, c.correct.bytes)) {
+        rows.push({
+          oracle: oracle.name,
+          caseId: c.id,
+          cls,
+          claimed: oracle.claims.has(cls),
+          status: "harness-fault",
+          code: "corruption-equals-control",
+          ok: false,
+          expectedStatus: false,
+        });
+        continue;
+      }
       const v = safeVerify(oracle, doc, c.intent);
       rows.push({
         oracle: oracle.name,
@@ -117,6 +137,16 @@ export function runSelfTest<I>(
     reasons.push(
       `${controls.length - controlsVerified} of ${controls.length} correct documents did not verify`,
     );
+  }
+  for (const cls of CORRUPTION_CLASSES) {
+    const degenerate = rows.filter(
+      (r) => r.cls === cls && r.code === "corruption-equals-control",
+    ).length;
+    if (degenerate > 0) {
+      reasons.push(
+        `${cls}: ${degenerate} corruption(s) are byte-identical to the correct document`,
+      );
+    }
   }
   for (const cls of CORRUPTION_CLASSES) {
     const s = perClass[cls];

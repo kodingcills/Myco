@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PersistedStateReadError, readCsvSpreadsheet } from "../core/filepersist.ts";
 import type { TaskIntent } from "../core/verify.ts";
+import { calcRecordEditFamily } from "../gate/families.ts";
 import { calcRecordEditVerifier, intentFor } from "../tasks/calc-record-edit.ts";
 import { DATA_COLUMNS, generateFixture } from "../tasks/fixture.ts";
 import { type CalcRecordEditParams, generateParameterSets } from "../tasks/intent.ts";
@@ -86,6 +87,40 @@ export const calcRecordEditOracle: OracleUnderTest<CalcRecordEditParams> = {
         throw error;
       }
     });
+  },
+};
+
+/**
+ * The gate's `calc-record-edit` family (version 2, TIF-270 / #485), over the same CSV bytes:
+ * a whole-document diff against the pristine fixture plus the edit. The adapter follows the
+ * gate's documented contract (`src/gate/gate.ts`): a missing file, and a `decide` that
+ * throws (including unreadable bytes), are `uncertain`.
+ */
+export const calcGateOracle: OracleUnderTest<CalcRecordEditParams> = {
+  name: "calc-record-edit/gate",
+  version: `gate-family-${calcRecordEditFamily.version}`,
+  claims: new Set<CorruptionClass>([
+    "edit-missing",
+    "wrong-value",
+    "wrong-target",
+    "collateral",
+    "truncated",
+    "missing-file",
+  ]),
+  verify(doc, params) {
+    if (doc.bytes === null) return { status: "uncertain", code: "state-missing" };
+    try {
+      const out = calcRecordEditFamily.decide(doc.bytes, { ...params }, "oracle-selftest");
+      const code =
+        out.status === "verified"
+          ? "postcondition-holds"
+          : out.status === "refuted"
+            ? (out.codes ?? []).join("+") || "refuted"
+            : "oracle-uncertain";
+      return { status: out.status, code };
+    } catch {
+      return { status: "uncertain", code: "oracle-threw" };
+    }
   },
 };
 
