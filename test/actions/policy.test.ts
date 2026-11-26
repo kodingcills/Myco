@@ -21,6 +21,7 @@ import {
   resolveScoped,
   type WorkspaceScope,
   workspacePolicy,
+  workspaceRelative,
 } from "../../src/actions/policy.ts";
 
 describe("parseShellCommand: default deny", () => {
@@ -361,5 +362,16 @@ describe("workspacePolicy: scoping", () => {
     expect(() => workspacePolicy({ ...scope, document: ws })).toThrow(/document/);
     expect(() => workspacePolicy({ ...scope, scratch: root })).toThrow(/scratch/);
     expect(() => workspacePolicy({ ...scope, scratch: ws })).toThrow(/scratch/);
+  });
+});
+
+describe("workspaceRelative", () => {
+  it("spells a path below the root as ./<rel>, and the root itself as .", () => {
+    expect(workspaceRelative("/w/run-a/scratch/x", "/w/run-a")).toBe("./scratch/x");
+    expect(workspaceRelative("/w/run-a", "/w/run-a")).toBe(".");
+  });
+  it("throws for a path outside the root rather than spell it with ..", () => {
+    expect(() => workspaceRelative("/w/run-b/x", "/w/run-a")).toThrow(/outside the root/);
+    expect(() => workspaceRelative("/elsewhere", "/w/run-a")).toThrow(/outside the root/);
   });
 });

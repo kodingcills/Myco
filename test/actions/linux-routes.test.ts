@@ -228,6 +228,129 @@ describe("script route", () => {
     expect(JSON.stringify(result)).not.toContain("MARKER-OUTSIDE");
   });
 
+  // F2 (round 1 verdict on #544): each produced-file guard, alone. Every case below gets past
+  // the other two guards, so removing the one it names makes it pass.
+  describe("each produced-file guard refuses on its own", () => {
+    const escaped = (body: string) => {
+      const router = createActionRouter({
+        policy: workspacePolicy(scope),
+        executors: [shellScriptRoute({ scope, soffice: fakeBin("soffice-guard", body) })],
+      });
+      const result = router.act({ kind: "doc.export-csv" });
+      return { result, code: router.log()[0]?.attempts[0]?.code, log: router.log() };
+    };
+
+    it("a hard link to an outside file (one regular file, inside, but two names: nlink)", () => {
+      const outside = join(root, "outside-hard.csv");
+      writeFileSync(outside, "MARKER-HARDLINK\n");
+      const { result, code, log } = escaped(`mkdir -p "$5"; ln ${outside} "$5/doc.csv"`);
+      expect(result).toMatchObject({ ok: false, code: "ALL_ROUTES_FAILED" });
+      expect(code).toBe("ROUTE_OUTPUT_ESCAPED");
+      expect(JSON.stringify([result, log])).not.toContain("MARKER-HARDLINK");
+      // Never moved into the workspace either.
+      expect(readdirSync(join(scope.scratch, "export-1"))).toEqual([]);
+      expect(lstatSync(outside).nlink).toBe(1);
+    });
+
+    it("a symlink to a file inside the fresh directory (one name, inside, not a file: isFile)", () => {
+      const { result, code, log } = escaped(
+        'mkdir -p "$5"; printf "MARKER-INNER-LINK\\n" > "$5/real.csv"; ln -s real.csv "$5/doc.csv"',
+      );
+      expect(result).toMatchObject({ ok: false, code: "ALL_ROUTES_FAILED" });
+      expect(code).toBe("ROUTE_OUTPUT_ESCAPED");
+      expect(JSON.stringify([result, log])).not.toContain("MARKER-INNER-LINK");
+      expect(readdirSync(join(scope.scratch, "export-1"))).toEqual([]);
+    });
+
+    it("the fresh directory swapped for a link out (a regular file, one name, outside: inside)", () => {
+      const away = join(root, "away");
+      mkdirSync(away);
+      writeFileSync(join(away, "doc.csv"), "MARKER-AWAY\n");
+      const { result, code, log } = escaped(`mv "$5" "$5.moved"; ln -s ${away} "$5"`);
+      expect(result).toMatchObject({ ok: false, code: "ALL_ROUTES_FAILED" });
+      expect(code).toBe("ROUTE_OUTPUT_ESCAPED");
+      expect(JSON.stringify([result, log])).not.toContain("MARKER-AWAY");
+      // The outside file stays where it was; nothing named doc.csv lands in the workspace.
+      expect(readFileSync(join(away, "doc.csv"), "utf8")).toBe("MARKER-AWAY\n");
+      expect(readdirSync(join(scope.scratch, "export-1"))).not.toContain("doc.csv");
+    });
+
+    it("a directory at the output name is refused", () => {
+      const { result, code } = escaped('mkdir -p "$5/doc.csv"');
+      expect(result).toMatchObject({ ok: false, code: "ALL_ROUTES_FAILED" });
+      expect(code).toBe("ROUTE_OUTPUT_ESCAPED");
+    });
+  });
+
+  it.each([
+    ["the resolved spelling (the route's cwd)", () => '"$PWD"'],
+    ["the given spelling", () => `"${scope.workspace}"`],
+  ])("an exported CSV whose cells carry the workspace path (%s) is ROUTE_OUTPUT_LEAK", (_w, at) => {
+    const router = createActionRouter({
+      policy: workspacePolicy(scope),
+      executors: [
+        shellScriptRoute({
+          scope,
+          soffice: fakeBin(
+            "soffice-leak",
+            `mkdir -p "$5"; printf "p\\n%s\\n" ${at()} > "$5/doc.csv"`,
+          ),
+        }),
+      ],
+    });
+    const result = router.act({ kind: "doc.export-csv" });
+    expect(result).toMatchObject({ ok: false, code: "ALL_ROUTES_FAILED" });
+    expect(router.log()[0]?.attempts[0]?.code).toBe("ROUTE_OUTPUT_LEAK");
+    const seen = JSON.stringify([result, router.log()]);
+    expect(seen).not.toContain(realpathSync(scope.workspace));
+    expect(seen).not.toContain(scope.workspace);
+  });
+
+  // Defensive checks the policy makes unreachable through the router, driven directly.
+  describe("direct executor calls: checks the policy normally makes unreachable", () => {
+    const direct = (soffice: string, outdir: string, argOutdir: string) => {
+      const ws = realpathSync(scope.workspace);
+      const doc = join(ws, "doc", "doc.xlsx");
+      return shellScriptRoute({ scope, soffice }).run(
+        { kind: "doc.export-csv" },
+        {
+          request: { route: "script", kind: "doc.export-csv", reads: [], writes: [] },
+          reads: [doc],
+          writes: [outdir],
+          argv: ["soffice", "--headless", "--convert-to", "csv", "--outdir", argOutdir, doc],
+        },
+      );
+    };
+
+    it("an argv outdir that is not the approved write is refused before soffice runs", () => {
+      const ws = realpathSync(scope.workspace);
+      const ran = join(root, "ran");
+      const soffice = fakeBin("soffice-ran", `touch ${ran}; mkdir -p "$5"; echo a > "$5/doc.csv"`);
+      expect(direct(soffice, join(ws, "scratch", "o"), join(ws, "scratch", "p"))).toEqual({
+        ok: false,
+        code: "ROUTE_FAILED",
+      });
+      expect(() => lstatSync(ran)).toThrow();
+    });
+
+    it("an approved outdir that no longer resolves to itself is ROUTE_OUTPUT_ESCAPED", () => {
+      const ws = realpathSync(scope.workspace);
+      const away = join(root, "away-dir");
+      mkdirSync(away);
+      const swapped = join(ws, "scratch", "swapped");
+      symlinkSync(away, swapped);
+      // Refused before soffice runs: nothing is ever created through the swapped link.
+      const ran = join(root, "ran-swapped");
+      const soffice = fakeBin("soffice-swap", `touch ${ran}; mkdir -p "$5"; echo a > "$5/doc.csv"`);
+      expect(direct(soffice, swapped, swapped)).toEqual({
+        ok: false,
+        code: "ROUTE_OUTPUT_ESCAPED",
+      });
+      expect(() => lstatSync(ran)).toThrow();
+      expect(readdirSync(away)).toEqual([]);
+    });
+  });
+
   it("runs in the workspace with no shell: the checked argv, verbatim", () => {
     writeFileSync(join(scope.scratch, "a b.txt"), "spaced\n");
     const router = createActionRouter({
