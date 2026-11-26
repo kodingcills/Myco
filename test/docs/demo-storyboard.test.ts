@@ -1,0 +1,243 @@
+/**
+ * docs/product/demo-storyboard.md and the README's "Getting started": every operator command is
+ * either runnable on main (and is run here, with its stated exit code) or marked "lands with
+ * #<PR>". No VM, no model, no network: the commands are the mock gate demo, `myco-gate check`
+ * on its output, the corrections-loop test (#514, merged) and a `myco init --dry-run` into a
+ * scratch project with a scratch HOME (#512, merged).
+ */
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+import { S0_TASKS } from "../../src/discovery/s0-sequence.js";
+import { SCENARIOS } from "../../src/gate/demo.js";
+
+const ROOT = join(import.meta.dirname, "..", "..");
+const DOC = readFileSync(join(ROOT, "docs/product/demo-storyboard.md"), "utf8");
+const README = readFileSync(join(ROOT, "README.md"), "utf8");
+const PENDING_PRS = new Set(["513"]);
+/** `# exit N`, or for `myco init` on Linux: `# exit 0 (1 on Linux without LibreOffice)`. */
+const EXIT = / # exit (\d+)( \(1 on Linux without LibreOffice\))?$/;
+const PENDING = /# \(?lands with #(\d+)/;
+
+function shellLines(markdown: string): string[] {
+  const lines: string[] = [];
+  for (const block of markdown.matchAll(/```sh\n([\s\S]*?)```/g))
+    for (const line of (block[1] ?? "").split("\n"))
+      if (line.trim() !== "" && !line.trim().startsWith("#")) lines.push(line.trim());
+  return lines;
+}
+
+function section(markdown: string, heading: string): string {
+  const start = markdown.indexOf(`\n## ${heading}\n`);
+  expect(start, heading).toBeGreaterThanOrEqual(0);
+  const end = markdown.indexOf("\n## ", start + 1);
+  return markdown.slice(start, end === -1 ? undefined : end);
+}
+
+/** Shot-list rows: `| # | Time | Seconds | On screen | Narration | Operator runs |`. */
+function shotRows(markdown: string): string[][] {
+  return [...markdown.matchAll(/^\| \d+ \| \d:\d\d–\d:\d\d \|.*\|$/gm)].map((m) =>
+    m[0]
+      .slice(1, -1)
+      .split(" | ")
+      .map((c) => c.trim()),
+  );
+}
+
+function flag(line: string, name: string): string | undefined {
+  return new RegExp(`${name} "?([^" ]+)"?`).exec(line)?.[1];
+}
+
+function run(line: string, env: Record<string, string>) {
+  return spawnSync("bash", ["-c", line], {
+    cwd: ROOT,
+    env: { ...process.env, ...env },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+}
+
+const lines = shellLines(DOC);
+const pending = lines.filter((l) => PENDING.test(l));
+const setup = lines.filter((l): l is string => l === "OUT=$(mktemp -d)");
+const runnable = lines.filter((l) => !pending.includes(l) && !setup.includes(l));
+
+const readmeLines = shellLines(section(README, "Getting started"));
+const readmePending = readmeLines.filter((l) => PENDING.test(l));
+/** README lines with a placeholder path: shown for the reader's own project, not run here. */
+const readmeTemplate = readmeLines.filter((l) => l.startsWith("/path/to/"));
+const readmeRunnable = readmeLines.filter(
+  (l) =>
+    !readmePending.includes(l) && !readmeTemplate.includes(l) && !l.startsWith("pnpm install "),
+);
+
+describe("demo storyboard commands", () => {
+  const out = mkdtempSync(join(tmpdir(), "myco-storyboard-"));
+  afterAll(() => rmSync(out, { recursive: true, force: true }));
+
+  it("marks every command as runnable (with an exit code) or pending a known PR", () => {
+    expect(setup).toHaveLength(1);
+    expect(runnable.length).toBeGreaterThanOrEqual(5);
+    expect(pending.length).toBeGreaterThanOrEqual(1);
+    for (const line of [...pending, ...readmePending]) {
+      const pr = PENDING.exec(line)?.[1] ?? "";
+      expect(PENDING_PRS, line).toContain(pr);
+    }
+    for (const line of runnable) expect(line, line).toMatch(EXIT);
+    // The Linux allowance is only for `myco init`, whose Linux checks need LibreOffice.
+    for (const line of runnable.filter((l) => EXIT.exec(l)?.[2]))
+      expect(line).toMatch(/bin\/myco" init --dry-run /);
+    // Commands that exist only on the pending branches never appear in a runnable line.
+    for (const line of [...runnable, ...readmeRunnable]) expect(line).not.toMatch(/myco-watch/);
+    expect(readmeTemplate).toEqual([expect.stringMatching(/myco init --dry-run --project /)]);
+  });
+
+  it("never tells the operator to run a relative bin/myco (it targets the Myco checkout)", () => {
+    for (const [name, text] of [
+      ["storyboard", DOC],
+      ["README", README],
+    ] as const) {
+      const relative = [...text.matchAll(/(^|[^\w/.-])(\.\/)?bin\/myco\b/gm)].map((m) => m[0]);
+      expect(relative, name).toEqual([]);
+    }
+    for (const line of readmeTemplate)
+      expect(line).toMatch(/^\/path\/to\/Myco\/bin\/myco init --dry-run --project \S+ /);
+    // Every storyboard `myco init` keeps `--project` (without it, init configures the cwd).
+    const inits = [...DOC.matchAll(/[^\n`]*myco"? init[^\n`]*/g)].map((m) => m[0]);
+    expect(inits.length).toBeGreaterThanOrEqual(2);
+    for (const line of inits.filter((l) => /bin\/myco"? init/.test(l)))
+      expect(line, line).toMatch(/init --dry-run --project /);
+  });
+
+  it("the status table's pending rows are exactly the pending PRs", () => {
+    const table = section(DOC, "Status of the pieces");
+    const notYet = [...table.matchAll(/\| no \(lands with #(\d+)\) \|$/gm)].map((m) => m[1]);
+    expect(new Set(notYet)).toEqual(PENDING_PRS);
+    expect(notYet).toHaveLength(PENDING_PRS.size);
+    for (const row of table.split("\n").filter((r) => /^\| (?!Piece|---)/.test(r)))
+      expect(row, row).toMatch(/\| (yes|no \(lands with #\d+\)) \|$/);
+  });
+
+  it("the README's getting started never promises a write to a home config", () => {
+    const start = section(README, "Getting started");
+    expect(start).not.toMatch(/~\/\.claude|~\/\.codex|\.claude\.json|--global/);
+    expect(start).toContain("your project's `.mcp.json`");
+  });
+
+  it("beat 3 describes the tamper payload the demo actually sends", () => {
+    const tamper = SCENARIOS.find((s) => s.runId === "demo-df-s02" && s.tamper)?.tamper;
+    const sent = (tamper?.items ?? []) as string[];
+    const task = S0_TASKS.find((t) => t.id === "df-s02");
+    const quote = /`not persisted: ([^`]+)`/.exec(DOC)?.[1] ?? "";
+    const missing = quote.split(", ");
+    const saved = (task?.items ?? []).filter((item) => !missing.includes(item));
+    expect(missing).toHaveLength(2);
+    // The agent sends the items that DID persist, not the missing ones.
+    expect([...sent].sort()).toEqual([...saved].sort());
+    for (const item of missing) expect(sent).not.toContain(item);
+    const narration = shotRows(DOC)[2]?.[4] ?? "";
+    const counts = ["zero", "one", "two", "three", "four"];
+    expect(narration).toContain(`only the ${counts[sent.length]} that saved`);
+    expect(narration).not.toMatch(/missing items|items that did not|unsaved items/i);
+  });
+
+  it("the shot list has 8 contiguous beats, each with all six cells, summing to 90 s", () => {
+    const rows = shotRows(DOC);
+    expect(rows).toHaveLength(8);
+    let clock = 0;
+    const mmss = (t: string) => Number(t.split(":")[0]) * 60 + Number(t.split(":")[1]);
+    rows.forEach((row, i) => {
+      expect(row, row.join(" | ")).toHaveLength(6);
+      for (const cell of row) expect(cell, row.join(" | ")).not.toBe("");
+      expect(row[0]).toBe(String(i + 1));
+      const [from, to] = (row[1] ?? "").split("–");
+      expect(mmss(from ?? ""), row[1]).toBe(clock);
+      expect(mmss(to ?? "") - clock, row[1]).toBe(Number(row[2]));
+      clock = mmss(to ?? "");
+    });
+    expect(clock).toBe(90);
+    const total = /^Total: ([\d + ]+) = 90 seconds\.$/m.exec(DOC)?.[1];
+    expect(total).toBe(rows.map((r) => r[2]).join(" + "));
+  });
+
+  it("runs every main-today command with its stated exit code and the quoted output", () => {
+    let stdout = "";
+    for (const line of runnable) {
+      const [, code, linuxAllowance] = EXIT.exec(line) ?? [];
+      const isInit = /bin\/myco" init /.test(line);
+      const home = mkdtempSync(join(tmpdir(), "myco-storyboard-home-"));
+      const result = run(line, isInit ? { OUT: out, HOME: home } : { OUT: out });
+      const missingCalc =
+        process.platform === "linux" && /^ {2}MISSING {2}(soffice|python)/im.test(result.stdout);
+      const expected = linuxAllowance && missingCalc ? 1 : Number(code);
+      expect(result.status, `${line}\n${result.stdout}\n${result.stderr}`).toBe(expected);
+      if (isInit) {
+        // A dry run: the plan names both project files, and nothing lands anywhere.
+        expect(result.stdout).toContain("DRY RUN: nothing written.");
+        expect(result.stdout).toContain(join(out, "project", ".mcp.json"));
+        expect(result.stdout).toContain(join(out, "project", ".codex", "config.toml"));
+        expect(readdirSync(join(out, "project"))).toEqual([]);
+        expect(readdirSync(home)).toEqual([]);
+      }
+      rmSync(home, { recursive: true, force: true });
+      stdout += result.stdout;
+    }
+    const quoted = [
+      "refuted (not accepted): ORACLE_FAIL, CLAIM_RECORDED",
+      "not persisted: bug: login page crashes on save, BUG: token expires too early",
+      "step 2: TARGET_MISMATCH: cell C4 (record EMP-0003, column qty) does not hold the requested value",
+      "verified (accepted): ORACLE_PASS, CLAIM_RECORDED",
+      'correction: {"kind":"target_value_mismatch","step":2,"cell":"C4","record":"EMP-0003","column":"qty","expected":"4242","observed":"4224"}',
+    ];
+    for (const text of quoted) {
+      expect(stdout).toContain(text);
+      expect(DOC).toContain(text);
+    }
+
+    // Every `check` line names a run the demo actually logged for that task.
+    for (const line of runnable.filter((l) => / check /.test(l))) {
+      const root = (flag(line, "--evidence-root") ?? "").replace("$OUT", out);
+      const log = join(root, "..", "gate-decisions.jsonl");
+      expect(existsSync(log), line).toBe(true);
+      const pairs = readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l).request as { taskId: string; runId: string })
+        .map((r) => `${r.taskId}/${r.runId}`);
+      expect(pairs, line).toContain(`${flag(line, "--task")}/${flag(line, "--run")}`);
+    }
+
+    // Beat 2 shows the run's whole timeline: one numbered call per decision the demo logged
+    // for demo-df-s02 (the watch view reads this same log), with its verdict and first code.
+    const beat2 = shotRows(DOC)[1]?.[3] ?? "";
+    expect(beat2).toContain("run `demo-df-s02`");
+    const decisions = readFileSync(join(out, "todo", "gate-decisions.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map(
+        (l) =>
+          JSON.parse(l) as { verdict: string; reasonCodes: string[]; request: { runId: string } },
+      )
+      .filter((d) => d.request.runId === "demo-df-s02");
+    expect(decisions.length).toBeGreaterThanOrEqual(2);
+    decisions.forEach((d, i) => {
+      const call = new RegExp(`Call ${i + 1}[^.]*\`${d.verdict}\`[^.]*\`${d.reasonCodes[0]}\``);
+      expect(beat2, `call ${i + 1}: ${d.verdict} ${d.reasonCodes[0]}`).toMatch(call);
+    });
+    expect(beat2).not.toContain(`Call ${decisions.length + 1}`);
+    expect(beat2).toContain(`${["one", "two", "three", "four"][decisions.length - 1]} entries`);
+  }, 120_000);
+
+  it("runs the README's main-today demo line and backs its stated outcome", () => {
+    expect(readmeRunnable).toEqual([
+      expect.stringMatching(/^pnpm myco-gate demo --transport mock /),
+    ]);
+    const line = (readmeRunnable[0] ?? "").replace(/\s+#.*$/, "");
+    const result = run(line, {});
+    expect(result.status, `${line}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("DEMO: PASS");
+    expect(README).toContain("The demo exits 0 and prints `DEMO: PASS`");
+  }, 60_000);
+});
