@@ -133,8 +133,10 @@ export const m2TrialOpsSchema: JsonSchema = {
  * event when it ends, so every attempt (harness-faulted and superseded ones included) is on
  * record before anyone decides what to keep. Each event names the sha256 of the previous
  * event's canonical JSON (`prevSha256`; 64 zeros for the first), so an edit, a deletion or a
- * reordering breaks the chain. `outcome` (and, for a harness fault, `harnessClass`) is on
- * `end` events only.
+ * reordering breaks the chain, and `pack.json` pins the head against truncation. This is
+ * tamper-evidence against partial edits, not against regenerating the whole history: the pin
+ * sits in the same pack (`src/m2/attempt-ledger.ts`). `outcome` (and, for a harness fault,
+ * `harnessClass`) is on `end` events only.
  */
 export const m2AttemptEventSchema: JsonSchema = {
   type: "object",

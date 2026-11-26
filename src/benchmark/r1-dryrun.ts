@@ -87,8 +87,9 @@ export interface DryRunResult {
 
 /**
  * Run the dry run over `tasks`, writing `<dir>/SIMULATED`, `<dir>/arm.jsonl`,
- * `<dir>/attempts.jsonl` (the append-only attempt ledger) and `<dir>/docs/<trialKey>.csv`. `oracleSources` are the gate family's source files (hashed at
- * seal). The caller grades with `make-requests` + the grader and checks with the check.
+ * `<dir>/attempts.jsonl` (the append-only attempt ledger) and `<dir>/docs/<trialKey>.csv`.
+ * `oracleSources` are the gate family's source files (hashed at seal). The caller grades with
+ * `make-requests` + the grader and checks with the check.
  */
 export async function runDryRun(
   tasks: readonly BenchmarkTask[],

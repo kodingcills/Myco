@@ -427,3 +427,66 @@ describe("superseded attempts (#511) against the ledger", () => {
     expect(has(r, /^superseded row 0: .*reason/)).toBe(true);
   });
 });
+
+describe("#518 round 1: double ends, non-R1 triggers, end-vs-start, torn lines, the stated limit", () => {
+  const pinOf = (c: { events: AttemptEvent[]; headSha256: string }) => ({
+    events: c.events.length,
+    headSha256: c.headSha256,
+  });
+
+  it("D1: a second end with a different outcome is refused, and cannot overwrite the first", () => {
+    const trials = r1Trials();
+    const evs = ledgerFor(trials).events;
+    // g0 completed; a forged second end claims a harness fault.
+    const second = { ...evs[1]!, outcome: "harness-fault" as const, harnessClass: "timeout" };
+    const forged = rechain([...evs.slice(0, 2), second, ...evs.slice(2)]);
+    const r = checkWith(trials, forged.events, pinOf(forged));
+    expect(has(r, /attempt g0: ended twice/)).toBe(true);
+    // The first (completed) end stands: no harness-fault mismatch is reported for g0.
+    expect(has(r, /g0: the ledger recorded a harness fault/)).toBe(false);
+    expect(r.r1?.pass).toBe(false);
+  });
+
+  it("D2: a non-R1 pack that carries a broken ledger, or pins one without the file, is refused", () => {
+    const trials = r1Trials();
+    const r3 = manifest({ rows: ["R3"], expectTrials: { "myco-gate": 100 } });
+    const { events, head } = ledgerFor(trials);
+    const broken = events.map((e, i) => (i === 3 ? { ...e, taskId: "fc-v1-099" } : e));
+    const carried = checkPack({
+      ...input(trials, r3),
+      manifest: { ...r3, attempts: head },
+      attempts: broken,
+    });
+    expect(has(carried, /^attempt event 4: the hash chain breaks/)).toBe(true);
+    const pinnedOnly = checkPack({ ...input(trials, r3), manifest: { ...r3, attempts: head } });
+    expect(has(pinnedOnly, /attempts\.jsonl: missing/)).toBe(true);
+    // A non-R1 pack with neither is not required to have one.
+    expect(has(checkPack(input(trials, r3)), /attempt/)).toBe(false);
+  });
+
+  it("nit 2: an end that names another task or arm than its start is refused", () => {
+    const trials = r1Trials();
+    const forged = rechain(
+      ledgerFor(trials).events.map((e, i) => (i === 1 ? { ...e, arm: "hcu+shell" as const } : e)),
+    );
+    const r = checkWith(trials, forged.events, pinOf(forged));
+    expect(has(r, /attempt g0: its end names another task or arm than its start/)).toBe(true);
+  });
+
+  it("nit 3: the writer refuses a torn last line with a clear message", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "myco-ledger-")), "attempts.jsonl");
+    const w = new AttemptLedgerWriter(path);
+    w.start({ trialKey: "t1", taskId: "fc-v1-001", arm: "myco-gate" });
+    writeFileSync(path, `${readFileSync(path, "utf8")}{"schema":"myco.m2.att`);
+    expect(() => new AttemptLedgerWriter(path)).toThrow(/line 2 is not JSON \(a torn write\?\)/);
+  });
+
+  it("STATED LIMIT (D3): a wholly regenerated ledger with a fresh pin is not detected", () => {
+    // Tamper-evidence, not rewrite resistance: the pin sits in the same pack. Pinned here so the
+    // limit is visible until an out-of-pack anchor exists (a lead decision).
+    const trials = r1Trials();
+    const regenerated = ledgerFor(trials);
+    const r = checkWith(trials, regenerated.events, regenerated.head);
+    expect(r.errors).toEqual([]);
+  });
+});

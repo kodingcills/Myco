@@ -3,9 +3,18 @@
  * its superseded attempts are what the operator chose to disclose; this ledger is what
  * happened. The runner appends a `start` event when an attempt begins and an `end` event when
  * it ends (`completed`, or `harness-fault` with its harness class), to `attempts.jsonl`, as
- * the attempt runs. Each event names the sha256 of the previous event's canonical JSON, so the
- * file can only grow: an edited, deleted or reordered event breaks the chain, and the pack's
- * manifest pins the head (event count and last hash), so a truncated tail is refused too.
+ * the attempt runs. Each event names the sha256 of the previous event's canonical JSON (the
+ * parsed, key-sorted event, not its raw bytes: whitespace or key order is not evidence), and
+ * the pack's manifest pins the head (event count and last hash).
+ *
+ * What that gives, plainly: TAMPER-EVIDENCE against partial edits and truncation. Editing,
+ * deleting, inserting or reordering an event breaks the chain; cutting the tail no longer
+ * matches the pin; and a partial forgery that is re-chained and re-pinned is still caught by
+ * the cross-check below wherever it makes the ledger and the pack disagree. What it does NOT
+ * give: resistance to regenerating the whole history. The chain is unkeyed and the pin sits in
+ * the same pack, so whoever can write the pack can write a fresh, consistent ledger and pin it.
+ * Rewrite resistance needs the head anchored outside the operator's write path (recorded
+ * host-side before the pack is assembled, or signed); that is a lead decision, not built here.
  *
  * The evidence check (`src/m2/evidence.ts`) then cross-checks the ledger against the pack:
  *  - every attempt in the ledger is disclosed (a pack row, or a superseded attempt), with the
@@ -15,9 +24,10 @@
  *    disclosed as anything else;
  *  - a superseded attempt ends before the trial that replaced it starts.
  *
- * What it cannot prove: that the runner itself wrote every event honestly. It moves the trust
- * from "the operator disclosed every attempt" to "the runner logged every attempt as it ran",
- * which is code we review, and the head pin makes a later rewrite visible.
+ * What it cannot prove: that the runner itself wrote every event honestly, or that nobody
+ * regenerated the whole ledger (above). It moves the trust from "the operator disclosed every
+ * attempt" to "the runner logged every attempt as it ran", which is code we review. The ledger
+ * records task, arm and outcome only: a row's verdict or document is not bound here.
  */
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
@@ -142,14 +152,21 @@ export function crossCheckAttempts(
 
   const starts = new Map<string, number>();
   const ends = new Map<string, AttemptEvent & { at: number }>();
+  const startOf = new Map<string, AttemptEvent>();
   events.forEach((e, at) => {
     if (e.kind === "start") {
       if (starts.has(e.trialKey)) errors.push(`attempt ${e.trialKey}: started twice`);
       starts.set(e.trialKey, at);
+      if (!startOf.has(e.trialKey)) startOf.set(e.trialKey, e);
     } else {
-      if (!starts.has(e.trialKey)) errors.push(`attempt ${e.trialKey}: ended before it started`);
+      const start = startOf.get(e.trialKey);
+      if (start === undefined) errors.push(`attempt ${e.trialKey}: ended before it started`);
+      else if (start.taskId !== e.taskId || start.arm !== e.arm)
+        errors.push(`attempt ${e.trialKey}: its end names another task or arm than its start`);
+      // A second end is refused, and the first is kept, so a later end cannot overwrite the
+      // recorded outcome (#518 round 1, D1).
       if (ends.has(e.trialKey)) errors.push(`attempt ${e.trialKey}: ended twice`);
-      ends.set(e.trialKey, { ...e, at });
+      else ends.set(e.trialKey, { ...e, at });
     }
   });
   for (const key of starts.keys())
@@ -211,7 +228,16 @@ export class AttemptLedgerWriter {
       const lines = readFileSync(path, "utf8")
         .split("\n")
         .filter((l) => l.trim() !== "")
-        .map((l) => JSON.parse(l) as unknown);
+        .map((l, i) => {
+          try {
+            return JSON.parse(l) as unknown;
+          } catch {
+            // A torn line (for example a crash mid-append) is a broken ledger: refuse clearly.
+            throw new Error(
+              `refusing to append to a broken attempt ledger: line ${i + 1} is not JSON (a torn write?)`,
+            );
+          }
+        });
       const v = verifyAttemptLedger(lines);
       if (v.errors.length > 0)
         throw new Error(`refusing to append to a broken attempt ledger: ${v.errors[0]}`);
