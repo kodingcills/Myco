@@ -407,8 +407,10 @@ jobs:
         run: npm install -g pnpm@10
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Install LibreOffice Calc and Python-UNO
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc python3-uno
+      # libreoffice-writer: the cross-app suite (track P, test/linux/cross-app-libreoffice.test.ts)
+      # drives a real headless Writer too.
+      - name: Install LibreOffice Calc, Writer and Python-UNO
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc libreoffice-writer python3-uno
       - name: Prerequisites
         run: pnpm myco-linux --check
       - name: Linux path tests (real Calc; must not skip)
