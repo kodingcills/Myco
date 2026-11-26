@@ -141,13 +141,17 @@ if ($Stage -eq 'idle') {
   # \Microsoft\Windows task (except the two below) has been running and the
   # guest CPU has stayed low for 3 consecutive 30 s samples; give up (exit 1)
   # after 60 minutes.
-  # Exactly two tasks are not counted, matched by full path (equality, no
-  # wildcards; lead ruling 2026-11-26 05:37Z). Both run for the whole session:
-  # in build run 2 they were running in all 115 samples and in the deadline
-  # line, and also 22-23 s after boot, so the stage could never pass while they
-  # counted. They are still
-  # logged in every sample.
-  $notCounted = @('\Microsoft\Windows\Multimedia\SystemSoundsService', '\Microsoft\Windows\Wininet\CacheTask')
+  # Exactly three tasks are not counted, matched by full path (equality, no
+  # wildcards). SystemSoundsService and CacheTask (lead ruling 2026-11-26
+  # 05:37Z) run for the whole session: in build run 2 they were running in all
+  # 115 samples and in the deadline line, and also 22-23 s after boot.
+  # WDI\ResolutionHost (lead ruling 2026-11-26 20:3xZ, trial-base-v3): on a COLD
+  # boot it ran in 85 of 103 samples through the 60 min deadline with the guest
+  # otherwise idle (CPU 2-6%), and never appeared on the fast-booted v2 builds.
+  # Unconfirmed explanation: the Diagnostic Policy Service resolving the
+  # slow-boot event a ~134 s cold boot logs. All three are still logged in every
+  # sample.
+  $notCounted = @('\Microsoft\Windows\Multimedia\SystemSoundsService', '\Microsoft\Windows\Wininet\CacheTask', '\Microsoft\Windows\WDI\ResolutionHost')
   $msched = "$env:windir\System32\MSchedExe.exe"
   if (Test-Path -LiteralPath $msched) { Native { & $msched Start }; "idle: Automatic Maintenance started" } else { "idle: MSchedExe.exe not present; idle tasks only" }
   Native { & "$env:windir\System32\rundll32.exe" advapi32.dll,ProcessIdleTasks }
