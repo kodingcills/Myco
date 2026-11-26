@@ -30,6 +30,7 @@ import {
 import { validateSchema } from "../../schemas/validate.ts";
 import { currentHost, type HostFacts } from "./clean.ts";
 import { ARM_GRAMMAR, closeEpisode, ExportInputError, openStrings } from "./closed.ts";
+import { type IdentityOptions, identityIssues, identityPatterns } from "./identity.ts";
 import { blobsFor, EpisodeStore, readStoreDir } from "./store.ts";
 import type { Episode, EpisodeOutcome } from "./types.ts";
 import { canonicalJson, sha256Hex, validateEpisode } from "./validate.ts";
@@ -156,10 +157,19 @@ export function exportDataset(options: {
   readonly simulated: boolean;
   readonly filter?: EpisodeFilter;
   readonly host?: HostFacts;
+  /** Extra identity strings (the host's account and host name are always checked; identity.ts). */
+  readonly identity?: IdentityOptions;
 }): DatasetManifest {
   const filter = options.filter ?? NO_FILTER;
   validateFilter(filter);
   const host = options.host ?? currentHost();
+  // Identity strings (lead ruling 21:52Z): read now, from os and the identity file.
+  const identity = identityPatterns(options.identity);
+  const filterIdentity = identityIssues(filter, identity);
+  if (filterIdentity.length > 0)
+    throw new Error(
+      `export refused: the filter carries an identity string (${filterIdentity[0]?.class} at ${filterIdentity[0]?.path.replace(/^\$/, "$.filter")})`,
+    );
   if (options.stores.length === 0) throw new Error("export: name at least one store");
   const byId = new Map<string, Episode>();
   for (const root of options.stores) {
@@ -197,6 +207,11 @@ export function exportDataset(options: {
         throw new Error(
           `export refused: the closed form of episode ${String(ep.episodeId).slice(0, 12)} is invalid (${[...new Set(closedIssues.map((i) => i.code))].join(", ")})`,
         );
+      const named = identityIssues(closedEp, identity);
+      if (named.length > 0)
+        throw new Error(
+          `export refused: episode ${String(ep.episodeId).slice(0, 12)} carries an identity string (${named[0]?.class} at ${named[0]?.path})`,
+        );
       byId.set(closedEp.episodeId, closedEp);
     }
   }
@@ -222,7 +237,12 @@ export function exportDataset(options: {
 }
 
 /** Validate an exported dataset. Returns problems (empty = valid); never throws on bad data. */
-export function validateDataset(dir: string, host: HostFacts = currentHost()): string[] {
+export function validateDataset(
+  dir: string,
+  host: HostFacts = currentHost(),
+  identityOptions: IdentityOptions = {},
+): string[] {
+  const identity = identityPatterns(identityOptions);
   const problems: string[] = [];
   let manifest: DatasetManifest;
   try {
@@ -273,6 +293,10 @@ export function validateDataset(dir: string, host: HostFacts = currentHost()): s
     const issues = validateEpisode(ep, { host });
     for (const i of issues)
       problems.push(`episode ${String(ep.episodeId).slice(0, 12)}: ${i.code} at ${i.path}`);
+    for (const i of identityIssues(ep, identity))
+      problems.push(
+        `episode ${String(ep.episodeId).slice(0, 12)}: IDENTITY ${i.class} at ${i.path}`,
+      );
     for (const path of openStrings(ep))
       problems.push(
         `episode ${String(ep.episodeId).slice(0, 12)}: OPEN_STRING at ${path} (not a closed value)`,

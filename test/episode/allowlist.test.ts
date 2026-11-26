@@ -8,6 +8,7 @@
  */
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -512,5 +513,169 @@ describe("#556 round 1 fixes", () => {
         name,
       ).toEqual([]);
     }
+  });
+});
+
+describe("identity strings are leaks (lead ruling 21:52Z): bare username, host name, configured identity", () => {
+  // The real host values, read now and never printed: assertions compare booleans only.
+  const realUser = (() => {
+    try {
+      return userInfo().username;
+    } catch {
+      return "";
+    }
+  })();
+  const realHost = hostname().split(".")[0] ?? "";
+  const GENERIC = new Set([
+    "root",
+    "user",
+    "runner",
+    "admin",
+    "ubuntu",
+    "node",
+    "nobody",
+    "vscode",
+    "codespace",
+  ]);
+  const userCounts = realUser.length >= 3 && !GENERIC.has(realUser.toLowerCase());
+  const hostCounts = realHost.length >= 4 && realHost.toLowerCase() !== "localhost";
+  const variants = (v: string) => [v, v.toUpperCase(), v.toLowerCase()];
+  const leaks = (out: string, v: string) => dataset(out).toLowerCase().includes(v.toLowerCase());
+
+  /** Export one episode built by `edit`; the refusal message, or null when it exported. */
+  type Draft = ReturnType<typeof draft>;
+  function exportEdited(edit: (d: Draft) => Draft, identity = {}) {
+    const root = join(dir("id-store"), "s");
+    const store = EpisodeStore.open(root, { simulated: true, host: HOST });
+    const r = store.record(draft(edit(draft())), new Map());
+    expect(r.status).toBe("written");
+    const out = join(dir("id-out"), "ds");
+    try {
+      exportDataset({ stores: [root], out, simulated: true, host: HOST, identity });
+      return { refused: null as string | null, out };
+    } catch (e) {
+      return { refused: (e as Error).message, out };
+    }
+  }
+  const fields: [
+    string,
+    (v: string) => (d: ReturnType<typeof draft>) => ReturnType<typeof draft>,
+  ][] = [
+    ["$.task.id", (v) => (d) => ({ ...d, task: { ...d.task, id: v } })],
+    ["$.provenance.runId", (v) => (d) => ({ ...d, provenance: { ...d.provenance, runId: v } })],
+    [
+      "$.provenance.trialKey",
+      (v) => (d) => ({ ...d, provenance: { ...d.provenance, trialKey: `t-${v}-1` } }),
+    ],
+    [
+      "$.harness.plannerModelId",
+      (v) => (d) => ({ ...d, harness: { ...d.harness, plannerModelId: v } }),
+    ],
+    [
+      "$.actions.items[0].keys",
+      (v) => (d) => ({
+        ...d,
+        actions: {
+          capture: "recorded",
+          truncated: false,
+          items: [{ seq: 0, atMs: null, kind: "key", keys: v }],
+        },
+      }),
+    ],
+    [
+      "$.actions.items[0].app",
+      (v) => (d) => ({
+        ...d,
+        actions: {
+          capture: "recorded",
+          truncated: false,
+          items: [{ seq: 0, atMs: null, kind: "launch", app: v }],
+        },
+      }),
+    ],
+  ];
+
+  it("the real host username, in every closed id/token field and every case, refuses the export by path, never by value", () => {
+    if (!userCounts) return; // a generic or short account (CI's `runner`): its home paths are paths
+    for (const v of variants(realUser)) {
+      for (const [path, put] of fields) {
+        const r = exportEdited(put(v));
+        if (CLOSED_ID.test(v) || /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(v)) {
+          expect(r.refused !== null, path).toBe(true);
+          expect((r.refused ?? "").includes(`(username at ${path})`), path).toBe(true);
+          expect((r.refused ?? "").toLowerCase().includes(realUser.toLowerCase()), path).toBe(
+            false,
+          );
+        } else {
+          // Not a closed value: hashed, so it never appears.
+          expect(r.refused === null && !leaks(r.out, v), path).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("the real host name refuses the export the same way", () => {
+    if (!hostCounts || !CLOSED_ID.test(realHost)) return;
+    for (const v of variants(realHost)) {
+      const r = exportEdited(fields[0]![1](v));
+      expect((r.refused ?? "").includes("(hostname at $.task.id)")).toBe(true);
+      expect((r.refused ?? "").toLowerCase().includes(realHost.toLowerCase())).toBe(false);
+    }
+  });
+
+  it("configured identity strings (an identity file): an alias is refused in any case; a full name with a space never appears", () => {
+    const file = join(dir("id-file"), "identity.txt");
+    const alias = ["qzplant", "alias"].join("");
+    const full = ["Qzfirst", " ", "Plantlast"].join("");
+    writeFileSync(file, `# configured identity\n${alias}\n${full}\n`);
+    for (const v of variants(alias)) {
+      const r = exportEdited(fields[0]![1](v), { identityFile: file });
+      expect((r.refused ?? "").includes("(identity at $.task.id)")).toBe(true);
+    }
+    for (const v of variants(full)) {
+      const r = exportEdited(
+        (d) => ({
+          ...d,
+          task: { ...d.task, instruction: `I am ${v}` },
+          actions: {
+            capture: "recorded",
+            truncated: false,
+            items: [
+              { seq: 0, atMs: null, kind: "shell", command: `echo ${v}` },
+              { seq: 1, atMs: null, kind: "key", keys: v.slice(0, 64) },
+            ],
+          },
+        }),
+        { identityFile: file },
+      );
+      expect(r.refused).toBeNull();
+      expect(leaks(r.out, v)).toBe(false);
+    }
+  });
+
+  it("the filter is checked too, and a hand-edited dataset carrying one is refused by validateDataset", () => {
+    const file = join(dir("id-file2"), "identity.txt");
+    const alias = ["qzplant", "other"].join("");
+    writeFileSync(file, `${alias}\n`);
+    const root = join(dir("id-f"), "s");
+    EpisodeStore.open(root, { simulated: true, host: HOST }).record(draft(), new Map());
+    expect(() =>
+      exportDataset({
+        stores: [root],
+        out: join(dir("id-fo"), "ds"),
+        simulated: true,
+        host: HOST,
+        identity: { identityFile: file },
+        filter: { ...NO_FILTER, taskSetVersion: alias },
+      }),
+    ).toThrow(/the filter carries an identity string \(identity at \$\.filter\.taskSetVersion\)/);
+    const r = exportWith("echo hello");
+    expect(r.written).toBe(true);
+    if (!r.written) return;
+    rewriteFirstEpisode(r.out, (ep) => ({ ...ep, task: { ...ep.task, id: alias.toUpperCase() } }));
+    expect(validateDataset(r.out, HOST, { identityFile: file })).toEqual([
+      expect.stringMatching(/: IDENTITY identity at \$\.task\.id$/),
+    ]);
+    expect(validateDataset(r.out, HOST)).toEqual([]);
   });
 });
