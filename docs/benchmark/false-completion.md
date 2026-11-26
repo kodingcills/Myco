@@ -351,9 +351,15 @@ arm. The arm file is untrusted input:
   (`COPYFILE_EXCL`, flag `wx`), so nothing is written through a planted entry;
 - the `--bundle`, `--docs`, `--out` and `--arm` arguments themselves are the operator's and
   may be reached through symlinks (on macOS `/tmp` is one);
+- `--docs` must exist. A missing `--docs` directory is a hard refusal, not a run in which
+  every trial grades `ungradable`;
+- two `trialKey`s that differ only in case are refused, because on a case-insensitive
+  filesystem (macOS by default) they would name the same saved document;
 - every refusal happens before anything is written: on any refusal it exits 1 having
-  written nothing. An I/O error during the copy itself (a full disk, say) can still leave a
-  partial `--out`; delete it and rerun.
+  written nothing. The one exception is the write phase itself. If the disk changes between
+  planning and writing (a race), or an I/O error occurs (a full disk, say), it exits 1 with
+  one `RequestBuildError` line, not a stack trace. That case can leave a partial `--out`;
+  delete it and rerun.
 - On Windows a `trialKey` such as `C:x` would name a drive-relative path. Windows is not a
   supported host for these scripts (CI runs Linux and macOS).
 
