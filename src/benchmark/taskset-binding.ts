@@ -3,8 +3,9 @@
  * used by the M2 evidence-pack check (`src/m2/evidence.ts`) and, after #506, by the
  * benchmark check CLI, so the two can never bind differently.
  *
- * On a task set this module knows (today: fc-v1, built by `buildTaskSet`, which
- * `test/benchmark/taskset.test.ts` pins byte-identical to `benchmark/false-completion/fc-v1/`),
+ * On a task set this module knows (today: fc-v1, read from its committed bundle
+ * `benchmark/false-completion/fc-v1/tasks.jsonl`, pinned by SHA-256 in `published-tasks.ts`;
+ * `test/benchmark/taskset.test.ts` pins that bundle byte-identical to `buildTaskSet`),
  * the rows must be exactly that task set, run a whole number of times:
  *  - every row names one of its tasks, with that task's `faultClass`, `fixtureSha256` and
  *    `instructionSha256` (so an fc-v1 label over other fixtures or instructions is refused);
@@ -15,14 +16,16 @@
  * caller decides (R1 evidence refuses it).
  */
 import type { BenchmarkArmRow } from "./check.ts";
-import { type BenchmarkTask, buildTaskSet, TASK_SET_VERSION } from "./taskset.ts";
+import { publishedTasks } from "./published-tasks.ts";
+import type { BenchmarkTask } from "./task-types.ts";
 
-let known: ReadonlyMap<string, readonly BenchmarkTask[]> | undefined;
-
-/** The published tasks of `version`, or undefined when this module does not know it. */
+/**
+ * The published tasks of `version`, or undefined when this module does not know it. Read from the
+ * committed bundle, pinned by SHA-256 (`published-tasks.ts`), never rebuilt from the generators
+ * (#547 O1 follow-up).
+ */
 export function knownTaskSet(version: string): readonly BenchmarkTask[] | undefined {
-  known ??= new Map([[TASK_SET_VERSION, buildTaskSet().tasks]]);
-  return known.get(version);
+  return publishedTasks(version);
 }
 
 export interface TaskSetBinding {
