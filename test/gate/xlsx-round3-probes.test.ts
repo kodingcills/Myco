@@ -19,7 +19,12 @@
  * were run by hand, one at a time.
  */
 import { describe, expect, it } from "vitest";
-import { classifyFormat, codeHasDateToken } from "../../src/gate/xlsx-document.ts";
+import {
+  classifyFormat,
+  codeHasDateToken,
+  readZipEntries,
+  XlsxError,
+} from "../../src/gate/xlsx-document.ts";
 import {
   editOnce,
   gateOn,
@@ -32,6 +37,7 @@ import {
   WORKBOOK,
 } from "./xlsx-lo-mutate.ts";
 import { writerBytes } from "./xlsx-writer-files.ts";
+import { layout } from "./xlsx-zip-surgery.ts";
 
 async function expectRefused(bytes: Uint8Array, code: string) {
   const gate = await gateOn(bytes);
@@ -227,5 +233,70 @@ describe('T1: an empty <v></v> (Number("") is 0 to the grader)', () => {
     ["t=e, whitespace", '<c r="F2" s="0" t="e"><v> </v></c>'],
   ])("every other cell type: an empty or blank <v> is refused too (%s)", async (_label, cell) => {
     await expectRefused(withF2(cell), "XLSX_CELL_MALFORMED");
+  });
+});
+
+describe("round-2 nits: the zip reader's defensive checks, each pinned by a row", () => {
+  const base = () => writerBytes(LO_BASE).slice();
+  const view = (b: Uint8Array) => new DataView(b.buffer, b.byteOffset, b.byteLength);
+  function zipCode(bytes: Uint8Array): string {
+    try {
+      readZipEntries(bytes);
+      return "read";
+    } catch (error) {
+      if (error instanceof XlsxError) return error.code;
+      throw error;
+    }
+  }
+  /** Central-record fields of the entry named `name` in a comment-free archive. */
+  function central(bytes: Uint8Array, name: string) {
+    const v = view(bytes);
+    const { cdOffset, total } = layout(bytes);
+    let at = cdOffset;
+    for (let n = 0; n < total; n++) {
+      const nameLength = v.getUint16(at + 28, true);
+      const found = new TextDecoder().decode(bytes.subarray(at + 46, at + 46 + nameLength));
+      const rec = {
+        flags: v.getUint16(at + 8, true),
+        compressedSize: v.getUint32(at + 20, true),
+        localOffset: v.getUint32(at + 42, true),
+        nameLength,
+      };
+      if (found === name) return rec;
+      at += 46 + nameLength + v.getUint16(at + 30, true) + v.getUint16(at + 32, true);
+    }
+    throw new Error(`no entry ${name}`);
+  }
+
+  it("control: the fixture's archive reads", () => {
+    expect(zipCode(base())).toBe("read");
+  });
+
+  it("a local header name that differs from the central one (same length) is refused", () => {
+    const bytes = base();
+    const { localOffset, nameLength } = central(bytes, STYLES);
+    // xl/styles.xml -> xl/styles.xmL in the local header only.
+    const last = localOffset + 30 + nameLength - 1;
+    bytes[last] = (bytes[last] as number) ^ 0x20;
+    expect(zipCode(bytes)).toBe("XLSX_ZIP_MALFORMED");
+  });
+
+  it("a data descriptor whose CRC alone differs from the central directory's is refused", () => {
+    const bytes = base();
+    const { flags, compressedSize, localOffset } = central(bytes, STYLES);
+    expect(flags & 0x8).toBe(0x8); // LibreOffice writes a data descriptor
+    const v = view(bytes);
+    const dataStart =
+      localOffset + 30 + v.getUint16(localOffset + 26, true) + v.getUint16(localOffset + 28, true);
+    const dataEnd = dataStart + compressedSize;
+    const sig = v.getUint32(dataEnd, true) === 0x08074b50 ? 4 : 0;
+    v.setUint32(dataEnd + sig, (v.getUint32(dataEnd + sig, true) ^ 1) >>> 0, true);
+    expect(zipCode(bytes)).toBe("XLSX_ZIP_MALFORMED");
+  });
+
+  it("an EOCD at the very end whose comment length is nonzero (no bytes after it) is refused", () => {
+    const bytes = base();
+    view(bytes).setUint16(bytes.length - 2, 1, true);
+    expect(zipCode(bytes)).toBe("XLSX_ZIP_MALFORMED");
   });
 });

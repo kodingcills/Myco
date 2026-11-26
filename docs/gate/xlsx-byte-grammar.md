@@ -31,6 +31,12 @@ refuses it, with a code (`uncertain` `STATE_CORRUPT`, never `verified`).
    overlap; the central directory is `[cdOffset, eocd)`. No byte is left that no structure
    covers, so no decoy archive can sit in a comment, in front, between entries or behind
    (round 1, V6: the grader takes the last `PK\x05\x06` it finds). `XLSX_ZIP_MALFORMED`.
+   Covered is not constrained: the local and central extra fields and the per-entry
+   comments are bytes inside a structure, and nothing checks their content (both judges
+   read the same directory and skip them). The local header's name must equal the central
+   one, and the descriptor's CRC as well as its sizes must equal the central directory's;
+   each of these and the EOCD comment-length check has its own test row
+   (`test/gate/xlsx-round3-probes.test.ts`, "round-2 nits").
 2. Active content by entry name (macros, external links, embedded objects).
 3. **Part names** (`src/gate/xlsx-parts.ts`, `checkPartNames`): every entry is one of
    LibreOffice's fixed parts (below), or `XLSX_PART_UNEXPECTED`.
