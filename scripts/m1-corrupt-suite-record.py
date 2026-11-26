@@ -93,8 +93,11 @@ def reclassification_reason(row):
     return "verified disk value matches host ground truth"
 
 
-def record(trial, status, out_path, out_dir):
+def record(trial, status, out_path, out_dir, snapshot=None):
     row = {key: trial[key] for key in RECORD_FIELDS}
+    # The snapshot the trial's reset reported ready on (TIF-98), parsed by the
+    # driver from `reset-trial-vm: ready on '<snap>'`; null if it never got there.
+    row.update(snapshot=snapshot or None)
     row.update(status=status, verdict=None, persistedValue=None, falseSuccess=False, reason=status)
     if status != "report":
         return row
@@ -374,8 +377,11 @@ def main(argv):
         log = Path(args[0])
         return final([(log.parent, plan, load_records(log))], log.parent, supplement=command == "--final-supplement")
     if command == "--record":
+        snapshots = [a[len("--snapshot="):] for a in args if a.startswith("--snapshot=")]
+        args = [a for a in args if not a.startswith("--snapshot=")]
         index, status, *paths = args
-        print(json.dumps(record(plan[int(index)], status, paths[0] if paths else None, Path(plan_path).parent)))
+        print(json.dumps(record(plan[int(index)], status, paths[0] if paths else None, Path(plan_path).parent,
+                                snapshots[-1] if snapshots else None)))
         return 0
     raise ValueError(f"unknown command: {command}")
 

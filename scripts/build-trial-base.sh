@@ -22,7 +22,7 @@
 #
 # Fails closed: any step that fails stops the build before the snapshot. The
 # VM is then left with egress DENIED (an EXIT trap re-denies it) and clean-base
-# untouched; the next reset-trial-vm.sh restores clean-base as usual.
+# untouched; the next reset-trial-vm.sh restores its snapshot as usual.
 set -uo pipefail
 
 OUT=${1:?usage: build-trial-base.sh <evidence-dir>}
