@@ -1,0 +1,25 @@
+reset-bench: reset rc=0 163s
+reset-bench: check rc=0 3s
+reset-bench: reset rc=0 157s
+reset-bench: check rc=0 3s
+reset-bench: reset rc=0 140s
+reset-bench: check rc=0 2s
+reset-bench: reset rc=0 140s
+reset-bench: check rc=0 5s
+reset-bench: reset rc=0 160s
+reset-bench: check rc=0 5s
+reset-bench: reset rc=0 222s
+reset-bench: check rc=0 6s
+reset-bench: reset rc=0 221s
+reset-bench: load 10.05 >= 10; holding
+reset-bench: load under 10 for 3 min (now 5.32); resuming
+reset-bench: check rc=0 8s
+reset-bench: reset rc=0 204s
+reset-bench: check rc=0 8s
+reset-bench: reset rc=0 222s
+reset-bench: check rc=0 8s
+reset-bench: reset rc=0 218s
+reset-bench: load 10.08 >= 10; holding
+reset-bench: load under 10 for 3 min (now 3.76); resuming
+reset-bench: check rc=0 8s
+BENCH-EXIT=0

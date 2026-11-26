@@ -59,7 +59,7 @@ function run(
 
 describe("reset-trial-vm.sh snapshot allowlist", () => {
   // Guards against dropping a protected name from the allowlist.
-  it.each(["clean-base", "clean-base-live", "m1-agent-live", "cua-c1-base"])(
+  it.each(["clean-base", "clean-base-live", "m1-agent-live", "cua-c1-base", "trial-base-v2"])(
     "restores the allowed snapshot %s",
     (name) => {
       const r = run(name);
@@ -87,6 +87,9 @@ describe("reset-trial-vm.sh snapshot allowlist", () => {
     "xcua-c1-base",
     "clean-base-evil",
     "clean-base2",
+    "trial-base",
+    "trial-base-v3",
+    "Trial-Base-V2",
     "m1-agent",
     "../clean-base",
     "cua-c1-base;true",

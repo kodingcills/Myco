@@ -1,0 +1,38 @@
+# UTM snapshot metadata for myco-win11, captured 2026-11-26T12:45:20Z (read-only; VM stopped).
+# No snapshot has been created, deleted or changed since run 3 (06:01:58Z).
+#
+# 1. snapshots.plist (plutil -p), fields Title / HasState / Size / Created / BackendIdentifier:
+"BackendIdentifier" => "6281B2DC-C369-41C7-A708-AE3D3D5B3116"
+"Created" => 2026-11-26 06:01:57 +0000
+"HasState" => false
+"Size" => 0
+"Title" => "trial-base-v2"
+"BackendIdentifier" => "981C3790-C52B-4E1E-AC4E-D102506C6FB7"
+"Created" => 2026-11-22 13:06:12 +0000
+"HasState" => false
+"Size" => 0
+"Title" => "cua-c1-base"
+"BackendIdentifier" => "7E6B037B-43F7-4DC2-AF13-6978DB7D4C0E"
+"Created" => 2026-11-21 00:39:28 +0000
+"HasState" => true
+"Size" => 2919031845
+"Title" => "m1-agent-live"
+"BackendIdentifier" => "6DD52266-73A0-4425-854F-8989A6E27D0E"
+"Created" => 2026-11-19 04:58:37 +0000
+"HasState" => true
+"Size" => 2215968090
+"Title" => "clean-base-live"
+"BackendIdentifier" => "DB3B5059-89A8-477D-B910-DA89501CAD9D"
+"Created" => 2026-11-19 04:57:32 +0000
+"HasState" => false
+"Size" => 0
+"Title" => "clean-base"
+#
+# 2. qemu-img snapshot -l -U <disk.qcow2> (internal snapshots; VM_SIZE is the saved RAM state in the image):
+Snapshot list:
+ID      TAG               VM_SIZE                DATE        VM_CLOCK     ICOUNT
+1       DB3B5059-89A8-477D-B910-DA89501CAD9D      0 B 2026-11-18 23:57:32  0000:00:00.000          0
+2       6DD52266-73A0-4425-854F-8989A6E27D0E      0 B 2026-11-18 23:58:37  0000:01:02.911         --
+3       7E6B037B-43F7-4DC2-AF13-6978DB7D4C0E      0 B 2026-11-20 19:39:28  0000:04:05.248         --
+4       981C3790-C52B-4E1E-AC4E-D102506C6FB7      0 B 2026-11-22 08:06:12  0000:00:00.000          0
+5       6281B2DC-C369-41C7-A708-AE3D3D5B3116      0 B 2026-11-26 01:01:57  0000:00:00.000          0
