@@ -307,26 +307,27 @@ stability probes; the `first ssh answer` line splits them. The `host swap` line 
 only. It records the host state the reset ran under.
 
 **Plan for 190–260 s on this Mac** (measured 2026-11-25: 8 recorded resets with the TIF-98 code and 5
-without, 185–254 s, median ~210 s, at host load 4–10;
+without, 185–254 s, median 213 s, at host 1-minute load 3.83–9.72;
 `docs/research/experiments/tif-98-reset/`). Where the time goes:
 
 | Phase | Typical | What it is |
 |---|---|---|
 | stop + restore + start | ~6 s | UTM AppleScript; restore is a qcow2 internal-snapshot apply |
-| boot to first SSH answer | 140–185 s | Windows booting. A plain in-guest reboot with no restore is just as slow, so the restore is not the cost |
-| stability probes | 30–50 s | each `echo ok` round trip takes 5–20 s on a guest still busy booting |
+| boot to first SSH answer | 139–183 s | Windows booting. A plain in-guest reboot with no restore is just as slow, so the restore is not the cost |
+| stability probes | 29–54 s | each `echo ok` round trip took about 5–8 s on a guest still busy booting (a diagnostic-shell observation, not in the rows) |
 | clock resync | 6–18 s | one more SSH round trip |
 
-The guest's boot is slow because it is CPU-busy. It spends ~270 guest CPU-seconds before SSH
+The guest's boot is slow because it is CPU-busy. It spends 264–314 guest CPU-seconds (median 281) before SSH
 answers, and Windows records 50+ s in session-manager init, against ~1 s on its first boot
 (2026-11-19). After SSH answers it stays busy: Defender, .NET optimization (`ngen`), scheduled
-tasks and Windows Update were still running 26 minutes after one boot, with QEMU near 190 % host CPU. Every reset reverts the disk, so the guest repeats that
+tasks and Windows Update were still running 26 minutes after one boot, with QEMU at 187 % host CPU (a diagnostic-shell observation, not in the rows). Every reset reverts the disk, so the guest repeats that
 maintenance on every trial. `scripts/guest-boot-profile.sh` prints Windows' phase timings and the
 busiest guest processes, read-only.
 
 The older figures (~21 s "warm UTM", 25.8 s in m1-state log 44) were not reproduced: with swap
-freed to ~4.5 GB and 60–75 % host memory free, resets still took 213–254 s. Host swap pressure makes
-things worse (QEMU resident 1.8 GB for a 6 GB guest at 9.9 GB swap), but it is not the main cost.
+freed to ~4.5 GB and 61–72 % host memory free, resets still took 213–254 s. Host swap pressure makes
+things worse (QEMU resident about 1.8 GB for a 6 GB guest at 9.9 GB swap, a diagnostic-shell
+observation, not in the rows), but it is not the main cost.
 
 **Timing a reset.** `scripts/reset-bench.sh reset N out.jsonl [label]` runs N resets.
 `scripts/reset-bench.sh cycle N out.jsonl [label]` runs N reset → deploy → `session_info` cycles
