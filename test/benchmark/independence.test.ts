@@ -74,3 +74,46 @@ describe("benchmark grader independence (TIF-267)", () => {
     ]);
   });
 });
+
+/**
+ * Capability track T (bring your own app): third-party plugins (`src/plugins/`, the example
+ * plugins under `examples/plugins/`) never share code with the grader, in either direction.
+ * A plugin oracle is a gate-side oracle as far as R1 is concerned: if it shared code with the
+ * grader, the grader would grade the plugin with the plugin.
+ */
+describe("plugins never share code with the benchmark grader (track T)", () => {
+  const PLUGIN_ROOTS = [join(ROOT, "src", "plugins"), join(ROOT, "examples", "plugins")];
+  const pluginFiles = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory()
+        ? pluginFiles(join(dir, e.name))
+        : /\.(ts|mjs|js)$/.test(e.name)
+          ? [join(dir, e.name)]
+          : [],
+    );
+  const files = PLUGIN_ROOTS.flatMap(pluginFiles);
+
+  it("has plugin modules to check", () => {
+    expect(files.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("no plugin module reaches src/benchmark/grade/ (transitively)", () => {
+    const violations: string[] = [];
+    for (const file of files)
+      for (const mod of walk(file).keys())
+        if (mod.startsWith(`${GRADER}/`))
+          violations.push(`${relative(ROOT, mod)} reached from ${relative(ROOT, file)}`);
+    expect(violations).toEqual([]);
+  });
+
+  it("no grader module reaches a plugin module (transitively)", () => {
+    for (const file of graderFiles)
+      for (const mod of walk(file).keys())
+        for (const root of PLUGIN_ROOTS) expect(mod.startsWith(`${root}/`), mod).toBe(false);
+  });
+
+  it("no plugin module names the grader", () => {
+    for (const file of files)
+      expect(readFileSync(file, "utf8"), relative(ROOT, file)).not.toMatch(/benchmark\/grade/);
+  });
+});
