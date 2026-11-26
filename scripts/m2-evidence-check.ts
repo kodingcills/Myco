@@ -1,0 +1,88 @@
+/**
+ * M2 evidence-pack check CLI (TIF-273 / M2-11). See src/m2/evidence.ts.
+ *
+ *   npx tsx scripts/m2-evidence-check.ts --all [--root DIR]   every m2-* pack under DIR
+ *   npx tsx scripts/m2-evidence-check.ts PACK_DIR...           the named packs
+ *   npx tsx scripts/m2-evidence-check.ts --constants           the bars and the load gate
+ *
+ * DIR defaults to docs/research/experiments. Every `m2-*` directory there is a pack and
+ * must hold a valid pack.json (a directory without one fails, so evidence cannot skip the
+ * check by leaving the manifest out). `--all` with no pack at all prints an empty list and
+ * passes: the scorecard check, not this gate, fails a row that cites no evidence.
+ *
+ * Prints JSON. Exit 1 when any pack fails a schema, ledger or process check; 2 on usage.
+ */
+import { spawnSync } from "node:child_process";
+import { readdirSync, statSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
+import { HARNESS_CLASSES } from "../schemas/m2-evidence.ts";
+import {
+  checkPack,
+  LOAD_GATE,
+  NO_FAULT,
+  R1_MIN_TRIALS,
+  R2_MIN_PAIRS,
+  R3_MIN_ELIGIBLE,
+  R3_SECURITY_CLASSES,
+  readPack,
+  SIGN_TEST_UNDERPOWERED,
+} from "../src/m2/evidence.ts";
+
+const ROOT = resolve(import.meta.dirname, "..");
+const args = process.argv.slice(2);
+
+if (args[0] === "--constants") {
+  process.stdout.write(
+    `${JSON.stringify({
+      loadGate: LOAD_GATE,
+      r1MinTrials: R1_MIN_TRIALS,
+      r2MinPairs: R2_MIN_PAIRS,
+      r3MinEligible: R3_MIN_ELIGIBLE,
+      signTestUnderpowered: SIGN_TEST_UNDERPOWERED,
+      noFault: NO_FAULT,
+      r3SecurityClasses: R3_SECURITY_CLASSES,
+      harnessClasses: HARNESS_CLASSES,
+    })}\n`,
+  );
+  process.exit(0);
+}
+
+let dirs: string[] = [];
+if (args[0] === "--all") {
+  let root = join(ROOT, "docs/research/experiments");
+  if (args[1] === "--root" && args[2] !== undefined) root = resolve(args[2]);
+  else if (args.length > 1) {
+    process.stderr.write("usage: m2-evidence-check.ts --all [--root DIR]\n");
+    process.exit(2);
+  }
+  dirs = readdirSync(root)
+    .filter((e) => e.startsWith("m2-") && statSync(join(root, e)).isDirectory())
+    .sort()
+    .map((e) => join(root, e));
+} else if (args.length > 0 && !args.some((a) => a.startsWith("--"))) {
+  dirs = args.map((a) => resolve(a));
+} else {
+  process.stderr.write(
+    "usage: m2-evidence-check.ts --all [--root DIR] | PACK_DIR... | --constants\n",
+  );
+  process.exit(2);
+}
+
+function validateRuns(runsDir: string, expect: number) {
+  const out = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "src/integration/validate-live.ts", runsDir, "--expect", String(expect)],
+    { cwd: ROOT, encoding: "utf8" },
+  );
+  const tail = `${out.stdout}${out.stderr}`.trim().split("\n").pop() ?? "";
+  return { ok: out.status === 0, detail: `validate-live exit ${out.status}: ${tail}` };
+}
+
+const packs = dirs.map((dir) => ({
+  pack: relative(ROOT, dir) || ".",
+  result: checkPack(readPack(dir, validateRuns)),
+}));
+process.stdout.write(`${JSON.stringify({ packs }, null, 2)}\n`);
+for (const p of packs)
+  for (const e of p.result.errors) process.stderr.write(`ERROR ${p.pack}: ${e}\n`);
+process.exit(packs.every((p) => p.result.ok) ? 0 : 1);
