@@ -504,15 +504,27 @@ An explicit argument wins over `MYCO_TRIAL_SNAPSHOT`, and every name must pass t
   first run, and refuse a resume that resolves a different one (`REFUSED_SNAPSHOT_MISMATCH`,
   exit 11).
 - An `OUT` with rows but no pin was started before pinning existed, on `clean-base`. It is
-  refused until `MYCO_TRIAL_SNAPSHOT` names its snapshot (`REFUSED_SNAPSHOT_UNKNOWN`, exit 11).
+  refused unless resumed with `MYCO_TRIAL_SNAPSHOT=clean-base` (`REFUSED_SNAPSHOT_UNKNOWN`,
+  exit 11). A symlink at `OUT/snapshot` is refused, and the pin is never written through one.
+- Only a Myco trial base resolves: `trial-base-v2` or `clean-base`. Anything else in
+  `MYCO_TRIAL_SNAPSHOT` (a typo, a `*-live` snapshot, the baseline arms' `cua-c1-base`) is
+  refused at the start, with exit 11.
 - Every row carries `snapshot`, parsed from the reset's `ready on '<snap>'` line (`null` when
-  the reset failed). A reset that reports ready on a different snapshot aborts the run
+  the reset failed). That is the name the reset script reports it restored, not an observed
+  identity of the guest. A reset that reports ready on a different snapshot aborts the run
   (`ABORT_SNAPSHOT_MISMATCH`, exit 12).
 
 **Comparison runs** (Myco against a baseline arm) keep both arms on the same base. The baseline
 arms run on `cua-c1-base`, a `clean-base` derivative, so the Myco arm of a comparison runs with
 `MYCO_COMPARISON_RUN=1 MYCO_TRIAL_SNAPSHOT=clean-base`. The drivers refuse a comparison run
-without that (exit 11). See `docs/baseline/screenshot-agent.md` §2.
+without that (exit 11), and refuse any `MYCO_COMPARISON_RUN` other than empty, `0` or `1`
+(exit 11), so a typo such as `true` never silently means "not a comparison".
+
+The join enforces it too, fail-closed: `scripts/row7-compare.py` refuses to pair a Myco row whose
+`snapshot` is not in the baseline's base family (`clean-base` for `cua-c1-base`). A Myco row with
+no `snapshot` key predates the field and counts as `clean-base`. Any new comparator that pairs
+Myco rows with a baseline arm must apply the same check. See
+`docs/baseline/screenshot-agent.md` §2.
 `clean-base` and `clean-base-live` are never modified or deleted. A new trial base is a new
 versioned snapshot (`trial-base-v3`, and so on), never an overwrite: `build-trial-base.sh`
 refuses an existing name.
@@ -1262,6 +1274,16 @@ nohup caffeinate -dimsu bash "$OUT.supervise.sh" "$PWD" scripts/m1-sweep.sh "$OU
   >> "$OUT.supervise.log" 2>&1 < /dev/null &
 ```
 
+**A sweep meant as the Myco arm of a comparison** (paired against C1/C2) runs on `clean-base`
+(§3.5). Export both variables in the shell that launches the supervisor, and in the shell of any
+resume:
+
+```bash
+export MYCO_COMPARISON_RUN=1 MYCO_TRIAL_SNAPSHOT=clean-base
+nohup caffeinate -dimsu bash "$OUT.supervise.sh" "$PWD" scripts/m1-sweep.sh "$OUT" \
+  >> "$OUT.supervise.log" 2>&1 < /dev/null &
+```
+
 Files: `$OUT.supervise.pid` (the supervisor, ppid 1), `$OUT.pid` (the current driver, which holds
 the lock), `$OUT.supervise.log` (gate samples, `START`/`EXIT rc=`/`DONE`), `$OUT.watch.log`
 (60 s), `$OUT.done` (the final exit code, written once). The sweep is finished when `$OUT.done`
@@ -1461,7 +1483,8 @@ from recorded evidence and print a `RECLASSIFIED` line when the stored false-suc
 |---|---|
 | 0 | Full suite passed all coverage and evidence gates, or the supplemental batch recorded its manifest and passed its evidence checks. |
 | 1 | Driver or manifest error. |
-| 11 / 12 | Snapshot refused before any trial (pin mismatch, unknown pin, or a comparison run not on `clean-base`), or a reset reported ready on a different snapshot (§3.5). |
+| 11 | Snapshot refused before any trial: pin mismatch, unknown or symlinked pin, a snapshot that is not a Myco trial base, a bad `MYCO_COMPARISON_RUN`, or a comparison run not on `clean-base` (§3.5). |
+| 12 | Mid-run: a trial's reset reported ready on a different snapshot than the pinned one (§3.5). |
 | 4 / 6 | Paused for net one-minute load above 14 (load minus the guest's QEMU cores), or swap free below 300 MB. Resume in the same directory when the gate clears. **Exit 3 (on battery) is no longer emitted** — power is recorded, never enforced. |
 | 7 / 9 | Seed or CSV SHA-256 mismatch detected in this trial / already present at startup. Use a fresh output directory. |
 | 8 | Final audit failed. Inspect `summary.json`, `summary.txt` and `ledger.jsonl`. |

@@ -9,8 +9,12 @@
 #   ts_resolve
 #       Print the snapshot this run uses: $MYCO_TRIAL_SNAPSHOT, else
 #       trial-base-v2. Refuses (rc 11), with the reason on stderr:
-#         - a *-live snapshot from the variable: the live path wedges UTM under
-#           rapid cycling (runbook §3.3), so a whole sweep never rides it;
+#         - MYCO_COMPARISON_RUN set to anything but empty, 0 or 1 (a typo such
+#           as `true` must not silently mean "not a comparison");
+#         - a snapshot that is not a Myco trial base (trial-base-v2 or
+#           clean-base), so a typo fails here, at pin time, not on every trial.
+#           That also refuses *-live (the live path wedges UTM under rapid
+#           cycling, runbook §3.3) and cua-c1-base (the baseline arms' base);
 #         - a comparison run (MYCO_COMPARISON_RUN=1) that does not explicitly
 #           set MYCO_TRIAL_SNAPSHOT=clean-base. The baseline arms (C1/C2:
 #           cua-c1-base) are clean-base derivatives, and both arms of a
@@ -19,10 +23,11 @@
 #           derivative for the baseline arms yet.
 #   ts_pin <out_dir> <trials.jsonl> <snapshot>
 #       First run: write <snapshot> to <out_dir>/snapshot. Resume: refuse
-#       (rc 11) unless it matches. An existing <trials.jsonl> with rows but no
-#       pin file was started before pinning existed (on clean-base, the default
-#       then): refuse unless MYCO_TRIAL_SNAPSHOT names the snapshot explicitly,
-#       then pin that.
+#       (rc 11) unless it matches. A symlink at <out_dir>/snapshot is refused
+#       (never written through). An existing <trials.jsonl> with rows but no
+#       pin file was started before pinning existed, on clean-base (the only
+#       default then): refuse unless MYCO_TRIAL_SNAPSHOT=clean-base, then pin
+#       that.
 #   ts_reset <snapshot> <progress.log>
 #       Run the reset with the snapshot named explicitly, append its output to
 #       the progress log, and set TS_READY to the snapshot its
@@ -34,9 +39,16 @@
 
 ts_resolve() {
   local snap=${MYCO_TRIAL_SNAPSHOT:-trial-base-v2}
+  case "${MYCO_COMPARISON_RUN:-}" in
+    ''|0|1) ;;
+    *)
+      echo "REFUSED_SNAPSHOT: MYCO_COMPARISON_RUN='${MYCO_COMPARISON_RUN}' is not empty, 0 or 1" >&2
+      return 11 ;;
+  esac
   case "$snap" in
-    *-live)
-      echo "REFUSED_SNAPSHOT: MYCO_TRIAL_SNAPSHOT=$snap is a live snapshot; a sweep never runs on the live path (runbook §3.3)" >&2
+    trial-base-v2|clean-base) ;;
+    *)
+      echo "REFUSED_SNAPSHOT: MYCO_TRIAL_SNAPSHOT='$snap' is not a Myco trial base (trial-base-v2 or clean-base); live snapshots and the baseline arms' cua-c1-base are never a sweep's base (runbook §3.3, §3.5)" >&2
       return 11 ;;
   esac
   if [ "${MYCO_COMPARISON_RUN:-}" = 1 ] && [ "${MYCO_TRIAL_SNAPSHOT:-}" != clean-base ]; then
@@ -48,6 +60,10 @@ ts_resolve() {
 
 ts_pin() {
   local out=$1 log=$2 snap=$3 pinned
+  if [ -L "$out/snapshot" ]; then
+    echo "REFUSED_SNAPSHOT_PIN: $out/snapshot is a symlink; the pin is never written or read through one" >&2
+    return 11
+  fi
   if [ -f "$out/snapshot" ]; then
     pinned=$(tr -d '\r\n' < "$out/snapshot")
     if [ "$pinned" != "$snap" ]; then
@@ -56,8 +72,8 @@ ts_pin() {
     fi
     return 0
   fi
-  if [ -s "$log" ] && [ -z "${MYCO_TRIAL_SNAPSHOT:-}" ]; then
-    echo "REFUSED_SNAPSHOT_UNKNOWN: $log has rows but $out has no snapshot pin (started before 2026-11-26, on clean-base); set MYCO_TRIAL_SNAPSHOT to the snapshot it was started on, or start a fresh OUT" >&2
+  if [ -s "$log" ] && [ "${MYCO_TRIAL_SNAPSHOT:-}" != clean-base ]; then
+    echo "REFUSED_SNAPSHOT_UNKNOWN: $log has rows but $out has no snapshot pin, so it was started before 2026-11-26, on clean-base; resume it with MYCO_TRIAL_SNAPSHOT=clean-base, or start a fresh OUT" >&2
     return 11
   fi
   printf '%s\n' "$snap" > "$out/snapshot"

@@ -6,7 +6,14 @@
  * their source), and both row writers.
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -86,11 +93,73 @@ describe("ts_pin", () => {
     );
     expect(named.status).toBe(0);
     expect(readFileSync(join(named.out, "snapshot"), "utf8")).toBe("clean-base\n");
+    // Round 3 (N-d): every unpinned OUT predates the switch, so only clean-base may name it.
+    const wrong = ts(
+      'ts_pin "$OUT" "$OUT/trials.jsonl" trial-base-v2',
+      { MYCO_TRIAL_SNAPSHOT: "trial-base-v2" },
+      rows,
+    );
+    expect(wrong.status).toBe(11);
+    expect(wrong.stderr).toContain("REFUSED_SNAPSHOT_UNKNOWN");
+  });
+
+  // Round 3 (N-c): never write or read the pin through a symlink, dangling or not.
+  it("refuses a symlink at OUT/snapshot and never writes through it", () => {
+    const dangling = ts('ts_pin "$OUT" "$OUT/trials.jsonl" trial-base-v2', {}, (out) =>
+      symlinkSync(join(out, "elsewhere"), join(out, "snapshot")),
+    );
+    expect(dangling.status).toBe(11);
+    expect(dangling.stderr).toContain("REFUSED_SNAPSHOT_PIN");
+    expect(existsSync(join(dangling.out, "elsewhere"))).toBe(false);
+    const toFile = ts('ts_pin "$OUT" "$OUT/trials.jsonl" clean-base', {}, (out) => {
+      writeFileSync(join(out, "real"), "clean-base\n");
+      symlinkSync(join(out, "real"), join(out, "snapshot"));
+    });
+    expect(toFile.status).toBe(11);
+  });
+});
+
+// Round 3 (D1' a): the comparison flag is strict; a typo never means "not a comparison".
+describe("ts_resolve: strict MYCO_COMPARISON_RUN", () => {
+  it.each(["1 ", " 1", "true", "yes", "01", "TRUE", "on", " "])(
+    "MYCO_COMPARISON_RUN=%j is refused (exit 11)",
+    (value) => {
+      const r = ts("ts_resolve", { MYCO_COMPARISON_RUN: value, MYCO_TRIAL_SNAPSHOT: "clean-base" });
+      expect(r.status).toBe(11);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain("is not empty, 0 or 1");
+    },
+  );
+
+  it("empty and 0 mean no comparison (the default applies)", () => {
+    expect(ts("ts_resolve", { MYCO_COMPARISON_RUN: "" }).stdout).toBe("trial-base-v2");
+    expect(ts("ts_resolve", { MYCO_COMPARISON_RUN: "0" }).stdout).toBe("trial-base-v2");
+  });
+});
+
+// Round 3 (N-a): only a Myco trial base resolves, so a typo fails at pin time.
+describe("ts_resolve: allowlist", () => {
+  it.each([
+    "Clean-Base",
+    "cua-c1-base",
+    "trial-base-v3",
+    "m1-agent-live",
+    "$(touch pwned)",
+    "../clean-base",
+  ])("MYCO_TRIAL_SNAPSHOT=%j is refused at resolve time (exit 11)", (name) => {
+    const r = ts("ts_resolve", { MYCO_TRIAL_SNAPSHOT: name });
+    expect(r.status).toBe(11);
+    expect(r.stdout).toBe("");
+    expect(existsSync(join(r.out, "pwned"))).toBe(false);
   });
 });
 
 describe("ts_reset", () => {
-  /** A stub reset script that prints `ready on '<what>'` and exits <rc>. */
+  /**
+   * A stub reset script that prints `ready on '<what>'` and exits <rc>. With
+   * ready = "$1" it echoes back the snapshot it was given, the way the real reset
+   * does, so a ts_reset that drops the argument is caught (round 2 V1).
+   */
   function stub(out: string, ready: string, rc = 0): string {
     const p = join(out, "reset.sh");
     writeFileSync(
@@ -108,6 +177,11 @@ describe("ts_reset", () => {
       { MYCO_RESET_SCRIPT: script },
     );
   };
+
+  it("passes the snapshot to the reset as its argument (the stub echoes $1)", () => {
+    const r = run("$1");
+    expect(r.stdout.split("\n")[0]).toBe("rc=0 ready=trial-base-v2");
+  });
 
   it("passes the snapshot explicitly and sets TS_READY from the ready line", () => {
     const r = run("trial-base-v2");
@@ -168,7 +242,15 @@ describe("the drivers use it", () => {
     expect(src).toContain('"$FPRINTS" "$AC_POWER" "$TS_READY" >> "$LOG"');
     const echoed = src.match(/echo "\{\\"index\\": \$i, \\"status\\": [^\n]*/g) ?? [];
     expect(echoed.length).toBe(4);
-    for (const row of echoed) expect(row).toMatch(/\\"snapshot\\": (null|\\"\$TS_READY\\")\}/);
+    // Round 3 (V5): no reset reached ready on param-error / reset-failed, so those are null;
+    // deploy-failed / token-failed come after a ready reset and carry its snapshot.
+    const byStatus = Object.fromEntries(
+      echoed.map((row) => [row.match(/\\"status\\": \\"([a-z-]+)\\"/)?.[1], row]),
+    );
+    expect(byStatus["param-error"]).toMatch(/\\"snapshot\\": null\}/);
+    expect(byStatus["reset-failed"]).toMatch(/\\"snapshot\\": null\}/);
+    expect(byStatus["deploy-failed"]).toMatch(/\\"snapshot\\": \\"\$TS_READY\\"\}/);
+    expect(byStatus["token-failed"]).toMatch(/\\"snapshot\\": \\"\$TS_READY\\"\}/);
   });
 
   it("m1-corrupt-suite.sh passes the ready snapshot on every row it records", () => {
