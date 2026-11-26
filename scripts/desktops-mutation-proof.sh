@@ -174,7 +174,7 @@ M = {
   "e8": [(E, 'return ep.agentClaim === "done" ? { label: "positive" } : { excluded: "NOT_CLAIMED" };', 'return { label: "positive" };')],
   "e9": [(E, '    gate.accepted !== (gate.verdict === "verified")\n', '    false\n')],
   "e10": [(E, 'if (mustBeSimulated(ep) && ep.simulated !== true) {', 'if (false) {')],
-  "e11": [(E, 'const leak = firstLeak(outputs, options.hygiene);', 'const leak = null as { where: string; kind: string } | null;')],
+  "e11": [(E, 'const leak = firstLeak(rawOutputs, options.hygiene) ?? firstLeak(outputs, options.hygiene);', 'const leak = null as { where: string; kind: string } | null;')],
   "e17": [(E, '      (trialKey !== null && trialKeys.has(trialKey)) ||\n      runIds.has(ep.provenance.runId) ||\n      episodeIds.has(ep.episodeId)\n', '      false\n')],
   "e18": [(E, 'const issues = validateSchema(record, datasetRecordSchema);', 'const issues: Array<{ path: string; keyword: string }> = [];')],
   "e19": [(E, 'if (existsSync(options.outDir)) throw new ExportRefused("OUT_EXISTS", "outDir");', ''),
