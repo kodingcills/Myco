@@ -72,7 +72,7 @@ select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 
 export const PAGE_JS = `"use strict";
 (function () {
-  var state = { runs: [], events: [], skipped: 0, logPresent: false };
+  var state = { runs: [], events: [], omitted: 0, skipped: 0, logPresent: false };
   var selected = null;
   var index = 0;
   var $ = function (id) { return document.getElementById(id); };
@@ -149,7 +149,7 @@ export const PAGE_JS = `"use strict";
     });
     var acc = shown.filter(function (e) { return e.accepted; }).length;
     $("summary").textContent = state.logPresent
-      ? shown.length + " decision(s) for this run, " + acc + " accepted" + (state.skipped ? " · " + state.skipped + " other line(s) not shown" : "")
+      ? shown.length + " decision(s) for this run, " + acc + " accepted" + (state.skipped ? " · " + state.skipped + " other line(s) not shown" : "") + (state.omitted ? " · " + state.omitted + " earlier decision(s) not shown" : "")
       : "Waiting for the decision log…";
   }
   function render() { renderRuns(); renderFrame(); renderEvents(); }

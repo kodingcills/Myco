@@ -26,13 +26,13 @@ import {
 import { join } from "node:path";
 import { isSafeId } from "../gate/api.ts";
 
+/**
+ * File-backed frames are PNG only (round 2, D1). JPEG/GIF/WebP carry metadata this view does
+ * not rebuild, and SVG is text that can carry anything; none of them is ever listed. SVG is
+ * served only from the in-process demo renderer (`renderedFrameSource`).
+ */
 export const FRAME_TYPES: Readonly<Record<string, string>> = {
   ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
 };
 export const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 const MAX_FRAMES_PER_RUN = 10_000;
@@ -41,6 +41,11 @@ const MAX_DEPTH = 4;
 export interface Frame {
   readonly bytes: Buffer;
   readonly contentType: string;
+  /**
+   * Where the bytes came from: `file` (operator-side files, never trusted as they are) or
+   * `rendered` (drawn in this process by `render-frame.ts`). Only `rendered` SVG is served.
+   */
+  readonly provenance: "file" | "rendered";
 }
 
 export interface FrameSource {
@@ -98,7 +103,8 @@ function listImages(dir: string, skip: ReadonlySet<string>): string[] {
   return out.sort();
 }
 
-function readRegular(path: string): Buffer | null {
+/** Read a regular file, refusing a symlink at the last component (O_NOFOLLOW) or a non-file. */
+export function readRegular(path: string): Buffer | null {
   let fd: number;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -119,6 +125,23 @@ function readRegular(path: string): Buffer | null {
   } finally {
     closeSync(fd);
   }
+}
+
+/**
+ * Join a listed relative name onto `dir`, re-checking every component: nothing may have
+ * become a symlink since the listing. Null if any component is a symlink or is missing.
+ */
+export function resolveListed(dir: string, name: string): string | null {
+  let path = dir;
+  for (const segment of name.split("/")) {
+    path = join(path, segment);
+    try {
+      if (lstatSync(path).isSymbolicLink()) return null;
+    } catch {
+      return null;
+    }
+  }
+  return path;
 }
 
 /**
@@ -151,19 +174,44 @@ export function directoryFrameSource(
       const listed = list(runId);
       const name = listed?.names[index];
       if (listed === null || name === undefined) return null;
-      // Re-check every component: nothing may have become a symlink since the listing.
-      let path = listed.dir;
-      for (const segment of name.split("/")) {
-        path = join(path, segment);
-        try {
-          if (lstatSync(path).isSymbolicLink()) return null;
-        } catch {
-          return null;
-        }
-      }
+      const path = resolveListed(listed.dir, name);
       const contentType = typeOf(name);
-      const bytes = contentType === undefined ? null : readRegular(path);
-      return bytes === null || contentType === undefined ? null : { bytes, contentType };
+      const bytes = contentType === undefined || path === null ? null : readRegular(path);
+      return bytes === null || contentType === undefined
+        ? null
+        : { bytes, contentType, provenance: "file" };
+    },
+  };
+}
+
+export interface RenderedFrameSource extends FrameSource {
+  /** Add one frame drawn in this process (`render-frame.ts`) for a listed run. */
+  push(runId: string, svg: string): void;
+}
+
+/**
+ * Frames rendered in this process (the demo): held in memory, never read from disk, so the
+ * only SVG the view serves is SVG it drew itself. Unlisted runs get nothing.
+ */
+export function renderedFrameSource(runs: ReadonlySet<string>): RenderedFrameSource {
+  const frames = new Map<string, Buffer[]>();
+  return {
+    push(runId, svg) {
+      if (!runs.has(runId)) return;
+      const list = frames.get(runId) ?? [];
+      if (list.length >= MAX_FRAMES_PER_RUN) return;
+      list.push(Buffer.from(svg, "utf8"));
+      frames.set(runId, list);
+    },
+    count(runId) {
+      return runs.has(runId) ? (frames.get(runId)?.length ?? 0) : 0;
+    },
+    read(runId, index) {
+      if (!runs.has(runId) || !Number.isInteger(index) || index < 0) return null;
+      const bytes = frames.get(runId)?.[index];
+      return bytes === undefined
+        ? null
+        : { bytes, contentType: "image/svg+xml", provenance: "rendered" };
     },
   };
 }

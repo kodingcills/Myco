@@ -16,6 +16,7 @@ import { DecisionLogTail } from "../../src/watch/decision-log.ts";
 import { projectDecisions } from "../../src/watch/events.ts";
 import { directoryFrameSource } from "../../src/watch/frames.ts";
 import { gridFrameSvg, todoFrameSvg } from "../../src/watch/render-frame.ts";
+import { sanitizePng } from "../../src/watch/sanitize-frame.ts";
 import {
   isLoopbackHost,
   startWatchServer,
@@ -270,8 +271,10 @@ describe("watch: path traversal on the frame route", () => {
       "/%2e%2e/etc/passwd",
     ])
       expect((await raw(s.port, path)).status, path).toBe(400);
-    expect((await raw(s.port, "/frames/run-a/0")).body.equals(PNG)).toBe(true);
-    expect((await raw(s.port, "/frames/run-a/1")).body.equals(PNG)).toBe(true);
+    // Served frames are the PNG rebuilt from its pixels (round 2, D1), not the file's bytes.
+    const rebuilt = sanitizePng(PNG) as Buffer;
+    expect((await raw(s.port, "/frames/run-a/0")).body.equals(rebuilt)).toBe(true);
+    expect((await raw(s.port, "/frames/run-a/1")).body.equals(rebuilt)).toBe(true);
     expect(s.state().runs).toEqual([{ runId: "run-a", frames: 2 }]);
   });
 
@@ -482,6 +485,7 @@ describe("watch: passive (changes no file, holds no gate handle)", () => {
       "frames.ts",
       "page.ts",
       "render-frame.ts",
+      "sanitize-frame.ts",
     ];
     const writes =
       /(?<!\.)\b(writeFile|writeSync|appendFile|createWriteStream|mkdir|rmSync|rmdir|unlink|rename|truncate|chmod|chown|utimes|copyFile|symlink|link|cp|cpSync|spawn|exec|fork)\w*\s*\(|["']w\+?["']|O_WRONLY|O_RDWR|O_CREAT|O_TRUNC|O_APPEND/;
@@ -498,12 +502,15 @@ describe("watch: passive (changes no file, holds no gate handle)", () => {
       const imports = [...text.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1] as string);
       for (const spec of imports) {
         const ok =
-          ["node:fs", "node:http", "node:net", "node:path"].includes(spec) ||
+          ["node:fs", "node:http", "node:net", "node:os", "node:path", "node:zlib"].includes(
+            spec,
+          ) ||
           [
             "./decision-log.ts",
             "./events.ts",
             "./frames.ts",
             "./page.ts",
+            "./sanitize-frame.ts",
             "../gate/api.ts",
             "../core/state.ts",
             "../discovery/live-runner.ts",

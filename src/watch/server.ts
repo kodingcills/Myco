@@ -16,6 +16,14 @@
  *  - Redaction by allowlist. The stream carries only `WatchEvent`s (`events.ts`), run ids
  *    the operator listed and frame counts; never a path, the claim, reasons, digests or any
  *    vault field. Frames are addressed by (listed run id, index), never by a name.
+ *  - Frames are rebuilt, never copied (`sanitize-frame.ts`): a PNG is re-encoded from its
+ *    pixels alone, SVG is served only when this process rendered it, anything else is
+ *    refused, and a backstop scan refuses bytes carrying host paths, the username or text.
+ *  - Bounded memory. At most 16 SSE watchers. A watcher that has not drained its last
+ *    message is not written to again (it gets the latest state once it drains, so updates
+ *    coalesce), and one stalled longer than `sseStallMs`, or holding more than
+ *    `sseMaxBufferedBytes` unsent, is disconnected. The state carries at most `maxEvents`
+ *    events (the latest), so one message is bounded too.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
@@ -23,6 +31,7 @@ import { DecisionLogTail } from "./decision-log.ts";
 import { projectDecisions, type WatchEvent } from "./events.ts";
 import type { FrameSource } from "./frames.ts";
 import { PAGE_CSS, PAGE_HTML, PAGE_JS } from "./page.ts";
+import { hostNeedles, servableFrame } from "./sanitize-frame.ts";
 
 export interface WatchServerOptions {
   /** Bind address. Default 127.0.0.1. */
@@ -40,13 +49,30 @@ export interface WatchServerOptions {
   readonly frames?: FrameSource;
   /** How often the log and frames are re-read. Default 250 ms. */
   readonly pollMs?: number;
+  /** Most events the state carries (the latest ones). Default 2000. */
+  readonly maxEvents?: number;
+  /** A watcher that has not drained for this long is disconnected. Default 30 s. */
+  readonly sseStallMs?: number;
+  /** A watcher holding more unsent bytes than this is disconnected. Default 8 MiB. */
+  readonly sseMaxBufferedBytes?: number;
 }
 
 export interface WatchState {
   readonly runs: readonly { readonly runId: string; readonly frames: number }[];
   readonly events: readonly WatchEvent[];
+  /** Earlier events left out because the state carries at most `maxEvents`. */
+  readonly omitted: number;
   readonly skipped: number;
   readonly logPresent: boolean;
+}
+
+/** SSE bookkeeping, for tests and diagnostics. */
+export interface SseStats {
+  readonly clients: number;
+  /** The largest unsent byte count any watcher has held since the server started. */
+  readonly maxBufferedBytes: number;
+  /** Watchers disconnected for stalling or holding too much. */
+  readonly dropped: number;
 }
 
 export interface WatchServer {
@@ -55,12 +81,14 @@ export interface WatchServer {
   readonly host: string;
   /** The current state, exactly as `/api/state` serves it. */
   state(): WatchState;
+  sse(): SseStats;
   close(): Promise<void>;
 }
 
 export class WatchBindError extends Error {}
 
-const MAX_SSE_CLIENTS = 16;
+export const MAX_SSE_CLIENTS = 16;
+export const DEFAULT_MAX_EVENTS = 2000;
 
 /** True for a loopback address or the name `localhost`. */
 export function isLoopbackHost(host: string): boolean {
@@ -112,20 +140,28 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
     throw new WatchBindError(
       `refusing to bind ${host}: the watch view binds loopback only (pass the explicit non-loopback flag to override)`,
     );
+  // `[::1]` is a URL form; listen() wants the bare address.
+  const listenHost = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  const maxEvents = opts.maxEvents ?? DEFAULT_MAX_EVENTS;
+  const stallMs = opts.sseStallMs ?? 30_000;
+  const maxBuffered = opts.sseMaxBufferedBytes ?? 8 * 1024 * 1024;
+  const needles = hostNeedles();
   const runs = new Set(opts.runs);
   const tasks = new Set(opts.tasks ?? []);
   const tail = opts.decisionLog === undefined ? null : new DecisionLogTail(opts.decisionLog);
   const frames = opts.frames;
 
-  let current: WatchState = { runs: [], events: [], skipped: 0, logPresent: false };
+  let current: WatchState = { runs: [], events: [], omitted: 0, skipped: 0, logPresent: false };
   let currentJson = "";
   const refresh = (): boolean => {
     tail?.poll();
     const log = tail?.snapshot() ?? { present: false, records: [], malformed: 0 };
     const projected = projectDecisions(log.records, { runs, tasks });
+    const omitted = Math.max(0, projected.events.length - maxEvents);
     const next: WatchState = {
       runs: opts.runs.map((runId) => ({ runId, frames: frames?.count(runId) ?? 0 })),
-      events: projected.events,
+      events: omitted === 0 ? projected.events : projected.events.slice(omitted),
+      omitted,
       skipped: projected.skipped + log.malformed,
       logPresent: log.present,
     };
@@ -137,19 +173,52 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
   };
   refresh();
 
-  const clients = new Set<ServerResponse>();
+  interface Client {
+    readonly res: ServerResponse;
+    /** A newer state arrived while the watcher was still draining. */
+    dirty: boolean;
+    /** When the watcher last stopped draining (null while it keeps up). */
+    stalledSince: number | null;
+  }
+  const clients = new Set<Client>();
+  let maxBufferedSeen = 0;
+  let dropped = 0;
+  const drop = (client: Client) => {
+    if (!clients.delete(client)) return;
+    dropped += 1;
+    client.res.destroy();
+  };
+  const stateMessage = () => `event: state\ndata: ${currentJson}\n\n`;
+  /** Write only to a watcher that has drained; otherwise remember it owes the latest state. */
+  const push = (client: Client, message: string, coalesce: boolean) => {
+    if (client.res.writableNeedDrain) {
+      if (coalesce) client.dirty = true;
+      client.stalledSince ??= Date.now();
+      return;
+    }
+    client.res.write(message);
+    maxBufferedSeen = Math.max(maxBufferedSeen, client.res.writableLength);
+    if (client.res.writableLength > maxBuffered) drop(client);
+  };
+  const sweep = () => {
+    const now = Date.now();
+    for (const client of clients)
+      if (client.stalledSince !== null && now - client.stalledSince > stallMs) drop(client);
+  };
   const broadcast = () => {
-    for (const client of clients) client.write(`event: state\ndata: ${currentJson}\n\n`);
+    const message = stateMessage();
+    for (const client of clients) push(client, message, true);
   };
   const timer = setInterval(() => {
     try {
       if (refresh()) broadcast();
+      sweep();
     } catch {
       // A failed poll keeps the last good state; the view never crashes the operator.
     }
   }, opts.pollMs ?? 250);
   const keepAlive = setInterval(() => {
-    for (const client of clients) client.write(": keep-alive\n\n");
+    for (const client of clients) push(client, ": keep-alive\n\n", false);
   }, 15_000);
   timer.unref();
   keepAlive.unref();
@@ -157,7 +226,8 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
   let boundPort = 0;
   const allowedHosts = (): Set<string> => {
     const names = ["127.0.0.1", "localhost", "[::1]"];
-    if (!loopback) names.push(host.includes(":") && !host.startsWith("[") ? `[${host}]` : host);
+    // The bind host itself is always allowed (e.g. 127.0.0.2), bracketed when IPv6.
+    names.push(listenHost.includes(":") ? `[${listenHost}]` : listenHost);
     return new Set(names.map((name) => `${name.toLowerCase()}:${boundPort}`));
   };
 
@@ -212,15 +282,24 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
           "Content-Type": "text/event-stream; charset=utf-8",
           Connection: "keep-alive",
         });
-        res.write(`retry: 1000\nevent: state\ndata: ${currentJson}\n\n`);
-        clients.add(res);
-        req.on("close", () => clients.delete(res));
+        const client: Client = { res, dirty: false, stalledSince: null };
+        clients.add(client);
+        res.on("drain", () => {
+          client.stalledSince = null;
+          if (client.dirty && clients.has(client)) {
+            client.dirty = false;
+            push(client, stateMessage(), true);
+          }
+        });
+        req.on("close", () => clients.delete(client));
+        push(client, `retry: 1000\n${stateMessage()}`, true);
         return;
       }
     }
     const match = FRAME_ROUTE.exec(url);
     if (match && frames !== undefined && runs.has(match[1] as string)) {
-      const frame = frames.read(match[1] as string, Number(match[2]));
+      const read = frames.read(match[1] as string, Number(match[2]));
+      const frame = read === null ? null : servableFrame(read, needles);
       if (frame !== null) {
         send(res, 200, frame.contentType, frame.bytes, { "Content-Security-Policy": FRAME_CSP });
         return;
@@ -241,7 +320,7 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
   server.requestTimeout = 10_000;
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen({ host, port: opts.port ?? 0 }, () => {
+    server.listen({ host: listenHost, port: opts.port ?? 0 }, () => {
       server.off("error", reject);
       resolve();
     });
@@ -250,7 +329,8 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
   const close = async () => {
     clearInterval(timer);
     clearInterval(keepAlive);
-    for (const client of clients) client.end();
+    // destroy, not end: a stalled watcher would otherwise hold close() open.
+    for (const client of clients) client.res.destroy();
     clients.clear();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   };
@@ -269,6 +349,7 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
     port: boundPort,
     host: address.address,
     state: () => current,
+    sse: () => ({ clients: clients.size, maxBufferedBytes: maxBufferedSeen, dropped }),
     close,
   };
 }

@@ -27,8 +27,9 @@ export const USAGE = `usage:
   --run <id>               a run to show (repeatable); events for any other run are not shown
   --task <id>              a task id the page may show (repeatable); others show as blank
   --decision-log <file>    the gate's decision log (myco-gate --audit), read-only, tailed live
-  --frames <dir>           frames from <dir>/<runId>/*.{png,jpg,jpeg,gif,webp,svg}
-  --sealed-capture <dir>   frames from the vault: <dir>/<runId>/captured/** (images only;
+  --frames <dir>           frames from <dir>/<runId>/*.png (PNG only; re-encoded from pixels,
+                           metadata dropped; other image types are never served)
+  --sealed-capture <dir>   frames from the vault: <dir>/<runId>/captured/**.png (PNG only;
                            captured/persisted and everything outside captured/ is never read)
   --host <addr>            bind address (default 127.0.0.1); non-loopback is refused unless
   --allow-non-loopback     is given (the stream is unauthenticated: think before using it)
