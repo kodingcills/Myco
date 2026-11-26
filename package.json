@@ -23,7 +23,9 @@
     "myco-run": "tsx scripts/myco-run.ts",
     "myco-linux": "tsx scripts/linux-run.ts",
     "myco-gate": "tsx scripts/myco-gate.ts",
+    "myco-watch": "tsx scripts/myco-watch.ts",
     "myco": "bash bin/myco",
+    "myco-record": "tsx scripts/myco-record.ts",
     "myco-state": "tsx scripts/myco-state.ts"
   },
   "devDependencies": {
