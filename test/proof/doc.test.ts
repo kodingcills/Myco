@@ -5,9 +5,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { DECODE_DEPTH, findLeaks } from "../../src/proof/backstop.ts";
 import { PROOF_CLAIM } from "../../src/proof/bundle.ts";
 import { KNOWN } from "../../src/proof/cli.ts";
-import { DECODE_DEPTH, findLeaks } from "../../src/proof/redact.ts";
+import { CLOSED_ID_SOURCE, FIELD_TREATMENT, TEXT_DIGEST_TAG } from "../../src/proof/closed.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const DOC = readFileSync(join(ROOT, "docs", "architecture", "replayable-proof.md"), "utf8");
@@ -43,73 +44,58 @@ describe("docs/architecture/replayable-proof.md matches the code", () => {
       if (command === "verify") for (const f of flags) verifyFlags.add(f);
       if (command === "report") expect(line).toContain("[verify flags]");
     }
-    // verify's documented flags plus --forbid-file (documented in prose) are all of its flags.
     expect(DOC).toContain("`--forbid-file`");
     expect([...verifyFlags, "--forbid-file"].sort()).toEqual([...(KNOWN.verify ?? [])].sort());
   });
 
-  it("home roots are caught after any leading character, as documented (R2-D1)", () => {
-    expect(DOC).toContain("**Home roots have no such exception:**");
-    for (const lead of [".../", "../../", "v2/", "build-/", "x.", "-"])
-      for (const root of ["Users/", "home/", "root/", "Users\\\\"])
-        expect(findLeaks(`${lead}${root}plantuser05/x`), `${lead}${root}`).not.toEqual([]);
+  it("the allowlist table names every input field with its treatment", () => {
+    const table = DOC.slice(
+      DOC.indexOf("| Type | Written as | Fields |"),
+      DOC.indexOf("**Hashed, not placeholdered.**"),
+    );
+    for (const field of Object.keys(FIELD_TREATMENT))
+      expect(table, `${field} is not in the doc's allowlist table`).toContain(`\`${field}\``);
+    expect(table).toContain(CLOSED_ID_SOURCE);
+    expect(DOC).toContain(`\`${TEXT_DIGEST_TAG}\``);
+    // Text is always hashed; artifacts and episodes are never written.
+    expect(table).toMatch(/\| text \| \*\*always hashed\*\*/);
+    expect(table).toMatch(/\| artifact \| \*\*never written\*\*/);
+    expect(table).toMatch(/\| episode \| \*\*never written\*\*/);
   });
 
-  it("R3-D1: spaced user segments are documented, and no completeness claim is made", () => {
-    expect(DOC).not.toContain("never under-matches");
-    expect(DOC).toContain("**The user segment after a home root may contain spaces**");
-    expect(DOC).toContain("It is not a proof that nothing identifying can get through");
-    expect(DOC).toContain("**Limits.**");
-    for (const root of ["C:\\Users\\", "C:\\Documents and Settings\\", "C:\\DOCUME~1\\"]) {
-      const value = `${root}Plantfirst ZqPLANTEDlast\\x`;
-      expect(findLeaks(value), root).not.toEqual([]);
-    }
+  it("states what is hashed vs placeholdered, and the guess-confirmation limit", () => {
+    expect(DOC).toContain("no field uses a fixed placeholder");
+    expect(DOC).toContain("can confirm the guess");
   });
 
-  it("#548 D1/D3: the UNC class and the username forms are documented, with their limits", () => {
-    expect(DOC).toContain("**The UNC shape covers the whole");
-    expect(DOC).toContain("**Usernames are caught in exactly these forms:**");
-    expect(DOC).toContain("The aim is that no secret");
-    expect(DOC).not.toContain("No secret, absolute host path, username or vault key may be");
-    expect(DOC).toContain("`--user-file`");
-    const limits = DOC.slice(DOC.indexOf("**Limits.**"), DOC.indexOf("Planted-marker tests"));
-    for (const item of [
-      "plain prose",
-      "**POSIX** path outside the home roots",
-      "`x_CORP\\user`",
-      "`dest://nas/homes/First Last`",
-      "bracketed IPv6",
+  it("the threat model is exactly #518's, and no verdict is claimed right", () => {
+    expect(DOC).toContain("This is exactly #518's ruled threat model");
+    expect(DOC).toContain(
+      "**The adversary is the checked agent and any guest-side process. The harness is trusted.**",
+    );
+    expect(DOC).toContain("**It is not proof against a malicious bundle author.**");
+    expect(DOC).toContain("never a finding that the gate was right");
+    expect(PROOF_CLAIM).toContain("not a finding that it was right");
+    for (const overclaim of [
+      "tamper-proof record",
+      "unforgeable",
+      "cryptographically signed",
+      "never under-matches",
     ])
-      expect(limits, item).toContain(item);
-    // Each documented UNC form is caught.
-    for (const form of [
-      "\\\\?\\UNC\\nas\\Plantfirst ZqPLANTEDlast\\x",
-      "\\\\.\\UNC\\nas\\Plantfirst ZqPLANTEDlast\\x",
-      "\\\\nas/homes/Plantfirst ZqPLANTEDlast/x",
-      "//nas/Plantfirst ZqPLANTEDlast/x",
-      "smb://nas/homes/Plantfirst ZqPLANTEDlast/x",
-      "FileSystem::\\\\nas\\homes\\Plantfirst ZqPLANTEDlast",
-      "file://nas/homes/Plantfirst ZqPLANTEDlast/x",
-      "file://///nas/homes/Plantfirst ZqPLANTEDlast",
-      "file:///srv/Plantfirst ZqPLANTEDlast/x",
-      "\\\\nas\\homes\\ZqPLANTEDlast, Plantfirst",
-      "desktop-7\\Plantfirst ZqPLANTEDlast",
-      "zqplantedguest@DESKTOP-7 ~ %",
-    ])
-      expect(findLeaks(form), form).not.toEqual([]);
+      expect(DOC.toLowerCase()).not.toContain(overclaim.toLowerCase());
+  });
+
+  it("the backstop is described as a backstop, with its decode depth", () => {
+    expect(DOC).toContain("It is a backstop, not the guarantee.");
+    expect(DOC).toContain("stacked up to three deep");
+    expect(DECODE_DEPTH).toBe(3);
+    const stacked = ["see ", "Users", "plantuser05", "x"].join("&#92;u00252F");
+    expect(findLeaks(stacked)).not.toEqual([]);
   });
 
   it("an unchecked episode reference is stated in the doc", () => {
     expect(DOC).toContain("**not\ncross-checked**");
     expect(DOC).toContain("episodeChecked: false");
-  });
-
-  it("decoders stack three deep, as documented", () => {
-    expect(DOC).toContain("stacked up to three deep");
-    expect(DECODE_DEPTH).toBe(3);
-    // A path percent-encoded, then JSON-escaped, then entity-encoded is still found.
-    const stacked = ["see ", "Users", "plantuser05", "x"].join("&#92;u00252F");
-    expect(findLeaks(stacked)).not.toEqual([]);
   });
 
   it("Q2 names its paired unit, the pair rule, the minimum, the cap and the test", () => {

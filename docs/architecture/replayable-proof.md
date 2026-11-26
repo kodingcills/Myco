@@ -1,7 +1,15 @@
 # Replayable proof (capability track Q)
 
-Status: M2 capability track Q, Tier 2. Code: `src/proof/`, CLI `scripts/proof.ts`, tests
-`test/proof/`. Local only: no network, no model, no VM.
+Status: M2 capability track Q, Tier 2 (#553, superseding #548 and #533). Code: `src/proof/`,
+CLI `scripts/proof.ts`, tests `test/proof/`. Local only: no network, no model, no VM.
+
+**Allowlist export (lead decision, #553).** A bundle writes ONLY closed-schema fields. Every
+free-text or path-capable value (paths, filenames, command lines, error text, notes, URLs, any
+string from the agent, the host or the harness) is replaced **structurally** before it is
+written, by its sha256, never by pattern-based redaction. The pattern scanner stays only as a
+backstop that fails the export closed if it ever fires. #533 and #548 used all their rounds on
+one leak class because a denylist scanner kept missing new path forms; under the allowlist a
+path never reaches the bundle whatever its form, because no string field can hold it.
 
 ## What it is
 
@@ -22,10 +30,11 @@ claim, provenance, observations).
 
 The bundle carries:
 
-- the ordered **actions** (agent or harness, tool, a redacted summary);
+- the ordered **actions** (agent or harness, the tool id, and the summary as a digest);
 - the **gate verdicts** (`myco.gate/v1`: verdict, `accepted`, reason **codes** only, never
   free-text reasons) and the evidence each verdict cites;
-- **evidence digests** (sha256 and byte count of each artifact; small clean text inlined);
+- **evidence digests** (sha256 and byte count of each artifact, and the digest of its path;
+  no artifact is ever inlined);
 - **checkpoints** of multi-step tasks;
 - **handoffs** between agents or sessions (shape lands with track N);
 - **policy decisions** (allow / deny / ask, with a code; shape lands with track O);
@@ -50,36 +59,39 @@ npx tsx scripts/proof.ts report bundle.json --out report.html [verify flags]
 
 Exit codes: 0 ok, 1 refused, 2 usage. `RUN.json` is a `ProofRunInput` (`src/proof/bundle.ts`)
 written by the harness, never by the agent. `RUN.json` may name `episodeFile`, the attempt's
-episode. `--forbid-file` lines are extra literals to redact and refuse; export registers no
-secret values of its own (it redacts the host's home, temp and checkout directories, its
-account name, every forbid-file line, and the generic shapes), so put secret values in the
-forbid file too. `--user-file` lines are account names to redact and refuse as whole words in
-any letter case: register the guest's account name there (the exporting host's own account is
-registered automatically). Neither file's contents are ever printed.
+episode. Nothing from `RUN.json` is written as text (see "Allowlist export"). `--forbid-file`
+lines (literals) and `--user-file` lines (account names, matched as whole words in any letter
+case) feed the **backstop**: the exporting host's account name, home, temp and checkout
+directories are registered automatically, and if any registered value still appears in an
+output (for example a closed id that equals the guest's account name), the command fails
+closed. Register the guest's account name in `--user-file`. Neither file's contents are ever
+printed.
 
 ## The verifier
 
-`verify` recomputes every record hash and chain link, the head, every inline evidence digest,
-every digest-only artifact when `--evidence-dir` points at the run's evidence, and the whole
-attempt ledger. It refuses (exit 1, a code per error) on:
+`verify` recomputes every record hash and chain link, the head, every artifact digest when
+`--evidence-dir` points at the run's evidence (a file is matched to its record by the digest of
+its path relative to that directory; a symlink out of it is refused), and the whole attempt
+ledger. Every message is built from closed values and schema field names: no message quotes a
+value from the bundle. It refuses (exit 1, a code per error) on:
 
 | Code | Cause |
 |---|---|
 | `PROOF_CHAIN` | an edited, removed or reordered record, or an edited `run` header (the chain breaks) |
 | `PROOF_GAP` | a `seq` that is not the record's index (a gap or a reorder) |
 | `PROOF_TRUNCATED` | the records do not reach the pinned head (tail cut or extended) |
-| `PROOF_SCHEMA` | not JSON, or any unknown field, wrong type, non-code reason, or absolute or escaping evidence path |
+| `PROOF_SCHEMA` | not JSON, any unknown field, any value outside its closed type (a free-text string where a digest is, an id outside the closed grammar, a non-code reason, an inlined artifact) |
 | `PROOF_CLAIM` | the claim is not the fixed statement below (no stronger claim) |
-| `PROOF_EVIDENCE` / `PROOF_EVIDENCE_DIGEST` / `PROOF_EVIDENCE_MISSING` | an inlined frame, a duplicate id, content that does not match its digest, an original file that changed or is missing |
+| `PROOF_EVIDENCE` / `PROOF_EVIDENCE_DIGEST` / `PROOF_EVIDENCE_MISSING` | a duplicate id, an evidence path that escapes the evidence dir, an original file that changed or is missing |
 | `PROOF_VERDICT` | `accepted` without `verified`, `verified` without `ORACLE_PASS` or `ORACLE_PASS` without `verified`, a verdict for another task or run, or citing evidence not recorded before it |
-| `PROOF_LEDGER_CHAIN` / `PROOF_LEDGER_HEAD` / `PROOF_LEDGER_ANCHOR` | an edited, reordered or truncated ledger; a ledger event outside #518's schema (unknown field, unknown arm, a start with an outcome, an end without one, a harness class without `harness-fault` or the reverse); a ledger with no anchor or an anchor with no ledger; an anchor that does not point at exactly one start and one end of the run's trial, for the run's task and arm |
+| `PROOF_LEDGER_CHAIN` / `PROOF_LEDGER_HEAD` / `PROOF_LEDGER_ANCHOR` | an edited, reordered or truncated ledger; a ledger event that fails #518's own check (`verifyAttemptLedger`: unknown field, unknown arm, a start with an outcome, an end without one, a harness class without `harness-fault` or the reverse); a ledger with no anchor or an anchor with no ledger; an anchor that does not point at exactly one start and one end of the run's trial, for the run's task and arm |
 | `PROOF_EPISODE` | with `--episode`: an episode whose id is not its content hash, that differs from `run.episode`, whose run id, task, arm, simulated flag or trial key differs from the bundle's, or an episode given for a bundle that references none |
 | `PROOF_ANCHOR_MISMATCH` | a head differs from the one given out of band |
-| `PROOF_REDACTION` | any parsed string value or key of the bundle carries a secret, an absolute host path, a `~user` home, or a forbidden literal, in any decoded form |
+| `PROOF_REDACTION` | the backstop fires: a parsed string value or key carries something it recognises (a secret shape, a host-path shape, a registered literal or account name), in any decoded form |
 
 The exporter runs the same verifier on what it built and refuses to write a bundle that would
-not verify. The report refuses to render one, and refuses to return HTML that its own scan
-finds a leak in. The CLI scans each line it prints and prints only error codes if one would
+not verify. The report refuses to render one, and refuses to return HTML that the backstop
+flags. The CLI scans each line it prints and prints only error codes if one would
 leak.
 
 ## Security model (stated plainly)
@@ -91,10 +103,18 @@ verifier accepts, is:
 > of the attempt ledger they carry is detected when checked against the heads pinned here (the
 > attempt ledger's guarantee, #518, and no more). The trusted harness that wrote the run is the
 > boundary: the chains are unkeyed and unsigned, so whoever can write the whole bundle can
-> regenerate a consistent one; only a head received out of band detects that.
+> regenerate a consistent one; only a head received out of band detects that. A verdict record is
+> what the gate said, not a finding that it was right.
 
-So:
+This is exactly #518's ruled threat model (`src/m2/attempt-ledger.ts`, lead ruling on #518 D3),
+and no more:
 
+- **The adversary is the checked agent and any guest-side process. The harness is trusted.**
+  Against that adversary, and against accidental drops or edits, the bundle is tamper-evident.
+- **It is not proof against a malicious bundle author.** Whoever controls the harness and
+  writes the whole bundle can write a consistent one.
+- **A verdict record is what the gate said, never a finding that the gate was right.** Whether
+  it was right is the independent grader's call; the report says so next to every verdict.
 - **The trusted harness is the boundary.** The bundle proves that what you hold is what the
   harness wrote, as far as partial changes go. It does not prove the harness recorded honestly.
 - **Whole-bundle regeneration is not detected** unless you check a head you received separately
@@ -107,101 +127,79 @@ So:
 - **The gate is unchanged.** The bundle is built after the run from the harness's own records.
   The agent still supplies only `taskId`, `runId` and `claim`; nothing here is a new gate input.
 
-### Redaction
+### Allowlist export
 
-The aim is that no secret, absolute host path, username or vault key is in a bundle or
-report. What is enforced is exactly the shapes and registered literals below; anything
-outside them is a stated limit (item 5), not a guarantee.
+The exporter does not look at what a string says. It looks at which field it is in:
 
-1. The exporter rewrites every string: registered literals first (secret values, vault keys,
-   the host's home, temp and checkout directories), then generic shapes (POSIX, Windows drive,
-   UNC and rootless backslash paths, network file URLs, `~user` homes, `file:` URLs, private
-   keys, bearer and vendor key shapes, `key=value` credentials), then the account-name shapes
-   and the registered account names. A token that still leaks once decoded is replaced whole.
-   - Every scan also runs over each **decoded form** of the string: JSON escapes (`\/`, `\t`,
-     `\u002f`), percent-encoding (`%2F`) and HTML entities (`&#47;`), stacked up to three deep.
-   - A path is not recognised by an allow-list of characters before it (any character left off
-     such a list bypasses it). A generic absolute path is skipped only when it continues a word
-     or a relative path. **Home roots have no such exception:** `Users`, `home`, `root`,
-     `Documents and Settings` or its 8.3 name `DOCUME~N`, followed by a separator and a segment
-     (either separator, any case), and `var/folders`, are a host path after any
-     non-alphanumeric character, so `.../home/a`, `../../Users/a`, `v2/Users/a`,
-     `build-/home/a`, `/Users\a` and drive-relative `C:Users\a` are all caught.
-   - **The user segment after a home root may contain spaces** (`C:\Users\First Last\x`), as
-     may every segment of a Windows drive path (`D:\Profiles\First Last\x`), of a UNC path
-     after the host, and of a network file URL. A user segment runs to the next separator and
-     stops only at a character no account name may contain. A share or folder segment (drive,
-     UNC, network URL) also runs on through `, ; = + [ ]`, which a Windows folder or share name
-     may contain (`\\nas\homes\Last, First`), and stops at a separator, a line break, a tab or
-     one of `" < > | : * ?`. **The UNC shape covers the whole
-     class:** `\\nas\homes\First Last`, either or mixed separators (`\\nas/homes/a`,
-     `//nas/a`), the long-path and device prefixes (`\\?\UNC\nas\a`, `\\.\UNC\nas\a`,
-     `\\?\C:\Users\a`), double-escaped backslashes, a UNC path after a `:` such as
-     PowerShell's provider-qualified path (`FileSystem::\\nas\homes\First Last`, as
-     `Get-Location` prints it), and every encoded form of each. A slash pair directly after a
-     URL scheme (`letters:`) is not a UNC host, so `https://host/x` stays; the network file
-     schemes `file`, `smb`, `cifs`, `afp`, `nfs`, `webdav`, `dav(s)` and `(s)ftp(s)` are caught
-     with spaces in every segment and any run of separators after the colon
-     (`file://nas/homes/First Last/x`, `file://///nas/homes/First Last`,
-     `file:///srv/First Last/x`). These
-     whitespace-tolerant shapes run **before** the drive, backslash and POSIX shapes, which stop
-     at whitespace: run after them, the part before the space is replaced and the surname is
-     left with no root to flag it. For the same reason, a string whose **decoded** form holds
-     such a path with whitespace in it (`C:\u005cUsers\u005cFirst Last`,
-     `%5C%5Cnas%5CFirst Last`) is replaced whole.
-   - **Usernames are caught in exactly these forms:** a registered account name (the
-     exporting host's own, and every `--user-file` line) as a whole word in **any letter
-     case**; `DOMAIN\user` as `whoami` and Windows prompts print it (a domain of letters,
-     digits, `.` and `-`, a backslash, then a user segment that may contain spaces); `user@host`
-     as POSIX prompts, `scp` and e-mail print it; and a user folder inside any path shape
-     above. These over-match too: a relative `dir\file`, a literal `word\nword` escape, an
-     e-mail address or `git@host` is redacted.
-   - This over-matches (`src/home/x`, or the rest of a sentence after `C:\Users\`, is redacted
-     too). It is not a proof that nothing identifying can get through: see the limits below.
-     Vendor key prefixes may follow anything but a letter.
-2. Evidence text is inlined only if redaction would leave it byte-identical, so an inline
-   digest is always the original artifact's. Otherwise it is digest-only (`withheld:
-   "redaction"`).
-3. **Screenshots and frames are never inlined**, only their digests (`withheld: "frame"`). The
-   watch view has no merged pixel-redaction rules, and this track does not invent them.
-4. Every output is scanned before it is written: the bundle by the verifier (every parsed value
-   and key), the report's final HTML by the renderer, and the CLI's own output. A leak that
-   survives step 1 and that a scanner recognises stops the export or the report. It is never
-   written. Leak reports name kinds and offsets, never the value.
-5. **Limits.** The scanners recognise shapes and registered literals, so they cannot flag a
-   fragment that no longer looks like a path (which is why step 1's order matters). Not caught
-   today:
-   - an account name that is not registered and is not in one of the forms above, such as a
-     name written in plain prose (`logged in as Alice`) or after a prompt with no `@`;
-   - a spaced folder in a **POSIX** path outside the home roots (`/srv/First Last/x` keeps
-     `Last/x`): only home roots, Windows drive, UNC and network-URL segments may span spaces;
-   - a URL whose scheme is not one of the network file schemes above
-     (`dest://nas/homes/First Last`): it is read as an ordinary URL and not flagged;
-   - a `DOMAIN\user` with `_`, `:`, `.`, `-` or a separator directly before the domain
-     (`x_CORP\user`), and a `user@host` whose host does not start with a letter
-     (`a@10.0.0.1`);
-   - obfuscated or invalid forms (a soft hyphen inside `Users`, a fullwidth `／`, a tab inside
-     `Documents and Settings` or inside a UNC folder name, a bracketed IPv6 "UNC" host), and
-     paths outside the home roots behind a character the generic shape skips
-     (`run.../tmp/x/y`).
-   These are hardening items for the shared scanner (TO FILE).
+| Type | Written as | Fields |
+|---|---|---|
+| enum | as is; any other value is refused (`PROOF_INPUT`) | `action.actor`, `verdict.verdict`, `verdict.reasonCodes` (the gate's reason codes), `checkpoint.verdict`, `policy.decision` |
+| boolean | as is; any other value is refused | `run.simulated`, `verdict.accepted` |
+| integer | as is; any other value is refused | `checkpoint.checkpoint`, `handoff.checkpoint` |
+| sha256 digest | as is; any other value is refused | `verdict.oracle.specSha256` |
+| id | as is when it matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, else **hashed**: `h-` + its digest (itself a closed id, so equality is still checked) | `run.runId`, `run.taskId`, `action.tool`, `evidence.evidenceId`, `evidence.evidenceKind`, `verdict.taskId`, `verdict.runId`, `verdict.evidence`, `verdict.oracle.family`, `verdict.oracle.version`, `handoff.from`, `handoff.to`, `policy.policyId`, `policy.subject` |
+| arm | as is when it is `myco-gate` or `hcu+shell`, else as an id | `run.arm` |
+| code | as is when it matches `^[A-Z][A-Z0-9_]{1,63}$`, else **hashed** | `policy.reasonCode` |
+| media type | as is when it matches `type/subtype`, else **hashed** | `evidence.mediaType` |
+| text | **always hashed**: a `TextRef` `{sha256, chars}`, the digest of the raw value and its length | `action.summary`, `handoff.summary`, `evidence.path` |
+| artifact | **never written**: its sha256 and byte count only | `evidence.content` |
+| ledger | verbatim, because every field is closed under #518's schema (ids in #518's grammar `^[A-Za-z0-9._:-]{1,128}$`, enums, integers, digests); a ledger that fails #518's check is refused | `ledger.lines`; `ledger.trialKey` (the input) is only used to find the trial: the anchor's trial key is taken from the ledger, never from the input |
+| episode | **never written**: its id and digest only | `episode` |
 
-Planted-marker tests (`test/proof/redaction.test.ts`) plant fake secrets, key shapes, a vault
-key (plain and percent-encoded), a username and macOS, Linux and Windows home paths in every
-free-text field and in evidence fixture files. They assert none reach the bundle or the
-report. One test per scanner bypass (JSON-escaped, percent-encoded and entity-encoded paths,
-backslash and UNC paths, `~user` homes, leading-character bypasses, and each home root after a
-`.`, `-`, digit, letter or `/`, mixed separators and drive-relative forms) asserts each is
-found, redacted, refused by the verifier and absent from an export, and the report refuses to
-render each.
+**Hashed, not placeholdered.** Every replacement is a digest: no field uses a fixed placeholder,
+so two equal values still compare equal (a verdict's hashed `runId` still binds to the run's).
+A digest is sha256 over `myco.proof.text/1`, a NUL byte, and the raw value's UTF-8 bytes. It
+does not reveal its input, but it is unsalted: a party who **guesses** the exact raw value (a
+likely path with a likely username) can confirm the guess by hashing it. That is the price of
+keeping equality checkable, and it is a stated limit.
+
+The bundle and record schemas are closed: every object has `additionalProperties: false`, and
+every string has a pattern or an enum. There is no free-text string type anywhere, so the
+verifier refuses a hand-edited bundle that puts any text (a path, a note) where a digest or a
+closed id belongs (`PROOF_SCHEMA`). A test walks the schemas and fails on any unpatterned
+string (`test/proof/allowlist.test.ts`).
+
+**Property test.** A seeded generator (`test/proof/path-fuzz.ts`) produces arbitrary host-path
+strings: spaces, `Documents and Settings`, UNC `\\server\share` and `//server` forms, `\\?\`,
+`\\.\` and `\??\` prefixes, `\Device\Mup`, 8.3 short names, mixed and repeated separators,
+unicode and RTL characters, percent, double-percent, JSON, `\u005c`, entity and `+` escapes,
+`~user`, `file://` and `smb://` URLs, `DOMAIN\user`, `user@host`, very long strings, behind
+arbitrary prefixes. Each is planted in every input field of a run, which is exported,
+verified and reported; no planted word may appear in any output byte (any letter case, and
+JSON-escaped). Each is also planted in every closed-type field, where the exporter must refuse
+without echoing it. Every probe the verifiers ran on #533 and #548 is a test too
+(`test/proof/probes.test.ts`).
+
+**Screenshots and frames are never inlined** (nothing is): the watch view has no merged
+pixel-redaction rules, and this track does not invent them.
+
+### Backstop
+
+The pattern scanner from #548 (`src/proof/backstop.ts`, unchanged patterns) runs over every
+output: the bundle (every parsed value and key, by the exporter's self-verify and by
+`verify`), the report's final HTML, and every line the CLI prints. It recognises registered
+literals (secrets, vault keys, host paths, account names in any letter case) and generic shapes
+(home roots, UNC and drive paths, POSIX absolute paths, `~user`, `file:` and network URLs,
+`DOMAIN\user`, `user@host`, key-shaped tokens), each in every decoded form (JSON escapes,
+percent-encoding, HTML entities), stacked up to three deep. If it fires, the export, verify or
+report fails closed (`PROOF_REDACTION`; the CLI prints only codes). It reports kinds and
+offsets, never the value.
+
+It is a backstop, not the guarantee. In an honest run it can fire only on a value the
+allowlist writes as is: a closed id that equals a registered account name or a forbidden
+literal, or that looks like a key (`sk_...`). Its known misses (the earlier rounds' "Limits":
+an unlisted URL scheme, a spaced POSIX folder outside the home roots, obfuscated forms) no
+longer matter for export, because no path reaches a bundle in the first place; tests pin that
+those forms never reach a bundle.
 
 TO FILE: consolidate this scanner and #542's episode cleanliness scan onto one canonical
-scanner once #542 merges, with a parity test over the bypass corpus.
+scanner once #542 merges, with a parity test over the probe corpus.
 
 ### The report
 
 `report` writes one static HTML file: no script, no link, no image, no remote URL, a
-`default-src 'none'` CSP, and every value HTML-escaped. Replay is read-only and needs no
+`default-src 'none'` CSP, and every value HTML-escaped. It shows only what the bundle holds:
+closed values, and each summary or path as its digest prefix and length ("text not carried"). Replay is read-only and needs no
 server, so there is nothing to bind to loopback.
 
 The renderer takes a bundle and a verification result. It renders only a passing result
@@ -217,16 +215,16 @@ passes the result of verifying the same bytes.
   id rule, and does not import #542. TO FILE: switch to #542's `Episode` type, `episodeIdOf` and
   `validateEpisode` once it merges; then make `run.episode` required and project the action and
   evidence records from the episode's actions and observations instead of `RUN.json` steps.
-- **#518 (attempt ledger), open.** `src/proof/ledger.ts` re-states its documented format (event
-  schema, canonical JSON, genesis, head) and does not import it. TO FILE: bind to #518's final
-  `verifyAttemptLedger` and `eventSha256` once it merges, with a parity test.
+- **#518 (attempt ledger), merged.** `src/proof/ledger.ts` calls #518's own
+  `verifyAttemptLedger` and `eventSha256` (`src/m2/attempt-ledger.ts`, not modified), and
+  replaces its messages with structural ones (#518's schema messages may quote a value).
 - **Track N (handoffs), track O (policy decisions), in flight.** The bundle defines minimal
   closed shapes (`HandoffBody`, `PolicyBody`). The record kinds land with N and O: their
   records map onto these shapes, never the reverse. TO FILE: once `myco.episode/1` carries the
   handoff log (N, #528's `handoffs` field) and policy decisions (O), the bundle references them
   through the episode instead of restating them.
 - **Live runner wiring.** The live harness must write `RUN.json` as the trial runs. That needs
-  the VM, so it is out of this PR.
+  the VM, so it is out of this PR (TO FILE, a local single-owner task under the VM lock).
 
 ## Proposed pre-registered measurement bar (for `docs/product/capability-spec.md`)
 
@@ -247,7 +245,8 @@ measurement run (n ≥ 30):
 - 100% of a pre-registered tamper battery is refused. The battery is edit, delete, swap and
   truncate at every record position, plus ledger edit, reorder and truncate, plus an evidence
   file swap: at least 300 cases;
-- 0 planted-marker leaks.
+- 0 planted-word leaks in the allowlist property test (at least 600 generated paths, each
+  planted in every input field, and every #533/#548 probe).
 
 A single miss fails Q1. With 0 misses in 300 cases, the exact one-sided 95% upper bound on the
 miss rate is about 1%.
