@@ -612,9 +612,9 @@ describe("#547 round 1 fixes", () => {
         k === 0 && r.experiment ? { ...r, experiment: { ...r.experiment, stage: 0 as const } } : r,
       ),
     };
-    expect(
-      checkCorrectionsAb(ab({ on, off: wrongStage }), { stage: 1 }).errors.join("\n"),
-    ).toMatch(/corrections-OFF: 1 row\(s\) not marked as corrections-ab Stage 1, arm off/);
+    expect(checkCorrectionsAb(ab({ on, off: wrongStage }), { stage: 1 }).errors.join("\n")).toMatch(
+      /corrections-OFF: 1 row\(s\) not marked as corrections-ab Stage 1, arm off/,
+    );
     const twoSeeds: AbArm = {
       ...off,
       arm: (off.arm as BenchmarkArmRow[]).map((r, k) =>
