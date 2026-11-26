@@ -10,6 +10,27 @@ Agents can already touch desktop software. The unsolved problem is *trust* — k
 
 ---
 
+## Getting started
+
+Needs Node ≥ 24 and pnpm 10 (details in [Setup](#setup)). No VM and no model for any step here.
+
+```sh
+pnpm install --frozen-lockfile           # in the Myco checkout
+pnpm myco-gate demo --transport mock     # an agent claims "saved"; the gate checks the saved file
+pnpm myco-watch --demo calc-multi-step   # (lands with #513) the same, in a local page: desktop frames + verdict timeline
+/path/to/Myco/bin/myco init --dry-run --project /path/to/your/project   # wire the gate into Claude Code and Codex
+```
+
+The demo exits 0 and prints `DEMO: PASS`; its verdicts are mock, not evidence. Drop
+`--dry-run` to write the gate's MCP entry to your project's `.mcp.json` and
+`.codex/config.toml`. `myco init` without `--project` configures the current directory, so run
+it from your project, not from the Myco checkout. On Linux, init also checks for headless
+LibreOffice Calc and Python-UNO and exits 1 if either is missing (the configs are still
+written); see [Quickstart: one command](#quickstart-one-command). A 90-second walkthrough with the exact commands is in
+[docs/product/demo-storyboard.md](docs/product/demo-storyboard.md).
+
+---
+
 ## M1 results
 
 M1 was signed off on 2026-11-25 ([#444](https://github.com/kodingcills/Myco/pull/444)). All 8
@@ -46,6 +67,33 @@ python3 scripts/scorecard-check.py
 | **Dogfood** (`dogfood/`) | `myco-todo`, a small app with a seeded persistence bug, for end-to-end checks | Partly |
 
 Core invariant: **`ActResult` never claims goal success, and the runner never decides task success.** Only the verifier, reading persisted state, produces a `verified` verdict — and the eval harness independently recomputes ground truth to catch a verifier that rubber-stamps.
+
+---
+
+## Quickstart: one command
+
+After `pnpm install --frozen-lockfile` (see [Setup](#setup)), from the project you want your
+agents to use the gate in:
+
+```sh
+/path/to/Myco/bin/myco init --dry-run   # every check and every planned change; writes nothing
+/path/to/Myco/bin/myco init             # checks, then writes ./.mcp.json and ./.codex/config.toml
+```
+
+`myco init` checks the Linux desktop path (headless LibreOffice Calc and Python-UNO, or says
+exactly what to install), starts the gate once with the launch line it is about to write and
+checks it answers and fails closed, then adds the `myco-gate` MCP server for Claude Code
+(`./.mcp.json`) and Codex (`./.codex/config.toml`). It changes only that entry (one splice; every
+other byte is kept, and a file it cannot merge into valid JSON/TOML is left alone), backs up
+any file it changes, and a second run changes nothing. It never reads or writes `~/.claude`,
+`~/.claude.json` or `~/.codex` unless you pass `--global`: it refuses to run with your home
+directory as the project and never follows a symlink or hard link out of the project. With
+`--global` it only prints the exact diff until you add `--yes`. No config it writes carries a
+key or token. It does not touch the Windows VM path. `--tasks <file>` registers an operator
+task (for example a `calc-record-edit` task for the Linux Calc path); CI's `linux path` job
+runs init end to end: real headless Calc edits the file under the configured evidence root,
+and a scripted MCP client gets `verified` / `refuted` through the written config. Details:
+[docs/product/setup.md](docs/product/setup.md).
 
 ---
 
@@ -188,6 +236,7 @@ docs/             see below
 | Path | Contents |
 |---|---|
 | [docs/m1-scorecard.md](docs/m1-scorecard.md) | **Acceptance criteria and evidence — the authoritative M1 status** |
+| [docs/product/setup.md](docs/product/setup.md) | `myco init`: one-command setup of the gate's MCP config for Claude Code and Codex |
 | [docs/eval-runbook.md](docs/eval-runbook.md) | How to run the evaluation from a clean snapshot |
 | [docs/product/vision.md](docs/product/vision.md) | Product vision and M1 acceptance criteria |
 | [docs/architecture/m1.md](docs/architecture/m1.md) | ADRs: adapter, verifier, evidence, recovery, baseline |

@@ -223,7 +223,8 @@ is bound to the published task set**, not to the typed numbers: with `--require-
 `--evidence` the check calls `src/benchmark/taskset-binding.ts`, the same module as the M2
 evidence-pack check (#506). The myco-gate rows must be exactly a whole number k of runs of a
 known task set (fc-v1: 100 tasks, 10 invalid-target): every task exactly k times, each with its
-own `faultClass`, `fixtureSha256` and `instructionSha256`, unregistrable exactly on its
+own `faultClass`, `fixtureSha256` and `instructionSha256` (read from the committed bundle,
+pinned by SHA-256 in `src/benchmark/published-tasks.ts`), unregistrable exactly on its
 unsatisfiable tasks, and the asserted split equal to k x those tasks. So a short run
 (`--expect myco-gate=90 --expect-unregistrable myco-gate=0`), a run missing a task, a
 relabelled run, or a run on an unknown task set fails even when the typed numbers agree. Without
@@ -431,3 +432,58 @@ families in a new task-set version. Each new family adds:
 - its fixtures, pinned by hash.
 
 The ledgers and the check are family-agnostic and do not change.
+
+## 9. Corrections ON/OFF A/B under the independent grader
+
+The A/B compares the gate with track B's agent-safe corrections (#514) ON against the same gate
+with them OFF. Its design is the lead's, fixed on #524 (comment 7196445749). This repo holds the
+**analysis only**: `src/m2/corrections-ab.ts` and `scripts/m2-corrections-ab.ts`. Track E's
+runner (#524 follow-up) runs the arms, owns the pre-registration file, and calls the analysis.
+
+```
+npx tsx scripts/m2-corrections-ab.ts --stage 0|1 \
+  --on-arm on/arm.jsonl --on-grades on/grades.jsonl \
+  --off-arm off/arm.jsonl --off-grades off/grades.jsonl \
+  --on-config on/run-config.json --off-config off/run-config.json \
+  [--stage0-on-arm s0/on/arm.jsonl --stage0-off-arm s0/off/arm.jsonl] \
+  [--prereg-file <committed pre-registration> --prereg-declared <sha256>] [--evidence]
+```
+
+- **Stage 0** has 30 pairs and is plumbing only. The effect claim is null, and its rows are excluded
+  from Stage 1: a Stage-1 trial may not reuse a Stage-0 trial.
+- **Stage 1** uses fc-v1, with 100 pairs per arm, each arm bound to exactly fc-v1. It runs a one-sided
+  exact sign test on the discordant pairs at alpha 0.05, and reports the discordant counts and a
+  95% interval on the paired difference (Newcombe 1998, method 10). A miss reads
+  `corrections-not-shown-to-help`, never a fail.
+- **A gate miss** is a trial the gate VERIFIED that the grader fails, in either arm. It halts the run
+  as an integrity incident, recorded in `integrityIncidents`. It is never data.
+- **Preconditions.** The analysis refuses to run unless:
+  - both arms ran identically apart from corrections:
+    - each arm is bound to the same published tasks, so the instruction and fixture hashes
+      match per pair;
+    - the planner, output ceiling and grader version are the same;
+    - the recorded run configs must record retry budget, pacing, planner and output ceiling,
+      must state what the rows actually ran, and may differ only in `corrections`;
+  - every row carries `experiment: {id: "corrections-ab", stage, arm, seed}`, with one seed per
+    run. Stage 1 refuses any trial whose key or seed appears in the Stage-0 ledgers, so a reused
+    trial cannot slip through under a new key;
+  - Stage 0 is exactly the pilot's 30 tasks (fc-v1's demo subset), each once;
+  - Stage 1 has no simulated planner (it is confirmatory, so this holds with or without
+    `--evidence`);
+  - for Stage 1, the hash of the committed pre-registration file equals the one the pack
+    declares.
+- **Two runs, two ledgers.** An unregistrable or refused row never called the gate, so the arm is
+  the ledger a row came from. Every gate-called ON row says `corrections: "on"`, and no OFF row
+  does.
+- **Never R1 evidence.** Both arms, the OFF arm included, are experiment-only, and this is
+  enforced. Because every A/B row carries the `experiment` marker, `checkBenchmark(..., { evidence:
+  true })` and the M2 pack check refuse such rows (`experimentRowsError`).
+- **No gate-side code, the task binding included** (#547 O1 follow-up). The binding reads the
+  published task rows (ids, fault classes, fixture and instruction hashes) from the committed
+  `benchmark/false-completion/fc-v1/tasks.jsonl`, pinned by SHA-256 in
+  `src/benchmark/published-tasks.ts`. It does not rebuild them with `buildTaskSet`, which runs
+  the generators in `src/tasks/` that the gate also imports. `test/benchmark/independence.test.ts`
+  walks the A/B module and the shared binding path (`check.ts`, `taskset-binding.ts`,
+  `published-tasks.ts`). It fails if any of them reaches `src/gate/`, `src/verify/`,
+  `src/tasks/` or `src/benchmark/taskset.ts`, or a process launcher. The lead's rule: this lands
+  before any Stage 1 effect is reported.

@@ -22,7 +22,13 @@
     "test:task": "tsx scripts/myco-test.ts",
     "myco-run": "tsx scripts/myco-run.ts",
     "myco-linux": "tsx scripts/linux-run.ts",
-    "myco-gate": "tsx scripts/myco-gate.ts"
+    "myco-gate": "tsx scripts/myco-gate.ts",
+    "myco-schedule": "tsx scripts/myco-schedule.ts",
+    "myco-watch": "tsx scripts/myco-watch.ts",
+    "myco": "bash bin/myco",
+    "myco-state": "tsx scripts/myco-state.ts",
+    "myco-record": "tsx scripts/myco-record.ts",
+    "myco-handoff": "tsx scripts/myco-handoff.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",
@@ -30,6 +36,7 @@
     "@playwright/test": "^1.65.1",
     "@types/node": "^24.0.0",
     "fflate": "^0.8.3",
+    "smol-toml": "1.9.1",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"

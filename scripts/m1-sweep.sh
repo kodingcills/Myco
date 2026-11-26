@@ -20,6 +20,12 @@
 #   - on start: a trials.jsonl that already holds a seed-mismatch is refused
 #     (exit 9); resume is only for gate pauses / operator stops.
 #
+# Trial snapshot (TIF-98, scripts/trial-snapshot.sh): pinned in $OUT/snapshot on
+# the first run; a resume on a different snapshot, an unpinned OUT with rows, or
+# a comparison run (MYCO_COMPARISON_RUN=1) not on clean-base is refused (exit 11).
+# Every row carries `snapshot` from the reset's ready line; a reset ready on a
+# different snapshot aborts (exit 12).
+#
 # Host gates, checked before each trial (exit and resume later; never run
 # through them): net load > 14 (exit 4), swap free < 300 MB (exit 6). Net load
 # is the 1-min load minus the guest's own QEMU cores (scripts/load-gate.sh,
@@ -39,6 +45,7 @@ cd "$WS" || exit 1
 mkdir -p "$OUT/runs" || exit 1
 source "$WS/scripts/vm-lock.sh"
 source "$WS/scripts/load-gate.sh"
+source "$WS/scripts/trial-snapshot.sh"
 vm_lock_acquire m1-sweep.sh "$PROGRESS" || exit "$?"
 trap vm_lock_release EXIT
 
@@ -48,6 +55,12 @@ if [ -f "$LOG" ] && grep -q '"status": "seed-mismatch"' "$LOG"; then
   echo "REFUSED_SEED_MISMATCH_PRESENT $(date -u +%FT%TZ): $LOG contains a seed-mismatch; start a fresh OUT" >> "$PROGRESS"
   exit 9
 fi
+
+# The trial snapshot, pinned in $OUT (TIF-98, scripts/trial-snapshot.sh): a resume
+# on a different snapshot is refused (exit 11), so one OUT never mixes bases.
+SNAP=$(ts_resolve 2>>"$PROGRESS") || exit 11
+ts_pin "$OUT" "$LOG" "$SNAP" 2>>"$PROGRESS" || exit 11
+echo "trial snapshot: $SNAP $(date -u +%FT%TZ)" >> "$PROGRESS"
 
 if [ ! -s "$PARAMS" ]; then
   pnpm exec tsx scripts/m1-sweep-params.ts params > "$PARAMS" || { echo "FATAL: params generation failed" >> "$PROGRESS"; exit 1; }
@@ -80,15 +93,23 @@ for i in $(seq 0 29); do
 
   FS=$(field "$i" fixtureSeed); RK=$(field "$i" rowKey); CL=$(field "$i" column); NV=$(field "$i" newValue)
   if [ -z "$FS" ] || [ -z "$RK" ] || [ -z "$CL" ] || [ -z "$NV" ]; then
-    echo "{\"index\": $i, \"status\": \"param-error\"}" >> "$LOG"; continue
+    echo "{\"index\": $i, \"status\": \"param-error\", \"snapshot\": null, $(ts_boot_json "")}" >> "$LOG"; continue
   fi
 
-  bash scripts/reset-trial-vm.sh >> "$PROGRESS" 2>&1 || {
-    echo "{\"index\": $i, \"status\": \"reset-failed\"}" >> "$LOG"; sleep 20; continue; }
+  # Every row carries the snapshot the reset reported ready on (null if it never
+  # got there). A reset ready on a different snapshot aborts the sweep (exit 12).
+  TS_READY=""; TS_BOOT=""
+  ts_reset "$SNAP" "$PROGRESS" 2>>"$PROGRESS"; RESET_RC=$?
+  if [ "$RESET_RC" -eq 12 ]; then
+    echo "ABORT_SNAPSHOT_MISMATCH at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit 12
+  fi
+  if [ "$RESET_RC" -ne 0 ]; then
+    echo "{\"index\": $i, \"status\": \"reset-failed\", \"snapshot\": null, $(ts_boot_json "")}" >> "$LOG"; sleep 20; continue
+  fi
   perl -e "alarm 400; exec @ARGV" agent/bootstrap/deploy-to-vm.sh >> "$PROGRESS" 2>&1 || {
-    echo "{\"index\": $i, \"status\": \"deploy-failed\"}" >> "$LOG"; continue; }
+    echo "{\"index\": $i, \"status\": \"deploy-failed\", \"snapshot\": \"$TS_READY\", $(ts_boot_json "$TS_BOOT")}" >> "$LOG"; continue; }
   TOK=$(~/VMs/myco-win11/scripts/vssh 'Get-Content C:\ProgramData\Myco\agent.token' 2>/dev/null | tr -d '\r\n')
-  [ ${#TOK} -lt 20 ] && { echo "{\"index\": $i, \"status\": \"token-failed\"}" >> "$LOG"; continue; }
+  [ ${#TOK} -lt 20 ] && { echo "{\"index\": $i, \"status\": \"token-failed\", \"snapshot\": \"$TS_READY\", $(ts_boot_json "$TS_BOOT")}" >> "$LOG"; continue; }
 
   # Allow the sequential cold-start polls and agent RPCs to finish (see the
   # M1-014 cold-start note in docs/research/experiments).
@@ -96,7 +117,7 @@ for i in $(seq 0 29); do
     --mode normal --seed "$FS" --row-key "$RK" --column "$CL" --new-value "$NV" \
     --runs-dir "$OUT/runs/$i" > "$OUT/trial.out" 2> "$OUT/trial.err"
 
-  python3 scripts/m1-sweep-record.py "$i" "$FS" "$RK" "$CL" "$NV" "$OUT/trial.out" "$FPRINTS" "$AC_POWER" >> "$LOG"
+  python3 scripts/m1-sweep-record.py "$i" "$FS" "$RK" "$CL" "$NV" "$OUT/trial.out" "$FPRINTS" "$AC_POWER" "$TS_READY" "$TS_BOOT" >> "$LOG"
   if tail -1 "$LOG" | grep -q '"status": "seed-mismatch"'; then
     echo "ABORT_SEED_MISMATCH at trial $i $(date -u +%FT%TZ): $(tail -1 "$LOG")" >> "$PROGRESS"; exit 7
   fi
