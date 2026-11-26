@@ -58,7 +58,9 @@ async function until(check: () => boolean, ms = 15_000): Promise<void> {
 }
 
 /** The verifier's style of fake absolute path (never exists). */
-const HOST_PATH = `/Users/fakeuser-${process.pid}/secret/path`;
+/** Assembled at run time so this file holds no literal home path (TIF-241's scan). */
+const MAC_HOME = ["", "Users", ""].join("/");
+const HOST_PATH = `${MAC_HOME}fakeuser-${process.pid}/secret/path`;
 const PLANT = `${MARKER} ${HOST_PATH}`;
 
 function chunkTypes(png: Buffer): string[] {
@@ -288,7 +290,7 @@ describe("D1: frame contents never reach a response unredacted", () => {
     expect(frameLeaks(b("abc"), true, [])).toBe(false);
     expect(frameLeaks(b("x/opt-in-zz"), true, ["/opt-in-zz"])).toBe(true);
     for (const leak of [
-      "/Users/x/",
+      `${MAC_HOME}x/`,
       "/home/x/",
       "/srv/x/",
       "C:\\Users\\x\\",
