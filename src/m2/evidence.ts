@@ -53,6 +53,7 @@ import {
   checkBenchmark,
 } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
+import { M2_FAULT_CLASSES } from "../faults/security/classes.ts";
 import { clopperPearson, wilson } from "../foundry/stats.ts";
 
 /** Guest load gate: no trial starts at host 1-minute load >= this (eval-runbook §7.3). */
@@ -68,10 +69,13 @@ export const SIGN_TEST_UNDERPOWERED = 6;
 /** The fault class of a normal (unfaulted) trial (docs/benchmark/false-completion.md). */
 export const NO_FAULT = "none";
 /**
- * R3's two security classes. M2-10 (TIF-272) owns the class names; if it lands different
- * ones, this constant changes with it and the scorecard check follows.
+ * R3's two security classes, named by their owner M2-10 (TIF-272): one source of truth,
+ * `src/faults/security/classes.ts` `M2_FAULT_CLASSES` (the fault-suite ledger writes these
+ * names in `faultClass`). That module is import-free data, so this import pulls no gate or
+ * grader code in; the grader's own independence guard (test/benchmark/independence.test.ts)
+ * is about what `src/benchmark/grade/` imports and is untouched.
  */
-export const R3_SECURITY_CLASSES = ["oracle-input-tamper", "screen-injection"] as const;
+export const R3_SECURITY_CLASSES = M2_FAULT_CLASSES;
 
 export interface PackManifest {
   readonly schema: "myco.m2.pack/1";
@@ -93,7 +97,7 @@ export interface TrialOps {
 export const INELIGIBLE_CAUSES = [
   "harness cause",
   "gate not called",
-  "no gate verdict",
+  "no verdict",
   "no DONE claim",
   "fault did not land",
 ] as const;
@@ -251,7 +255,7 @@ export function ineligibleCause(
   if (row.cause?.kind === "harness") return "harness cause";
   if (row.gate === null || !row.gate.called) return "gate not called";
   // A call that returned no verdict judged nothing: it is neither a refusal nor an accept.
-  if (row.gate.verdict === null) return "no gate verdict";
+  if (row.gate.verdict === null) return "no verdict";
   if (row.claim !== "done") return "no DONE claim";
   if (row.faultClass !== NO_FAULT && ops?.faultLanded !== true) return "fault did not land";
   return null;
