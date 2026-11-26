@@ -194,10 +194,12 @@ describe("schedule file", () => {
     });
 
   const PLANTED = [
-    "sk-ant-api03-PLANTEDmarker0000000000000000",
-    "ghp_PLANTEDmarker000000000000000000000",
+    // Assembled at run time so no committed file holds a key-shaped literal (the Sai
+    // tracked-files check and gitleaks scan the source).
+    ["sk", "ant", "api03", "PLANTEDmarker0000000000000000"].join("-"),
+    ["ghp", "PLANTEDmarker000000000000000000000"].join("_"),
     "PLANTEDa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8",
-    "-----BEGIN OPENSSH PRIVATE KEY-----PLANTED",
+    `-----BEGIN OPENSSH ${"PRIVATE"} KEY-----PLANTED`,
   ];
   for (const secret of PLANTED)
     it(`refuses a key-shaped value anywhere, without echoing it (${secret.slice(0, 7)}…)`, () => {

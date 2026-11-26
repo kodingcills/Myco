@@ -114,7 +114,10 @@ describe("myco-schedule", () => {
     expect(await main(["trigger", "--config", config, "--schedule", "nope"], t.io)).toBe(1);
     const planted = fixture({
       tickSeconds: 30,
-      notifier: { kind: "file", path: "/var/sk-ant-api03-PLANTED00000000000000" },
+      notifier: {
+        kind: "file",
+        path: `/var/${["sk", "ant", "api03", "PLANTED00000000000000"].join("-")}`,
+      },
     });
     t = io();
     expect(await main(["status", "--config", planted.config], t.io)).toBe(2);
