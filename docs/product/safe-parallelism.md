@@ -63,7 +63,20 @@ mismatch, a contamination, a refused pool or an unavailable backend. 3 means a u
 
 ## 2. What one trial does
 
-`runPool` (`src/parallel/pool.ts`) runs these steps for every trial. Each step fails closed.
+`runPool` (`src/parallel/pool.ts`) runs these steps for every trial. Each step fails closed:
+a failed check gives a code (a disqualifier, an `integrity:<code>` verdict reason, or a refused
+pool), never a count. No step blocks on a file an agent planted: every harness write and every
+host read an agent can reach on `linux-plain` is non-blocking and type-checked (see "Harness
+writes" and "Host reads" below). Failing closed can also mean denial: one trial can make the
+pool withhold its whole report (§5), but it cannot make the pool hang or count a trial.
+
+**Before the first trial, the oracle sources are read once.** The pool reads each oracle
+source the operator named (`CALC_ORACLE_SOURCES`, repo paths) without blocking, copies it into
+a fresh dir under the run root (`<run>/oracle-<random>/`) and keeps its sha256 in memory
+(`snapshotOracleSources`). Every trial's vault seals and checks those copies. The operator's
+paths are never read again during the pool, so an agent that replaces one with a FIFO (or a
+symlink to `/dev/zero`) cannot reach the harness. A source that is not a regular file at
+snapshot time refuses the pool before anything runs (`oracle source "…": not-regular`).
 
 1. **Claim the run id by its case-folded form.** `Run-A` and `run-a` are the same trial on a
    case-insensitive filesystem. A run id ending in `.` is refused (NTFS drops the dot, so
@@ -85,7 +98,9 @@ mismatch, a contamination, a refused pool or an unavailable backend. 3 means a u
    fresh key, and the desktop's root as its agent root. The gate is bound to
    `{ runId, receipt }`. Then the agent runs, stops, its output is captured, and the gate
    decides from the sealed capture. The agent still sends only taskId, runId and claim
-   (`myco.gate/v1`). Track L adds no gate input.
+   (`myco.gate/v1`). Track L adds no gate input. After the verdict, the pool reads the
+   trial's `seal.json` back (non-blocking; it must be the file the receipt names) and checks
+   that it hashed exactly the snapshot's bytes; if not, the trial gets `oracle-source`.
 6. **Capture without following links, and without blocking.** The saved file is read for the
    vault only if it is a regular file with exactly one link and at most 16 MiB, inside the
    workspace the harness resolved before the agent ran. The file is `lstat`ed first and
@@ -122,6 +137,26 @@ even when the gate said `verified`. The pool report is written to a fresh random
 is replaced); a target that is not a regular file rejects the whole run with
 `HarnessWriteRefused`: no report, no count.
 
+**Host reads never block, and read only regular files (#541 R3-1).** On `linux-plain` the
+agent can also replace files the harness *reads*: the oracle sources, and the vault's own
+files under `<run>/vaults/<runId>` (`seal.json`, `stop.json`, `capture.json`, `sealed/…`,
+`captured/…`). A plain `readFileSync` of a FIFO waits in `open()` for a writer forever, which
+froze the round-3 verifier's whole pool. Every such read goes through `readRegularNoBlock`
+(`src/integrity/nonblocking-read.ts`):
+
+- open `O_RDONLY | O_NONBLOCK | O_NOFOLLOW`: a FIFO opens at once, a symlink is refused;
+- `fstat` the fd: a regular file only; where the vault `lstat`ed first, the same inode (a
+  swap between the `lstat` and the `open` is refused) and, for sealed and captured files,
+  one link;
+- refuse a file over the cap (the vault's `VAULT_READ_LIMIT_BYTES`, 256 MiB; 16 MiB for an
+  oracle source at snapshot), then read from that fd.
+
+A refusal is a code, never a hang: a vault file gives `integrity:sealed-file-not-regular`,
+`captured-file-not-regular`, `seal-malformed` (and the verdict is `uncertain`), an oracle
+source gives `integrity:oracle-source-missing` at verdict time, or `oracle-source` when a
+later trial's seal is refused. For a regular file the bytes are exactly what `readFileSync`
+returned, so callers outside the pool see no change.
+
 After all trials finish, the pool scans each trial's evidence root, its vault dir and its
 gate records (the agent-seen result, the final result and the claim) for the other trials'
 markers.
@@ -143,6 +178,7 @@ the gate `accepted` it, and none of these disqualifiers applies:
 | `timeout` | The trial ran past its wall-clock cap |
 | `capture-refused` | The saved file was a link, a special file (FIFO, socket, dir), too large, or outside the workspace |
 | `evidence-refused` | A harness write (marker, fixture, `mcp.json`, agent output, record) found something planted at its target, a swapped dir, or timed out |
+| `oracle-source` | The trial's seal did not hash exactly the pool's oracle snapshot (a copy was replaced before it sealed), or the seal refused a copy that is not a regular file |
 | `agent-error`, `harness-error` | The agent or the setup threw |
 
 ## 3. The Linux backend (`linux-plain` only)
@@ -218,6 +254,10 @@ defence against it, and the test that proves the defence:
 | Get verified on B's work through its own capture | B has its own vault (own key and receipt); A's gate is bound to A's run id; capture refuses links and special files | `pool.test.ts` capture and special-file tests; `test/gate/sealed-gate.test.ts` (unchanged) |
 | Hang the pool with a FIFO or another special file as its state file | `lstat` first, `O_NONBLOCK` open, re-check on the fd, size cap; coded refusal | `pool.test.ts` "special file as the state file" and "B3: a file swapped for a FIFO between the lstat and the open" (in a child with a hard limit) |
 | Hang the pool with a FIFO at a harness write (its own or another trial's evidence dir, workspace or home, or the pool report) | `writeHarnessFile`: `O_EXCL \| O_NOFOLLOW \| O_NONBLOCK` create, realpath'd dir, off-loop write with a hard timeout; `evidence-refused` / run rejected | `pool.test.ts` "B1: harness writes" (real pool in a child with a hard KILL limit, per site, honest sibling still counted) |
+| Hang the pool with a FIFO or a `/dev/zero` symlink at an oracle source (#541 R3-1) | Sources are read once, non-blocking, before the first trial; the operator's paths are never read again; the snapshot copies are read by the vault with `readRegularNoBlock`. Refusal: the pool is refused before anything runs (`not-regular`), the verdict is `uncertain` (`integrity:oracle-source-missing`), or a later trial gets `oracle-source` | `host-reads.test.ts` "an oracle source replaced by the agent cannot hang the pool" (each of the four sources, FIFO and `/dev/zero`, before the pool, at the operator's path mid-run, and at the snapshot copy in a serial pool; real pool in a child with a hard KILL limit, a heartbeat and an honest sibling) |
+| Make a later trial seal oracle bytes it did not start with (replace a snapshot copy with other regular bytes) | NOT prevented on `linux-plain` (the snapshot dir is under the run root, same uid). Prevented from being COUNTED: the seal-vs-snapshot check gives `oracle-source`, and the gate refuses a source changed between seal and verdict (`integrity:oracle-source-hash`) | `host-reads.test.ts` "snapshot copy replaced by other regular bytes" |
+| Hang the pool with a FIFO swapped in at a vault sealed file or manifest, including a `setsid` daemon racing the vault's `lstat` and its read | `lstat`, then `readRegularNoBlock` with the same-inode check; coded integrity violation, verdict `uncertain` | `host-reads.test.ts` "a vault file swapped for a FIFO or a /dev/zero link" (each manifest and sealed/captured file; a daemon racing 3000 checks; a daemon from trial 1 racing trial 2's vault in a serial pool) |
+| Deny the whole pool its report | NOT prevented: a FIFO (or anything not a regular file) planted at `pool-report.json` rejects the run, and a source replaced before a later pool starts refuses that pool. Fail closed: no report and no count, never a hang | `pool.test.ts` "B1: … pool-report.json"; `host-reads.test.ts` "before the pool" |
 | Leak something into B that changes B's outcome | Markers are scanned in workspace, evidence, vault and gate records; a hit disqualifies both trials | `pool.test.ts` contamination tests; `linux-backend.test.ts` "planted markers" |
 | Talk to B over the network or a socket | NOT prevented on `linux-plain` (shared network). Covered by the count rule | — |
 | Connect to B's X display (read its screen, inject input) | A blind connect is refused: each Xvfb requires its own random cookie, set only in its own trial's env. NOT prevented against a trial that reads B's cookie file (same uid, B's root is readable on `linux-plain`). Covered by the count rule | `linux-backend.test.ts` "B2: a trial cannot connect to another trial's X display" (A's processes are refused on B's filesystem and abstract sockets, with no cookie and with A's own; B's client is accepted) |
@@ -233,6 +273,9 @@ The gate guarantees are unchanged and are not weakened here:
 - The grader stays independent: `src/benchmark/grade` is not imported by `src/parallel/`.
 - Persisted bytes are captured per trial.
 - The gate fails closed.
+- The vault changes only by hardening (#541 R3-1): its host reads no longer block or follow a
+  final symlink, refuse non-regular, swapped or over-256-MiB files with an existing code,
+  and return the same bytes as before for a regular file.
 - Agent-facing reasons carry codes only.
 - Calc stays CSV-only.
 - R1 is untouched.
@@ -247,7 +290,14 @@ Residual risks:
 - **X cookies are readable by other trials.** The per-trial cookie stops a blind connect to
   another trial's display, not a trial that reads the cookie file from B's root (or B's
   process memory) as the same uid. Covered by the count rule; strict isolation (#551) is
-  the real fix.
+  the real fix. Split to #551.
+- **One trial can deny the pool its report.** Anything but a regular file at
+  `pool-report.json` rejects the whole run, and an oracle source replaced before a pool
+  starts refuses that pool. This fails closed (no report, no count, no hang); it is a
+  denial of service, not a wrong result.
+- **The oracle snapshot is reachable.** It lives under the run root, which a `linux-plain`
+  agent can write. A replaced copy cannot hang the pool or be counted (above), but it can
+  make other trials' verdicts `uncertain` or uncounted.
 - **`setsid` escapes and harness death.** A process that leaves its process group survives
   `destroy()`, and `processesGone` only covers the desktop's own process groups. If the
   harness itself dies, the desktops' processes are not killed. Neither can produce a
@@ -339,7 +389,8 @@ public leaderboard.
 | --- | --- |
 | `src/parallel/backend.ts` | The backend interface, isolation report and requirements, `isolationShortfalls` |
 | `src/parallel/linux-backend.ts` | The `linux-plain` desktop, the watchdog, teardown |
-| `src/parallel/pool.ts` | `runPool`, the marker scan, `captureRegularFile`, disqualifiers |
+| `src/parallel/pool.ts` | `runPool`, the marker scan, `captureRegularFile`, `writeHarnessFile`, the oracle snapshot, disqualifiers |
+| `src/integrity/nonblocking-read.ts` | `readRegularNoBlock`: the non-blocking, type-checked host read the vault and the pool use |
 | `src/parallel/runid.ts` | Folded run-id claims (in-process and lock files) |
 | `src/parallel/caps.ts` | Cap validation |
 | `src/parallel/agents.ts` | Scripted agents: the real-Calc actuator and the hermetic file writer |
