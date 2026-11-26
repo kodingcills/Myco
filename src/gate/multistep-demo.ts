@@ -120,7 +120,7 @@ export interface MsReport {
 }
 
 /** The scripted agent: open the guest sheet in the fake app, make its edits, save, stop. */
-async function scriptedAgent(guestFile: string, edits: readonly CellEdit[]): Promise<void> {
+export async function scriptedAgent(guestFile: string, edits: readonly CellEdit[]): Promise<void> {
   const app = new FakeSpreadsheetApp({
     filePath: guestFile,
     rows: dataRowsForSeed(MS_SPEC.fixtureSeed) + 1,
