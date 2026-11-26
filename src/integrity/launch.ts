@@ -28,6 +28,13 @@
  *   and does not read the file: the transport owns writing it (see `GatedTrialTransport`);
  * - refuses an MCP server in `plan.mcpServers` it cannot classify, and an
  *   `mcp__<server>__…` tool whose server is not in the plan;
+ * - when the plan starts a `myco-state` server (capability track I), checks its binding: its
+ *   environment must pin `MYCO_STATE_RUN_ID` to this trial's run id and name a harness-issued
+ *   UNO pipe, carry a non-empty withheld list of absolute host paths
+ *   (`stateWithheldListValid`), carry no other keys than `MYCO_STATE_ENV_KEYS`, and its args
+ *   must end in `mcp` with no flag anywhere.
+ *   The server is classified only when the caller passes `STATE_SERVER_CLASS` (the
+ *   capability-arm audit does; the R1 gated harness does not, so it refuses the server);
  * - derives `mycoRtSessionPinned` from the `myco-rt` server's real environment
  *   (`MYCO_RT_SESSION_ID` must equal `rtSessionIdFor(runId)`, so an empty or other value
  *   leaves `create` rejected; #470 N3) instead of taking the caller's word.
@@ -45,9 +52,16 @@ import {
   classifyTool,
   MCP_SERVERS,
   MYCO_RT_SESSION_ENV,
+  MYCO_STATE_DOC_ENV,
+  MYCO_STATE_ENV_KEYS,
+  MYCO_STATE_PIPE_ENV,
+  MYCO_STATE_RUN_ENV,
+  MYCO_STATE_WITHHELD_ENV,
   rtSessionIdFor,
+  STATE_SERVER_NAME,
   type SurfaceAudit,
   type SurfaceViolation,
+  stateWithheldListValid,
   type ToolClass,
 } from "./surface.ts";
 
@@ -326,6 +340,48 @@ function mcpConfigViolations(
   return out;
 }
 
+/** Harness-issued UNO pipe names (`UNO_PIPE_NAME` in src/state/linux/uno.ts). */
+const STATE_PIPE = /^myco-state-[a-z0-9-]{8,64}$/;
+/** A Calc RuntimeUID (`DOC_UID` in src/state/linux/uno.ts). */
+const STATE_DOC_UID = /^[1-9][0-9]{0,9}$/;
+
+/**
+ * A `myco-state` server in the plan must be bound to this trial: run id pinned, a
+ * harness-issued pipe, the trial document's uid, a non-empty withheld list, no other env keys, args ending in `mcp`
+ * with no flag. Fail closed on any other.
+ */
+function stateBindingViolations(plan: AgentLaunchPlan, runId: string): SurfaceViolation[] {
+  if (!Object.hasOwn(plan.mcpServers, STATE_SERVER_NAME)) return [];
+  const server = plan.mcpServers[STATE_SERVER_NAME] as McpServerLaunch;
+  const out: SurfaceViolation[] = [];
+  const violation = (detail: string) =>
+    out.push({ tool: `mcp__${STATE_SERVER_NAME}`, reach: "unknown", detail });
+  const env = server.env ?? {};
+  for (const key of Object.keys(env))
+    if (!MYCO_STATE_ENV_KEYS.includes(key))
+      violation(`environment key ${JSON.stringify(key)} is not a myco-state binding key`);
+  const pinned = Object.hasOwn(env, MYCO_STATE_RUN_ENV) ? env[MYCO_STATE_RUN_ENV] : "";
+  if (runId.length === 0 || pinned !== runId)
+    violation(`${MYCO_STATE_RUN_ENV} does not pin the server to this trial's run id`);
+  const pipe = Object.hasOwn(env, MYCO_STATE_PIPE_ENV) ? (env[MYCO_STATE_PIPE_ENV] ?? "") : "";
+  if (!STATE_PIPE.test(pipe))
+    violation(`${MYCO_STATE_PIPE_ENV} is not a harness-issued myco-state pipe name`);
+  const docUid = Object.hasOwn(env, MYCO_STATE_DOC_ENV) ? (env[MYCO_STATE_DOC_ENV] ?? "") : "";
+  if (!STATE_DOC_UID.test(docUid))
+    violation(`${MYCO_STATE_DOC_ENV} does not bind the server to the trial's document`);
+  const withheld = Object.hasOwn(env, MYCO_STATE_WITHHELD_ENV)
+    ? env[MYCO_STATE_WITHHELD_ENV]
+    : undefined;
+  if (!stateWithheldListValid(withheld))
+    violation(
+      `${MYCO_STATE_WITHHELD_ENV} must list the trial's host paths (a JSON array of 1-64 absolute paths)`,
+    );
+  if (server.args.at(-1) !== "mcp") violation("server args must end in `mcp`");
+  if (server.args.some((a) => looksLikeOption(a)))
+    violation("server args must carry no flags (e.g. --inspect)");
+  return out;
+}
+
 /**
  * Audit a launch plan. `ok` is true only when the argv grants nothing outside guest / gate /
  * agent-local reach, no flag widens it, the agent can load only `plan.mcpServers` (via
@@ -342,6 +398,7 @@ export function auditAgentLaunch(plan: AgentLaunchPlan, opts: LaunchAuditOptions
     ...opts.extraServers,
   };
   const serverNames = Object.keys(plan.mcpServers);
+  violations.push(...stateBindingViolations(plan, opts.runId));
   for (const name of serverNames)
     if (!Object.hasOwn(servers, name))
       violations.push({
