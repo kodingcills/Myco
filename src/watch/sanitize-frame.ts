@@ -215,26 +215,39 @@ export function sanitizePng(input: Buffer): Buffer | null {
   ]);
 }
 
-/** Host-identifying strings the backstop refuses (only ones long enough to be specific). */
-export function hostNeedles(): string[] {
+/** Host-identifying strings for these host facts (only ones long enough to be specific). */
+export function needlesFor(host: {
+  readonly home?: string;
+  readonly tmp?: string;
+  readonly user?: string;
+}): string[] {
   const needles = new Set<string>();
-  const add = (value: string | undefined) => {
+  for (const value of [host.home, host.tmp])
     if (value !== undefined && value.length >= 4) needles.add(value);
-  };
-  try {
-    add(homedir());
-  } catch {}
-  try {
-    add(tmpdir());
-  } catch {}
-  try {
-    const user = userInfo().username;
-    if (user.length >= 3) {
-      needles.add(`/${user}`);
-      needles.add(`\\${user}`);
-    }
-  } catch {}
+  if (host.user !== undefined && host.user.length >= 3) {
+    needles.add(`/${host.user}`);
+    needles.add(`\\${host.user}`);
+  }
   return [...needles];
+}
+
+/** The backstop's needles for this process: home directory, temp directory, username. */
+export function hostNeedles(): string[] {
+  const read = (get: () => string): string | undefined => {
+    try {
+      return get();
+    } catch {
+      return undefined;
+    }
+  };
+  const home = read(homedir);
+  const tmp = read(tmpdir);
+  const user = read(() => userInfo().username);
+  return needlesFor({
+    ...(home === undefined ? {} : { home }),
+    ...(tmp === undefined ? {} : { tmp }),
+    ...(user === undefined ? {} : { user }),
+  });
 }
 
 /** Absolute host-path prefixes and key-shaped prefixes: refused in any served frame. */

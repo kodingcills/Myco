@@ -24,6 +24,7 @@ import {
 import {
   frameLeaks,
   hostNeedles,
+  needlesFor,
   sanitizePng,
   servableFrame,
 } from "../../src/watch/sanitize-frame.ts";
@@ -251,8 +252,17 @@ describe("D1: frame contents never reach a response unredacted", () => {
     const badFilter = Buffer.from(CLEAN_RAW);
     badFilter[0] = 7;
     bad(encodePng({ width: 2, height: 2, colorType: 6, raw: badFilter }));
-    const corrupt = Buffer.from(clean());
-    corrupt[corrupt.length - 20] ^= 0xff; // breaks a CRC
+    // A bad CRC on a chunk that would otherwise be dropped unread still refuses the file.
+    const withText = encodePng({
+      width: 2,
+      height: 2,
+      colorType: 6,
+      raw: CLEAN_RAW,
+      extra: [pngChunk("tEXt", Buffer.from("Comment\0hello", "latin1"))],
+    });
+    expect(sanitizePng(withText)).not.toBeNull();
+    const corrupt = Buffer.from(withText);
+    corrupt[33 + 8] ^= 0xff; // first data byte of the tEXt chunk (after the 33-byte header)
     bad(corrupt);
     bad(clean().subarray(0, clean().length - 12)); // no IEND
     expect(sanitizePng(PNG)).not.toBeNull();
@@ -291,6 +301,10 @@ describe("D1: frame contents never reach a response unredacted", () => {
     expect(frameLeaks(b(MARKER), true, [])).toBe(true); // a 16+ char text run in binary
     expect(frameLeaks(b(MARKER), false, [])).toBe(false); // rendered SVG is text by design
     expect(frameLeaks(b("ABCDEFGHIJKLMNO"), true, [])).toBe(false); // 15 chars: below the run
+    expect(needlesFor({ home: "/h/aaaa", tmp: "/t/bbbb", user: "cccc" }).sort()).toEqual(
+      ["/cccc", "/h/aaaa", "/t/bbbb", "\\cccc"].sort(),
+    );
+    expect(needlesFor({ home: "/h", user: "ab" })).toEqual([]); // too short to be specific
     const needles = hostNeedles();
     expect(needles).toContain(homedir());
     if (userInfo().username.length >= 3) expect(needles).toContain(`/${userInfo().username}`);
