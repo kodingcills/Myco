@@ -29,7 +29,7 @@ export function trial(
 ): Trial {
   const base: BenchmarkArmRow = {
     schema: "myco.benchmark.arm-row/1",
-    taskSetVersion: "fc-v1",
+    taskSetVersion: "fx-synthetic",
     arm: "myco-gate",
     trialKey: `${over.arm === "hcu+shell" ? "s" : "g"}${i}`,
     taskId: `fc-${i}`,

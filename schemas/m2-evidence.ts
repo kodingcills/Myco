@@ -41,9 +41,10 @@ export const m2PackManifestSchema: JsonSchema = {
     /**
      * The asserted split of `expectTrials` (TIF-274, outer-loop ruling 2026-11-26 08:38Z):
      * how many of an arm's trials are unregistrable (the gate's registry rejected the task
-     * spec, e.g. fc-v1's 10 invalid-target tasks); the rest are gated. Required for
-     * `myco-gate` when the pack is R1 evidence, so a short run fails instead of shrinking
-     * R1's denominator.
+     * spec, e.g. fc-v1's 10 invalid-target tasks); the rest are gated. Optional here; the
+     * requirement (for `myco-gate` when the pack is R1 evidence, or has unregistrable rows) and
+     * the binding to the published task set's composition live in `checkPack`
+     * (`src/m2/evidence.ts`), so a short run fails instead of shrinking R1's denominator.
      */
     expectUnregistrable: {
       type: "object",
