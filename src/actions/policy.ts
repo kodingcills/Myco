@@ -20,7 +20,9 @@
  *   the workspace, resolved through symlinks as the kernel resolves it (`realpath(3)` on the
  *   unnormalised spelling, so a `..` after a symlinked directory goes where the kernel goes;
  *   for a path that does not exist yet, its parent), and must lie inside the workspace's
- *   resolved root. The script route then runs the resolved operands, not the spelling. A
+ *   resolved root. The script route then runs the resolved operands, not the spelling,
+ *   passed relative to the resolved root (the route's working directory) so no program
+ *   ever echoes the workspace's host path. A
  *   path that leaves it, by `..`, an absolute host path, or a symlink, is denied. Writes are narrower still:
  *   only the trial document and the scratch directory.
  * - **denies by default any shell command it cannot parse safely** (`parseShellCommand`).
@@ -264,6 +266,18 @@ function within(path: string, root: string): boolean {
 }
 
 /**
+ * A resolved path inside `root`, spelled relative to it for a program whose working
+ * directory is `root`: `.` for the root itself, otherwise `./<path below root>`. The `./`
+ * prefix also keeps a file named like a flag (`-n`) from being read as one.
+ */
+export function workspaceRelative(resolved: string, root: string): string {
+  const rel = relative(root, resolved);
+  if (rel === "") return ".";
+  if (!within(resolved, root)) throw new Error("workspaceRelative: path outside the root");
+  return `.${sep}${rel}`;
+}
+
+/**
  * Resolve `raw` against the workspace through symlinks. A path that does not exist yet
  * resolves by its parent directory (which must exist); null when neither resolves, and null
  * for a regular file with more than one hard link (its other names are invisible to
@@ -367,11 +381,15 @@ export function workspacePolicy(scope: WorkspaceScope): ActionPolicy {
         resolvedWrites.push(path);
       }
       if (program !== null) {
-        // Every program runs on the resolved absolute operands the loop above scoped, never
-        // the agent's spelling of them (which the kernel may resolve differently).
+        // Every program runs on the operands the loop above resolved, never the agent's
+        // spelling of them (which the kernel may resolve differently). They are passed
+        // RELATIVE to the resolved root (`./` + the path below it): the route's working
+        // directory is that root, so the kernel opens exactly the scoped file with no
+        // symlink in between, and programs that echo their operands (`wc`, `sha256sum`,
+        // multi-file `head`, multi-operand `ls`) never print the host path of the workspace.
         const args = [...program.plan.args];
         program.plan.operands.forEach((k, j) => {
-          args[k] = resolvedReads[program.offset + j] as string;
+          args[k] = workspaceRelative(resolvedReads[program.offset + j] as string, root);
         });
         argv = [program.plan.program, ...args];
       }

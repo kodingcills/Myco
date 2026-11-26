@@ -71,7 +71,11 @@ export const ROUTE_TABLE: Readonly<Record<ActionKind, readonly RouteName[]>> = {
   "shell.run": ["script"],
 };
 
-export type RouteFailureCode = "ROUTE_FAILED" | "ROUTE_TIMEOUT" | "ROUTE_OUTPUT_ESCAPED";
+export type RouteFailureCode =
+  | "ROUTE_FAILED"
+  | "ROUTE_TIMEOUT"
+  | "ROUTE_OUTPUT_ESCAPED"
+  | "ROUTE_OUTPUT_LEAK";
 
 /** What a route reports after it ran. A trace, never a verdict. */
 export type RouteRun =

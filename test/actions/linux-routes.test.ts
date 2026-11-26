@@ -4,11 +4,14 @@
  */
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -70,7 +73,8 @@ describe("api route", () => {
       executors: [unoApiRoute({ scope, python: py, probe: () => true })],
     }).act({ ...SET, save: false });
     const args = readFileSync(log, "utf8");
-    expect(args).toContain(`--doc ${scope.document} `);
+    // The policy resolves symlinks in the workspace's own path (macOS: /var -> /private/var).
+    expect(args).toContain(`--doc ${realpathSync(scope.document)} `);
     expect(args).toContain("--cell B2 --value v");
     expect(args.trim().endsWith("--no-save")).toBe(true);
   });
@@ -95,9 +99,10 @@ describe("gui route", () => {
       ok: false,
       code: "ALL_ROUTES_FAILED",
     });
+    const doc = realpathSync(scope.document);
     expect(calls).toEqual([
-      { doc: scope.document, cell: "B2", value: "v", save: true },
-      { doc: scope.document, cell: "B2", value: "v", save: false },
+      { doc, cell: "B2", value: "v", save: true },
+      { doc, cell: "B2", value: "v", save: false },
     ]);
   });
 });
@@ -125,14 +130,24 @@ describe("script route", () => {
 
   it("the program's environment is exactly PATH, HOME and LANG (no harness variable)", () => {
     // Names only (never values): the fake soffice writes its environment's variable names
-    // as the "CSV". `/bin/sh` itself adds PWD, the workspace it was started in.
+    // as the "CSV". `/bin/sh` itself adds its own bookkeeping names, which differ by
+    // platform (dash: PWD; macOS bash: PWD, SHLVL, _), so those are set aside; everything
+    // else must be exactly the three the route passes. A harness variable never arrives.
     const soffice = fakeBin(
       "soffice-env",
       'mkdir -p "$5"; /usr/bin/env | cut -d= -f1 | sort > "$5/doc.csv"',
     );
-    const result = exportWith(soffice);
-    expect(result).toMatchObject({ ok: true, route: "script" });
-    expect(result.output).toBe("HOME\nLANG\nPATH\nPWD\n");
+    const SHELL_ADDED = new Set(["PWD", "OLDPWD", "SHLVL", "_"]);
+    process.env.MYCO_TEST_HARNESS_SENTINEL = "1";
+    try {
+      const result = exportWith(soffice);
+      expect(result).toMatchObject({ ok: true, route: "script" });
+      const names = (result.output ?? "").split("\n").filter((n) => n !== "");
+      expect(names).not.toContain("MYCO_TEST_HARNESS_SENTINEL");
+      expect(names.filter((n) => !SHELL_ADDED.has(n))).toEqual(["HOME", "LANG", "PATH"]);
+    } finally {
+      delete process.env.MYCO_TEST_HARNESS_SENTINEL;
+    }
   });
 
   it("only stdout comes back from a shell.run program; stderr never does", () => {
@@ -173,9 +188,13 @@ describe("script route", () => {
       }),
     ).toMatchObject({ ok: true, output: "converted" });
     const ws = realpathSync(scope.workspace);
-    expect(readFileSync(log, "utf8").trim()).toBe(
-      `--headless --convert-to csv --outdir ${ws}/scratch/o ${ws}/doc/doc.xlsx`,
-    );
+    // The outdir soffice sees is a fresh directory the route made under the approved one.
+    const parts = readFileSync(log, "utf8").trim().split(" ");
+    expect(parts.slice(0, 4).join(" ")).toBe("--headless --convert-to csv --outdir");
+    expect(parts[4]?.startsWith(`${ws}/scratch/o/.myco-convert-`)).toBe(true);
+    expect(parts[5]).toBe(`${ws}/doc/doc.xlsx`);
+    expect(parts).toHaveLength(6);
+    expect(readFileSync(join(ws, "scratch", "o", "doc.csv"), "utf8")).toBe("a\n");
   });
 
   it("soffice exiting 0 without producing the file is a failed route", () => {
@@ -218,5 +237,44 @@ describe("script route", () => {
     expect(router.act({ kind: "shell.run", command: "cat 'scratch/a b.txt'" }).output).toBe(
       "spaced\n",
     );
+  });
+  // D2 (round 3 verdict on #539): soffice opens `<outdir>/<doc>.csv` through a symlink
+  // already planted at that name. The fake below writes with a shell redirect, which follows
+  // links exactly as soffice does.
+  describe("a symlink planted at the output name is never written through", () => {
+    const VICTIM = "VICTIM-ORIGINAL\n";
+    const writer = () =>
+      fakeBin("soffice-writes", 'mkdir -p "$5"; printf "a,b\\n1,2\\n" > "$5/doc.csv"');
+
+    it.each([
+      [
+        "shell.run soffice --outdir scratch",
+        "scratch",
+        {
+          kind: "shell.run",
+          command: "soffice --headless --convert-to csv --outdir scratch doc/doc.xlsx",
+        },
+      ],
+      ["doc.export-csv", "scratch/export-1", { kind: "doc.export-csv" }],
+    ] as const)("%s", (_what, outRel, action) => {
+      const victim = join(root, "victim.csv");
+      writeFileSync(victim, VICTIM);
+      mkdirSync(join(scope.workspace, outRel), { recursive: true });
+      const planted = join(scope.workspace, outRel, "doc.csv");
+      symlinkSync(victim, planted);
+      const result = createActionRouter({
+        policy: workspacePolicy(scope),
+        executors: [shellScriptRoute({ scope, soffice: writer() })],
+      }).act(action);
+      expect(readFileSync(victim, "utf8")).toBe(VICTIM);
+      expect(result).toMatchObject({ ok: true, route: "script" });
+      // The export replaced the planted link with a regular file inside the workspace.
+      expect(lstatSync(planted).isSymbolicLink()).toBe(false);
+      expect(readFileSync(planted, "utf8")).toBe("a,b\n1,2\n");
+      // No conversion directory is left behind.
+      expect(
+        readdirSync(join(scope.workspace, outRel)).filter((n) => n.startsWith(".myco-")),
+      ).toEqual([]);
+    });
   });
 });

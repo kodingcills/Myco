@@ -71,9 +71,8 @@ describe("script route scoping with planted markers", () => {
     ).toBe(true);
   });
 
-  it("every program runs on the resolved absolute operands, not the agent's spelling", () => {
+  it("every program runs on the resolved operands (relative to the resolved root), not the agent's spelling", () => {
     const policy = workspacePolicy(scope);
-    const realWs = realpathSync(ws);
     expect(
       policy.check({
         route: "script",
@@ -84,7 +83,7 @@ describe("script route scoping with planted markers", () => {
       }),
     ).toMatchObject({
       allow: true,
-      argv: ["head", "-n", "2", join(realWs, "scratch", "notes.txt")],
+      argv: ["head", "-n", "2", "./scratch/notes.txt"],
     });
     expect(
       policy.check({
@@ -169,5 +168,72 @@ describe("script route scoping with planted markers", () => {
     expect(everything).not.toContain(MARKER_OTHER);
     expect(everything).not.toContain(MARKER_HOST);
     expect(() => statSync(join(ws, "scratch", "stolen.txt"))).toThrow();
+  });
+  // D1 (round 3 verdict on #539): programs that echo their operands must never print the
+  // workspace's host path. Real coreutils, no planted links, ordinary commands.
+  it("no program's output carries the workspace's host path (wc, sha256sum, head, ls)", () => {
+    writeFileSync(join(ws, "scratch", "b.txt"), "b\n");
+    const r = router();
+    const commands = [
+      "wc -l scratch/notes.txt",
+      "sha256sum doc/doc.xlsx",
+      "head -n 1 scratch/notes.txt scratch/b.txt",
+      "ls scratch doc",
+      "wc -c scratch/notes.txt doc/doc.xlsx",
+      `wc -l ${join(ws, "scratch", "notes.txt")}`,
+      `ls ${join(ws, "scratch")} ${join(ws, "doc")}`,
+    ];
+    const hostPaths = [ws, realpathSync(ws), root, realpathSync(root)];
+    for (const command of commands) {
+      const result = r.act({ kind: "shell.run", command });
+      expect(result.ok, command).toBe(true);
+      expect(result.output, command).toBeTypeOf("string");
+      for (const host of hostPaths) expect(result.output, command).not.toContain(host);
+    }
+    const out = (command: string) => r.act({ kind: "shell.run", command }).output ?? "";
+    expect(out("wc -l scratch/notes.txt")).toBe("1 ./scratch/notes.txt\n");
+    expect(out("head -n 1 scratch/notes.txt scratch/b.txt")).toContain("==> ./scratch/b.txt <==");
+    expect(out("ls scratch doc")).toContain("./doc:");
+  });
+
+  it("output that would carry the workspace's host path is refused (ROUTE_OUTPUT_LEAK)", () => {
+    // Defence in depth behind the relative operands: a workspace file whose bytes hold the
+    // host path is not returned, under either spelling of the workspace.
+    writeFileSync(join(ws, "scratch", "real.txt"), `at ${realpathSync(ws)}/x\n`);
+    writeFileSync(join(ws, "scratch", "given.txt"), `at ${ws}/x\n`);
+    const r = router();
+    for (const command of ["cat scratch/real.txt", "head -n 1 scratch/given.txt"]) {
+      const result = r.act({ kind: "shell.run", command });
+      expect(result, command).toEqual({ ok: false, code: "ALL_ROUTES_FAILED", route: null });
+    }
+    expect(r.log().map((d) => d.attempts[0]?.code)).toEqual([
+      "ROUTE_OUTPUT_LEAK",
+      "ROUTE_OUTPUT_LEAK",
+    ]);
+  });
+
+  it("the leak guard also catches the workspace's given (symlinked) spelling", () => {
+    // The harness may name the workspace through a symlink (macOS: /var -> /private/var).
+    const given = join(root, "ws-link");
+    symlinkSync(ws, given);
+    const linked: WorkspaceScope = {
+      workspace: given,
+      document: join(given, "doc", "doc.xlsx"),
+      scratch: join(given, "scratch"),
+    };
+    writeFileSync(join(ws, "scratch", "given-only.txt"), `at ${given}/x\n`);
+    const r = createActionRouter({
+      policy: workspacePolicy(linked),
+      executors: [shellScriptRoute({ scope: linked })],
+    });
+    expect(r.act({ kind: "shell.run", command: "cat scratch/given-only.txt" })).toEqual({
+      ok: false,
+      code: "ALL_ROUTES_FAILED",
+      route: null,
+    });
+    expect(r.log()[0]?.attempts[0]?.code).toBe("ROUTE_OUTPUT_LEAK");
+    // And ordinary output under a symlinked workspace carries neither spelling.
+    const wc = r.act({ kind: "shell.run", command: "wc -l scratch/notes.txt" });
+    expect(wc).toMatchObject({ ok: true, output: "1 ./scratch/notes.txt\n" });
   });
 });

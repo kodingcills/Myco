@@ -201,11 +201,9 @@ describe("workspacePolicy: scoping", () => {
     const d = workspacePolicy(scope).check(
       req({ route: "script", kind: "shell.run", command: "cat doc/doc.xlsx" }),
     );
-    // The argv to run carries the resolved absolute operand, not the agent's spelling.
-    expect(d).toMatchObject({
-      allow: true,
-      argv: ["cat", join(realpathSync(ws), "doc", "doc.xlsx")],
-    });
+    // The argv to run carries the resolved operand, relative to the resolved root (the
+    // route's working directory), never the agent's spelling and never the host path.
+    expect(d).toMatchObject({ allow: true, argv: ["cat", "./doc/doc.xlsx"] });
   });
 
   it.each([

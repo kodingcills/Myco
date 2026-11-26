@@ -14,7 +14,16 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { type Actuator, pythonBinary, pythonUnoAvailable } from "../linux/actuator.ts";
@@ -43,6 +52,14 @@ export interface LinuxRouteOptions {
 function inside(path: string, root: string): boolean {
   const rel = relative(root, path);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function isLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 /** The single document write a set-cell route may make: the trial document, resolved. */
@@ -164,8 +181,30 @@ export function shellScriptRoute(options: LinuxRouteOptions): RouteExecutor {
     run(action, approved): RouteRun {
       const argv = approved.argv;
       if (argv === undefined || argv.length === 0) return { ok: false, code: "ROUTE_FAILED" };
-      const [program, ...args] = argv as [string, ...string[]];
+      const [program, ...approvedArgs] = argv as [string, ...string[]];
       const workspace = realpathSync(options.scope.workspace);
+      // Nothing this route returns may carry the workspace's host path (either spelling).
+      const leaks = (output: string) =>
+        output.includes(workspace) || output.includes(options.scope.workspace);
+      let args = approvedArgs;
+      // soffice: convert into a fresh directory this route creates under the approved output
+      // directory, never into the approved directory itself. soffice opens `<outdir>/<doc>.csv`
+      // through any symlink already planted at that name; a fresh mkdtemp directory has none.
+      let convertDir: string | null = null;
+      const outdir = approved.writes[0];
+      const source = approved.reads[0];
+      if (program === "soffice") {
+        if (outdir === undefined || source === undefined || args[4] !== outdir)
+          return { ok: false, code: "ROUTE_FAILED" };
+        try {
+          mkdirSync(outdir, { recursive: true });
+          if (realpathSync(outdir) !== outdir) return { ok: false, code: "ROUTE_OUTPUT_ESCAPED" };
+          convertDir = mkdtempSync(join(outdir, ".myco-convert-"));
+        } catch {
+          return { ok: false, code: "ROUTE_FAILED" };
+        }
+        args = [...args.slice(0, 4), convertDir, ...args.slice(5)];
+      }
       const home = mkdtempSync(join(tmpdir(), "myco-fastpath-home-"));
       try {
         const result = spawnSync(program === "soffice" ? soffice : program, args, {
@@ -178,22 +217,33 @@ export function shellScriptRoute(options: LinuxRouteOptions): RouteExecutor {
         if (result.error && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT")
           return { ok: false, code: "ROUTE_TIMEOUT" };
         if (result.status !== 0) return { ok: false, code: "ROUTE_FAILED" };
-        if (program !== "soffice") return { ok: true, output: result.stdout ?? "" };
-        // soffice exits 0 even when it converts nothing: success is the output file, and it
-        // must resolve inside the approved output directory.
-        const outdir = approved.writes[0];
-        const source = approved.reads[0];
-        if (outdir === undefined || source === undefined)
-          return { ok: false, code: "ROUTE_FAILED" };
-        const produced = join(outdir, `${basename(source).replace(/\.[^.]+$/, "")}.csv`);
-        if (!existsSync(produced)) return { ok: false, code: "ROUTE_FAILED" };
-        if (!inside(realpathSync(produced), outdir))
+        if (convertDir === null || outdir === undefined || source === undefined) {
+          const stdout = result.stdout ?? "";
+          return leaks(stdout)
+            ? { ok: false, code: "ROUTE_OUTPUT_LEAK" }
+            : { ok: true, output: stdout };
+        }
+        // soffice exits 0 even when it converts nothing: success is the output file. It must
+        // be a regular file with one name, created in the fresh directory (not a link out).
+        const name = `${basename(source).replace(/\.[^.]+$/, "")}.csv`;
+        const produced = join(convertDir, name);
+        if (!existsSync(produced) && !isLink(produced)) return { ok: false, code: "ROUTE_FAILED" };
+        const st = lstatSync(produced);
+        if (!st.isFile() || st.nlink > 1 || !inside(realpathSync(produced), convertDir))
           return { ok: false, code: "ROUTE_OUTPUT_ESCAPED" };
-        return action.kind === "doc.export-csv"
-          ? { ok: true, output: readFileSync(produced, "utf8") }
-          : { ok: true, output: "converted" };
+        const csv = readFileSync(produced, "utf8");
+        // Move it into place by rename(2), which replaces a directory entry and never follows
+        // a symlink planted at the destination name.
+        try {
+          renameSync(produced, join(outdir, name));
+        } catch {
+          return { ok: false, code: "ROUTE_FAILED" };
+        }
+        if (action.kind !== "doc.export-csv") return { ok: true, output: "converted" };
+        return leaks(csv) ? { ok: false, code: "ROUTE_OUTPUT_LEAK" } : { ok: true, output: csv };
       } finally {
         rmSync(home, { recursive: true, force: true });
+        if (convertDir !== null) rmSync(convertDir, { recursive: true, force: true });
       }
     },
   };

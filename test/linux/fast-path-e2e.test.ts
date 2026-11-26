@@ -17,7 +17,17 @@
  * No model is called.
  */
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -310,6 +320,34 @@ describe.skipIf(!available)("fast path end to end (real Calc, scripted agent, $0
     expect(everything).not.toContain(MARKER_HOST);
     expect(outcome.result.verdict).toBe("verified");
     expect(graded.status).toBe("pass");
+  });
+
+  it("real soffice never writes through a symlink planted at its output name; no output carries the host path", {
+    timeout: TIMEOUT,
+  }, () => {
+    // D2 / D1 of the round-3 verdict on #539, against real LibreOffice and real coreutils.
+    const scope = workspaceFor(BY_COLUMN[0] as BenchmarkTask, "run-planted-out");
+    const victim = join(root, "victim.csv");
+    writeFileSync(victim, "VICTIM-ORIGINAL\n");
+    const planted = join(scope.scratch, "doc.csv");
+    symlinkSync(victim, planted);
+    const router = createActionRouter({
+      policy: workspacePolicy(scope),
+      executors: [shellScriptRoute({ scope })],
+    });
+    const converted = router.act({
+      kind: "shell.run",
+      command: "soffice --headless --convert-to csv --outdir scratch doc/doc.xlsx",
+    });
+    expect(readFileSync(victim, "utf8")).toBe("VICTIM-ORIGINAL\n");
+    expect(converted).toMatchObject({ ok: true, route: "script", output: "converted" });
+    expect(lstatSync(planted).isSymbolicLink()).toBe(false);
+    const hostPaths = [scope.workspace, realpathSync(scope.workspace)];
+    for (const command of ["wc -l scratch/doc.csv", "sha256sum doc/doc.xlsx", "ls scratch doc"]) {
+      const result = router.act({ kind: "shell.run", command });
+      expect(result.ok, command).toBe(true);
+      for (const host of hostPaths) expect(result.output, command).not.toContain(host);
+    }
   });
 
   it("the gated harness's own launch audit refuses the cap server until it is reviewed in", {

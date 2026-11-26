@@ -46,7 +46,10 @@ describe("fast-path doc", () => {
   it("states kernel-faithful path resolution and resolved operands (E1)", () => {
     expect(DOC).toContain("no lexical `..` collapsing first");
     expect(DOC).toContain("a `..` after a symlinked directory are `PATH_OUTSIDE_WORKSPACE`");
-    expect(DOC).toContain("Every program then runs on the resolved absolute operands");
+    expect(DOC).toContain("Every program then runs on the resolved operands the policy checked");
+    expect(DOC).toContain("never prints the workspace's host path");
+    expect(DOC).toContain("never writes through it");
+    expect(DOC).toContain("`ROUTE_OUTPUT_LEAK`");
     expect(DOC).toContain("bounded to 4,096 characters");
   });
 
