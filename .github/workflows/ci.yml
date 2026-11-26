@@ -182,6 +182,32 @@ jobs:
             grep -qE "^test tests::$t \.\.\. ok$" /tmp/host-test.log || { echo "::error::$t did not run and pass on Linux"; exit 1; }
           done
 
+  # TIF-273 (M2-11): the M2 scorecard check and the process gates the M2 plan §2.2
+  # keeps as CI checks instead of scorecard rows: schema validity of every committed
+  # M2 evidence pack, a cause on every non-verified row (with a harness class), and the
+  # guest load gate record. Host only: no VM, no model, no secrets. Not a required check.
+  m2-scorecard:
+    name: m2 evidence and scorecard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Evidence gates (every committed m2-* pack)
+        run: pnpm exec tsx scripts/m2-evidence-check.ts --all
+      - name: M2 scorecard check
+        run: python3 scripts/m2-scorecard-check.py
+      - name: Checker tests (fixture packs, every failure mode)
+        run: pnpm exec vitest run test/m2
+
   # TIF-269 (M2-06): the Linux path an outsider can run. A real headless
   # LibreOffice Calc is driven by a scripted agent; Myco's oracle reads the saved
   # workbook and must return verified / refuted / uncertain as each scenario
