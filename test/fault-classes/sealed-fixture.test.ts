@@ -176,4 +176,37 @@ describe("through the vault", () => {
     expect(result).toMatchObject({ verdict: "verified" });
     expect(result.evidenceRefs.map((r) => r.kind)).toEqual(["persisted-state"]);
   });
+
+  // Round-3 nit (V11, follow-up to #485): the gate always calls `read` (which runs the vault's
+  // integrity checks) before `readFixture`, so a `readFixture` that skipped them would pass
+  // every gate-level test. Pin the reader on its own: it runs the checks itself.
+  it("readFixture runs the vault's integrity checks itself, not only through read()", async () => {
+    const runId = "fixture-direct";
+    const spec = gateSpecFor(params, INJECTED);
+    const receipt = vault.seal(runId, {
+      groundTruth: spec,
+      fixtures: { [SEALED_FIXTURE_FILE]: Buffer.from(INJECTED) },
+      oracle: { id: "t", sourceFiles: [] },
+    });
+    vault.markAgentStopped(runId);
+    vault.capture(runId, { "persisted/output.csv": Buffer.from(honest(INJECTED)) });
+    const sink: string[] = [];
+    const reader = vaultReader(vault, { runId, receipt }, spec, sink);
+    const good = await reader.readFixture?.(runId, SEALED_FIXTURE_FILE);
+    expect(good?.ok && Buffer.from(good.bytes).toString()).toBe(INJECTED);
+
+    expect(await reader.readFixture?.("other-run", SEALED_FIXTURE_FILE)).toMatchObject({
+      ok: false,
+    });
+    expect(sink).toEqual(["integrity:run-not-bound"]);
+    sink.length = 0;
+
+    const path = join(vaultRoot, runId, "sealed/fixtures", SEALED_FIXTURE_FILE);
+    chmodSync(path, 0o600);
+    writeFileSync(path, PRISTINE);
+    chmodSync(path, 0o400);
+    const tampered = await reader.readFixture?.(runId, SEALED_FIXTURE_FILE);
+    expect(tampered).toMatchObject({ ok: false, cause: "unreadable" });
+    expect(sink).toContain("integrity:sealed-file-hash");
+  });
 });
