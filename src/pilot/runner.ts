@@ -23,8 +23,18 @@
  * Pacing: at most `concurrency` trials in flight; trial starts are spaced by
  * `interTrialDelayS` across all workers; a rate-limit fault holds every worker for the backoff,
  * and after `maxConsecutiveRateLimits` in a row the run pauses (exit, resumable). An `auth`
- * fault (lost login) pauses at once. Neither spends the trial's `maxAttemptsPerTrial` budget
- * (`BUDGET_EXEMPT_CLASSES`), so a limit spell never closes a trial: resume re-runs it.
+ * fault (lost login), a `billing` fault (credit, billing or quota) and an `ApiKeyPathFault`
+ * stop the run at once with a `stopCode` (fail closed, no retry loop). None of these spends
+ * the trial's `maxAttemptsPerTrial` budget (`BUDGET_EXEMPT_CLASSES`), so a resume re-runs the
+ * trial. The subscription's usage quota (class `usage-limit`) stops the run at once with its
+ * own code, for the lead (PR #598 round 2, D3); only a transient rate limit (429 / 529 /
+ * overloaded) backs off, and on a live run a trial re-runs after at most one of them in total,
+ * counted from the ledger so `--resume` cannot reset it (`maxTransientRetriesPerTrial`,
+ * `transientCapped`), so a limit spell costs at most one extra cold reset per trial. On a live
+ * run, two identical harness faults in a row (same class and
+ * message, no decided trial between) stop it too (`stopCode` `repeat-failure`,
+ * `abortOnRepeatedFailure`); the last fault's message is in the ledger (`faultMessage`), so the
+ * rule holds across `--resume`.
  *
  * A live (non-simulated) driver also needs `liveLaunchSha256` equal to the config's sha256:
  * the same explicit acknowledgement the CLI demands, enforced here so no caller can start a
@@ -55,11 +65,25 @@ import { trialLaunchPlan } from "./launch.ts";
 import {
   AttemptLedger,
   type AttemptRecord,
+  faultSignature,
   loadLedger,
   type PilotHarnessClass,
   PROGRESS_FILE,
+  resumeFaultSignature,
   taskStatus,
+  transientFaultCounts,
 } from "./ledger.ts";
+
+/**
+ * Why a run stopped fail-closed, with no retry loop (TIF-274 live driver). `auth`: the CLI's
+ * login is lost or refused; `billing`: a credit, billing or quota error; `api-key`: the CLI
+ * would bill an API key instead of the subscription; `repeat-failure`: two identical harness
+ * failures in a row; `usage-limit`: the subscription's own usage quota ("usage limit reached",
+ * "5-hour limit", "Weekly limit reached", "resets at ..."), which goes to the lead (lead ruling,
+ * PR #598 round 2, D3). The CLIs exit 5 for the first three, 6 for `repeat-failure` and 7 for
+ * `usage-limit`.
+ */
+export type StopCode = "auth" | "billing" | "api-key" | "repeat-failure" | "usage-limit";
 
 /** A fault of the harness, not the agent: the only kind of attempt that is ever re-run. */
 export class HarnessFault extends Error {
@@ -72,6 +96,27 @@ export class HarnessFault extends Error {
     this.harnessClass = harnessClass;
     this.usage = usage;
   }
+}
+
+/**
+ * The CLI ran (or would run) on an API key instead of the operator's subscription. Recorded as
+ * an `auth` fault, and it stops the run at once with code `api-key`: never retried, never an
+ * agent outcome.
+ */
+export class ApiKeyPathFault extends HarnessFault {
+  constructor(message: string, usage: TokenUsage | null = null) {
+    super("auth", message, usage);
+    this.name = "ApiKeyPathFault";
+  }
+}
+
+/** The fail-closed stop a fault demands, or null when the fault is re-run in place. */
+export function stopCodeOf(fault: HarnessFault): Exclude<StopCode, "repeat-failure"> | null {
+  if (fault instanceof ApiKeyPathFault) return "api-key";
+  if (fault.harnessClass === "auth") return "auth";
+  if (fault.harnessClass === "billing") return "billing";
+  if (fault.harnessClass === "usage-limit") return "usage-limit";
+  return null;
 }
 
 export interface AttemptContext {
@@ -166,6 +211,25 @@ export interface PilotRunOptions {
    * halts the whole run (no new starts; status `halted`). A throw is a harness bug (fatal).
    */
   readonly afterDecided?: (d: DecidedTrial) => string | null;
+  /**
+   * Stop the run (code `repeat-failure`) when two harness faults in a row, with no decided
+   * trial between them, have the same class and message: the same failure twice is not going
+   * to clear by itself, and a third attempt only spends subscription time. Rate limits are
+   * excluded (they have their own back-off and pause), as are the immediate stops (`auth`,
+   * `billing`, `api-key`). Default: on for a live driver, off for a simulated one.
+   */
+  readonly abortOnRepeatedFailure?: boolean;
+  /**
+   * Transient rate-limit faults (HTTP 429 / 529, "overloaded") one trial may re-run after, in
+   * total over the run directory's ledger (every invocation: `--resume` cannot reset it; PR
+   * #598 round 3, F2), each after the bounded back-off. Every re-run is a fresh attempt and so
+   * a fresh cold VM reset; the next transient fault on the same trial pauses the run instead of
+   * resetting again, and later invocations do not start that trial again (`transientCapped`;
+   * lead ruling, PR #598 round 2, D3: at most one extra cold reset per trial). Default: 1 for
+   * a live driver; unbounded for a simulated one (no VM, the dry-run's pacing semantics as
+   * reviewed). Never spends the trial's attempt budget.
+   */
+  readonly maxTransientRetriesPerTrial?: number;
 }
 
 export interface PilotRunResult {
@@ -177,6 +241,13 @@ export interface PilotRunResult {
   readonly skipped: number;
   readonly faulted: number;
   readonly exhausted: readonly string[];
+  /**
+   * Open trials the ledger-durable transient cap keeps from starting again (each already had
+   * its one transient re-run in this run directory); the run is `paused` while any remain.
+   */
+  readonly transientCapped: readonly string[];
+  /** Set when the run stopped fail-closed (status `paused`); null otherwise. */
+  readonly stopCode: StopCode | null;
 }
 
 export const SIMULATED_PLANNER_PREFIX = "simulated:";
@@ -377,15 +448,27 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
       agentRoots: [join(outDir, "trials")],
     });
 
+    const maxTransient =
+      opts.maxTransientRetriesPerTrial ?? (simulated ? Number.POSITIVE_INFINITY : 1);
+    // Ledger-durable (PR #598 round 3, F2): the transient faults each trial already had, in
+    // this run directory, across every earlier invocation, so `--resume` cannot reset the cap.
+    const transientByTask = transientFaultCounts(state.byTask);
+
     let skipped = 0;
     let ran = 0;
     let faulted = 0;
     const exhausted: string[] = [];
+    // Open trials whose one transient re-run is already spent (lead ruling, PR #598 round 2,
+    // D3: at most one extra cold reset per trial, in total): never started again in this run
+    // directory, so no further cold reset; the operator takes them to the lead.
+    const transientCapped: string[] = [];
     const queue: BenchmarkTask[] = [];
     for (const task of runnable) {
       const st = taskStatus(attempts.get(task.taskId), config.pacing.maxAttemptsPerTrial);
       if (st.kind === "done") skipped++;
       else if (st.kind === "exhausted") exhausted.push(task.taskId);
+      else if ((transientByTask.get(task.taskId) ?? 0) > maxTransient)
+        transientCapped.push(task.taskId);
       else queue.push(task);
     }
 
@@ -394,6 +477,11 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
     let stop: string | null = null;
     let halted: string | null = null;
     let fatal: unknown = null;
+    let stopCode: StopCode | null = null;
+    const abortOnRepeat = opts.abortOnRepeatedFailure ?? !simulated;
+    // Seeded from the ledger, so a resume keeps the rule: a fault before the crash or stop plus
+    // the identical fault after resume still aborts (PR #598 round 2, D1).
+    let lastFaultSignature: string | null = resumeFaultSignature(state.ends);
     const pauseRequested = () =>
       [join(outDir, PAUSE_FILE), ...(opts.pauseFiles ?? [])].some((p) => existsSync(p));
 
@@ -597,6 +685,7 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
           recovered: false,
           armRow,
           cost,
+          faultMessage: fault.message,
         };
         ledger.end(end);
         opts.attemptSink?.end(trialKey, {
@@ -615,11 +704,34 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
         log(
           `${trialKey}: harness fault (${fault.harnessClass}); the attempt is kept and the trial re-runs in place`,
         );
-        if (fault.harnessClass === "auth")
-          stop = `paused: the agent's Claude Code session is not authenticated (${trialKey}); log in to the subscription and re-run the same command to resume`;
+        const code = stopCodeOf(fault);
+        if (code !== null) {
+          // Fail closed: stop at once, no back-off, no retry loop. Resume is the operator's call.
+          stopCode ??= code;
+          stop =
+            code === "auth"
+              ? `stopped (auth): the agent's Claude Code session is not authenticated (${trialKey}); log in to the subscription and re-run the same command to resume`
+              : code === "billing"
+                ? `stopped (billing): the CLI reported a credit, billing or quota error (${trialKey}); fix the subscription account, then re-run the same command to resume`
+                : code === "usage-limit"
+                  ? `stopped (usage-limit): the subscription's usage limit was reached (${trialKey}); no retry, no attempt spent. This must go to the lead: do not resume until the lead decides when the run continues`
+                  : `stopped (api-key): the CLI would run on an API key, not the subscription (${trialKey}); remove the API-key path, then re-run the same command to resume`;
+        } else if (abortOnRepeat && fault.harnessClass !== "rate-limit") {
+          const signature = faultSignature(fault.harnessClass, fault.message);
+          if (signature === lastFaultSignature) {
+            stopCode ??= "repeat-failure";
+            stop = `stopped (repeat-failure): two identical harness failures in a row (${fault.harnessClass}, last ${trialKey}); find the cause, then re-run the same command to resume`;
+          }
+          lastFaultSignature = signature;
+        }
         if (fault.harnessClass === "rate-limit") {
           consecutiveRateLimits++;
-          if (consecutiveRateLimits >= config.pacing.maxConsecutiveRateLimits)
+          const transient = (transientByTask.get(task.taskId) ?? 0) + 1;
+          transientByTask.set(task.taskId, transient);
+          if (transient > maxTransient) {
+            transientCapped.push(task.taskId);
+            stop = `paused: a transient rate limit hit ${task.taskId} again (${trialKey}) after its re-run; no further cold reset for this trial in this run directory (a resume runs the other trials only). Take it to the lead`;
+          } else if (consecutiveRateLimits >= config.pacing.maxConsecutiveRateLimits)
             stop = `paused after ${consecutiveRateLimits} rate limits in a row; re-run the same command later to resume`;
           else
             nextStartAt = Math.max(
@@ -663,6 +775,7 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
           if (r === "decided") {
             ran++;
             consecutiveRateLimits = 0;
+            lastFaultSignature = null;
             break;
           }
           if (r === "faulted") {
@@ -686,6 +799,10 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
       ),
     );
     if (fatal !== null) throw fatal;
+    // A trial left open by the transient cap is never `complete`: the run pauses (resumable
+    // for the other trials) and names it for the lead.
+    if (stop === null && transientCapped.length > 0)
+      stop = `paused: ${transientCapped.length} trial(s) already had their one transient re-run (at most one extra cold reset per trial) and are not started again in this run directory: ${transientCapped.join(", ")}. Take them to the lead`;
     const status =
       halted !== null
         ? "halted"
@@ -705,6 +822,8 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
       skipped,
       faulted,
       exhausted,
+      transientCapped,
+      stopCode,
     };
   } finally {
     release();

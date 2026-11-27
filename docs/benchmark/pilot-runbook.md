@@ -1,12 +1,36 @@
 # R1 pilot runbook (30 trials, headless Claude Code on the subscription)
 
-Status: **launch-ready plumbing, not launched.** The pilot itself is a later, lead-approved
-step. In this change the runner cannot start a real trial: `launch` refuses even with the
-right flag and plan hash, because the VM-side capture of the saved document is not wired.
+Status: **wired, not launched.** The live driver with VM-side capture is wired (TIF-274):
+`launch` starts real trials once every precondition in the checklist below holds, and refuses
+with each unmet reason otherwise. Running the pilot is still the lead's decision.
 
-Code: `src/pilot/` (config, launch plan, ledger, runner, cost, dry run, live transport),
-CLI `scripts/m2-r1-pilot.ts`, reviewed config `benchmark/pilot/r1/config.json`, tests
-`test/pilot/`.
+Code: `src/pilot/` (config, launch plan, ledger, runner, cost, dry run, live transport, VM
+step `vm-capture.ts`, live launch `live-launch.ts`), CLI `scripts/m2-r1-pilot.ts`, reviewed
+config `benchmark/pilot/r1/config.json`, tests `test/pilot/`.
+
+## What one live trial does (TIF-274)
+
+Per attempt, in order (`liveVmDriver`, `src/pilot/vm-capture.ts`; every failure is a harness
+fault with a fixed, code-only message, never an agent outcome):
+
+1. The runner seals the trial (`runGatedTrial`, #484) and audits the launch plan, as before.
+2. **Cold reset.** `scripts/reset-trial-vm.sh` (default snapshot `trial-base-v3`) runs with the
+   session's lock descriptor. Its `boot class=` line (#546) becomes the attempt's
+   `resetBootClass`. A failed reset is `spawn-failed`.
+3. **Seed.** The host opens the SSH tunnel to the in-guest agent (the deploy's token file, or
+   `--token-file PATH`; read at the point of use, never printed). It writes the task's committed
+   fixture (sha-checked against `fixtureSha256`) to `C:\myco\pilot\<trialKey>\doc.csv`, then
+   reads it back and compares. That path comes from the trial key alone, so the agent cannot
+   name it. fc-v1's tasks declare `persistedFormat: "xlsx"`, but the live step seeds and
+   captures `doc.csv`: that matches the pilot's CSV-only row mapping and gate state.
+4. **Agent.** Headless Claude Code on the subscription, with the audited argv and allowlisted
+   environment names only (`claudeDriver`).
+5. **Capture.** After the agent stopped, the host reads the guest document back over the same
+   channel. Those bytes are `persisted/doc.csv` in the sealed vault, with a host provenance
+   record (`host-capture.json`: guest path, sha256, the seed's sha256, boot class). Nothing on
+   the host that the agent can write (its trial directory, transcript or gate evidence root) is
+   read. An unreadable document is a `transport-error` fault, never an empty document.
+6. The harness's own post-stop check decides on that capture, as before.
 
 ## What the pilot is
 
@@ -38,12 +62,12 @@ CLI `scripts/m2-r1-pilot.ts`, reviewed config `benchmark/pilot/r1/config.json`, 
 |---|---|---|
 | `concurrency` | 1 (max 3) | the pilot holds one subscription session; builder and verifier sessions keep the rest |
 | `interTrialDelayS` | 90 | spreads the pilot's use across the rate window instead of bursting (one global spacing across all workers) |
-| `rateLimitBackoffS` / `rateLimitBackoffMaxS` | 300 / 3600 | on a rate- or usage-limit signal, every worker waits 5 min, doubling to 60 min |
-| `maxConsecutiveRateLimits` | 4 | then the run pauses (exit 4); re-run the same command later. A lost login (`auth`) pauses at once |
+| `rateLimitBackoffS` / `rateLimitBackoffMaxS` | 300 / 3600 | on a **transient** limit (HTTP 429 / 529, "rate limit", "overloaded"), every worker waits 5 min, doubling to 60 min. On a live run a trial re-runs after at most one transient limit **in total** (one extra cold reset, counted from the ledger, so a resume cannot reset it); a second one on the same trial pauses the run (exit 4), and later resumes do not start that trial again (`transientCapped` in the result; take it to the lead) |
+| `maxConsecutiveRateLimits` | 4 | then the run pauses (exit 4); re-run the same command later. A lost login (`auth`) or a credit, billing or quota error (`billing`) stops it at once (exit 5); the subscription's usage limit (`usage-limit`) stops it at once with exit 7 and goes to the lead |
 | `trialTimeoutS` | 1800 | a longer trial is stopped and recorded as a harness `timeout` |
 | `maxAttemptsPerTrial` | 3 | attempts per trial that end in a harness fault **other than** a rate limit or a lost login; once spent, the trial is closed for this run directory and the run reports `incomplete` |
 
-Rate-limit and `auth` faults never spend `maxAttemptsPerTrial`: they back off and pause, and a
+Rate-limit, `usage-limit`, `auth` and `billing` faults never spend `maxAttemptsPerTrial`: they back off, pause or stop, and a
 resume re-runs the trial. So a limit spell on the shared subscription can never strand a trial,
 and recovering from one needs no config change (and so no new run directory).
 
@@ -53,7 +77,7 @@ is bounded (3 attempts, `interTrialDelayS` apart) and safe for the data, but it 
 trial. Recovering an `exhausted` trial: there is no in-place reset; start a **new run
 directory** (`--out` to a fresh path) once the cause is understood, and keep the old directory
 as the record of the faulted attempts. If the cause was an unrecognised limit message, add its
-wording to `RATE_LIMIT_TEXT` (with a test) before the new run.
+wording to `USAGE_LIMIT_TEXT` (a quota: stops) or `RATE_LIMIT_TEXT` (transient: backs off), with a test, before the new run.
 
 At the defaults, 30 trials take at least 43.5 minutes of spacing (29 gaps of 90 s) plus the
 trials themselves.
@@ -67,17 +91,43 @@ start hitting limits, raise `--delay-s`. Override per invocation with `--concurr
   or uncertain), any unregistrable trial, and any claim the agent made (done, not done, none)
   in a **clean** Claude Code result: subtype `success`, `is_error` false, exit 0, no
   structured error on any message.
-- **Re-run in place:** only a harness fault before a decision: `rate-limit` (backs off),
-  `auth` (pauses at once), `error-result`, `timeout`, `spawn-failed`, `transport-error`, or
-  `crash` (the runner died mid-trial). Classification reads structured fields first (the
+- **Stop at once, with a code (fail closed, no retry loop):** `auth` (a lost or refused login),
+  `billing` (a credit, billing or quota error: the `billing_error` class, HTTP 402, or wording
+  such as "Credit balance is too low", "out of extra usage", "quota exceeded"), and an API-key
+  path (`apiKeySource` other than `none` in the CLI's output; recorded as `auth`). The run
+  exits **5** with `stopCode` `auth`, `billing` or `api-key`. These do not spend the attempt
+  budget; fix the account, then re-run the same command to resume. The `apiKeySource` check
+  is defence in depth only: under the reviewed argv (`--output-format json`, no `--verbose`)
+  the CLI emits no init message, so it never fires; the active guards are the environment
+  preflight (no API-path name) and the agent's environment allowlist.
+- **The subscription's usage limit (lead ruling, round 2):** wording such as "usage limit
+  reached", "5-hour limit reached", "Weekly limit reached", "Opus limit reached" or "resets at
+  3pm" (`USAGE_LIMIT_TEXT`; also when it comes with the structured `rate_limit` class or HTTP
+  429) is class `usage-limit`. The run stops at once with exit **7** (`stopCode`
+  `usage-limit`): no retry, no back-off, no attempt spent. The CLI prints `USAGE LIMIT: ...
+  This must go to the lead`; take it to the lead and do not resume until the lead decides.
+- **Two identical failures:** on a live run, two harness faults in a row with the same class
+  and message (no decided trial between) stop the run with exit **6** (`stopCode`
+  `repeat-failure`), before a third attempt. Rate limits are excluded (they back off). The
+  fault's message is in the ledger (`faultMessage`), so the rule holds across a resume: a
+  fault before a stop or crash plus the identical fault after the resume stops at once.
+- **Re-run in place:** a harness fault before a decision: `rate-limit` (a transient 429 / 529
+  / overloaded: backs off; on a live run at most once per trial in total, across resumes,
+  then pauses),
+  `error-result`, `timeout`, `spawn-failed`, `transport-error`, or `crash` (the runner died
+  mid-trial). Classification reads structured fields first (the
   assistant message's `error` class such as `rate_limit` / `authentication_failed`,
   `api_error_status`, the result `subtype` and `is_error`, the exit status) and a tested text
   vocabulary only as a fallback (`src/pilot/claude-transport.ts`). Any error result it cannot
   name is `error-result`: a harness fault, never an agent outcome. The text vocabulary is
-  applied **only** to runs that did not complete normally (no result event, an error result,
-  a non-zero or null exit, a structured error) and to their stderr, never to a clean result:
-  fc-v1's fixtures hold values such as qty 401, 403 and 429, so a clean result with no
-  `DONE`/`NOT DONE` line is the agent's "no claim", decided and never re-run. Under the
+  applied **only** to runs that did not complete normally (no result event: stdout and stderr
+  both; an error result: its text, `errors[]` and stderr; a non-zero or null exit; a
+  structured error), never to a clean result: fc-v1's fixtures hold values such as qty 401,
+  403 and 429, so a clean result with no `DONE`/`NOT DONE` line is the agent's "no claim",
+  decided and never re-run. One narrow, fail-closed exception (PR #598 round 3): a clean
+  result with no claim line whose text matches the usage-limit vocabulary (no bare numbers)
+  is `usage-limit` (exit 7, nothing counted); a clean result with a claim line is never
+  reclassified. Under the
   topped-up-run ruling (lead, 2026-11-26 12:22Z) the faulted attempt stays in the ledger with
   its arm row (cause `harness`) and its cost estimate, and the re-run's `start` line names it
   in `supersedes`. Its cost counts toward R7.
@@ -103,8 +153,11 @@ faulted ones included); the denominator is the graded verified count from `bench
 
 ## Preflight checklist (before a real launch)
 
-1. The lead has approved the pilot launch, and the VM step that supplies the live capture is
-   merged. Until then `launch` refuses.
+`launch` checks items 2, 8 and 9 itself and refuses (exit 3, every reason listed) before any VM,
+guest channel or `claude` process is touched. The other items are the operator's.
+
+1. The lead has approved the pilot launch. The R1 runner has no GO file of its own; the
+   approval is the lead's word. The corrections A/B does need its committed GO file (below).
 2. No API-path credential is configured. The runner checks variable **names only** and refuses
    to start if any is set: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`,
    the Bedrock / Vertex / Foundry / federation variables (`CLAUDE_CODE_USE_BEDROCK`, `_VERTEX`, `_FOUNDRY`), and
@@ -119,8 +172,22 @@ faulted ones included); the denominator is the graded verified count from `bench
 4. The reviewed config is unchanged: `npx tsx scripts/m2-r1-pilot.ts config` succeeds (it
    refuses a committed config whose launch surface drifted from the code).
 5. The dry run passes: `npx vitest run test/pilot` and the dry run below.
-6. The guest load gate holds (no trial starts at host 1-minute load >= 10; eval-runbook §7.3).
+6. **The VM side (wired by TIF-274, the operator provides the rest).** Wired: the per-trial
+   cold reset, the seed and the host-side capture over the SSH tunnel (above), and the boot
+   class per trial. You still provide:
+   - a working trial VM: `trial-base-v3` restorable with `scripts/reset-trial-vm.sh` (run it
+     once by hand under `scripts/vm-session.sh` and see `boot class=cold`), and guest egress
+     closed (the reset checks it);
+   - the in-guest agent answering `ping` through the tunnel after a reset onto that snapshot. A
+     verified deploy (`agent/bootstrap/deploy-to-vm.sh`, eval-runbook §4) writes the token
+     file, `~/.myco-token`, or pass `--token-file PATH`. The live step waits up to 2 min
+     (24 pings, 5 s apart) after each reset, then records `transport-error`;
+   - the guest load gate (no trial starts at host 1-minute load >= 10; eval-runbook §7.3).
 7. A fresh run directory outside `docs/research/experiments` (the runner refuses that path).
+8. **The VM session lock.** Run `launch` under `scripts/vm-session.sh` and start the runner
+   with `node --import tsx`, not `npx` (a Node launcher drops FD 9). Otherwise `launch` refuses:
+   the lock is what lets each trial's reset run and keeps every other VM driver out.
+9. Concurrency 1 (one trial VM). `launch` refuses any other value.
 
 ## Exact commands
 
@@ -145,13 +212,30 @@ npx tsx scripts/benchmark-check.ts --arm runs/r1-pilot-dry-export/arm.jsonl \
   --expect myco-gate=30 --expect-unregistrable myco-gate=3
 # Adding --evidence refuses the dry run: its planner is simulated:pilot-dry-run.
 
-# Real launch (later, lead-approved). Needs the flag AND the configSha256 `plan` printed.
-# In this change it prints the plan and then refuses.
-npx tsx scripts/m2-r1-pilot.ts launch --out runs/r1-pilot \
+# Real launch (lead-approved). Needs the flag AND the configSha256 `plan` printed, under the
+# VM session lock. It prints the plan, then starts real trials or refuses with every reason.
+scripts/vm-session.sh -- node --import tsx scripts/m2-r1-pilot.ts launch --out runs/r1-pilot \
   --launch-real-trials --plan-sha256 <configSha256 from plan>
+
+# Detached: the same command under nohup; watch the heartbeat file and the ledger.
+nohup scripts/vm-session.sh -- node --import tsx scripts/m2-r1-pilot.ts launch \
+  --out runs/r1-pilot --launch-real-trials --plan-sha256 <sha> > runs/r1-pilot.log 2>&1 &
+cat runs/r1-pilot/live-status.json
+npx tsx scripts/m2-r1-pilot.ts status --out runs/r1-pilot
 ```
 
-Exit codes: 0 ok / complete, 1 run failed, 2 usage, 3 refused, 4 paused or incomplete.
+Exit codes: 0 ok / complete, 1 run failed, 2 usage, 3 refused, 4 paused or incomplete,
+5 fail-closed stop (`auth`, `billing`, `api-key`), 6 two identical failures in a row,
+7 the subscription's usage limit (`usage-limit`; no retry, no attempt spent; take it to the
+lead before resuming).
+
+**The heartbeat.** A live launch keeps `<run dir>/live-status.json` (the A/B:
+`<A/B dir>/stage<N>/live-status.json`) up to date. It is rewritten atomically every 60 s and on
+every log line, with `pid`, `state` (`running` / `finished`), `updatedAt`, the last log line
+and, once finished, `exitCode`, the run result and the cost estimate. Every cost in it is
+labelled `token-derived estimate at frozen rates; not billed USD`. A watchdog can treat
+`state: running` with a dead `pid`, or an `updatedAt` older than a few minutes, as a dead
+runner. Re-running the same command resumes from the ledger.
 
 ## Pause and resume
 
@@ -246,10 +330,10 @@ npx tsx scripts/m2-corrections-ab-run.ts analyze --pack packs/ab-stage1 --stage0
 # analyze refuses (exit 3) unless the pre-registered analysis command, filled in for the pack,
 # equals the command it runs; otherwise it exits with #547's code.
 
-# Real Stage 0, then Stage 1 (later, after the GO). In this change it prints the plan, lists
-# every unmet precondition and refuses (exit 3).
-npx tsx scripts/m2-corrections-ab-run.ts launch --stage 0 --out runs/ab \
-  --launch-real-trials --plan-sha256 <planSha256 from plan --stage 0>
+# Real Stage 0 first, then Stage 1 (after the GO). It prints the plan, then runs the stage on
+# the live VM driver, or lists every unmet precondition and refuses (exit 3).
+scripts/vm-session.sh -- node --import tsx scripts/m2-corrections-ab-run.ts launch --stage 0 \
+  --out runs/ab --launch-real-trials --plan-sha256 <planSha256 from plan --stage 0>
 ```
 
 `analyze` checks the pack first: the manifest, the markers, the labels, identical arm configs,
@@ -270,15 +354,35 @@ from each A/B arm config (`liveExperimentRefusals`), so no caller can skip them:
 2. The lead's GO is committed as `docs/benchmark/corrections-ab-go.json`, with the stage(s) in
    `stages` and this pre-registration's sha256 in `preregSha256`.
 3. The integrity fixes have landed. The gate reads the tasks' format: fc-v1 persists xlsx, and
-   the gate reads CSV until the xlsx replacement for #503. #546's cold-boot guard is merged: the
+   the A/B format check (`GATE_STATE_FILE`) and the pilot row mapping are still CSV-only, although the xlsx gate (#576) has merged. #546's cold-boot guard is merged: the
    trial-ops schema has `resetBootClass`, and the live transport reports a cold boot per trial.
 4. #518's attempt-event vocabulary names the pilot's harness classes. Until then, a fault it
    cannot name stays open in `attempts.jsonl` and is recorded with its exact class in
    `attempts-unclassified.jsonl`; the pack discloses the count.
 5. The subscription preflight passes (no API-key variable, names only), with
    `--launch-real-trials` and the `planSha256` that `plan` printed.
-6. A live driver with VM-side capture is wired. This change has none, so `launch` always
-   refuses for now.
+6. The live driver with VM-side capture is **wired** (TIF-274; "What one live trial does",
+   above). `launch` adds two checks of its own: it runs under `scripts/vm-session.sh` (the VM
+   lock) and the pre-registered pacing has concurrency 1. Each trial reports its reset's boot
+   class, so the sticky boot-class halt below applies to real trials.
+
+What the operator must still provide before a real A/B launch:
+
+- **Stage 0 first.** Stage 1 refuses until Stage 0 is complete in the same A/B directory, with
+  every trial graded and zero gate misses (`runAbStage`).
+- **The GO file.** `docs/benchmark/corrections-ab-go.json`, committed by the lead, naming the
+  stage and this pre-registration's sha256 (item 2). This change does not write it.
+- **The open preconditions (items 3 and 4).** As of this change they still refuse a real run:
+  the A/B format check and the pilot row mapping are CSV-only while fc-v1 persists xlsx, and #518's vocabulary cannot
+  name the pilot's harness classes (now also `billing`). `launch` lists them. They are fixed in
+  their own changes, never by an ack or a flag.
+- **The VM side.** The same as the pilot's preflight item 6: a restorable `trial-base-v3`, and
+  the in-guest agent reachable after a reset.
+
+A credit, billing, quota, login or API-key error stops the stage with exit 5; two identical
+harness failures in a row stop it with exit 6. Either way the run is resumable once the cause
+is fixed (re-run the same command). The subscription's usage limit stops it with exit 7; that
+goes to the lead before any resume.
 
 ### Pause and resume
 

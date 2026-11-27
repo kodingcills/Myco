@@ -89,6 +89,7 @@ import {
   runPilot,
   SIMULATED_FILE,
   SIMULATED_PLANNER_PREFIX,
+  type StopCode,
 } from "./runner.ts";
 
 export {
@@ -1001,6 +1002,8 @@ export interface AbRunResult {
   readonly chunksRun: number;
   readonly chunksDone: number;
   readonly chunks: number;
+  /** The runner's fail-closed stop (`PilotRunResult.stopCode`), when an arm stopped on one. */
+  readonly stopCode: StopCode | null;
 }
 
 export const stageRoot = (outRoot: string, stage: AbStage) =>
@@ -1240,7 +1243,11 @@ export async function runAbStage(opts: AbRunOptions): Promise<AbRunResult> {
       });
       if (r.ran + r.faulted > 0) worked = true;
       if (r.status !== "complete")
-        return result(r.status, `chunk ${chunk.index}, arm ${arm}: ${r.reason ?? r.status}`);
+        return result(
+          r.status,
+          `chunk ${chunk.index}, arm ${arm}: ${r.reason ?? r.status}`,
+          r.stopCode,
+        );
     }
     chunksDone++;
     if (worked) {
@@ -1258,8 +1265,12 @@ export async function runAbStage(opts: AbRunOptions): Promise<AbRunResult> {
   }
   return result("complete", null);
 
-  function result(status: AbRunResult["status"], reason: string | null): AbRunResult {
-    return { status, reason, stage, chunksRun, chunksDone, chunks: schedule.length };
+  function result(
+    status: AbRunResult["status"],
+    reason: string | null,
+    stopCode: StopCode | null = null,
+  ): AbRunResult {
+    return { status, reason, stage, chunksRun, chunksDone, chunks: schedule.length, stopCode };
   }
 }
 
