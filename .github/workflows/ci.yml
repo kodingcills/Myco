@@ -451,7 +451,7 @@ jobs:
   safe-parallelism:
     name: safe parallelism (ubuntu-latest)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       MYCO_PYTHON: /usr/bin/python3
       MYCO_PARALLEL_REQUIRED: "1"
@@ -474,11 +474,22 @@ jobs:
         run: pnpm exec vitest run test/parallel
       - name: Throughput run ($0, real Calc, N = 1,2,4; measured, never counted)
         run: pnpm myco-parallel --n 1,2,4 --trials 8 --agent calc --display xvfb --allow-weak-isolation --out "$RUNNER_TEMP/myco-parallel"
+      # L-infra (capability-spec §L stage 1): fc-v1's 90 satisfiable tasks at N = 1, 2, 4, 8,
+      # a unique canary per desktop, plus a planted-leak positive control. SIMULATED, never
+      # evidence. A level this runner's caps refuse (N = 8 on 4 CPUs) is recorded, not forced.
+      # --print-rows puts run.json and rows.jsonl, with their sha256, in this public log: the
+      # committed result (docs/product/l-infra/) is checked against these bytes.
+      - name: L-infra zero-contamination run (real Calc; simulated, never evidence)
+        run: pnpm myco-l-infra --allow-weak-isolation --agent calc --display xvfb --out "$RUNNER_TEMP/l-infra" --print-rows
+      - name: L-infra result recomputes from its rows
+        run: pnpm myco-l-infra-analyze "$RUNNER_TEMP/l-infra" --check
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: safe-parallelism-runs
-          path: ${{ runner.temp }}/myco-parallel
+          path: |
+            ${{ runner.temp }}/myco-parallel
+            ${{ runner.temp }}/l-infra/*.json*
           if-no-files-found: ignore
 
   # Runs both verdict fixture sizes on main pushes and PRs labelled `perf`.

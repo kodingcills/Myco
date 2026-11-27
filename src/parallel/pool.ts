@@ -48,7 +48,6 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readdirSync,
   readSync,
   realpathSync,
   renameSync,
@@ -62,9 +61,15 @@ import type { TaskRegistry } from "../gate/gate.ts";
 import { runGatedTrial } from "../gate/gated-trial.ts";
 import { GATE_TOOL, handleLine, SERVER_NAME } from "../gate/mcp-server.ts";
 import { type AgentLaunchPlan, mcpConfigJson } from "../integrity/launch.ts";
-import { readRegularNoBlock } from "../integrity/nonblocking-read.ts";
+import { readDirNoFollow, readRegularNoBlock } from "../integrity/nonblocking-read.ts";
 import { rtSessionIdFor } from "../integrity/surface.ts";
-import { newVaultKey, VaultError, VerdictVault } from "../integrity/vault.ts";
+import {
+  MANIFEST_READ_LIMIT_BYTES,
+  newVaultKey,
+  ORACLE_SOURCE_READ_LIMIT_BYTES,
+  VaultError,
+  VerdictVault,
+} from "../integrity/vault.ts";
 import { generateFixture } from "../tasks/fixture.ts";
 import type { AgentContext, CalcSpec, ScriptedDesktopAgent } from "./agents.ts";
 import {
@@ -84,6 +89,8 @@ export const MARKER_FILE = ".myco-trial-marker";
 export const MARKER_ENV = "MYCO_TRIAL_MARKER";
 /** A trial tree larger than this is not fully scanned, which disqualifies the trial. */
 export const SCAN_LIMIT_BYTES = 64 * 1024 * 1024;
+/** A trial tree with more entries than this is not fully scanned either (#578 F1). */
+export const SCAN_LIMIT_ENTRIES = 100_000;
 
 export interface TrialSpec {
   readonly runId: string;
@@ -225,14 +232,23 @@ interface ScanResult {
  */
 export type LstatProbe = (path: string) => Stats;
 
-/** Which markers occur in the regular files under `dir` (symlinks are not followed). */
+/**
+ * Which markers occur in the regular files under `dir`. Symlinks are not followed, and a
+ * dir is listed only through `readDirNoFollow` with its `lstat` as the expected inode
+ * (#578 F1): a dir the trial swaps for a symlink (into another trial's root, or `/usr`)
+ * between the `lstat` and the listing is refused, which makes the scan incomplete, never
+ * redirected. At most `SCAN_LIMIT_BYTES` of file content and `SCAN_LIMIT_ENTRIES` entries.
+ */
 export function scanTree(
   dir: string,
   markers: ReadonlyMap<string, string>,
   lstat: LstatProbe = lstatSync,
+  /** Tests only: lower the caps. */
+  limits: { readonly bytes?: number; readonly entries?: number } = {},
 ): ScanResult {
   const found = new Set<string>();
-  let budget = SCAN_LIMIT_BYTES;
+  let budget = limits.bytes ?? SCAN_LIMIT_BYTES;
+  let entries = limits.entries ?? SCAN_LIMIT_ENTRIES;
   let complete = true;
   const walk = (path: string) => {
     let st: Stats;
@@ -246,14 +262,13 @@ export function scanTree(
       return;
     }
     if (st.isDirectory()) {
-      let names: string[];
-      try {
-        names = readdirSync(path);
-      } catch {
+      const listed = readDirNoFollow(path, { maxEntries: Math.max(entries, 0), expect: st });
+      if (!listed.ok) {
         complete = false;
         return;
       }
-      for (const name of names) {
+      entries -= listed.names.length;
+      for (const name of listed.names) {
         scanBytes(Buffer.from(name), markers, found);
         walk(join(path, name));
       }
@@ -515,10 +530,13 @@ export async function writeHarnessFile(
 // oracle sources
 // ---------------------------------------------------------------------------------------
 
-/** An oracle source larger than this is refused at snapshot time (sources are small). */
-export const ORACLE_SOURCE_LIMIT_BYTES = 16 * 1024 * 1024;
+/**
+ * An oracle source larger than this is refused at snapshot time (sources are small). The
+ * vault reads the snapshot copies with the same cap (#578 F2).
+ */
+export const ORACLE_SOURCE_LIMIT_BYTES = ORACLE_SOURCE_READ_LIMIT_BYTES;
 /** A trial's `seal.json` larger than this is not read back (manifests are small). */
-const SEAL_READ_LIMIT_BYTES = 1024 * 1024;
+const SEAL_READ_LIMIT_BYTES = MANIFEST_READ_LIMIT_BYTES;
 
 export interface OracleSnapshot {
   /** The path the operator named (never read again during the pool). */

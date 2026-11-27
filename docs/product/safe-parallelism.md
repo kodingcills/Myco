@@ -65,9 +65,11 @@ mismatch, a contamination, a refused pool or an unavailable backend. 3 means a u
 
 `runPool` (`src/parallel/pool.ts`) runs these steps for every trial. Each step fails closed:
 a failed check gives a code (a disqualifier, an `integrity:<code>` verdict reason, or a refused
-pool), never a count. No step blocks on a file an agent planted: every harness write and every
-host read an agent can reach on `linux-plain` is non-blocking and type-checked (see "Harness
-writes" and "Host reads" below). Failing closed can also mean denial: one trial can make the
+pool), never a count. No step blocks on a file an agent planted. Every harness write and every
+host file read an agent can reach on `linux-plain` is non-blocking and type-checked. Every
+directory walk (the vault's run-dir listing, the pool's marker scan) opens each dir no-follow,
+checks it is the dir its `lstat` saw, and caps its entries (#578; see "Harness writes", "Host
+reads" and "Directory walks" below). Failing closed can also mean denial: one trial can make the
 pool withhold its whole report (§5), but it cannot make the pool hang or count a trial.
 
 **Before the first trial, the oracle sources are read once.** The pool reads each oracle
@@ -148,14 +150,35 @@ froze the round-3 verifier's whole pool. Every such read goes through `readRegul
 - `fstat` the fd: a regular file only; where the vault `lstat`ed first, the same inode (a
   swap between the `lstat` and the `open` is refused) and, for sealed and captured files,
   one link;
-- refuse a file over the cap (the vault's `VAULT_READ_LIMIT_BYTES`, 256 MiB; 16 MiB for an
-  oracle source at snapshot), then read from that fd.
+- refuse a file over the cap, then read from that fd. The caps (#578 F2): 256 MiB for a
+  sealed or captured file (`VAULT_READ_LIMIT_BYTES`), 1 MiB for a manifest
+  (`MANIFEST_READ_LIMIT_BYTES`), and 16 MiB for an oracle source, both at snapshot and when
+  the vault reads the snapshot copies (`ORACLE_SOURCE_READ_LIMIT_BYTES`).
+
+A unix socket fails `open` with ENXIO. It is refused as `not-regular`, the same as a FIFO,
+never as `missing` (#578 N1). So a socket at a snapshot copy gives the next trial
+`oracle-source`, not `agent-error`.
 
 A refusal is a code, never a hang: a vault file gives `integrity:sealed-file-not-regular`,
 `captured-file-not-regular`, `seal-malformed` (and the verdict is `uncertain`), an oracle
 source gives `integrity:oracle-source-missing` at verdict time, or `oracle-source` when a
 later trial's seal is refused. For a regular file the bytes are exactly what `readFileSync`
 returned, so callers outside the pool see no change.
+
+**Directory walks never follow a swapped dir (#578 F1).** A walk that decides to recurse
+from an `lstat` (or a `readdir` d_type) and then re-opens the child by path can be led
+anywhere. #561's verifier swapped a vault's `captured` dir for a symlink to `/usr`, and one
+`checkIntegrity` then listed 94,313 files. Both walks (`listRunTree` in the vault, `scanTree`
+in the pool) now list each dir through `readDirNoFollow` (`src/integrity/nonblocking-read.ts`):
+
+- it opens the dir `O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK`, so a symlink or a non-dir is refused;
+- it checks the fd's device and inode against the walk's `lstat`, so a swapped dir is refused;
+- it reads the entries through the fd itself (`/proc/self/fd/<fd>` on Linux), never the path;
+- it stops past an entry cap: 10,000 per vault run dir, 100,000 per scanned tree.
+
+A refusal is a code, never a walk elsewhere. The vault records an `unexpected-file` violation
+(the verdict is `uncertain`), including for a dir that vanished mid-walk, which used to throw
+ENOENT out of the check. The pool marks the scan incomplete (`scan-incomplete`, not counted).
 
 After all trials finish, the pool scans each trial's evidence root, its vault dir and its
 gate records (the agent-seen result, the final result and the claim) for the other trials'
@@ -258,6 +281,7 @@ defence against it, and the test that proves the defence:
 | Make a later trial seal oracle bytes it did not start with (replace a snapshot copy with other regular bytes) | NOT prevented on `linux-plain` (the snapshot dir is under the run root, same uid). Prevented from being COUNTED: the seal-vs-snapshot check gives `oracle-source`, and the gate refuses a source changed between seal and verdict (`integrity:oracle-source-hash`) | `host-reads.test.ts` "snapshot copy replaced by other regular bytes" |
 | Hang the pool with a FIFO swapped in at a vault sealed file or manifest, including a `setsid` daemon racing the vault's `lstat` and its read | `lstat`, then `readRegularNoBlock` with the same-inode check; coded integrity violation, verdict `uncertain` | `host-reads.test.ts` "a vault file swapped for a FIFO or a /dev/zero link" (each manifest and sealed/captured file; a daemon racing 3000 checks; a daemon from trial 1 racing trial 2's vault in a serial pool) |
 | Deny the whole pool its report | NOT prevented: a FIFO (or anything not a regular file) planted at `pool-report.json` rejects the run, and a source replaced before a later pool starts refuses that pool. Fail closed: no report and no count, never a hang | `pool.test.ts` "B1: … pool-report.json"; `host-reads.test.ts` "before the pool" |
+| Redirect a harness directory walk (swap a dir in its own tree, a vault dir, or a scanned evidence dir for a symlink to `/usr` or into B's root) | `readDirNoFollow`: no-follow open, same dev/ino as the `lstat`, entries read through the fd, entry cap. The vault gives `unexpected-file` (`uncertain`); the scan gives `scan-incomplete` | `walks-and-caps.test.ts` "F1" (deterministic swap through a lying `lstat`, the real vault with `captured` → `/usr`, vanished dir, entry caps) |
 | Leak something into B that changes B's outcome | Markers are scanned in workspace, evidence, vault and gate records; a hit disqualifies both trials | `pool.test.ts` contamination tests; `linux-backend.test.ts` "planted markers" |
 | Talk to B over the network or a socket | NOT prevented on `linux-plain` (shared network). Covered by the count rule | — |
 | Connect to B's X display (read its screen, inject input) | A blind connect is refused: each Xvfb requires its own random cookie, set only in its own trial's env. NOT prevented against a trial that reads B's cookie file (same uid, B's root is readable on `linux-plain`). Covered by the count rule | `linux-backend.test.ts` "B2: a trial cannot connect to another trial's X display" (A's processes are refused on B's filesystem and abstract sockets, with no cookie and with A's own; B's client is accepted) |
@@ -274,8 +298,9 @@ The gate guarantees are unchanged and are not weakened here:
 - Persisted bytes are captured per trial.
 - The gate fails closed.
 - The vault changes only by hardening (#541 R3-1): its host reads no longer block or follow a
-  final symlink, refuse non-regular, swapped or over-256-MiB files with an existing code,
-  and return the same bytes as before for a regular file.
+  final symlink, refuse non-regular, swapped or over-cap files with an existing code,
+  and return the same bytes as before for a regular file. Its run-dir walk no longer follows
+  a swapped dir or throws on a vanished one: either is an `unexpected-file` violation (#578).
 - Agent-facing reasons carry codes only.
 - Calc stays CSV-only.
 - R1 is untouched.
@@ -396,6 +421,10 @@ public leaderboard.
 | `src/parallel/agents.ts` | Scripted agents: the real-Calc actuator and the hermetic file writer |
 | `src/parallel/throughput.ts` | The throughput harness and its report |
 | `src/parallel/cli.ts`, `scripts/parallel-run.ts` | `pnpm myco-parallel` |
+| `src/parallel/l-infra.ts` | L-infra: fc-v1's satisfiable tasks at N = 1, 2, 4, 8, a canary per desktop, the positive control |
+| `src/parallel/l-infra-analysis.ts` | The L-infra result, recomputed from the rows |
+| `src/parallel/l-infra-cli.ts`, `scripts/l-infra-run.ts`, `scripts/l-infra-analyze.ts` | `pnpm myco-l-infra`, `pnpm myco-l-infra-analyze` |
+| `docs/product/l-infra/` | The committed L-infra result and how to recompute it |
 
 ## 9. TO FILE (Linear limit)
 
