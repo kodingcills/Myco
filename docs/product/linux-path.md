@@ -32,6 +32,7 @@ not on your `PATH`, set `MYCO_SOFFICE` to its full path.
 
 ## 2. Install and check
 
+<!-- newcomer-path: clone -->
 ```sh
 git clone https://github.com/kodingcills/Myco.git myco
 cd myco
