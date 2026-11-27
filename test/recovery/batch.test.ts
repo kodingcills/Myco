@@ -283,6 +283,7 @@ describe("K13. the pre-registered bar: exact one-sided McNemar, p <= 0.05, >= 5 
   it("refuses mismatched tasks, duplicates, fault labels, swapped arms and simulated rows", () => {
     const [k, none] = arms(10, 5, 0);
     expect(() => recoveryBar(k, batch(none.rows.slice(1)))).toThrow(/same tasks/);
+    expect(() => recoveryBar(batch(k.rows.slice(1)), none)).toThrow(/same tasks/);
     expect(() =>
       recoveryBar(
         batch([...k.rows.slice(1), { ...(k.rows[1] as RecoveryRow), trialKey: "dup" }]),
@@ -428,6 +429,11 @@ describe("K15 (D1). only a done claim the gate verified and the grader passed is
       return { claim: "" };
     };
     expect((await one(trial("t2#K", "K", silent))).claim).toBe("no-claim");
+    for (const near of ["Done", " done", "done "])
+      expect(
+        (await one(trial("t3#K", "K", async (_c, w) => (w.setGuest(STEPS), { claim: near }))))
+          .claim,
+      ).toBe("not-done");
   });
 
   it("the round-1 probe: 5 fail-closed K trials graded pass never pass the bar", async () => {
