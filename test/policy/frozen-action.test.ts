@@ -293,13 +293,22 @@ describe("what runs is what was judged (#605 item 2)", () => {
 
   // Round-2 verifier N1: every kind, desktop and adapter, drops undeclared fields.
   it.each([
-    [{ kind: "typeTextGlobal", text: "t", command: CP }, { kind: "typeTextGlobal", text: "t" }],
-    [{ kind: "clickAt", x: 1, y: 2, command: CP }, { kind: "clickAt", x: 1, y: 2 }],
+    [
+      { kind: "typeTextGlobal", text: "t", command: CP },
+      { kind: "typeTextGlobal", text: "t" },
+    ],
+    [
+      { kind: "clickAt", x: 1, y: 2, command: CP },
+      { kind: "clickAt", x: 1, y: 2 },
+    ],
     [
       { kind: "launch", command: SOFFICE, args: ["--calc"], env: { X: "1" } },
       { kind: "launch", command: SOFFICE, args: ["--calc"] },
     ],
-    [{ kind: "keyPress", keys: "ctrl+c", command: CP }, { kind: "keyPress", keys: "ctrl+c" }],
+    [
+      { kind: "keyPress", keys: "ctrl+c", command: CP },
+      { kind: "keyPress", keys: "ctrl+c" },
+    ],
   ])("desktop copy of %o keeps only its declared fields", (raw, want) => {
     const got = frozenDesktopAction(raw);
     expect(got).toEqual(want);
@@ -307,7 +316,10 @@ describe("what runs is what was judged (#605 item 2)", () => {
   });
 
   it.each([
-    [{ kind: "click", ref: "r", extra: 1 }, { kind: "click", ref: "r" }],
+    [
+      { kind: "click", ref: "r", extra: 1 },
+      { kind: "click", ref: "r" },
+    ],
     [
       { kind: "typeText", ref: "r", text: "t", extra: 1 },
       { kind: "typeText", ref: "r", text: "t" },
@@ -316,7 +328,10 @@ describe("what runs is what was judged (#605 item 2)", () => {
       { kind: "setValue", ref: "r", value: "v", extra: 1 },
       { kind: "setValue", ref: "r", value: "v" },
     ],
-    [{ kind: "keyPress", keys: "k", extra: 1 }, { kind: "keyPress", keys: "k" }],
+    [
+      { kind: "keyPress", keys: "k", extra: 1 },
+      { kind: "keyPress", keys: "k" },
+    ],
   ])("adapter copy of %o keeps only its declared fields", (raw, want) => {
     const got = frozenAdapterAction(raw);
     expect(got).toEqual(want);
