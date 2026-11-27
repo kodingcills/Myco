@@ -8,6 +8,24 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { UpstreamPin } from "../../src/benchmark/upstream/import.ts";
+import { MYCO_FLEET, OSWORLD_HARNESS, OSWORLD_PIN } from "../../src/benchmark/upstream/pins.ts";
+import type { HarnessStamp } from "../../src/benchmark/upstream/r1-grade.ts";
+
+/**
+ * The stamp of a run on the pinned harness: upstream files at their pinned digests, the
+ * documented patches applied, on the myco-fleet provider with a digest-pinned image (or, for
+ * the parity reference, on utm-reference with its pinned files).
+ */
+export function pinnedStamp(provider: "myco-fleet" | "utm-reference" = "myco-fleet"): HarnessStamp {
+  return {
+    repo: OSWORLD_HARNESS.repo,
+    commit: OSWORLD_PIN.commit,
+    files: { ...OSWORLD_HARNESS.files, ...OSWORLD_HARNESS.patchedFiles },
+    provider,
+    imageDigest: provider === "myco-fleet" ? `sha256:${"a".repeat(64)}` : null,
+    fleetFiles: { ...(provider === "myco-fleet" ? MYCO_FLEET.files : MYCO_FLEET.referenceFiles) },
+  };
+}
 
 export const SYN_LICENSE = "Synthetic license text for tests.\n";
 

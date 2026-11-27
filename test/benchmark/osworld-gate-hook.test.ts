@@ -20,10 +20,11 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { OSWORLD_HARNESS, OSWORLD_PIN } from "../../src/benchmark/upstream/pins.ts";
+
 import { gradeR1ExampleDir, type HarnessStamp } from "../../src/benchmark/upstream/r1-grade.ts";
 import { GATE_API_VERSION } from "../../src/gate/api.ts";
 import { GATE_TOOL } from "../../src/gate/mcp-server.ts";
+import { pinnedStamp } from "./upstream-fixture.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 const HOOK_DIR = join(ROOT, "src/gate-hooks/osworld");
@@ -199,16 +200,41 @@ describe.runIf(hasPython)("OSWorld DONE gate hook (MOCK, fakes only)", () => {
     expect(s.unreachable).toBe("GATE_UNAVAILABLE");
   });
 
+  it("the runId wrap_agent is given is the runId DoneGate sends on the agent's DONE (the gate is bound to one trial)", () => {
+    const w = (report.stdio as { throughWrap: Record<string, unknown> }).throughWrap as {
+      actions: string[];
+      decisions: { accepted: boolean }[];
+      calls: Record<string, unknown>[];
+    };
+    expect(w.calls).toEqual([
+      { taskId: "task-7", runId: "run-7", claim: "I have finished the task." },
+    ]);
+    expect(w.decisions.map((d) => d.accepted)).toEqual([true]);
+    expect(w.actions).toEqual(["DONE"]);
+  });
+
+  it("the real stdio transport fails closed: a server that exits without replying, or replies with a non-object result, never accepts DONE", () => {
+    type Entry = {
+      client: string | null;
+      clientReturned: unknown;
+      actions: string[];
+      decisions: { verdict: string; accepted: boolean; reasonCodes: string[] }[];
+    };
+    const fc = report.stdioFailClosed as Record<"silent" | "nonObject", Entry>;
+    expect(fc.silent.client).toBe("GATE_NO_REPLY");
+    expect(fc.nonObject.client).toBe("GATE_REPLY_MALFORMED");
+    for (const [name, e] of Object.entries(fc)) {
+      expect(e.clientReturned, name).toBeNull();
+      expect(e.actions, name).toEqual(["WAIT"]);
+      expect(e.decisions, name).toEqual([
+        { verdict: "uncertain", accepted: false, reasonCodes: ["GATE_UNAVAILABLE"] },
+      ]);
+    }
+  });
+
   describe.runIf(Boolean(OSW) || REQUIRED)("through OSWorld's real loop at the pin", () => {
     const up = (report.upstream ?? {}) as { accept: Arms; refuse: Arms; failScore: Run };
-    const stamp: HarnessStamp = {
-      repo: OSWORLD_HARNESS.repo,
-      commit: OSWORLD_PIN.commit,
-      files: {
-        ...OSWORLD_HARNESS.files,
-        [OSWORLD_HARNESS.agentRunner]: OSWORLD_HARNESS.patchedAgentRunnerSha256,
-      },
-    };
+    const stamp: HarnessStamp = pinnedStamp();
 
     it("ran (MYCO_UPSTREAM_OSWORLD points at a checkout at the pin)", () => {
       expect(report.upstream).toBeDefined();

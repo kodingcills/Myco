@@ -270,6 +270,52 @@ try:
 except hook.GateError as exc:
     report["stdio"]["unreachable"] = str(exc)
 
+# N2 (#741 round 1): the runId that reaches the server is the one wrap_agent was given, sent by
+# DoneGate itself on the agent's DONE (not a direct client call).
+open(record, "w", encoding="utf-8").close()
+wrapped = hook.wrap_agent(FakeAgent([[DONE]]), "gate-before-done",
+                          [sys.executable, "-I", server, record], "task-7", "run-7")
+_, passed = wrapped.predict("instruction", {"screenshot": b"s"})
+with open(record, encoding="utf-8") as f:
+    saw = [json.loads(line) for line in f]
+report["stdio"]["throughWrap"] = {
+    "actions": [a.get("action_type") for a in passed],
+    "decisions": wrapped.decisions,
+    "calls": [m["params"]["arguments"] for m in saw if m.get("method") == "tools/call"],
+}
+
+# N1 (#741 round 1): the real stdio transport fails closed when the server exits without a
+# reply, or replies with a non-object result. Recorded at the client and through DoneGate.
+STUBS = {
+    "silent": "import sys\nfor line in sys.stdin:\n    pass\n",
+    "nonObject": (
+        "import json, sys\n"
+        "for line in sys.stdin:\n"
+        "    m = json.loads(line)\n"
+        "    if m.get('method') == 'initialize':\n"
+        "        print(json.dumps({'jsonrpc': '2.0', 'id': m['id'], 'result': {}}))\n"
+        "    elif m.get('method') == 'tools/call':\n"
+        "        print(json.dumps({'jsonrpc': '2.0', 'id': m['id'], 'result': 'verified'}))\n"
+    ),
+}
+report["stdioFailClosed"] = {}
+for name, body in STUBS.items():
+    path = os.path.join(WORK, "stub_%s.py" % name)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(body)
+    argv = [sys.executable, "-I", path]
+    entry = {"client": None, "clientReturned": None}
+    try:
+        entry["clientReturned"] = hook.StdioGateClient(argv).check(
+            hook.gate_request("t", "r", "done"))
+    except hook.GateError as exc:
+        entry["client"] = str(exc)
+    gated = hook.wrap_agent(FakeAgent([[DONE]]), "gate-before-done", argv, "t", "r")
+    _, out = gated.predict("instruction", {"screenshot": b"s"})
+    entry["actions"] = [a.get("action_type") for a in out]
+    entry["decisions"] = gated.decisions
+    report["stdioFailClosed"][name] = entry
+
 if UPSTREAM is not None:
     report["upstream"] = {
         "accept": arms(ACCEPT_TURNS, [VERIFIED], loop="upstream", prefix="accept-"),

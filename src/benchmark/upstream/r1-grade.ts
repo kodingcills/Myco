@@ -25,7 +25,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { sha256Hex } from "./import.ts";
-import { OSWORLD_HARNESS } from "./pins.ts";
+import { MYCO_FLEET, OSWORLD_HARNESS } from "./pins.ts";
 
 /** The grader version every R1 row must carry: the upstream evaluate path at the pin. */
 export const OSWORLD_EVALUATE_GRADER = `osworld-desktopenv-evaluate@${OSWORLD_HARNESS.commit}`;
@@ -37,7 +37,16 @@ export interface HarnessStamp {
   readonly commit: string;
   /** Path relative to the checkout root -> SHA-256 of the bytes the run used. */
   readonly files: Readonly<Record<string, string>>;
+  /** The DesktopEnv provider the run used (lead ruling 14:05Z: the Myco fleet, every arm). */
+  readonly provider: string;
+  /** The fleet image's digest (`sha256:<64 hex>`); null for the parity reference. */
+  readonly imageDigest: string | null;
+  /** Myco repo path -> SHA-256 of the provider and image files the run used. */
+  readonly fleetFiles: Readonly<Record<string, string>>;
 }
+
+export type StampProvider = typeof MYCO_FLEET.provider | typeof MYCO_FLEET.referenceProvider;
+const IMAGE_DIGEST = /^sha256:[0-9a-f]{64}$/;
 
 export interface R1ExampleGrade {
   readonly graderVersion: typeof OSWORLD_EVALUATE_GRADER;
@@ -54,29 +63,63 @@ export interface R1ExampleGrade {
 export function stampHarness(
   commit: string,
   readFile: (rel: string) => Uint8Array | null,
+  run: {
+    readonly provider: string;
+    readonly imageDigest: string | null;
+    readonly readRepoFile: (rel: string) => Uint8Array | null;
+  },
 ): HarnessStamp {
   const files: Record<string, string> = {};
   for (const rel of Object.keys(OSWORLD_HARNESS.files)) {
     const bytes = readFile(rel);
     if (bytes !== null) files[rel] = sha256Hex(bytes);
   }
-  return { repo: OSWORLD_HARNESS.repo, commit, files };
+  const fleetFiles: Record<string, string> = {};
+  const pinned =
+    run.provider === MYCO_FLEET.referenceProvider ? MYCO_FLEET.referenceFiles : MYCO_FLEET.files;
+  for (const rel of Object.keys(pinned)) {
+    const bytes = run.readRepoFile(rel);
+    if (bytes !== null) fleetFiles[rel] = sha256Hex(bytes);
+  }
+  return {
+    repo: OSWORLD_HARNESS.repo,
+    commit,
+    files,
+    provider: run.provider,
+    imageDigest: run.imageDigest,
+    fleetFiles,
+  };
 }
 
-/** Codes for every way a stamp differs from the pinned harness; empty when it matches. */
-export function harnessStampProblems(stamp: HarnessStamp): string[] {
+/**
+ * Codes for every way a stamp differs from the pinned harness; empty when it matches. R1 rows
+ * need the `myco-fleet` provider (every arm, 14:05Z); the parity reference passes
+ * `utm-reference`.
+ */
+export function harnessStampProblems(
+  stamp: HarnessStamp,
+  provider: StampProvider = MYCO_FLEET.provider,
+): string[] {
   const out: string[] = [];
   if (stamp.repo !== OSWORLD_HARNESS.repo) out.push("HARNESS_REPO_MISMATCH");
   if (stamp.commit !== OSWORLD_HARNESS.commit) out.push("HARNESS_COMMIT_MISMATCH");
   for (const [rel, upstreamDigest] of Object.entries(OSWORLD_HARNESS.files)) {
-    // Every arm runs the runner with the documented gate-hook patch applied, nothing else.
-    const digest =
-      rel === OSWORLD_HARNESS.agentRunner
-        ? OSWORLD_HARNESS.patchedAgentRunnerSha256
-        : upstreamDigest;
-    const got = stamp.files[rel];
+    // Patched files (runner: gate hook and fleet choice; provider registration) carry their
+    // documented patched digest; every other file its upstream digest.
+    const digest = OSWORLD_HARNESS.patchedFiles[rel] ?? upstreamDigest;
+    const got = stamp.files?.[rel];
     if (got === undefined) out.push(`HARNESS_FILE_MISSING:${rel}`);
     else if (got !== digest) out.push(`HARNESS_FILE_MODIFIED:${rel}`);
+  }
+  if (stamp.provider !== provider) out.push("HARNESS_PROVIDER_MISMATCH");
+  if (provider === MYCO_FLEET.provider && !IMAGE_DIGEST.test(String(stamp.imageDigest)))
+    out.push("HARNESS_IMAGE_NOT_PINNED");
+  const pinned =
+    provider === MYCO_FLEET.referenceProvider ? MYCO_FLEET.referenceFiles : MYCO_FLEET.files;
+  for (const [rel, digest] of Object.entries(pinned)) {
+    const got = stamp.fleetFiles?.[rel];
+    if (got === undefined) out.push(`FLEET_FILE_MISSING:${rel}`);
+    else if (got !== digest) out.push(`FLEET_FILE_MODIFIED:${rel}`);
   }
   return out;
 }

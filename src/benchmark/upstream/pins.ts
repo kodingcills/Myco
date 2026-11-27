@@ -52,9 +52,24 @@ export const OSWORLD_HARNESS = {
    * self-check bypass the gate by configuration. A run stamp must carry this digest for the
    * runner file and the upstream digest for every other harness file.
    */
-  patchedAgentRunnerSha256: "d08496bd4ae6b72c1c0a8d3f1b0b9100ef468512ffb58b6ca19c98a5489f8373",
-  /** Providers the pinned runner's --provider_name accepts. */
-  providers: ["aws", "virtualbox", "vmware", "docker", "azure", "pyromind"],
+  patchedAgentRunnerSha256: "45e5fea1bc57de6948280f9da8dc3f73ab06b1b021fb5ed43a92346cdea63006",
+  /**
+   * Every harness file a run uses patched, with its patched SHA-256: the runner (gate hook
+   * plus the `myco-fleet` provider choice) and the two files the provider registration patch
+   * (src/benchmark/upstream/fleet/desktop_env_providers.patch) touches. In
+   * `desktop_env/desktop_env.py` that patch changes only the two provider-name sets, never
+   * `evaluate`. Every other harness file must carry its upstream digest.
+   */
+  patchedFiles: {
+    "scripts/python/run_multienv_claude.py":
+      "45e5fea1bc57de6948280f9da8dc3f73ab06b1b021fb5ed43a92346cdea63006",
+    "desktop_env/desktop_env.py":
+      "383fc1e64c5aaa22de779645ab7911180878242379413d38fb59e002ed75340d",
+    "desktop_env/providers/__init__.py":
+      "39a50578665bb0b798e1f7123be9d5e8b079cc4fc703bbcd8e2aed84ac336c43",
+  } as Readonly<Record<string, string>>,
+  /** Providers the patched runner's --provider_name accepts (upstream's six plus the fleet). */
+  providers: ["aws", "virtualbox", "vmware", "docker", "azure", "pyromind", "myco-fleet"],
   files: {
     "scripts/python/run_multienv_claude.py":
       "6f230557ada2f231b71d6d27cc052f85d062d75cc17f82445bbb17be18aa102d",
@@ -69,5 +84,56 @@ export const OSWORLD_HARNESS = {
       "809aab83d3492bedcd12c6bcc3318b7939f5e247db469e26934512a719309441",
     "mm_agents/anthropic/utils.py":
       "8171db9085fa4f67c2a77c5ae1e970d58b82fb140f0f559aec40d7302e7ea9e8",
+    "desktop_env/providers/__init__.py":
+      "dc770371f2f9dfb46d43e2fa4ffa0e492646327b8f49dfa3e0c932f29df08b02",
+    "desktop_env/providers/base.py":
+      "3c71294f1b63c5b81ae17a2895934adb15c4877aa5a7359c5d5282a4126646eb",
+    // OSWorld's controller server, which the fleet image runs unmodified (fleet/server.sha256).
+    "desktop_env/server/__init__.py":
+      "74a63beb9b241af3b2e7e379d7fcf849e40829378c2d7a130699b2560ce97369",
+    "desktop_env/server/main.py":
+      "efd969e8b3b272b3694cb66450ddb7c90818970c98bd153f5a2050363cdb88c7",
+    "desktop_env/server/pyxcursor.py":
+      "87d09a465bf87c3766ac3b8584f80c3288890e874b45d9a56b811b0a4268e840",
+    "desktop_env/server/screen_recording.py":
+      "68ad468287b11cd1583df361bb06126151f93af97f1807dcd6ed1885bb890d06",
+  } as Readonly<Record<string, string>>,
+} as const;
+
+/**
+ * The Myco Linux fleet (lead rulings 2026-11-27 14:05Z and 14:37Z, #741): the R1 host. Every
+ * arm runs OSWorld's DesktopEnv with the `myco-fleet` provider on one digest-pinned image built
+ * from these files. A run stamp must carry exactly these digests (`r1-grade.ts`
+ * `harnessStampProblems`); test/benchmark/osworld-fleet.test.ts recomputes them from the repo.
+ * `referenceFiles` are what the parity reference run uses (`utm-reference`, 15:21Z ruling).
+ */
+export const MYCO_FLEET = {
+  provider: "myco-fleet",
+  referenceProvider: "utm-reference",
+  adapter: "src/benchmark/upstream/fleet/myco_fleet_provider.py",
+  image: "src/benchmark/upstream/fleet/Dockerfile",
+  files: {
+    "src/benchmark/upstream/fleet/Dockerfile":
+      "b71a3c8b589e2d6de663962fa85748450eeb35cf5a1bf14d4413c5a2b1209d83",
+    "src/benchmark/upstream/fleet/start.sh":
+      "9f0b02c087494ddd8c038fa0f2a0b423e636e5294b35f3bad7663021526c07b0",
+    "src/benchmark/upstream/fleet/registrymodifications.xcu":
+      "78cba110322b2b28ca6e60fa7cc1676c6c9ca2f1ce471b8856042436e53cc78b",
+    "src/benchmark/upstream/fleet/requirements-fleet.txt":
+      "c73c523153ec0815703020b66f3c6a6ae0d8f55508be243a90ee35c1e203d080",
+    "src/benchmark/upstream/fleet/server.sha256":
+      "7310403b5101629194d409b6f36b6bac3cd292bcfef0580a3b0de604aefd7ac1",
+    "src/benchmark/upstream/fleet/myco_fleet_provider.py":
+      "40d442ab66c59d520a0f0046d19597f4320ac6063def6505845ac18adf130920",
+    "src/benchmark/upstream/fleet/desktop_env_providers.patch":
+      "70222e0cc0cda0397958b94e4f7fd0370bcbf98aab463551cdf87eac897b2e7d",
+  } as Readonly<Record<string, string>>,
+  referenceFiles: {
+    "src/benchmark/upstream/fleet/myco_fleet_provider.py":
+      "40d442ab66c59d520a0f0046d19597f4320ac6063def6505845ac18adf130920",
+    "src/benchmark/upstream/fleet/utm_reference_provider.py":
+      "515cafae189b00b28380e3ad327783928860f2c2b5a82b11ba81ac10469d0150",
+    "src/benchmark/upstream/fleet/desktop_env_providers.patch":
+      "70222e0cc0cda0397958b94e4f7fd0370bcbf98aab463551cdf87eac897b2e7d",
   } as Readonly<Record<string, string>>,
 } as const;

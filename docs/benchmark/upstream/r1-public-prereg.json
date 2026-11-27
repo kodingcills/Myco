@@ -1,8 +1,30 @@
 {
-  "schema": "myco.prereg.r1-public/2",
+  "schema": "myco.prereg.r1-public/3",
   "status": "draft",
-  "title": "Confirmatory R1 (false-done gate) on the OSWorld LibreOffice subset, in OSWorld's own harness, graded by OSWorld's own evaluate path",
-  "ruling": "Lead ruling 2026-11-27 ~13:55Z (#700 comment 7220110528), approved 14:00Z: each benchmark's own environment, action server and evaluators, unmodified; Claude via the benchmark's standard computer-use runner; Myco adds only the completion gate before DONE is accepted.",
+  "title": "Confirmatory R1 (false-done gate) on the OSWorld LibreOffice subset, OSWorld's own task configs, controller, evaluator and Claude runner on the Myco Linux fleet, graded by OSWorld's own evaluate path",
+  "ruling": "Lead rulings 2026-11-27: 13:55Z (#700 comment 7220110528, approved 14:00Z: each benchmark's own task configs, action server and evaluators, unmodified; Claude via the benchmark's standard computer-use runner; Myco adds only the completion gate before DONE); 14:05Z (#741 comment 7220313158: RETARGET to the Myco Linux fleet with a DesktopEnv provider adapter used by every arm, parity against OSWorld's reference before any live run, measurements; supersedes the environment part of 13:55Z); 14:37Z (#741 comment 7220987945: the accessibility tree and pyautogui/python-xlib in the fleet image and provider; re-measure, also actively driven; keep the parity harness, do not run it); 15:21Z (#741 comment 7221935698: UTM approved as the parity reference hypervisor, a stated deviation; never a Broadcom/VMware account).",
+  "rulings": [
+    {
+      "at": "2026-11-27T13:55Z",
+      "ref": "https://github.com/kodingcills/Myco/pull/700#issuecomment-7220110528",
+      "summary": "Harness: the benchmark's own task configs, controller, evaluators and standard Claude runner; Myco adds only the DONE gate (approved 14:00Z)."
+    },
+    {
+      "at": "2026-11-27T14:05Z",
+      "ref": "https://github.com/kodingcills/Myco/pull/741#issuecomment-7220313158",
+      "summary": "Retarget: OSWorld LibreOffice subset on the Myco Linux fleet; a provider adapter used by every arm; parity before any live run; WAA phase 2; no paid box or second VM."
+    },
+    {
+      "at": "2026-11-27T14:37Z",
+      "ref": "https://github.com/kodingcills/Myco/pull/741#issuecomment-7220987945",
+      "summary": "Scope: a11y tree (GTK3 VCL plugin, AT-SPI bus before Calc) and pyautogui/python-xlib in the image and provider with tests; extended measure.sh incl. actively driven; parity harness kept but not run."
+    },
+    {
+      "at": "2026-11-27T15:21Z",
+      "ref": "https://github.com/kodingcills/Myco/pull/741#issuecomment-7221935698",
+      "summary": "UTM (QEMU/HVF) approved for the parity reference run, recorded as a stated deviation from OSWorld's VMware reference; guest image, controller and evaluator unchanged; nothing downloads until the ~40 GB disk question is answered."
+    }
+  ],
   "taskSet": "osworld-office-v1",
   "upstreamCommit": "0ad41bee56565efe7bb3c3a5ebc67590a1b8276f",
   "harness": {
@@ -10,10 +32,16 @@
     "repo": "https://github.com/xlang-ai/OSWorld",
     "commit": "0ad41bee56565efe7bb3c3a5ebc67590a1b8276f",
     "environment": "desktop_env/desktop_env.py#DesktopEnv",
-    "controller": "desktop_env/controllers/python.py#PythonController (the in-VM controller)",
-    "providerOptions": ["aws", "virtualbox", "vmware", "docker", "azure", "pyromind"],
-    "provider": "PENDING: which provider and host run it (needs Tiffany's OK; see docs/benchmark/upstream/host-requirements.md)",
-    "pinnedFiles": "SHA-256 of every harness file in src/benchmark/upstream/pins.ts OSWORLD_HARNESS.files; a run on any other bytes is ungradable"
+    "controller": "desktop_env/controllers/python.py#PythonController, talking to OSWorld's own desktop_env/server at the pin, run unmodified inside each fleet desktop",
+    "provider": {
+      "name": "myco-fleet",
+      "adapter": "src/benchmark/upstream/fleet/myco_fleet_provider.py",
+      "image": "src/benchmark/upstream/fleet/Dockerfile",
+      "imageDigest": "PENDING: the sha256 digest of the fleet image as built by the coordinator; every arm runs this one digest",
+      "registration": "src/benchmark/upstream/fleet/desktop_env_providers.patch adds the name myco-fleet to desktop_env/providers/__init__.py and to DesktopEnv's clean-start provider set, nothing else; desktop_env.evaluate is untouched",
+      "reset": "A fresh container per task (no snapshots), as OSWorld's own docker provider resets"
+    },
+    "pinnedFiles": "SHA-256 of every harness file in src/benchmark/upstream/pins.ts OSWORLD_HARNESS.files (patched files: OSWORLD_HARNESS.patchedFiles) and every fleet file in MYCO_FLEET.files; a run on any other bytes, another provider or an unpinned image is ungradable"
   },
   "agentRunner": {
     "file": "scripts/python/run_multienv_claude.py",
@@ -24,12 +52,13 @@
   },
   "model": "PENDING: the exact Claude model id passed as --model; it must be one the pinned runner accepts (mm_agents/anthropic/utils.py)",
   "actionLayer": {
+    "summary": "OSWorld controller, identical across arms",
     "actionSpace": "claude_computer_use",
     "observationType": "screenshot",
     "executor": "desktop_env/controllers/python.py#PythonController",
     "path": "AnthropicAgent.predict -> lib_run_single.run_single_example -> DesktopEnv.step -> PythonController.execute_python_command / execute_action; observations from DesktopEnv._get_obs",
     "identicalAcrossArms": true,
-    "assertion": "Identical across arms: the same runner, environment, controller, action space, observation type and budget in all three arms. The gate hook takes only the agent, never the environment or controller, and returns the agent's actions unchanged except a refused DONE, which becomes upstream's own WAIT special action (a no-op in the guest). Tested with fakes in test/benchmark/osworld-gate-hook.test.ts."
+    "assertion": "Identical across arms: the same runner, environment, provider (myco-fleet, one image digest), controller, action space, observation type and budget in all three arms. The gate hook takes only the agent, never the environment or controller, and returns the agent's actions unchanged except a refused DONE, which becomes upstream's own WAIT special action (a no-op in the guest). Tested with fakes in test/benchmark/osworld-gate-hook.test.ts."
   },
   "gateInterception": {
     "api": "myco.gate/v1",
@@ -46,6 +75,7 @@
       "agentRunner": "shared",
       "actionLayer": "shared",
       "budget": "shared",
+      "provider": "shared",
       "gate": false,
       "promptSuffix": null
     },
@@ -55,6 +85,7 @@
       "agentRunner": "shared",
       "actionLayer": "shared",
       "budget": "shared",
+      "provider": "shared",
       "gate": true,
       "promptSuffix": null
     },
@@ -64,12 +95,13 @@
       "agentRunner": "shared",
       "actionLayer": "shared",
       "budget": "shared",
+      "provider": "shared",
       "gate": false,
       "promptSuffix": "Before you finish, verify your own work. Take a screenshot and check every requirement of the task against what is actually on screen and in the saved file: the exact values, the cells, text or slides the task names, nothing else changed, and the document saved under the requested name, location and format. If anything is wrong or unsaved, fix it and check again. Only stop calling tools when you have checked that the task is fully complete."
     }
   ],
   "budget": "PENDING: one budget for all three arms: --max_steps (the runner default is 15; the Claude example in OSWorld's SETUP_GUIDELINE.md uses 50), --max_tokens, --thinking, --max_trajectory_length, and a wall-clock cap",
-  "subsetRule": "Every task id listed in OSWorld's evaluation_examples/test_all.json at the pinned commit under libreoffice_calc, libreoffice_writer and libreoffice_impress, run in OSWorld's own DesktopEnv. No Myco placement filter; the apps a task needs and the getters its evaluator uses are not exclusions. No task is added or dropped for difficulty, outcome or evaluator type.",
+  "subsetRule": "Every task id listed in OSWorld's evaluation_examples/test_all.json at the pinned commit under libreoffice_calc, libreoffice_writer and libreoffice_impress, run in OSWorld's own DesktopEnv on the myco-fleet provider. No Myco placement filter; the apps a task needs and the getters its evaluator uses are not exclusions. No task is added or dropped for difficulty, outcome or evaluator type.",
   "subsetSize": 117,
   "exclusions": [],
   "n": 117,
@@ -79,6 +111,30 @@
     "path": "desktop_env/desktop_env.py#DesktopEnv.evaluate",
     "description": "The upstream evaluation path unmodified: DesktopEnv.evaluate() runs the task's postconfig through its setup controller, its own getters through the in-VM controller and its own metrics, with the FAIL-action rule; lib_run_single writes the score to result.txt. Myco only reads that file (src/benchmark/upstream/r1-grade.ts) and refuses any run whose harness bytes differ from the pin.",
     "passThreshold": 1.0
+  },
+  "parity": {
+    "rule": "Parity must pass before any live run. A pre-declared sample of OSWorld LibreOffice tasks, each with a scripted known-good and known-bad action sequence, is scored by upstream DesktopEnv.evaluate() on the Myco fleet and on the reference environment and recorded per task (src/benchmark/upstream/parity.ts assessParity). Parity passes only when every sample task gives the same status on both; any mismatch is a stated gap, reported with the exact host requirement.",
+    "sample": "docs/benchmark/upstream/r1-parity-sample.json",
+    "sampleSha256": "b1329c467cf3a07f1e12ff7ece5cb6e76ad0d57a4441b56cc9e51a3ece692e35",
+    "taskIds": [
+      "1334ca3e-f9e3-4db8-9ca7-b4c653be7d17",
+      "2bd59342-0664-4ccb-ba87-79379096cc08",
+      "3ef2b351-8a84-4ff2-8724-d86eae9b842e",
+      "d53ff5ee-3b1a-431e-b2be-30ed2673079b",
+      "ef9d12bd-bcee-4ba0-a40e-918400f43ddf"
+    ],
+    "harness": "src/benchmark/upstream/fleet/osworld_parity.py",
+    "grader": "osworld-desktopenv-evaluate@0ad41bee56565efe7bb3c3a5ebc67590a1b8276f",
+    "fleet": { "provider": "myco-fleet" },
+    "reference": {
+      "provider": "utm-reference",
+      "adapter": "src/benchmark/upstream/fleet/utm_reference_provider.py",
+      "guestImage": "Ubuntu-arm.zip from huggingface.co/datasets/xlangai/ubuntu_osworld (the image OSWorld's VMware manager selects on a Mac, desktop_env/providers/vmware/manager.py:27,35 @ 0ad41bee): 12,287,865,453 bytes; 25,215,685,544 bytes unzipped in 27 files (a split vmdk); its Ubuntu.vmx sets memsize 4096, numvcpus 2",
+      "hypervisor": "UTM (QEMU with HVF)",
+      "deviation": "STATED DEVIATION from OSWorld's VMware reference (lead ruling 15:21Z): only the hypervisor differs. The guest image, its in-guest controller and OSWorld's evaluator are unchanged; UTM boots the same split vmdk. Never VMware Fusion or any Broadcom/VMware account.",
+      "hostRequirement": "docs/benchmark/upstream/host-requirements.md, 'The parity reference run': at least about 40 GB free on the volume holding the VM, 4 GiB guest RAM, one heavy VM at a time under the VM lock, $0 and no accounts"
+    },
+    "status": "Not run. The reference run waits for Tiffany's OK and the ~40 GB disk question (14:37Z, 15:21Z); nothing is downloaded."
   },
   "gateOracle": "PENDING: the gate's oracle family for OSWorld LibreOffice end states (the main build item)",
   "gateOracleConstraint": "The gate's oracle must be independent of the upstream evaluator: no import of desktop_env.evaluators (metrics or getters), no shared code, no reading of evaluator output (result.txt, scores) or of gold files (cloud_file expected assets). Enforced for src/gate and src/gate-hooks by test/benchmark/independence.test.ts.",
@@ -104,7 +160,8 @@
     "n: 117 (every task in the three LibreOffice domains, one trial each) is this draft's proposal, not ratified; whether to add repetitions is open",
     "pass-threshold: an upstream score of exactly 1.0 is a pass (most OSWorld metrics are 0/1; a few return fractions)",
     "gate-oracle: which gate oracle family the gate-before-done arm uses on these end states, independent of the upstream evaluator",
-    "host: which provider and machine run OSWorld's VM or container; a second VM or any paid box needs Tiffany's OK (docs/benchmark/upstream/host-requirements.md)",
+    "parity-reference-run: the parity reference run (OSWorld's Ubuntu-arm.zip in UTM) waits for Tiffany's OK and the ~40 GB disk question (15:21Z); parity must pass before any live run",
+    "self-check-form: arm (c) is a prompt suffix through AnthropicAgent's system_prompt_suffix; the structural alternative (intercept the first DONE as the gate does, WAIT plus a fixed oracle-free re-check message, same budget) needs a lead ruling (#741 round-1 verdict N3)",
     "model-access: the pinned runner calls the Anthropic API (or Bedrock/Vertex) with a key; M2's rule is $0 API on the Claude Ultra plan, so how the runner reaches the model needs a ruling"
   ]
 }

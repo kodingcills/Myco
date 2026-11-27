@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { sha256Hex } from "../../src/benchmark/upstream/import.ts";
-import { OSWORLD_HARNESS, OSWORLD_PIN } from "../../src/benchmark/upstream/pins.ts";
+import { MYCO_FLEET, OSWORLD_HARNESS, OSWORLD_PIN } from "../../src/benchmark/upstream/pins.ts";
 import {
   gradeR1Example,
   gradeR1ExampleDir,
@@ -24,6 +24,7 @@ import {
   OSWORLD_EVALUATE_GRADER,
   stampHarness,
 } from "../../src/benchmark/upstream/r1-grade.ts";
+import { pinnedStamp } from "./upstream-fixture.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 const OSW = process.env.MYCO_UPSTREAM_OSWORLD;
@@ -34,15 +35,9 @@ afterAll(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
 });
 
-/** The stamp of a run on the pinned harness with the documented runner patch applied. */
-const PINNED: HarnessStamp = {
-  repo: OSWORLD_HARNESS.repo,
-  commit: OSWORLD_PIN.commit,
-  files: {
-    ...OSWORLD_HARNESS.files,
-    [OSWORLD_HARNESS.agentRunner]: OSWORLD_HARNESS.patchedAgentRunnerSha256,
-  },
-};
+/** The stamp of a run on the pinned harness with the documented patches, on the fleet. */
+const PINNED: HarnessStamp = pinnedStamp();
+const PROVIDER_PATCH = join(ROOT, "src/benchmark/upstream/fleet/desktop_env_providers.patch");
 const grade = (resultTxt: string | null, stamp = PINNED, trajJsonl: string | null = null) =>
   gradeR1Example({ taskId: "t", stamp, files: { resultTxt, trajJsonl } });
 
@@ -89,6 +84,32 @@ describe("R1 grader: reads the score OSWorld's own evaluate path wrote", () => {
         withFile(OSWORLD_HARNESS.agentRunner, OSWORLD_HARNESS.files[OSWORLD_HARNESS.agentRunner]),
         `HARNESS_FILE_MODIFIED:${OSWORLD_HARNESS.agentRunner}`,
       ],
+      // The provider registration patch must be applied, and nothing else changed.
+      [
+        withFile(
+          "desktop_env/providers/__init__.py",
+          OSWORLD_HARNESS.files["desktop_env/providers/__init__.py"],
+        ),
+        "HARNESS_FILE_MODIFIED:desktop_env/providers/__init__.py",
+      ],
+      [
+        withFile("desktop_env/server/main.py", "1".repeat(64)),
+        "HARNESS_FILE_MODIFIED:desktop_env/server/main.py",
+      ],
+      // B3 at grading level: every row runs on the Myco fleet provider, one pinned image, the
+      // pinned fleet files.
+      [{ ...PINNED, provider: "vmware" }, "HARNESS_PROVIDER_MISMATCH"],
+      [{ ...PINNED, provider: "utm-reference" }, "HARNESS_PROVIDER_MISMATCH"],
+      [{ ...PINNED, imageDigest: null }, "HARNESS_IMAGE_NOT_PINNED"],
+      [{ ...PINNED, imageDigest: "myco-osworld-desktop:local" }, "HARNESS_IMAGE_NOT_PINNED"],
+      [
+        { ...PINNED, fleetFiles: { ...PINNED.fleetFiles, [MYCO_FLEET.adapter]: "2".repeat(64) } },
+        `FLEET_FILE_MODIFIED:${MYCO_FLEET.adapter}`,
+      ],
+      [
+        { ...PINNED, fleetFiles: { ...PINNED.fleetFiles, [MYCO_FLEET.image]: undefined as never } },
+        `FLEET_FILE_MISSING:${MYCO_FLEET.image}`,
+      ],
     ];
     for (const [stamp, code] of cases) {
       expect(harnessStampProblems(stamp), code).toContain(code);
@@ -98,23 +119,51 @@ describe("R1 grader: reads the score OSWorld's own evaluate path wrote", () => {
       });
     }
     expect(harnessStampProblems(PINNED)).toEqual([]);
+    // The parity reference stamp is checked against its own provider and files.
+    expect(harnessStampProblems(pinnedStamp("utm-reference"), "utm-reference")).toEqual([]);
+    expect(harnessStampProblems(pinnedStamp("utm-reference"))).toContain(
+      "HARNESS_PROVIDER_MISMATCH",
+    );
   });
 
-  it("pins every harness file the ruling names: runner, loop, agent, environment, controllers", () => {
+  it("pins every harness file the rulings name: runner, loop, agent, environment, controllers, provider registry, controller server", () => {
     expect(Object.keys(OSWORLD_HARNESS.files).sort()).toEqual([
       "desktop_env/controllers/python.py",
       "desktop_env/controllers/setup.py",
       "desktop_env/desktop_env.py",
+      "desktop_env/providers/__init__.py",
+      "desktop_env/providers/base.py",
+      "desktop_env/server/__init__.py",
+      "desktop_env/server/main.py",
+      "desktop_env/server/pyxcursor.py",
+      "desktop_env/server/screen_recording.py",
       "lib_run_single.py",
       "mm_agents/anthropic/main.py",
       "mm_agents/anthropic/utils.py",
       "scripts/python/run_multienv_claude.py",
     ]);
-    expect(stampHarness(OSWORLD_PIN.commit, () => null).files).toEqual({});
+    expect(Object.keys(OSWORLD_HARNESS.patchedFiles).sort()).toEqual([
+      "desktop_env/desktop_env.py",
+      "desktop_env/providers/__init__.py",
+      "scripts/python/run_multienv_claude.py",
+    ]);
+    expect(OSWORLD_HARNESS.patchedFiles[OSWORLD_HARNESS.agentRunner]).toBe(
+      OSWORLD_HARNESS.patchedAgentRunnerSha256,
+    );
+    const none = () => null;
+    const run = { provider: "myco-fleet", imageDigest: null, readRepoFile: none };
+    expect(stampHarness(OSWORLD_PIN.commit, none, run).files).toEqual({});
     const bytes = new TextEncoder().encode("x");
-    expect(stampHarness(OSWORLD_PIN.commit, () => bytes).files["lib_run_single.py"]).toBe(
+    expect(stampHarness(OSWORLD_PIN.commit, () => bytes, run).files["lib_run_single.py"]).toBe(
       sha256Hex(bytes),
     );
+    // stampHarness hashes the fleet files from the repo; the result equals the pins.
+    const fromRepo = stampHarness(OSWORLD_PIN.commit, none, {
+      provider: "myco-fleet",
+      imageDigest: null,
+      readRepoFile: (rel) => readFileSync(join(ROOT, rel)),
+    });
+    expect(fromRepo.fleetFiles).toEqual(MYCO_FLEET.files);
   });
 
   it("records the last action upstream logged, from traj.jsonl", () => {
@@ -151,8 +200,30 @@ describe.runIf(Boolean(OSW) || REQUIRED)("against a fresh OSWorld clone at the p
   const read = (rel: string) => readFileSync(join(root, rel));
 
   it("every pinned harness file matches the clone byte for byte", () => {
-    const stamp = stampHarness(OSWORLD_PIN.commit, (rel) => read(rel));
+    const stamp = stampHarness(OSWORLD_PIN.commit, (rel) => read(rel), {
+      provider: "myco-fleet",
+      imageDigest: null,
+      readRepoFile: () => null,
+    });
     expect(stamp.files).toEqual(OSWORLD_HARNESS.files);
+  });
+
+  it("the provider registration patch applies to the pinned files, yields the pinned patched digests, and leaves DesktopEnv.evaluate byte-identical", () => {
+    const d = mkdtempSync(join(tmpdir(), "provider-patch-"));
+    dirs.push(d);
+    for (const rel of ["desktop_env/desktop_env.py", "desktop_env/providers/__init__.py"]) {
+      mkdirSync(join(d, rel, ".."), { recursive: true });
+      copyFileSync(join(root, rel), join(d, rel));
+    }
+    const applied = spawnSync("git", ["apply", PROVIDER_PATCH], { cwd: d, encoding: "utf8" });
+    expect(applied.status, applied.stderr).toBe(0);
+    for (const rel of ["desktop_env/desktop_env.py", "desktop_env/providers/__init__.py"])
+      expect(sha256Hex(readFileSync(join(d, rel))), rel).toBe(OSWORLD_HARNESS.patchedFiles[rel]);
+    const evaluate = (src: string) =>
+      src.slice(src.indexOf("    def evaluate(self):"), src.indexOf("    def render(self"));
+    const before = evaluate(read("desktop_env/desktop_env.py").toString("utf8"));
+    expect(before.length).toBeGreaterThan(500);
+    expect(evaluate(readFileSync(join(d, "desktop_env/desktop_env.py"), "utf8"))).toBe(before);
   });
 
   it("run_single_example calls env.evaluate() after the loop and writes that value to result.txt (the R1 grader path)", () => {

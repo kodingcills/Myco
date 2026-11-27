@@ -9,6 +9,14 @@
  
  # Global variables for signal handling
  active_environments = []
+@@ -50,6 +52,6 @@
+     )
+     parser.add_argument(
+-        "--provider_name", type=str, default="aws", choices=["aws", "virtualbox", "vmware", "docker", "azure", "pyromind"], help="Provider name"
++        "--provider_name", type=str, default="aws", choices=["aws", "virtualbox", "vmware", "docker", "azure", "pyromind", "myco-fleet"], help="Provider name"
+     )
+     parser.add_argument(
+         "--client_password", type=str, default="", help="Client password"
 @@ -98,6 +100,9 @@
                          help="Step-prompt mode: full (system warning + per-turn reminder, default), system-only (warning only), none")
      parser.add_argument("--system-prompt", type=str, default=None,

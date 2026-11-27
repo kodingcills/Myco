@@ -1,0 +1,28 @@
+# OSWorld's action interface inside the fleet desktop (lead ruling 14:37Z, gap 2): PyAutoGUI at
+# the version OSWorld's desktop_env/server/requirements.txt pins (0.9.54), python3-xlib at its
+# pinned 0.15, Pillow at its pinned 10.1.0, and PyAutoGUI's own dependencies. Installed with
+# --require-hashes --no-deps --no-build-isolation (setuptools from apt), so every byte is pinned.
+# The server's other imports (flask, lxml, numpy, requests) and pyatspi come from Ubuntu 22.04's
+# apt archive (src/benchmark/upstream/fleet/Dockerfile). pynput, pygame and pywinauto are in
+# upstream's requirements but the server never imports them on Linux.
+PyAutoGUI==0.9.54 \
+    --hash=sha256:dd1d29e8fd118941cb193f74df57e5c6ff8e9253b99c7b04f39cfc69f3ae04b2
+python3-xlib==0.15 \
+    --hash=sha256:dc4245f3ae4aa5949c1d112ee4723901ade37a96721ba9645f2bfa56e5b383f8
+Pillow==10.1.0 \
+    --hash=sha256:ae88931f93214777c7a3aa0a8f92a683f83ecde27f65a45f95f22d289a69e593 \
+    --hash=sha256:b0eb01ca85b2361b09480784a7931fc648ed8b7836f01fb9241141b968feb1db
+PyMsgBox==1.0.9 \
+    --hash=sha256:2194227de8bff7a3d6da541848705a155dcbb2a06ee120d9f280a1d7f51263ff
+pytweening==1.2.0 \
+    --hash=sha256:243318b7736698066c5f362ec5c2b6434ecf4297c3c8e7caa8abfe6af4cac71b
+pyscreeze==1.0.1 \
+    --hash=sha256:cf1662710f1b46aa5ff229ee23f367da9e20af4a78e6e365bee973cad0ead4be
+PyGetWindow==0.0.9 \
+    --hash=sha256:17894355e7d2b305cd832d717708384017c1698a90ce24f6f7fbf0242dd0a688
+PyRect==0.2.0 \
+    --hash=sha256:f65155f6df9b929b67caffbd57c0947c5ae5449d3b580d178074bffb47a09b78
+MouseInfo==0.1.3 \
+    --hash=sha256:2c62fb8885062b8e520a3cce0a297c657adcc08c60952eb05bc8256ef6f7f6e7
+pyperclip==1.9.0 \
+    --hash=sha256:b7de0142ddc81bfc5c7507eea19da920b92252b548b96186caf94a5e2527d310
