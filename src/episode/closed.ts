@@ -54,7 +54,7 @@ import {
   NO_LEDGER,
 } from "../export-guard/provenance.ts";
 import { REASON_CODES } from "../gate/api.ts";
-import { heldIdentity, type IdentityEntry } from "./identity.ts";
+import { heldIdentities, heldIdentity, type IdentityEntry } from "./identity.ts";
 import type { Episode } from "./types.ts";
 import { episodeIdOf } from "./validate.ts";
 
@@ -345,8 +345,7 @@ export function joinedIdentity(
       if (t === undefined || t.kind === "text" || (t.kind === "closed" && t.exempt)) return;
       if (HASHED.test(node)) return;
       // Every identity this string holds (folded: joined forms, full case folding; identity.ts).
-      for (const entry of joined)
-        if (heldIdentity(node, [entry]) !== undefined) out.push({ class: entry[0], path });
+      for (const entry of heldIdentities(node, joined)) out.push({ class: entry[0], path });
     } else if (Array.isArray(node)) {
       for (const [i, item] of node.entries()) visit(item, `${path}[${i}]`);
     } else if (node !== null && typeof node === "object") {
