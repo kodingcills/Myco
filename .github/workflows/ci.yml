@@ -136,7 +136,11 @@ jobs:
     # once a runner had it (p50 1.8). 15 min fails a hang loudly, as "timed out" in
     # the step that hung. It does not cover queue time: a job no runner picks up is
     # cancelled by GitHub; re-run it by hand (docs/ci.md, TIF-256).
-    timeout-minutes: 15
+    # #747: by 2026-11-27 macOS runs on plain main took 11-14 min and hit the 15-min
+    # limit (once on main, three times on #711), cancelling a required check. macOS gets
+    # 25 for margin; ubuntu keeps 15. Step 2 of #747 brings macOS back under 15.
+    # Pinned by test/ci-check-timeout.test.ts.
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 25 || 15 }}
     steps:
       - name: CI plan
         env:
