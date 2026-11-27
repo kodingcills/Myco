@@ -17,6 +17,7 @@ export const SYN_METRICS: Record<string, string> = {
   "helpers.py":
     "def read(path):\n    with open(path, 'r', encoding='utf-8') as f:\n        return f.read()\n",
   "text.py": [
+    "import os",
     "from desktop_env.evaluators.metrics.helpers import read",
     "",
     "def same_text(result, expected, **options):",
@@ -35,6 +36,9 @@ export const SYN_METRICS: Record<string, string> = {
     "",
     "def half(result, expected, **options):",
     "    return 0.5",
+    "",
+    "def env_probe(result, expected, **options):",
+    "    return 1.0 if os.environ.get('MYCO_UPSTREAM_PROBE_SECRET') else 0.0",
     "",
     "def boom(result, expected, **options):",
     "    raise ValueError('upstream metric raised')",
