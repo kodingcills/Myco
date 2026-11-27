@@ -327,5 +327,25 @@ describe.runIf(hasPython)(
       });
       expect(res).toMatchObject({ status: "ungradable", codes: ["EVALUATOR_PROCESS_FAILED"] });
     });
+
+    it("no host environment variable reaches the upstream evaluator process", () => {
+      const s = setup();
+      const t = s.task("calc-0001");
+      const file = join(s.root, t.taskFile);
+      writeFileSync(file, readFileSync(file, "utf8").replace('"same_text"', '"env_probe"'));
+      process.env.MYCO_UPSTREAM_PROBE_SECRET = "set-by-the-host";
+      try {
+        const res = gradeUpstreamTask({
+          root: s.root,
+          manifest: s.manifest,
+          task: { ...t, taskFileSha256: sha(readFileSync(file)) },
+          endState: mock({ results: [s.file("e.txt", "x")], expected: [s.file("f.txt", "x")] }),
+        });
+        // The probe metric scores 1.0 only if it can see the host variable.
+        expect(res).toMatchObject({ status: "fail", upstreamScore: 0 });
+      } finally {
+        delete process.env.MYCO_UPSTREAM_PROBE_SECRET;
+      }
+    });
   },
 );
