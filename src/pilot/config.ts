@@ -24,6 +24,11 @@
 import { createHash } from "node:crypto";
 import type { BenchmarkTask } from "../benchmark/taskset.ts";
 import { GATE_TOOL, SERVER_NAME } from "../gate/mcp-server.ts";
+import { CHILD_ENV_ALLOWLIST, PILOT_MODEL } from "./claude-cli.ts";
+
+// The planner model and the child environment allowlist live in `claude-cli.ts`
+// (dependency-free, TIF-268, shared with the hcu+shell planner) and are re-exported here.
+export { CHILD_ENV_ALLOWLIST, PILOT_MODEL };
 
 export const PILOT_CONFIG_SCHEMA = "myco.pilot.r1-config/1" as const;
 export const PILOT_TASK_SET = "fc-v1";
@@ -36,12 +41,6 @@ export const PILOT_STRATA: Readonly<Record<string, number>> = {
   "focus-change": 3,
   "invalid-target": 3,
 };
-
-/**
- * The planner. Sonnet 5.5 because the hcu+shell arm (R2's other side, TIF-268) runs it, so a
- * later paired run keeps the same model, and because the repo's frozen token rates price it.
- */
-export const PILOT_MODEL = "claude-sonnet-5-5";
 
 export interface PacingConfig {
   /** Trials in flight at once. */
@@ -228,17 +227,6 @@ export function correctionPolicy(
 ): { readonly families: readonly string[] } | undefined {
   return config.corrections === "on" ? { families: AB_CORRECTION_FAMILIES } : undefined;
 }
-
-/** Names passed through to the agent process (values are never read by the harness). */
-export const CHILD_ENV_ALLOWLIST: readonly string[] = [
-  "HOME",
-  "PATH",
-  "USER",
-  "LOGNAME",
-  "LANG",
-  "TERM",
-  "TMPDIR",
-];
 
 export function pilotConfig(
   tasks: readonly BenchmarkTask[],

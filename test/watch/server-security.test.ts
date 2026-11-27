@@ -486,6 +486,7 @@ describe("watch: passive (changes no file, holds no gate handle)", () => {
       "page.ts",
       "render-frame.ts",
       "sanitize-frame.ts",
+      "run-dir.ts",
     ];
     const writes =
       /(?<!\.)\b(writeFile|writeSync|appendFile|createWriteStream|mkdir|rmSync|rmdir|unlink|rename|truncate|chmod|chown|utimes|copyFile|symlink|link|cp|cpSync|spawn|exec|fork)\w*\s*\(|["']w\+?["']|O_WRONLY|O_RDWR|O_CREAT|O_TRUNC|O_APPEND/;
@@ -511,6 +512,7 @@ describe("watch: passive (changes no file, holds no gate handle)", () => {
             "./frames.ts",
             "./page.ts",
             "./sanitize-frame.ts",
+            "./run-dir.ts",
             "../gate/api.ts",
             "../core/state.ts",
             "../discovery/live-runner.ts",

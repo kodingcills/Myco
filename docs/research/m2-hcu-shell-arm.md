@@ -194,8 +194,8 @@ rest are R2's parity requirements.
 | Same evidence and ledger format | **Closed (against PR #474)** | `benchmarkArmRow` writes TIF-267's `arm-row/1`, validated against the published schema. The internal row stays a superset of the C1 `BaselineRow`. Depends on #474 merging; this branch merges it rather than copying it |
 | One independent grader | **Closed (against PR #474)** | Both arms are graded by TIF-267's grader from captured bytes, and joined by its check on `trialKey`. Proven end to end on fakes |
 | Verdict integrity (TIF-266) | **Closed for this arm** | The four layers above. M2-03 owns the general CI isolation test |
-| HCU GUI transport | **Remaining** | `HcuGui` is the C1 Cua connection's shape. The HCU implementation needs the guest (`baseline-status.md`, item 2) |
-| Paid planner | **Remaining** | The interface (`HcuShellPlanner`), prompt and parser are built. The Messages-API adapter is a follow-up, since it is only needed for M2-12 |
+| HCU GUI transport | **Built; untried live** | `src/baseline/hcu-shell/hcu-gui.ts` drives HCU's `computer-use mcp` `GUI` tool, one batch per action, tested on a fake MCP session. A live run needs HCU in the trial base, serving the interactive desktop (`docs/benchmark/hcu-shell-runbook.md` §1) |
+| Planner | **Built, on the subscription** | Headless Claude Code on the operator's subscription (`src/baseline/hcu-shell-live/planner.ts`). Lead ruling 2026-11-27: $0 Anthropic API, so there is no Messages-API adapter and no API-key path. Runner and runbook: `scripts/m2-hcu-shell-run.ts`, `docs/benchmark/hcu-shell-runbook.md` |
 
 ### Asymmetries that remain, stated
 
