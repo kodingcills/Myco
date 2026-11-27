@@ -102,6 +102,22 @@ export function resumeFaultSignature(ends: readonly EndLine[]): string | null {
   return sig;
 }
 
+/**
+ * Transient rate-limit faults (429 / 529 / overloaded) per task id, over the whole ledger: every
+ * invocation's, so the runner's transient re-run cap is durable across `--resume` (PR #598
+ * round 3, F2; lead ruling: at most one extra cold reset per trial in total).
+ */
+export function transientFaultCounts(
+  byTask: ReadonlyMap<string, readonly AttemptRecord[]>,
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const [taskId, list] of byTask) {
+    const n = list.filter((a) => a.end?.harnessClass === "rate-limit").length;
+    if (n > 0) counts.set(taskId, n);
+  }
+  return counts;
+}
+
 export interface HeaderLine {
   readonly schema: typeof HEADER_SCHEMA;
   readonly configSha256: string;

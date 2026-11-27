@@ -23,11 +23,13 @@ import { fakeDriver, PILOT_DRY_RUN_PLANNER, virtualClock } from "../../src/pilot
 import { trialLaunchPlan } from "../../src/pilot/launch.ts";
 import {
   AttemptLedger,
+  type AttemptRecord,
   faultSignature,
   loadLedger,
   PROGRESS_FILE,
   resumeFaultSignature,
   taskStatus,
+  transientFaultCounts,
 } from "../../src/pilot/ledger.ts";
 import {
   EXIT,
@@ -987,7 +989,7 @@ describe("round 2, D1: the repeat-failure rule survives --resume", () => {
     expect(attemptsOf(out, "fc-v1-002")).toHaveLength(0);
   });
 
-  it("after resume a DIFFERENT failure does not abort; a decided trial before the stop clears the seed", async () => {
+  it("after resume a DIFFERENT failure of the same class does not abort (no decided trial between); then both trials decide", async () => {
     const out = tmp();
     const cfg = twoTrials();
     const first = fakeClaude(
@@ -1121,11 +1123,219 @@ describe("round 2, D3: the subscription's usage limit stops; transient limits ba
     expect(vm.events.filter((e) => e === "reset")).toHaveLength(2);
     const list = attemptsOf(out, "fc-v1-001");
     expect(taskStatus(list, cfg.pacing.maxAttemptsPerTrial).kind).toBe("open");
-    // Resume is the operator's call and re-runs the trial in place.
+    expect(r.result?.transientCapped).toEqual(["fc-v1-001"]);
+    // Round 3, F2: the cap is ledger-durable. A resume does not start fc-v1-001 again (no third
+    // cold reset); it runs the other trial and stays paused, naming the capped trial.
+    const vm2 = fakeVm();
     const again = fakeClaude(() => decided);
-    const r2 = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), again));
+    const r2 = await launchR1Live(r1Opts(cfg, out), deps(vm2, again));
+    expect(r2.exitCode).toBe(EXIT.paused);
+    expect(r2.result).toMatchObject({ status: "paused", stopCode: null, ran: 1 });
+    expect(r2.result?.transientCapped).toEqual(["fc-v1-001"]);
+    expect(r2.result?.reason).toMatch(/fc-v1-001\. Take them to the lead/);
+    expect(again.calls.map((c) => c.options.cwd?.toString().split("/").pop())).toEqual([
+      "r1p-fc-v1-002-a1",
+    ]);
+    expect(vm2.events.filter((e) => e === "reset")).toHaveLength(1);
+    expect(attemptsOf(out, "fc-v1-001")).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// PR #598 round 3
+// ---------------------------------------------------------------------------------------------
+
+const keyOf = (c: SpawnCall) => c.options.cwd?.toString().split("/").pop() as string;
+
+describe("round 3, F2: at most one extra cold reset per trial, in total, across --resume", () => {
+  // fc-v1-001 hits a persistent transient limit; fc-v1-002 decides.
+  const persistent529 = (c: SpawnCall) =>
+    keyOf(c).startsWith("r1p-fc-v1-001-")
+      ? { stdout: "", stderr: "API Error: 529 overloaded_error", code: 1 }
+      : decided;
+
+  for (const [name, pacing] of [
+    ["the second limit pauses in-run (default pacing)", {}],
+    ["each invocation pauses after one limit (maxConsecutiveRateLimits 1)", { maxConsecutiveRateLimits: 1 }],
+  ] as const)
+    it(`a persistent 529 over the first run and 3 resumes: 2 spawns and 2 resets for the trial in total (${name})`, async () => {
+      const out = tmp();
+      const cfg = twoTrials(config({ maxAttemptsPerTrial: 1, ...pacing }));
+      const allKeys: string[] = [];
+      let resetsTotal = 0;
+      const exits: number[] = [];
+      for (let inv = 0; inv < 4; inv++) {
+        const vm = fakeVm();
+        const calls: SpawnCall[] = [];
+        const claude = fakeClaude(
+          (n) => persistent529(calls[n - 1] as SpawnCall),
+          (c) => calls.push(c),
+        );
+        const r = await launchR1Live(r1Opts(cfg, out), deps(vm, claude));
+        exits.push(r.exitCode);
+        allKeys.push(...claude.calls.map(keyOf));
+        resetsTotal += vm.events.filter((e) => e === "reset").length;
+      }
+      const t1 = allKeys.filter((k) => k.startsWith("r1p-fc-v1-001-"));
+      // One normal start plus ONE extra cold reset, never more, over all four invocations.
+      expect(t1).toEqual(["r1p-fc-v1-001-a1", "r1p-fc-v1-001-a2"]);
+      expect(allKeys.filter((k) => k.startsWith("r1p-fc-v1-002-"))).toEqual(["r1p-fc-v1-002-a1"]);
+      expect(resetsTotal).toBe(3);
+      // Every invocation pauses (resumable, exit 4); none completes with the trial open.
+      expect(exits.every((e) => e === EXIT.paused)).toBe(true);
+      // The trial's attempt budget (1) is not spent by the limit: it is open, not exhausted.
+      expect(taskStatus(attemptsOf(out, "fc-v1-001"), 1).kind).toBe("open");
+    });
+
+  it("transientFaultCounts counts every invocation's rate-limit ends per task, nothing else", () => {
+    const rec = (cls: string | null, open = false): AttemptRecord =>
+      ({ start: {}, end: open ? null : { harnessClass: cls } }) as unknown as AttemptRecord;
+    const m = new Map([
+      ["a", [rec("rate-limit"), rec("transport-error"), rec("rate-limit")]],
+      ["b", [rec("usage-limit"), rec("auth"), rec(null), rec(null, true)]],
+    ]);
+    expect([...transientFaultCounts(m)]).toEqual([["a", 2]]);
+  });
+});
+
+describe("round 3, R2-D3a/b: quota wording stops with exit 7 on plain stdout and in a claimless clean result", () => {
+  const expectUsageStop = async (output: { stdout: string; stderr?: string; code?: number }) => {
+    const out = tmp();
+    const cfg = twoTrials(config({ maxAttemptsPerTrial: 1 }));
+    const vm = fakeVm();
+    const claude = fakeClaude(() => output);
+    const d = deps(vm, claude);
+    const r = await launchR1Live(r1Opts(cfg, out), d);
+    const list = attemptsOf(out, "fc-v1-001");
+    return {
+      exit: r.exitCode,
+      stopCode: r.result?.stopCode,
+      spawns: claude.calls.length,
+      resets: vm.events.filter((e) => e === "reset").length,
+      classes: list.map((a) => a.end?.harnessClass),
+      open: taskStatus(list, 1).kind,
+      report: d.lines.includes(USAGE_LIMIT_REPORT),
+      t2: attemptsOf(out, "fc-v1-002").length,
+    };
+  };
+  const STOPPED = {
+    exit: EXIT.usageLimit,
+    stopCode: "usage-limit",
+    spawns: 1,
+    resets: 1,
+    classes: ["usage-limit"],
+    open: "open",
+    report: true,
+    t2: 0,
+  };
+
+  it("R2-D3a: every phrasing on plain stdout, exit 1 and exit 0: exit 7, one spawn, one reset, zero attempts, lead report", async () => {
+    for (const phrase of USAGE_LIMIT_PHRASES)
+      for (const code of [1, 0])
+        expect([phrase, code, await expectUsageStop({ stdout: phrase, code })]).toEqual([
+          phrase,
+          code,
+          STOPPED,
+        ]);
+  });
+
+  it("R2-D3b: the verdict's exact clean result, and each phrasing as a clean result, stop with exit 7", async () => {
+    const exact =
+      '{"type":"result","subtype":"success","is_error":false,"result":"Claude AI usage limit reached|1700000000"}';
+    expect(await expectUsageStop({ stdout: exact, code: 0 })).toEqual(STOPPED);
+    for (const phrase of USAGE_LIMIT_PHRASES)
+      expect([phrase, await expectUsageStop({ stdout: resultJson(phrase), code: 0 })]).toEqual([
+        phrase,
+        STOPPED,
+      ]);
+  });
+
+  it("R2-D3b: a clean result with 429/401/403 task data, or with a claim line plus usage words, stays the agent's outcome", async () => {
+    for (const text of [
+      "EMP-0055 qty 429; EMP-0127 qty 401; EMP-0090 qty 403",
+      "Claude AI usage limit reached|1700000000\nDONE",
+      "5-hour limit reached ∙ resets 3pm\nNOT DONE",
+      "The weekly limit column is fixed.\nDONE",
+    ]) {
+      const out = tmp();
+      const claude = fakeClaude(() => ({ stdout: resultJson(text), code: 0 }));
+      const r = await launchR1Live(r1Opts(twoTrials(), out), deps(fakeVm(), claude));
+      expect([text, r.exitCode]).toEqual([text, EXIT.complete]);
+      expect(r.result).toMatchObject({ status: "complete", ran: 2, faulted: 0, stopCode: null });
+      const end = attemptsOf(out, "fc-v1-001")[0]?.end;
+      expect(end?.outcome).toBe("decided");
+      const want = text.endsWith("NOT DONE") ? "not-done" : text.endsWith("DONE") ? "done" : "no-claim";
+      expect([text, end?.armRow?.claim]).toEqual([text, want]);
+    }
+  });
+});
+
+describe("round 3: the A/B launch reports a usage-limit stop to the lead (kills O-6)", () => {
+  it("a stage that stopped on usage-limit: exit 7, the lead report on the log and in the heartbeat", async () => {
+    const LOADED = loadPrereg(ROOT);
+    const sha = abPlanSha256(LOADED, 0, PUBLISHED);
+    const out = tmp();
+    const d = deps(fakeVm(), fakeClaude(() => decided));
+    const r = await launchAbLive(
+      {
+        loaded: LOADED,
+        stage: 0,
+        published: PUBLISHED,
+        outRoot: out,
+        repoRoot: ROOT,
+        oracleSources: SOURCES,
+        launchRealTrials: true,
+        planSha256: sha,
+      },
+      d,
+      {
+        refusals: () => [],
+        runStage: async () => ({
+          status: "paused",
+          reason: "chunk 0, arm on: stopped (usage-limit)",
+          stage: 0,
+          chunksRun: 0,
+          chunksDone: 0,
+          chunks: 1,
+          stopCode: "usage-limit",
+        }),
+      },
+    );
+    expect(r.exitCode).toBe(EXIT.usageLimit);
+    expect(d.lines).toContain(USAGE_LIMIT_REPORT);
+    const status = JSON.parse(readFileSync(join(out, "stage0", LIVE_STATUS_FILE), "utf8"));
+    expect(status).toMatchObject({
+      runner: "corrections-ab",
+      state: "finished",
+      exitCode: EXIT.usageLimit,
+      lastLog: USAGE_LIMIT_REPORT,
+    });
+  });
+});
+
+describe("round 3: a decided end before the stop clears the resume seed (kills O-10)", () => {
+  it("fault, decided, PAUSE, resume, the same fault: no abort; the run completes", async () => {
+    const out = tmp();
+    const cfg = twoTrials();
+    // Run 1: fc-v1-001 faults, then decides on its re-run; PAUSE stops before fc-v1-002.
+    const first = fakeClaude(
+      (n) => (n === 1 ? notJson : decided),
+      (_c, n) => {
+        if (n === 2) writeFileSync(join(out, "PAUSE"), "");
+      },
+    );
+    const r1 = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), first));
+    expect(r1.exitCode).toBe(EXIT.paused);
+    expect(first.calls).toHaveLength(2);
+    expect(ledgerEnds(out).map((e) => e.outcome)).toEqual(["harness-fault", "decided"]);
+    expect(resumeFaultSignature(loadLedger(join(out, PROGRESS_FILE)).ends)).toBeNull();
+    rmSync(join(out, "PAUSE"));
+    // Run 2: the identical fault once on fc-v1-002, then it decides: not a repeat.
+    const second = fakeClaude((n) => (n === 1 ? notJson : decided));
+    const r2 = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), second));
     expect(r2.exitCode).toBe(EXIT.complete);
-    expect(again.calls[0]?.options.cwd?.toString()).toMatch(/r1p-fc-v1-001-a3$/);
+    expect(r2.result).toMatchObject({ status: "complete", stopCode: null });
+    expect(second.calls).toHaveLength(2);
   });
 });
 

@@ -28,9 +28,10 @@
  * the trial's `maxAttemptsPerTrial` budget (`BUDGET_EXEMPT_CLASSES`), so a resume re-runs the
  * trial. The subscription's usage quota (class `usage-limit`) stops the run at once with its
  * own code, for the lead (PR #598 round 2, D3); only a transient rate limit (429 / 529 /
- * overloaded) backs off, and on a live run a trial re-runs after at most one of them per
- * invocation (`maxTransientRetriesPerTrial`), so a limit spell costs at most one extra cold
- * reset per trial. On a live run, two identical harness faults in a row (same class and
+ * overloaded) backs off, and on a live run a trial re-runs after at most one of them in total,
+ * counted from the ledger so `--resume` cannot reset it (`maxTransientRetriesPerTrial`,
+ * `transientCapped`), so a limit spell costs at most one extra cold reset per trial. On a live
+ * run, two identical harness faults in a row (same class and
  * message, no decided trial between) stop it too (`stopCode` `repeat-failure`,
  * `abortOnRepeatedFailure`); the last fault's message is in the ledger (`faultMessage`), so the
  * rule holds across `--resume`.
@@ -70,6 +71,7 @@ import {
   PROGRESS_FILE,
   resumeFaultSignature,
   taskStatus,
+  transientFaultCounts,
 } from "./ledger.ts";
 
 /**
@@ -218,12 +220,14 @@ export interface PilotRunOptions {
    */
   readonly abortOnRepeatedFailure?: boolean;
   /**
-   * Transient rate-limit faults (HTTP 429 / 529, "overloaded") one trial may re-run after in
-   * this invocation, each after the bounded back-off. Every re-run is a fresh attempt and so a
-   * fresh cold VM reset; the next transient fault on the same trial pauses the run (resumable)
-   * instead of resetting again (lead ruling, PR #598 round 2, D3: at most one extra cold reset
-   * per trial). Default: 1 for a live driver; unbounded for a simulated one (no VM, the
-   * dry-run's pacing semantics as reviewed). Never spends the trial's attempt budget.
+   * Transient rate-limit faults (HTTP 429 / 529, "overloaded") one trial may re-run after, in
+   * total over the run directory's ledger (every invocation: `--resume` cannot reset it; PR
+   * #598 round 3, F2), each after the bounded back-off. Every re-run is a fresh attempt and so
+   * a fresh cold VM reset; the next transient fault on the same trial pauses the run instead of
+   * resetting again, and later invocations do not start that trial again (`transientCapped`;
+   * lead ruling, PR #598 round 2, D3: at most one extra cold reset per trial). Default: 1 for
+   * a live driver; unbounded for a simulated one (no VM, the dry-run's pacing semantics as
+   * reviewed). Never spends the trial's attempt budget.
    */
   readonly maxTransientRetriesPerTrial?: number;
 }
@@ -237,6 +241,11 @@ export interface PilotRunResult {
   readonly skipped: number;
   readonly faulted: number;
   readonly exhausted: readonly string[];
+  /**
+   * Open trials the ledger-durable transient cap keeps from starting again (each already had
+   * its one transient re-run in this run directory); the run is `paused` while any remain.
+   */
+  readonly transientCapped: readonly string[];
   /** Set when the run stopped fail-closed (status `paused`); null otherwise. */
   readonly stopCode: StopCode | null;
 }
@@ -439,15 +448,27 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
       agentRoots: [join(outDir, "trials")],
     });
 
+    const maxTransient =
+      opts.maxTransientRetriesPerTrial ?? (simulated ? Number.POSITIVE_INFINITY : 1);
+    // Ledger-durable (PR #598 round 3, F2): the transient faults each trial already had, in
+    // this run directory, across every earlier invocation, so `--resume` cannot reset the cap.
+    const transientByTask = transientFaultCounts(state.byTask);
+
     let skipped = 0;
     let ran = 0;
     let faulted = 0;
     const exhausted: string[] = [];
+    // Open trials whose one transient re-run is already spent (lead ruling, PR #598 round 2,
+    // D3: at most one extra cold reset per trial, in total): never started again in this run
+    // directory, so no further cold reset; the operator takes them to the lead.
+    const transientCapped: string[] = [];
     const queue: BenchmarkTask[] = [];
     for (const task of runnable) {
       const st = taskStatus(attempts.get(task.taskId), config.pacing.maxAttemptsPerTrial);
       if (st.kind === "done") skipped++;
       else if (st.kind === "exhausted") exhausted.push(task.taskId);
+      else if ((transientByTask.get(task.taskId) ?? 0) > maxTransient)
+        transientCapped.push(task.taskId);
       else queue.push(task);
     }
 
@@ -461,9 +482,6 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
     // Seeded from the ledger, so a resume keeps the rule: a fault before the crash or stop plus
     // the identical fault after resume still aborts (PR #598 round 2, D1).
     let lastFaultSignature: string | null = resumeFaultSignature(state.ends);
-    const maxTransient =
-      opts.maxTransientRetriesPerTrial ?? (simulated ? Number.POSITIVE_INFINITY : 1);
-    const transientByTask = new Map<string, number>();
     const pauseRequested = () =>
       [join(outDir, PAUSE_FILE), ...(opts.pauseFiles ?? [])].some((p) => existsSync(p));
 
@@ -710,8 +728,10 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
           consecutiveRateLimits++;
           const transient = (transientByTask.get(task.taskId) ?? 0) + 1;
           transientByTask.set(task.taskId, transient);
-          if (transient > maxTransient)
-            stop = `paused: a transient rate limit hit ${task.taskId} again (${trialKey}) after its re-run; no further cold reset this run. Re-run the same command later to resume`;
+          if (transient > maxTransient) {
+            transientCapped.push(task.taskId);
+            stop = `paused: a transient rate limit hit ${task.taskId} again (${trialKey}) after its re-run; no further cold reset for this trial in this run directory (a resume runs the other trials only). Take it to the lead`;
+          }
           else if (consecutiveRateLimits >= config.pacing.maxConsecutiveRateLimits)
             stop = `paused after ${consecutiveRateLimits} rate limits in a row; re-run the same command later to resume`;
           else
@@ -780,6 +800,10 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
       ),
     );
     if (fatal !== null) throw fatal;
+    // A trial left open by the transient cap is never `complete`: the run pauses (resumable
+    // for the other trials) and names it for the lead.
+    if (stop === null && transientCapped.length > 0)
+      stop = `paused: ${transientCapped.length} trial(s) already had their one transient re-run (at most one extra cold reset per trial) and are not started again in this run directory: ${transientCapped.join(", ")}. Take them to the lead`;
     const status =
       halted !== null
         ? "halted"
@@ -799,6 +823,7 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
       skipped,
       faulted,
       exhausted,
+      transientCapped,
       stopCode,
     };
   } finally {
