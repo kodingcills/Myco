@@ -692,6 +692,10 @@ describe("headless Claude Code transport (fake spawn)", () => {
   it("round 3 F-E: 'please log-in again' is auth on a failed run, with an ASCII or folded hyphen", () => {
     for (const t of [
       "Session expired: please log-in again",
+      // Without "please", only the `log[ -]?in again` alternative can match.
+      "Session expired; log-in again to continue",
+      `Session expired; log${String.fromCharCode(0x2011)}in again`,
+      `Please sign${String.fromCharCode(0x2010)}in`,
       `please log${String.fromCharCode(0x2011)}in again`,
       `Please log${String.fromCharCode(0x2010)}in again`,
       "please log in again",
