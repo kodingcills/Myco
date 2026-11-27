@@ -197,6 +197,10 @@ export async function launchR1Live(
   if (refusals.length > 0) return { exitCode: EXIT.refused, refusals, result: null };
 
   const now = deps.now ?? Date.now;
+  // The heartbeat is the first write into the run directory, so a fresh `--out` must exist
+  // before it (TIF-274). Recursive mkdir is a no-op on an existing directory: a resume keeps
+  // its ledger untouched.
+  mkdirSync(opts.outDir, { recursive: true });
   const status = new LiveStatus(opts.outDir, "r1-pilot", now, deps.heartbeatMs ?? 60_000);
   let result: PilotRunResult | null = null;
   try {
