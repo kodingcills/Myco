@@ -1,0 +1,8 @@
+wait-guest-ready: first ssh answer after 15s (guest CPU 4s)
+reset-trial-vm: fast boot (guest CPU 4s at the first ssh answer, under 100s): not a full cold boot (a UTM config write just before a reset does this, TIF-98); stopping by request and booting once more
+wait-guest-ready: first ssh answer after 178s (guest CPU 290s)
+reset-trial-vm: boot class=cold first_ssh_s=178 guest_cpu_first_ssh_s=290 attempts=2
+reset-trial-vm: WARNING MYCO_GUEST_EGRESS=open: guest egress NOT verified closed. Maintenance only; never run trials or put credentials in this guest (TIF-275)
+reset-trial-vm: timing stop=1 restore=2 start=3 ready=22 stop2=15 restore2=2 start2=3 ready2=226 egress=0 clock=13 total=287
+reset-trial-vm: host swap used 1918 of 3072 MB
+reset-trial-vm: ready on 'clean-base'
