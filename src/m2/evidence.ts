@@ -40,7 +40,10 @@
  *    "same tasks, fixtures and model settings" and lesson L5: the instruction is the task
  *    set's sentence, so both arms must hash the same text); success is an accepted DONE
  *    the grader passes; an exact two-sided sign test on the discordant pairs, called
- *    underpowered below SIGN_TEST_UNDERPOWERED;
+ *    underpowered below SIGN_TEST_UNDERPOWERED. A pack listing R2 or R7 must carry a committed
+ *    R2 pre-registration hash (`pack.json` `preregistration.sha256`, allowlist
+ *    `R2_PREREGISTRATION_SHA256`; #649): capability tracks reuse `hcu+shell` as
+ *    their baseline arm, so a capability pack's hash, or none, is refused (fail-closed);
  *  - R3's per-class rates over the gated arm's ELIGIBLE faulted trials: false successes
  *    (accepted DONE the grader does not pass) over eligible trials, and detection (the
  *    gate's own refusal: verdict `refuted` or `uncertain`) over eligible trials the
@@ -120,6 +123,51 @@ export interface PackManifest {
   /** The attempt ledger's pinned head (required for R1 packs; `attempts.jsonl`). */
   readonly attempts?: { readonly events: number; readonly headSha256: string };
   readonly runs: { readonly path: string; readonly expect: number } | null;
+  /** The pre-registration the pack ran under; required for R2 and R7 packs (#649). */
+  readonly preregistration?: { readonly sha256: string };
+}
+
+/**
+ * The committed R2 pre-registrations (#649, lead ruling 2026-11-27 06:01Z), by SHA-256. An
+ * ALLOWLIST: capability tracks reuse the `hcu+shell` arm as their baseline, so an `hcu+shell`
+ * row cannot be told apart by arm from an R2 head-to-head row. Separation is by pack,
+ * fail-closed: a pack's `hcu+shell` rows count as R2 head-to-head evidence (rows R2 and R7) only
+ * when `pack.json` carries one of these hashes. A capability pre-registration hash, any other
+ * hash, or no hash at all is refused.
+ *
+ * EMPTY: no R2 pre-registration is committed on `main` yet, so every R2 or R7 pack is refused
+ * until one is. To add one: commit the R2 pre-registration document, then, in a reviewed Tier 2
+ * PR, add the SHA-256 of its exact committed bytes here (lowercase hex, 64 characters) with a
+ * comment naming the file and the commit, and write that hash into each R2 pack's
+ * `pack.json` `preregistration.sha256`. Never add a capability pre-registration's hash
+ * (capability-spec.md §3). Frozen, so no code can widen it at runtime.
+ */
+export const R2_PREREGISTRATION_SHA256: readonly string[] = Object.freeze([]);
+
+/**
+ * Why a pack declaring pre-registration `declared` cannot use its `hcu+shell` rows as R2
+ * evidence, or null when it can: `declared` must be exactly (no case or whitespace variant) one
+ * of the committed R2 pre-registrations.
+ */
+export function r2PreregistrationError(
+  declared: string | undefined,
+  allowlist: readonly string[] = R2_PREREGISTRATION_SHA256,
+): string | null {
+  if (declared === undefined)
+    return "no pre-registration hash: hcu+shell rows are R2 head-to-head evidence only under a committed R2 pre-registration (R2_PREREGISTRATION_SHA256)";
+  if (!allowlist.includes(declared))
+    return `pre-registration ${JSON.stringify(declared)}, which is not a committed R2 pre-registration (R2_PREREGISTRATION_SHA256; a capability pre-registration never is): its hcu+shell rows are never R2 evidence`;
+  return null;
+}
+
+/** `checkPack` options. */
+export interface PackCheckOptions {
+  /**
+   * TEST SEAM ONLY: replaces the committed `R2_PREREGISTRATION_SHA256`, so a test can show that a
+   * correctly-hashed pack is accepted. Production callers never pass it
+   * (`test/m2/r2-prereg.test.ts` scans `scripts/` and `src/` for it).
+   */
+  readonly r2PreregistrationAllowlist?: readonly string[];
 }
 
 export interface TrialOps {
@@ -530,7 +578,7 @@ export function trialProcessErrors(row: BenchmarkArmRow, o: TrialOps, verified: 
   return errors;
 }
 
-export function checkPack(input: PackInput): PackResult {
+export function checkPack(input: PackInput, options: PackCheckOptions = {}): PackResult {
   const errors: string[] = [...input.readErrors];
   const manifestIssues = validateSchema(input.manifest, m2PackManifestSchema);
   for (const s of manifestIssues) errors.push(`pack.json: ${s.path} ${s.message}`);
@@ -638,6 +686,17 @@ export function checkPack(input: PackInput): PackResult {
     for (const row of ["R2", "R7"]) {
       needs(row, "myco-gate");
       needs(row, "hcu+shell");
+    }
+    // #649 (lead ruling 2026-11-27 06:01Z): R2 and R7 read hcu+shell rows as head-to-head
+    // evidence. Capability tracks reuse that arm as their baseline, so the pack must carry a
+    // committed R2 pre-registration hash (allowlist, fail-closed); a capability hash or none is
+    // refused. Required whenever the pack lists R2 or R7, whatever its rows hold.
+    if (manifest.rows.includes("R2") || manifest.rows.includes("R7")) {
+      const prereg = r2PreregistrationError(
+        manifest.preregistration?.sha256,
+        options.r2PreregistrationAllowlist,
+      );
+      if (prereg !== null) errors.push(`R2 pre-registration: pack.json carries ${prereg}`);
     }
     if (manifest.rows.includes("R2") !== (manifest.expectPairs !== null))
       errors.push("pack.json: expectPairs is set exactly when the pack is R2 evidence");

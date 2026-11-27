@@ -6,6 +6,15 @@ import { memoryHandoffEventSink } from "../../src/handoff/events.ts";
 import { type PolicyGuard, type ScreenSensor, startPolicy } from "../../src/policy/guard.ts";
 import { FakeClock } from "../handoff/helpers.ts";
 
+/**
+ * What a policed trial's agent is granted in these tests: observe, the gate and nothing that
+ * acts (the agent acts only through a wrapped host interface).
+ */
+export const POLICED_ARM_TOOLS: readonly string[] = [
+  "mcp__myco-rt__observe",
+  "mcp__myco-gate__myco_gate_check",
+];
+
 /** A planted marker: must never appear in anything agent-facing or in the policy log. */
 export const MARKER = "ZQMARKER7731";
 
@@ -60,6 +69,7 @@ export function guardFor(f: Fixture, config: unknown, opts: GuardOptions = {}): 
   const r = startPolicy({
     configPath: writeConfig(f, config),
     scope: { originalDocument: f.original, documentDir: f.docDir },
+    grantedTools: POLICED_ARM_TOOLS,
     screenSensor: opts.screen ?? (() => false),
     ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
   });

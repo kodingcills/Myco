@@ -111,9 +111,12 @@ function calcSelfTestCases(task: AgentCheckTask): SelfTestCase<unknown>[] {
   const same = (a: SavedDocument, b: SavedDocument) =>
     a.bytes !== null && b.bytes !== null && Buffer.from(a.bytes).equals(Buffer.from(b.bytes));
   const sound = (c: SelfTestCase<unknown>) => !c.corruptions.some((x) => same(x.doc, c.correct));
+  // The first carries the wider drawn corruptions (two errors, out-of-grammar values, inserted
+  // and deleted rows; #610): every shape once per proposal, freshly drawn, on the bound task.
   const own = Array.from(
     { length: OWN_CASES },
-    () => calcCasesFor([task.intent], task.fileName, hostDraw)[0] as SelfTestCase<unknown>,
+    (_, k) =>
+      calcCasesFor([task.intent], task.fileName, hostDraw, k === 0)[0] as SelfTestCase<unknown>,
   );
   if (!own.every(sound)) throw new Error("the intent changes nothing");
   const ext = task.fileName.slice(task.fileName.lastIndexOf("."));
