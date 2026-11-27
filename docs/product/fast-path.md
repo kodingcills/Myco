@@ -171,8 +171,11 @@ it does not call the gate (spec §1.3, "gate presence is the same in both arms")
 
 ## 5. Proposed pre-registered bar (for the capability spec to adopt)
 
-To be frozen, per spec §3, in `docs/product/capability-prereg/J-v1/prereg.json` before the
-first run. Nothing below has been run.
+Frozen for review, per spec §3, in `docs/product/capability-prereg/j-v1/prereg.json`, with its
+analysis script `src/actions/j-v1-analysis.ts` (see that directory's README). Where this
+section and the spec differ, the pre-registration follows the spec: k = 1 (the k = 2 proposal
+below is not adopted), and the invalid-target guardrail below is not run under j-v1. The
+5-point margin is lead ruling pending. Nothing below has been run.
 
 **Arms.** Primary: `fast-path` (`hcu+shell+J`) against `hcu+shell`. Secondary, reported and
 not part of the bar: `fast-path` against `screenshot-only` (C1). Same harness (Claude Code on
