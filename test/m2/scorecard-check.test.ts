@@ -155,11 +155,29 @@ const status = (text: string, done: number, pending: number, notDone: number) =>
 
 function allDone(): string {
   let t = setRow(COMMITTED, "R1", "DONE", "m2-fx-r1", R1_FIG);
-  t = setRow(t, "R2", "DONE", "m2-fx-r2", R2_FIG);
   t = setRow(t, "R3", "DONE", "m2-fx-r3", R3_FIG);
-  t = setRow(t, "R7", "DONE", "m2-fx-r2", R7_FIG);
-  return status(t, 4, 4, 0);
+  return status(t, 2, 6, 0);
 }
+
+/**
+ * R2 and R7 on the fixture R2 pack (#649). The real CLI checks against the committed
+ * R2_PREREGISTRATION_SHA256, which is empty until an R2 pre-registration is committed, so the
+ * pack is refused (its test-only hash is not committed) and both rows are NOT DONE; their
+ * figures are still recomputed and must still match.
+ */
+function r2Refused(): string {
+  let t = setRow(COMMITTED, "R1", "DONE", "m2-fx-r1", R1_FIG);
+  t = setRow(t, "R2", "NOT DONE", "m2-fx-r2", R2_FIG);
+  t = setRow(t, "R3", "DONE", "m2-fx-r3", R3_FIG);
+  t = setRow(t, "R7", "NOT DONE", "m2-fx-r2", R7_FIG);
+  return status(t, 2, 4, 2);
+}
+
+/** The gate mismatch every R2/R7 row on the fixture R2 pack carries (#649). */
+const PREREG_GATE = (row: string) =>
+  new RegExp(
+    `^MISMATCH ${row}: evidence pack passes every gate: .*R2 pre-registration: pack\\.json carries pre-registration "[0-9a-f]{64}", which is not a committed R2 pre-registration`,
+  );
 
 describe("m2-scorecard-check: the committed skeleton", () => {
   it(
@@ -190,13 +208,33 @@ describe("m2-scorecard-check: the committed skeleton", () => {
 
 describe("m2-scorecard-check: rows recomputed from fixture packs", () => {
   it(
-    "passes when R1, R2, R3 and R7 quote exactly what their packs recompute",
+    "passes when R1 and R3 quote exactly what their packs recompute",
     () => {
       const r = check(allDone());
       expect(r.mismatch).toEqual([]);
       expect(r.unattributed).toEqual([]);
       expect(r.status).toBe(0);
-      expect(r.stdout).toMatch(/rows: 4 DONE, 0 NOT DONE, 4 PENDING/);
+      expect(r.stdout).toMatch(/rows: 2 DONE, 0 NOT DONE, 6 PENDING/);
+    },
+    T,
+  );
+
+  it(
+    "refuses R2 and R7 on a pack without a committed R2 pre-registration, and still recomputes their figures (#649)",
+    () => {
+      const r = check(r2Refused());
+      expect(r.status).toBe(1);
+      expect(r.unattributed).toEqual([]);
+      // Exactly the two gate refusals: the NOT DONE statuses and every figure match.
+      expect(r.mismatch).toHaveLength(2);
+      expect(r.mismatch[0]).toMatch(PREREG_GATE("R2"));
+      expect(r.mismatch[1]).toMatch(PREREG_GATE("R7"));
+      expect(r.stdout).toMatch(/rows: 2 DONE, 2 NOT DONE, 4 PENDING/);
+      // DONE on the refused pack is a status mismatch too.
+      const claimed = check(status(setRow(COMMITTED, "R2", "DONE", "m2-fx-r2", R2_FIG), 1, 7, 0));
+      expect(claimed.mismatch.join("\n")).toMatch(
+        /MISMATCH R2: status: .*the doc says DONE, the pack gives NOT DONE/,
+      );
     },
     T,
   );
@@ -210,7 +248,7 @@ describe("m2-scorecard-check: rows recomputed from fixture packs", () => {
         ["detection 8/8", "detection 9/9", "R3"],
         ["wall clock 150.0 s", "wall clock 149.0 s", "R7"],
       ] as const) {
-        const r = check(mutate(allDone(), from, to));
+        const r = check(mutate(r2Refused(), from, to));
         expect(r.status).toBe(1);
         expect(r.mismatch.join("\n")).toMatch(
           new RegExp(`^MISMATCH ${row}: recomputed figures`, "m"),
@@ -264,8 +302,9 @@ describe("m2-scorecard-check: rows recomputed from fixture packs", () => {
         "hcu+shell: 15 verified of 30; per verified task model $1.0000, wall clock 200.0 s, VM 160.0 s; " +
         "myco-gate: 20 verified of 30; per verified task model unmeasured (1 null rows), wall clock 150.0 s, VM 120.0 s";
       const ok = check(status(setRow(COMMITTED, "R7", "NOT DONE", "m2-fx-r2-null", fig), 0, 7, 1));
-      expect(ok.mismatch).toEqual([]);
-      expect(ok.status).toBe(0);
+      // The only mismatch is the R2 pre-registration gate (#649): the figure renders unmeasured.
+      expect(ok.mismatch).toHaveLength(1);
+      expect(ok.mismatch[0]).toMatch(PREREG_GATE("R7"));
       const zero = check(
         status(
           setRow(
