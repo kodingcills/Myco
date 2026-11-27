@@ -55,20 +55,24 @@ host path shapes, nothing key-shaped. A rejected note is answered with a code, n
 
 ## Host side: policy trigger (track O interface)
 
-Track O is not merged; this PR defines only the seam (`src/handoff/policy.ts`):
+The seam is `src/handoff/policy.ts`; track O's engine and guard implement it
+(`src/policy/`, `docs/policy/guardrails.md`):
 
 ```ts
 interface HandoffPolicy {
   readonly id: string;
-  evaluate(action: ProposedAction): PolicyPauseRequest | null | Promise<PolicyPauseRequest | null>;
+  // null: pass; a PolicyDenial ({ deny: true, policyId }): refuse with POLICY_DENIED, no
+  // handoff; a PolicyPauseRequest: force a handoff (track O's `require-approval`).
+  evaluate(action: ProposedAction): PolicyVerdict | Promise<PolicyVerdict>;
 }
 // In the actuator path, before forwarding each agent action:
 const decision = await guardAction(policy, broker.policyTrigger(), action);
 ```
 
 `guardAction` first waits on the pause gate, so no action is forwarded while any handoff is
-open, whoever opened it. This holds for an actuator that calls `guardAction`; no actuator calls
-it yet (that lands with track O and the live bridge). A pause-gate waiter pending when the
+open, whoever opened it. This holds for an actuator that calls `guardAction`; track O's async
+policed wrappers (`src/policy/actuators.ts`) call it; wiring them into the live trial paths is
+a track O follow-up. A pause-gate waiter pending when the
 handoff times out or the trial closes gets `ended`, never `clear`. Then it asks the policy. A forced pause resolves to `proceed`
 (approve), `skip` (fixed-it: the human did it), `deny` (reject), or `ended` (timeout or the
 trial closed). A policy that throws denies the action. A policy pause while another handoff
