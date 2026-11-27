@@ -291,6 +291,131 @@ describe("what runs is what was judged (#605 item 2)", () => {
     );
   });
 
+  // Round-2 verifier N1: every kind, desktop and adapter, drops undeclared fields.
+  it.each([
+    [{ kind: "typeTextGlobal", text: "t", command: CP }, { kind: "typeTextGlobal", text: "t" }],
+    [{ kind: "clickAt", x: 1, y: 2, command: CP }, { kind: "clickAt", x: 1, y: 2 }],
+    [
+      { kind: "launch", command: SOFFICE, args: ["--calc"], env: { X: "1" } },
+      { kind: "launch", command: SOFFICE, args: ["--calc"] },
+    ],
+    [{ kind: "keyPress", keys: "ctrl+c", command: CP }, { kind: "keyPress", keys: "ctrl+c" }],
+  ])("desktop copy of %o keeps only its declared fields", (raw, want) => {
+    const got = frozenDesktopAction(raw);
+    expect(got).toEqual(want);
+    expect(Object.keys(got ?? {}).sort()).toEqual(Object.keys(want).sort());
+  });
+
+  it.each([
+    [{ kind: "click", ref: "r", extra: 1 }, { kind: "click", ref: "r" }],
+    [
+      { kind: "typeText", ref: "r", text: "t", extra: 1 },
+      { kind: "typeText", ref: "r", text: "t" },
+    ],
+    [
+      { kind: "setValue", ref: "r", value: "v", extra: 1 },
+      { kind: "setValue", ref: "r", value: "v" },
+    ],
+    [{ kind: "keyPress", keys: "k", extra: 1 }, { kind: "keyPress", keys: "k" }],
+  ])("adapter copy of %o keeps only its declared fields", (raw, want) => {
+    const got = frozenAdapterAction(raw);
+    expect(got).toEqual(want);
+    expect(Object.keys(got ?? {}).sort()).toEqual(Object.keys(want).sort());
+  });
+
+  it("adapter waitFor copy keeps only its declared fields", () => {
+    const predicate = () => true;
+    const got = frozenAdapterAction({ kind: "waitFor", predicate, timeoutMs: 5, extra: 1 });
+    expect(Object.keys(got ?? {}).sort()).toEqual(["kind", "predicate", "timeoutMs"]);
+  });
+
+  // Round-2 verifier B1: the api and gui routes carry no argv, and they write.
+  it("router, no argv (api/gui route): returned writes are the frozen judged copy", () => {
+    const f = fixture();
+    const writes = [join(f.docDir, "out.csv")];
+    const reads = [f.original];
+    const inner: ActionPolicy = {
+      id: "i",
+      check: (): PolicyDecision => ({ allow: true, code: "ALLOWED", reads, writes }),
+    };
+    const d = guardedActionPolicy(inner, guardFor(f, FILE_RULES)).check({
+      route: "api",
+      kind: "x",
+      reads: [],
+      writes: [],
+    });
+    writes[0] = f.original;
+    reads.push(f.outside);
+    expect(d).toEqual({
+      allow: true,
+      code: "ALLOWED",
+      reads: [f.original],
+      writes: [join(f.docDir, "out.csv")],
+    });
+    expect(Object.isFrozen(d)).toBe(true);
+    if (d.allow) {
+      expect(d.writes).not.toBe(writes);
+      expect(d.reads).not.toBe(reads);
+      expect(Object.isFrozen(d.writes)).toBe(true);
+      expect(Object.isFrozen(d.reads)).toBe(true);
+    }
+  });
+
+  it.each(["api", "gui", "script"] as const)(
+    "router (%s): a writes getter that answers differently on a second read never returns unjudged writes",
+    (route) => {
+      const f = fixture();
+      let n = 0;
+      const decision = {
+        allow: true,
+        code: "ALLOWED",
+        reads: [],
+        get writes() {
+          n += 1;
+          return n === 1 ? [join(f.docDir, "out.csv")] : [f.original];
+        },
+      };
+      const d = guardedActionPolicy(
+        { id: "i", check: () => decision as unknown as PolicyDecision },
+        guardFor(f, FILE_RULES),
+      ).check({ route, kind: "x", reads: [], writes: [] });
+      expect(d.allow && d.writes).toEqual([join(f.docDir, "out.csv")]);
+      expect(n).toBe(1);
+    },
+  );
+
+  it("router: a reads or argv getter is read once too", () => {
+    const f = fixture();
+    let nr = 0;
+    let na = 0;
+    const decision = {
+      allow: true,
+      code: "ALLOWED",
+      writes: [join(f.docDir, "out.csv")],
+      get reads() {
+        nr += 1;
+        return nr === 1 ? [f.original] : [f.outside];
+      },
+      get argv() {
+        na += 1;
+        return na === 1 ? ["cat", "x"] : ["cp", f.outside, f.original];
+      },
+    };
+    const d = guardedActionPolicy(
+      { id: "i", check: () => decision as unknown as PolicyDecision },
+      guardFor(f, FILE_RULES),
+    ).check({ route: "script", kind: "x", reads: [], writes: [] });
+    expect(d).toEqual({
+      allow: true,
+      code: "ALLOWED",
+      reads: [f.original],
+      writes: [join(f.docDir, "out.csv")],
+      argv: ["cat", "x"],
+    });
+    expect(nr).toBe(1);
+    expect(na).toBe(1);
+  });
+
   it("router: the decision returned is a frozen copy of the writes O judged", () => {
     const f = fixture();
     const writes = [join(f.docDir, "out.csv")];
