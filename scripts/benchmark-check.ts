@@ -9,7 +9,8 @@
  * Prints the CheckResult as JSON. Exit 1 when the ledgers are inconsistent, empty or
  * miscounted; with --require-r1, also when R1 does not pass; with --evidence, also when any
  * row lacks evidence provenance (its planner is not a Claude model id, e.g. a dry run) or had
- * the gate's corrections on (R1 evidence keeps corrections off).
+ * the gate's corrections on (R1 evidence keeps corrections off). --require-r1 also refuses
+ * experiment rows (the corrections A/B, both arms) without --evidence (#572 N3).
  * --expect-unregistrable asserts how many of an arm's --expect trials are unregistrable (the
  * rest must be gated); --require-r1 needs it for myco-gate (ruling 2026-11-26 08:38Z), so R1's
  * denominator cannot shrink silently. With --require-r1 or --evidence the myco-gate rows are also
@@ -20,7 +21,12 @@
  */
 import { readFileSync } from "node:fs";
 import { CAPABILITY_ARMS, R1_PATH_ARMS } from "../schemas/benchmark-ledger.ts";
-import { checkBenchmark, type LedgerArm } from "../src/benchmark/check.ts";
+import {
+  checkBenchmark,
+  experimentRowsError,
+  type LedgerArm,
+  type LedgerArmRow,
+} from "../src/benchmark/check.ts";
 
 // Every arm the ledger schema admits. A capability arm (tracks I-V) can be checked for
 // consistency, but --require-r1 and --evidence refuse its rows (capability-spec.md §3.4).
@@ -73,7 +79,8 @@ const readJsonl = (p: string) =>
     .filter((l) => l.trim() !== "")
     .map((l) => JSON.parse(l) as unknown);
 
-const result = checkBenchmark(readJsonl(armPath), readJsonl(gradesPath), {
+const armRows = readJsonl(armPath);
+const checked = checkBenchmark(armRows, readJsonl(gradesPath), {
   expectTrials,
   expectUnregistrable,
   evidence,
@@ -81,5 +88,12 @@ const result = checkBenchmark(readJsonl(armPath), readJsonl(gradesPath), {
   // module as the M2 pack check: the split cannot rest on numbers typed here.
   bindTaskSet: requireR1 || evidence,
 });
+// An R1 verdict is never computed over experiment rows (the corrections A/B, both arms), with
+// or without --evidence (#572 N3). With --evidence checkBenchmark already refuses them.
+const experimental = requireR1 && !evidence ? experimentRowsError(armRows as LedgerArmRow[]) : null;
+const result =
+  experimental === null
+    ? checked
+    : { ...checked, ok: false, errors: [...checked.errors, `--require-r1: ${experimental}`] };
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 process.exit(!result.ok || (requireR1 && result.r1?.pass !== true) ? 1 : 0);
