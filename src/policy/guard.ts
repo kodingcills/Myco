@@ -1,7 +1,8 @@
 /**
  * Track O: the guard. One per policed trial; every actuator wrapper asks it before forwarding.
  *
- * `startPolicy` is the only way to get one. It loads the host config (`./config.ts`), resolves
+ * `startPolicy` is the only way to get one. It first refuses a trial that grants the agent any
+ * tool no wrapper polices (`./surface.ts`), then loads the host config (`./config.ts`), resolves
  * the trial scope, and checks a sensor exists for every declared rule kind that needs one. Any
  * failure refuses the trial with a closed code (`PolicyStartRefusal`); there is no fallback to
  * an unpoliced run.
@@ -44,6 +45,7 @@ import {
   type PolicyEngine,
   type TrialScope,
 } from "./engine.ts";
+import { policedGrantOk } from "./surface.ts";
 
 export const POLICY_LOG_SCHEMA = "myco.policy.log/1" as const;
 export const POLICY_ROW_SCHEMA = "myco.policy.row/1" as const;
@@ -103,6 +105,12 @@ export interface StartPolicyOptions {
   /** Absolute host path of the policy config. */
   readonly configPath: string;
   readonly scope: TrialScope;
+  /**
+   * The exact tools the trial grants the agent (Claude Code names). Required: a trial granting
+   * any tool off `POLICED_GRANTABLE_TOOLS` (raw `myco-rt` act, launch or write included) is
+   * refused with `POLICY_UNPOLICED_SURFACE`, because no wrapper sits on that path.
+   */
+  readonly grantedTools: readonly string[];
   /**
    * Roots the agent or guest can reach. The trial's document directory is always added; a
    * config inside any of them is refused.
@@ -328,6 +336,8 @@ export function unpolicedRow(arm: string, trialKey: string): PolicyRow {
 
 /** Start a policed trial's guard, or refuse the trial. */
 export function startPolicy(options: StartPolicyOptions): StartPolicyResult {
+  // First, before any file is read: an unpoliced acting surface means no policy can hold.
+  if (!policedGrantOk(options.grantedTools)) return { ok: false, code: "POLICY_UNPOLICED_SURFACE" };
   const timeoutMs = options.timeoutMs ?? DEFAULT_POLICY_TIMEOUT_MS;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000)
     return { ok: false, code: "POLICY_SCOPE_INVALID" };
