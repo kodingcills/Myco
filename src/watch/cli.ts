@@ -3,6 +3,7 @@
  * over `main`; `bin/myco watch …` calls it.
  *
  *   myco watch --run <runId> [--task <id>] --decision-log <file> [--frames <dir> | --sealed-capture <vaultRoot>]
+ *   myco watch --pilot <runDir | A/B stageRoot>     (follow a pilot run; see run-dir.ts)
  *   myco watch --demo todo-items|calc-multi-step [--out <dir>]
  *
  * Every run/task the page may show is named here by the operator. The server binds
@@ -13,6 +14,8 @@ import type { Writable } from "node:stream";
 import { isSafeId } from "../gate/api.ts";
 import { type DemoFamily, startWatchDemo } from "./demo.ts";
 import { directoryFrameSource } from "./frames.ts";
+import { pilotRunSource } from "./run-dir.ts";
+import { hostNeedles } from "./sanitize-frame.ts";
 import { startWatchServer, WatchBindError, type WatchServer } from "./server.ts";
 
 export const EXIT_USAGE = 3;
@@ -22,6 +25,7 @@ export const USAGE = `usage:
   myco watch --run <runId> [--run <runId> ...] [--task <id> ...]
              [--decision-log <file>] [--frames <dir> | --sealed-capture <vaultRoot>]
              [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--allow-non-loopback]
+  myco watch --pilot <runDir> [--run <runId> ... --decision-log <file> ...] [--host …] [--port …]
   myco watch --demo todo-items|calc-multi-step [--out <dir>] [--host …] [--port …]
 
   --run <id>               a run to show (repeatable); events for any other run are not shown
@@ -31,6 +35,11 @@ export const USAGE = `usage:
                            metadata dropped; other image types are never served)
   --sealed-capture <dir>   frames from the vault: <dir>/<runId>/captured/**.png (PNG only;
                            captured/persisted and everything outside captured/ is never read)
+  --pilot <runDir>         follow an R1 pilot run directory, or an A/B stage root (on/, off/),
+                           as it runs: attempts, the agent's actions (counts and closed tool
+                           names), gate calls, verdicts, the heartbeat. Read-only; only the
+                           run's progress, heartbeat, attempt-ledger, grade and transcript
+                           files are read, never the vault or the oracle's inputs
   --host <addr>            bind address (default 127.0.0.1); non-loopback is refused unless
   --allow-non-loopback     is given (the stream is unauthenticated: think before using it)
   --port <n>               port (default ${DEFAULT_PORT}; 0 picks a free port)
@@ -51,6 +60,7 @@ const VALUE_FLAGS = new Set([
   "--port",
   "--demo",
   "--out",
+  "--pilot",
 ]);
 const REPEATABLE = new Set(["--run", "--task"]);
 const BOOL_FLAGS = new Set(["--allow-non-loopback"]);
@@ -66,6 +76,7 @@ export interface ParsedWatchArgs {
   readonly allowNonLoopback: boolean;
   readonly demo?: DemoFamily;
   readonly out?: string;
+  readonly pilot?: string;
 }
 
 export class WatchUsageError extends Error {}
@@ -106,12 +117,14 @@ export function parseWatchArgs(argv: readonly string[]): ParsedWatchArgs {
   if (single.has("--frames") && single.has("--sealed-capture"))
     throw new WatchUsageError("give --frames or --sealed-capture, not both");
   if (demo !== undefined) {
-    for (const flag of ["--decision-log", "--frames", "--sealed-capture"])
+    for (const flag of ["--decision-log", "--frames", "--sealed-capture", "--pilot"])
       if (single.has(flag)) throw new WatchUsageError(`${flag} does not go with --demo`);
     if (runs.length > 0 || tasks.length > 0)
       throw new WatchUsageError("--run/--task do not go with --demo (the demo names its runs)");
-  } else if (runs.length === 0) {
-    throw new WatchUsageError("--run is required (the page shows only runs you name)");
+  } else if (runs.length === 0 && !single.has("--pilot")) {
+    throw new WatchUsageError(
+      "--run is required, or --pilot <runDir> (the page shows only runs you name)",
+    );
   }
   const opt = (flag: string) => single.get(flag);
   return {
@@ -125,6 +138,7 @@ export function parseWatchArgs(argv: readonly string[]): ParsedWatchArgs {
     ...(opt("--sealed-capture") === undefined ? {} : { sealedCapture: opt("--sealed-capture") }),
     ...(demo === undefined ? {} : { demo }),
     ...(opt("--out") === undefined ? {} : { out: opt("--out") }),
+    ...(opt("--pilot") === undefined ? {} : { pilot: opt("--pilot") }),
   } as ParsedWatchArgs;
 }
 
@@ -163,8 +177,14 @@ export async function startFromArgs(args: ParsedWatchArgs, stdout: Writable): Pr
     tasks: args.tasks,
     ...(args.decisionLog === undefined ? {} : { decisionLog: args.decisionLog }),
     ...(frames === undefined ? {} : { frames }),
+    ...(args.pilot === undefined
+      ? {}
+      : { pilot: pilotRunSource(args.pilot, { needles: hostNeedles() }) }),
   });
-  stdout.write(`myco watch (read-only): ${server.url}\n`);
+  // The run directory's path is the operator's own input: never echoed, never served.
+  stdout.write(
+    `myco watch (read-only${args.pilot === undefined ? "" : ", pilot run"}): ${server.url}\n`,
+  );
   return { server };
 }
 

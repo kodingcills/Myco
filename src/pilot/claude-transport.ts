@@ -231,10 +231,19 @@ function classOfClaimlessCleanResult(text: string): PilotHarnessClass | null {
   return null;
 }
 
+/**
+ * The agent's claim: its last line, exactly `DONE` or `NOT DONE` (case-sensitive, no other
+ * words). The last line is compared on its folded forms (`vocabularyForms`, the same fold the
+ * vocabularies use; #611), each trimmed, so a Unicode space, a tab, a run of spaces or a format
+ * character inside or around the claim (`NOT<NBSP>DONE`, `N<ZWSP>OT DONE`, `DONE<ZWSP>`) is
+ * read as the claim, while `DONE.`, `done` and `NOT-DONE` stay `no-claim`. `interpretResult`
+ * decides "no claim line" from this result alone, so a folded claim line is never reclassified.
+ */
 export function parseClaim(text: string): AgentReport["claim"] {
-  const last = text.trimEnd().split("\n").pop()?.trim() ?? "";
-  if (last === "DONE") return "done";
-  if (last === "NOT DONE") return "not-done";
+  const last = text.trimEnd().split("\n").pop() ?? "";
+  const forms = vocabularyForms(last).map((form) => form.trim());
+  if (forms.includes("DONE")) return "done";
+  if (forms.includes("NOT DONE")) return "not-done";
   return "no-claim";
 }
 
