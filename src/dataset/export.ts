@@ -56,9 +56,11 @@ import {
   datasetRecordSchema,
 } from "../../schemas/dataset-export.ts";
 import { validateSchema } from "../../schemas/validate.ts";
+import type { HashLedger } from "../export-guard/provenance.ts";
 import {
   closeEpisode,
   closeRecordFields,
+  hashLedgerOf,
   joinedIdentity,
   manifestIdentity,
   OpenValueError,
@@ -363,6 +365,13 @@ export interface ExportOptions {
   readonly hygiene?: HygieneOptions;
   /** Clock for `createdAt` (tests pin it). */
   readonly now?: () => Date;
+  /**
+   * The harness's hash ledger (#579 O3): the ONLY `h-<60 hex>` inputs written as is, each bound
+   * to its episode id and path. Built by the harness from a container it wrote
+   * (`containerHashLedger`), never from run inputs. Default: none, so every `h-<60 hex>` input
+   * (an agent's) is re-hashed.
+   */
+  readonly hashLedger?: HashLedger;
 }
 
 export interface ExportResult {
@@ -448,7 +457,7 @@ export function exportDataset(
     // never written). Closing never touches a digest or a blob file name.
     let closedEp: Episode;
     try {
-      closedEp = closeEpisode(c.episode, joined);
+      closedEp = closeEpisode(c.episode, joined, options.hashLedger);
     } catch (error) {
       if (error instanceof OpenValueError)
         throw new ExportRefused("OPEN_VALUE", `${episodeFile(c.episode.episodeId)}:${error.path}`);
@@ -495,6 +504,7 @@ export function exportDataset(
         },
       },
       joined,
+      options.hashLedger,
     );
     // An identity string left in a closed pattern field (a task family, a version) refuses.
     const named = [
@@ -697,6 +707,28 @@ function depthOf(value: unknown, limit: number): number {
  * counts that do not match the records and episodes; and, as a backstop, any leak the exporter's
  * scan finds (this machine's identity and the identity file always included, joined forms too).
  */
+/**
+ * The hash ledger of a container this harness wrote (#579 O3), for re-exporting its episodes:
+ * the container must validate first (`validateContainer`, same hygiene), then every
+ * `h-<60 hex>` of its episodes and records is recorded, bound to its episode id and path. A
+ * container that does not validate throws (codes only). The container is TRUSTED as harness
+ * output: one written before #579 may hold an agent's verbatim `h-<60 hex>`; re-export it from
+ * its source episodes instead.
+ */
+export function containerHashLedger(dir: string, hygiene?: HygieneOptions): HashLedger {
+  const problems = validateContainer(dir, hygiene);
+  if (problems.length > 0)
+    throw new Error(`hash ledger refused: the container is invalid (${problems[0]})`);
+  const lines = readFileSync(join(dir, "records.jsonl"), "utf8")
+    .split("\n")
+    .filter((l) => l.length > 0)
+    .map((l) => JSON.parse(l) as { episode: { file: string } });
+  const episodes = lines.map(
+    (r) => JSON.parse(readFileSync(join(dir, r.episode.file), "utf8")) as Episode,
+  );
+  return hashLedgerOf(episodes, lines);
+}
+
 export function validateContainer(dir: string, hygiene?: HygieneOptions): string[] {
   try {
     return checkContainer(dir, hygiene);

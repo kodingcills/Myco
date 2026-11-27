@@ -18,6 +18,7 @@ import {
   closeRecordFields,
   HASHED,
   hashed,
+  hashLedgerOf,
   type JoinedIdentity,
   manifestIdentity,
   openEpisodeStrings,
@@ -179,28 +180,30 @@ describe("B2, F1d and the one hashed form, h-<60 hex> (lead ruling 23:06Z)", () 
     }
   });
 
-  it("an exact h-<60 hex> is kept as is on every hashed field (idempotent)", () => {
-    const ep = closeEpisode(
-      candidate(
-        {
-          task: { ...candidate({}, { taskId: exact }).episode.task, instruction: exact },
-          actions: [
-            { kind: "key", keys: exact },
-            { kind: "launch", app: exact },
-            { kind: "type", text: exact },
-          ],
-        },
-        { taskId: exact },
-      ).episode,
-    );
-    const items = ep.actions.items as unknown as Array<Record<string, string>>;
-    expect([
-      ep.task.id,
-      ep.task.instruction,
-      items[0]?.keys,
-      items[1]?.app,
-      items[2]?.text,
-    ]).toEqual([exact, exact, exact, exact, exact]);
+  it("a harness-produced exact h-<60 hex> is kept as is on every hashed field (idempotent); an agent's is re-hashed (#579 O3)", () => {
+    const input = candidate(
+      {
+        task: { ...candidate({}, { taskId: exact }).episode.task, instruction: exact },
+        actions: [
+          { kind: "key", keys: exact },
+          { kind: "launch", app: exact },
+          { kind: "type", text: exact },
+        ],
+      },
+      { taskId: exact },
+    ).episode;
+    const fields = (ep: typeof input) => {
+      const items = ep.actions.items as unknown as Array<Record<string, string>>;
+      return [ep.task.id, ep.task.instruction, items[0]?.keys, items[1]?.app, items[2]?.text];
+    };
+    expect(fields(closeEpisode(input, [], hashLedgerOf([input])))).toEqual([
+      exact,
+      exact,
+      exact,
+      exact,
+      exact,
+    ]);
+    expect(fields(closeEpisode(input))).toEqual(Array(5).fill(hashed(exact)));
   });
 
   it("every hashed form is h- plus the first 60 hex of the tagged sha256 (62 characters, no input text)", () => {
@@ -305,9 +308,11 @@ describe("S1 (round 3): an id that looks hashed but is not exactly h-<60 hex> is
       expect(record.desktop.backend, v).toBe(hashed(v));
       expect(record.desktop.image, v).toBe(hashed(v));
     }
-    // An exact h-<60 hex> id is kept (idempotent); a plain closed id is kept.
-    const kept = closeEpisode({ ...ep, task: { ...ep.task, id: exact } });
-    expect(kept.task.id).toBe(exact);
+    // A harness-produced exact h-<60 hex> id is kept (idempotent, #579 O3: the ledger records it);
+    // an agent's is re-hashed; a plain closed id is kept.
+    const input = { ...ep, task: { ...ep.task, id: exact } };
+    expect(closeEpisode(input, [], hashLedgerOf([input])).task.id).toBe(exact);
+    expect(closeEpisode(input).task.id).toBe(hashed(exact));
     expect(closeEpisode(ep).task.id).toBe("task-1");
   });
 

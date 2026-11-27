@@ -1,9 +1,10 @@
 /**
  * Track Q, #562 round 2 (D-H, lead ruling 23:06Z): every hashed VALUE is `h-<60hex>`, the
  * first 60 hex characters (240 bits) of the tagged sha256 of the full raw value, on every
- * export surface. Idempotence matches EXACTLY `h-<60hex>`: such an input is kept as is by the
- * id and vocabulary closers, and every other `h-` form (64, 59, 61 hex, upper case, `H-`) is a
- * plain value and is hashed. A bundle carrying any other `h-` form is refused. Full content
+ * export surface. Idempotence matches EXACTLY `h-<60hex>`, and only a harness-produced one
+ * (#579 O3: recorded in the harness's hash ledger) is kept as is by the id and vocabulary
+ * closers; every other `h-` form (64, 59, 61 hex, upper case, `H-`) is a plain value and is
+ * hashed. A bundle carrying any other `h-` form is refused. Full content
  * digests are not truncated (64 hex).
  *
  * Mutants this file kills: the hashed form restored to 64 hex; any `h-` prefix accepted as
@@ -11,7 +12,9 @@
  */
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { HashLedger } from "../../src/export-guard/provenance.ts";
 import {
+  bundleHashLedger,
   exportProofBundle,
   type ProofBundle,
   type ProofRunInput,
@@ -110,17 +113,29 @@ describe("D-H: the hashed form is h-<60hex>, a truncated tagged sha256 of the fu
 });
 
 describe("D-H: idempotence matches exactly h-<60hex>", () => {
-  it("isHashed / hashValue: exact h-<60hex> kept, every other h- form hashed", () => {
+  it("isHashed / hashValue: exact h-<60hex> kept only when the ledger records it (#579 O3), every other h- form hashed", () => {
     expect(isHashed(EXACT)).toBe(true);
-    expect(hashValue(EXACT)).toBe(EXACT);
+    expect(hashValue(EXACT)).toBe(reference(EXACT));
+    const ledger = new HashLedger();
+    ledger.record("f", EXACT);
+    expect(hashValue(EXACT, "f", ledger)).toBe(EXACT);
+    expect(hashValue(EXACT, "g", ledger)).toBe(reference(EXACT));
     for (const [label, raw] of NOT_EXACT) {
       expect(isHashed(raw), label).toBe(false);
       expect(hashValue(raw), label).toBe(reference(raw));
     }
   });
 
-  it("an exact h-<60hex> input is kept as is in every id and vocabulary field, and verifies", () => {
-    const b = exportProofBundle(everywhere(EXACT), NO_CTX);
+  it("a harness-produced exact h-<60hex> is kept as is in every id and vocabulary field, and verifies; an agent's is re-hashed (#579 O3)", () => {
+    const agent = exportProofBundle(everywhere(EXACT), NO_CTX);
+    for (const [field, value] of hashedFields(agent)) expect(value, field).toBe(reference(EXACT));
+    expect(verifyProofBundle(serializeProofBundle(agent)).ok).toBe(true);
+    // A bundle that carries EXACT as a harness hash (forged here), verified, gives the ledger.
+    const harness = rechain(
+      JSON.parse(serializeProofBundle(agent).split(reference(EXACT)).join(EXACT)) as ProofBundle,
+    );
+    const ledger = bundleHashLedger(serializeProofBundle(harness));
+    const b = exportProofBundle(everywhere(EXACT), NO_CTX, undefined, ledger);
     for (const [field, value] of hashedFields(b)) expect(value, field).toBe(EXACT);
     expect(b.run.runId).toBe(EXACT);
     expect(verifyProofBundle(serializeProofBundle(b)).ok).toBe(true);
