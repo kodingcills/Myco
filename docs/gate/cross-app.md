@@ -243,7 +243,7 @@ xa-v2 is built by the same builder: `npx tsx scripts/cross-app-taskset.ts --set 
 [--check]`. The analysis is `src/benchmark/cross-app-prereg.ts`; run it with
 `npx tsx scripts/cross-app-prereg.ts check | schedule | analyze <pack.json>`. It refuses a pack
 whose pre-registration hash, task set or manifest digest does not match, and any simulated
-row.
+row, and it decides nothing while any lead ruling is pending (`lead-ruling-pending`).
 
 ## Limits and follow-ups
 

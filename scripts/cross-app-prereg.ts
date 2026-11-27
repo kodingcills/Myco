@@ -9,8 +9,11 @@
  * pins (task set manifest, task ids, this script, the analysis module). `analyze` runs the
  * same check first and refuses to analyse under an inconsistent prereg; it prints the result
  * as JSON and exits 0 for a decided result (shown or not shown), 1 otherwise (refused,
- * incomplete). Every row a builder makes before the lead's GO is simulated, and the
- * analysis refuses it (`SIMULATED_ROW`).
+ * lead-ruling-pending, incomplete). While the prereg lists any lead ruling as pending, no
+ * pack is decided. A row with a planner other than the pre-registered model id, or with a
+ * `simulated` marker that is not exactly `false`, is refused (`SIMULATED_ROW`); a scripted
+ * row that carries the real planner id and no marker is not detectable here (see the
+ * prereg README).
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
