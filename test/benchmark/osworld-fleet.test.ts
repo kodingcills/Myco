@@ -437,7 +437,7 @@ describe("measure.sh: re-runnable, host-labelled, guarded, and actively driven (
     const bin = mkdtempSync(join(work, "bin-"));
     const marker = join(bin, "docker-was-called");
     writeFileSync(join(bin, "docker"), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
-    const r = spawnSync("bash", [SCRIPT, "cold", "1"], {
+    const r = spawnSync("bash", [SCRIPT, "cleanup"], {
       encoding: "utf8",
       env: {
         PATH: `${bin}:/usr/bin:/bin`,
