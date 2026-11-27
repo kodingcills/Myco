@@ -30,7 +30,7 @@ readers would refuse, makes a new version (`myco.episode/2`).
 | `episodeId` | sha256 of the canonical JSON (sorted keys) of the episode without this field. Episodes are content-addressed. |
 | `outcome` | `verified`, `refuted`, `uncertain`, `harness-fault`, `launch-refused` or `unregistrable` |
 | `simulated` | `false` only for a real model on a real gated trial (§3) |
-| `task` | `id`, `family`, `taskSetVersion`, `faultClass`, `instruction` (redacted text, or null), `instructionSha256`, `fixtureSha256` |
+| `task` | `id`, `family`, `taskSetVersion`, `faultClass`, `instruction` (redacted text, or null; hashed in an export, §5.1), `instructionSha256`, `fixtureSha256` |
 | `actions` | `capture` (`recorded` / `not-recorded`), `truncated`, `items`: at most 1000 typed actions, numbered `seq` 0..n-1. The kinds are `click`, `type`, `key`, `scroll`, `launch`, `wait`, `shell`, `gate-check` and `observe`. Each one carries `atMs` (ms since start, or null). |
 | `observations` | `capture`, `withheld` (count of dropped observations), `items`: at most 500. A `screenshot` is a PNG file. A `state` is the `persisted` document, a `ui-tree` or `app-state`, stored as a CSV or JSON file. A `ui-status` is text of at most 200 chars. Files are content-addressed: `blobs/<sha256>.<ext>`, with the hash and byte count recorded. |
 | `agentClaim` | `done`, `not-done` or `no-claim` |
@@ -189,8 +189,8 @@ npx tsx scripts/myco-episodes.ts import --dataset <dir> --into <store>
 
 Exit codes: 0 means OK, 1 means invalid or refused, 3 means a usage error.
 
-A dataset is `manifest.json` plus `episodes/` and only the `blobs/` the selected episodes
-reference. The manifest (`myco.episode-dataset/1`) holds:
+A dataset is `manifest.json` plus `episodes/`. It carries **no blobs**: screenshots and
+CSV/JSON state are digest-only (§5.1), so `counts.blobs` (blobs carried) is always 0. The manifest (`myco.episode-dataset/1`) holds:
 
 - the schema version;
 - the real/simulated label;
@@ -209,10 +209,88 @@ refuses:
 - a non-canonical episode file;
 - a wrong count;
 - an episode outside the filter;
-- an unreferenced blob;
+- any `blobs/` entry (a dataset is digest-only);
+- an episode with any string outside its field's closed grammar (`OPEN_STRING`, below);
+- a manifest filter that fails the export's own filter check (its closed grammars) or carries an
+  identity string (`manifest filter: …`, below);
 - a mislabelled dataset.
 
-`import` validates the dataset first, then writes into a store of the same kind.
+`import` validates the dataset first, then writes into a store of the same kind. An episode that
+references a blob cannot be restored from a digest-only dataset, so the store refuses it
+(`BLOB_MISSING`). Blob-free episodes round-trip: importing them and exporting the store again
+gives the same dataset, byte for byte.
+
+### 5.1 What leaves the machine: the closed allowlist (TIF-265)
+
+The store keeps each episode as written (free text redacted, on the machine that recorded
+it). **The export never writes free text.** It writes `closeEpisode(ep)` (`src/episode/closed.ts`),
+the closed-schema pattern of #553:
+
+| Field kind | Fields | Exported as |
+|---|---|---|
+| Closed value | enums, digests, timestamps, blob file names, reason codes, versions, fault codes, and the arm (a known arm, `myco-gate` or `hcu+shell`, optionally with a `:variant` of lower-case letters, digits and hyphens, such as the multi-step demo's `myco-gate:retry`) | as is when it matches its grammar; anything else **refuses the export**, naming the field, never the value |
+| Id | `task.id`, `harness.plannerModelId`, `provenance.runId`, `provenance.trialKey` | as is when it matches `CLOSED_ID` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`), else `h-<60 hex>` |
+| Free text | `task.instruction`, typed text, shell commands, UI status | always `h-<60 hex>` of the raw value |
+| Key and app names (F1, lead ruling 22:18Z) | `keys`, `app` (schema cap 64) | as is ONLY from a closed vocabulary: a known key or key combination (`KNOWN_KEYS`: up to three modifiers plus a named key, any case) or a registered app id (`REGISTERED_APPS`: `localc`, `lowriter`, `soffice`, `libreoffice`, `scalc`, `swriter`); anything else `h-<60 hex>` |
+
+**One hashed form** (lead ruling 2026-11-26 23:06Z): every hashed value on every field is
+`h-` followed by the first 60 hex digits (240 bits) of sha256 under the domain tag
+`myco.episode.export-text/1`. It carries no input text, and it fits the 64-character key and app
+cap. Closing is idempotent for exactly that form: an `h-<60 hex>` value is kept as is, and no
+other `h-` string (64 hex, 59 or 61 hex, upper case) counts as already hashed. The digest is
+unsalted, so equal values stay equal (one run's episodes share a hashed `runId`). A digest does
+not reveal its input, but someone who guesses the exact input can confirm the guess. Every string path an
+episode can hold is listed in `FIELD_TREATMENT`. A string at any other path refuses the
+export, so a new field is a reviewed change. `episodeId` is recomputed over the closed content.
+The export filter is closed too (it is written to the manifest).
+
+Why: `redactText` rewrites host paths by pattern, and patterns miss path forms. #553's probe
+corpus (spaced folders, `Documents and Settings`, 8.3 short names, UNC, mixed separators,
+encoded forms, unicode) put a planted username into 123 of 145 exported datasets before this
+change. For example, `C:\Users\First Last\x` was stored as `<path> Last\x`, and the
+cleanliness scan cannot see a path in what is left. The scan (§4) still runs over every
+exported episode as a backstop. It is no longer what keeps a path out.
+
+**Identity strings are leaks** (lead ruling 2026-11-26 21:52Z; `src/episode/identity.ts`). A host
+username, the host name, or a configured identity string (a full name, another account) never
+leaves the machine verbatim, in any case, whether alone, in a path or joined to other text:
+- free text is always digested;
+- an id or token field that holds one (`task.id`, `runId`, `trialKey`, `plannerModelId`, key and
+  app names) is digested;
+- any other closed pattern field that holds one (task family, task-set id, fault class, oracle
+  family and version, grader version, the arm, a fault code), or the export filter (task set and
+  arm), refuses the export, naming the JSON path and the class, never the value;
+- `validateDataset` refuses a hand-edited dataset carrying one, its manifest filter included.
+
+The sources and thresholds are the shared leak guard's (#560):
+- the account name (`os.userInfo().username`), at least 3 characters and not a generic account
+  (`root`, `user`, `runner`, `admin`, `ubuntu`, `node`, `nobody`, `vscode`, `codespace`, #560's
+  list);
+- the host name's first DNS label (`os.hostname()`), at least 4 characters, not `localhost`;
+- each line of an optional identity file (`--identity-file <file>`; CRLF and a byte-order mark
+  accepted; an unreadable file refuses without naming its path), at least 3 characters.
+
+The host values are read from `os` at export and validate time and are ALWAYS merged into what the
+caller passes (#553). Fake host facts, or a short or generic extra name, never switch them off.
+
+Matching is stricter than #560's word match: full Unicode case folding (NFKC, then upper, then
+lower case: `ß`/`ẞ` become `ss`, `ı`/`İ` become `i`), then letters and digits only, by
+substring. So joined forms are caught (`<name>_trial`, `<Name>2`, `xx<name>`, `<name>Trial`), a
+spaced full name matches `FirstLast`, `first.last`, `first_last` and `First-Last`, and `GROSS`
+matches a configured `Groß`. Enum values, digests and content-addressed blob names are exempt,
+because a match there could only be a false refusal. An already-hashed id or token is kept as is,
+so a re-export stays byte-identical. On a CI runner the account is the generic `runner`, so CI
+proves the check with planted identities in every field and with an os-mocked test
+(`test/episode/identity-os.test.ts`).
+
+**Blobs are digest-only** (lead ruling 2026-11-26 20:3xZ). Screenshots and CSV/JSON state leave
+the machine only as the sha256, byte count and content-addressed name their observation already
+carries, never as bytes: a captured document can hold a host path the byte scan misses (a
+long-path UNC form, say), and a screenshot can show one. Redacted screenshots behind the frame
+redactor may come later, in their own reviewed change with a fuzz over frame text.
+
+Cost: a dataset carries no agent text (typed text, commands and UI status are digests) and no
+screenshots or documents (digests and sizes only).
 
 ## 6. How tracks U and Q consume it
 

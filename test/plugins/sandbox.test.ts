@@ -13,7 +13,7 @@ import inspector from "node:inspector";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   fsizeBlocks,
   fsizeUnit,
@@ -23,6 +23,33 @@ import {
 } from "../../src/plugins/host/sandbox.ts";
 import { PLUGIN_SPEC } from "../../src/plugins/sdk/protocol.ts";
 import { cleanupPlugins, makePlugin, tempDir, utf8, watchDisk } from "./helpers.ts";
+
+/**
+ * D3 measurement point (#558 follow-up): every answer file, as the sandbox's own cleanup is
+ * about to remove it. `runInSandbox` opens `out.json` once (truncating) before the child starts,
+ * the child can only write it sequentially (no `fs`, no seek, no truncate) and the kernel's
+ * file-size limit refuses any write past the limit, so the size here is the largest the file
+ * ever was on the host disk. Read at a fixed point in the host's own path, not raced by a
+ * sampler: on macOS CI the file went from 0 bytes to the limit and was removed between two
+ * samples (runs 45907361949, 45908431665).
+ */
+const ioCleanups = vi.hoisted(() => [] as { size: number; alloc: number }[]);
+vi.mock("node:fs", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:fs")>();
+  const rmSync = ((path: Parameters<typeof real.rmSync>[0], ...rest: unknown[]) => {
+    const p = String(path);
+    if ((p.split("/").pop() ?? "").startsWith("myco-plugin-io-")) {
+      try {
+        const st = real.statSync(`${p}/out.json`);
+        ioCleanups.push({ size: st.size, alloc: st.blocks * 512 });
+      } catch {
+        ioCleanups.push({ size: -1, alloc: -1 }); // no answer file: fails every bound below
+      }
+    }
+    return (real.rmSync as (...a: unknown[]) => void)(path, ...rest);
+  }) as typeof real.rmSync;
+  return { ...real, default: { ...real, rmSync }, rmSync };
+});
 
 const PROBE = String.raw`
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -615,9 +642,14 @@ describe("the child refuses a free-text code itself (V6, defence in depth)", () 
  * child's own `out.write` calls it with the stream as `this`), so the bound has to hold for any
  * write to the answer file: the kernel's file-size limit (`LIMIT_WRAPPER`, `ulimit -f`).
  *
- * A watcher process (the test's own event loop is blocked by the synchronous runner) samples
- * every file under a private TMPDIR every few milliseconds and reports the largest size and
- * allocation it saw, so the test sees the host disk during the call, not after cleanup.
+ * Two measurements per call:
+ *  - `final`: the answer file's size and allocation at the moment the sandbox's cleanup removes
+ *    it (the `rmSync` hook at the top of this file). The file only grows, so this is its maximum;
+ *    it is the positive control (the flood really reached the limit) and the exact bound;
+ *  - a watcher process (the test's own event loop is blocked by the synchronous runner) samples
+ *    every file under a private TMPDIR every few milliseconds during the call. A sample can
+ *    miss the short burst (it did on macOS CI), so the watcher only ever bounds from above and
+ *    must agree with `final` (never more); it must also have seen the file while the child ran.
  */
 describe("D3: plugin output is bounded on the host disk during the call", () => {
   const CAP = 4096;
@@ -626,7 +658,16 @@ describe("D3: plugin output is bounded on the host disk during the call", () => 
   const HARD_BOUND = CAP + 1024;
   const MIB = 1024 * 1024;
 
-  const watched = (run: () => SandboxResult) => watchDisk(run);
+  const watched = async (run: () => SandboxResult) => {
+    const from = ioCleanups.length;
+    const w = await watchDisk(run);
+    const calls = ioCleanups.slice(from);
+    expect(calls).toHaveLength(1); // exactly one answer file, measured at its removal
+    const final = calls[0] as { size: number; alloc: number };
+    expect(final.size).toBeGreaterThanOrEqual(0);
+    expect(w.maxSize).toBeLessThanOrEqual(final.size); // a sample never beats the maximum
+    return { ...w, final };
+  };
 
   const verifyWith = (source: string, timeoutMs: number, cap = CAP) => {
     const p = makePlugin(source, {
@@ -655,9 +696,11 @@ export default { oracle() { return { status: "refuted", code: "X" }; } };`;
   it("a plugin writing 64 MiB through a stream prototype hook never puts more than the cap on disk", async () => {
     const w = await watched(verifyWith(HOOK_64MIB, 5000));
     expect(w.result).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
-    expect(w.seen).toBeGreaterThan(0); // the watcher did see the answer file
-    expect(w.maxSize).toBeGreaterThan(CAP); // the plugin did push past the cap ...
-    expect(w.maxSize).toBeLessThanOrEqual(HARD_BOUND); // ... and the kernel stopped it there
+    expect(w.seen).toBeGreaterThan(0); // the watcher did see the answer file during the call
+    expect(w.final.size).toBeGreaterThan(CAP); // the plugin did push past the cap ...
+    expect(w.final.size).toBeLessThanOrEqual(HARD_BOUND); // ... and the kernel stopped it there
+    expect(w.maxSize).toBeLessThanOrEqual(HARD_BOUND);
+    expect(w.final.alloc).toBeLessThanOrEqual(HARD_BOUND + 64 * 1024);
     expect(w.maxAlloc).toBeLessThanOrEqual(HARD_BOUND + 64 * 1024);
     expect(w.leftover).toEqual([]);
   }, 30_000);
@@ -677,9 +720,10 @@ export default { oracle() { return { status: "refuted", code: "X" }; } };`;
       const w = await watched(verifyWith(HOOK_64MIB, 5000, cap));
       expect(w.result).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
       expect(w.seen).toBeGreaterThan(0);
-      expect(w.maxSize).toBeGreaterThan(cap); // the plugin did push past the cap ...
-      expect(w.maxSize).toBeLessThanOrEqual(limit); // ... to this call's kernel limit, no further
+      expect(w.final.size).toBeGreaterThan(cap); // the plugin did push past the cap ...
+      expect(w.final.size).toBeLessThanOrEqual(limit); // ... to this call's kernel limit, no further
       expect(limit - cap).toBeLessThanOrEqual(unit as number);
+      expect(w.final.size).toBeLessThanOrEqual(cap + 1024);
       expect(w.maxSize).toBeLessThanOrEqual(cap + 1024);
       expect(w.leftover).toEqual([]);
     },
@@ -703,7 +747,8 @@ export default { oracle() { return { status: "refuted", code: "X" }; } };`,
       ),
     );
     expect(w.result).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
-    expect(w.maxSize).toBeGreaterThan(CAP);
+    expect(w.final.size).toBeGreaterThan(CAP);
+    expect(w.final.size).toBeLessThanOrEqual(HARD_BOUND);
     expect(w.maxSize).toBeLessThanOrEqual(HARD_BOUND);
     expect(w.ms).toBeLessThan(1500 + 5000);
     expect(w.leftover).toEqual([]);
@@ -727,6 +772,8 @@ export default { oracle() { return { status: "refuted", code: "X" }; } };`,
     );
     expect(w.result).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
     expect(w.ms).toBeGreaterThanOrEqual(1400); // it really hung until the time cap
+    expect(w.final.size).toBeGreaterThan(CAP);
+    expect(w.final.size).toBeLessThanOrEqual(HARD_BOUND);
     expect(w.maxSize).toBeLessThanOrEqual(HARD_BOUND);
   }, 30_000);
 
@@ -746,6 +793,8 @@ export default { oracle() { return { status: "refuted", code: "X" }; } };`,
       }),
     );
     expect(w.result).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
+    expect(w.final.size).toBeGreaterThan(CAP);
+    expect(w.final.size).toBeLessThanOrEqual(HARD_BOUND);
     expect(w.maxSize).toBeLessThanOrEqual(HARD_BOUND);
   }, 30_000);
 
@@ -769,6 +818,7 @@ export default { oracle() { return { status: "refuted", code: "X" }; } };`,
       }),
     );
     expect(w.result).toMatchObject({ ok: true, response: { status: "ok" } });
-    expect(w.maxSize).toBe(CAP);
+    expect(w.final.size).toBe(CAP);
+    expect(w.maxSize).toBeLessThanOrEqual(CAP);
   }, 30_000);
 });
