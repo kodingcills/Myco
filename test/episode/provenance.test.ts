@@ -44,7 +44,6 @@ afterEach(() => {
   for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-/** 30 bytes an agent might smuggle (a short path), hex-encoded into the hashed form. */
 /** A short home path (built at run time: no home-path literal is committed), hex-encoded. */
 const SMUGGLED = Buffer.from(
   ["", "Users", "qzsmug", "Documents", "x.csv"].join("/"),

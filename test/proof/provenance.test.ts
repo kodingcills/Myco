@@ -206,11 +206,13 @@ describe("O2: accent folding (NFD, combining marks removed) on both sides", () =
 
   it("an accented identity's ASCII form in a verbatim ledger id refuses the export (PROOF_IDENTITY)", () => {
     const base = sampleRun();
+    // Built at run time (like test/episode/helpers.ts fakeKey()): no key-shaped literal is committed.
+    const accentedTrial = `${["QZJOSE", "QZRENA"].join("_")}-1`;
     const ledger = buildLedger([
-      { kind: "start", trialKey: "QZJOSE_QZRENA-1", taskId: "df-s02", arm: "myco-gate" },
+      { kind: "start", trialKey: accentedTrial, taskId: "df-s02", arm: "myco-gate" },
       {
         kind: "end",
-        trialKey: "QZJOSE_QZRENA-1",
+        trialKey: accentedTrial,
         taskId: "df-s02",
         arm: "myco-gate",
         outcome: "completed",
@@ -218,7 +220,7 @@ describe("O2: accent folding (NFD, combining marks removed) on both sides", () =
     ]);
     let error: unknown = null;
     try {
-      exportProofBundle({ ...base, ledger: { ...ledger, trialKey: "QZJOSE_QZRENA-1" } }, NO_CTX, {
+      exportProofBundle({ ...base, ledger: { ...ledger, trialKey: accentedTrial } }, NO_CTX, {
         names: ["Qzjosé Qzreña"],
         homes: [],
       });
