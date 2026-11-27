@@ -735,6 +735,58 @@ describe("resume continues from the durable ledger", () => {
   });
 });
 
+describe("TIF-274: the R1 launch creates its run directory before the first heartbeat", () => {
+  const ok = () => fakeClaude(() => ({ stdout: resultJson("x\nDONE") }));
+  for (const [name, sub] of [
+    ["an --out directory that does not exist yet", ["r1-pilot-fresh"]],
+    ["a nested --out whose parents do not exist yet", ["runs", "nested", "r1-pilot-fresh"]],
+  ] as const)
+    it(`launches with ${name} and writes the heartbeat`, async () => {
+      const out = join(tmp(), ...sub);
+      expect(existsSync(out)).toBe(false);
+      const cfg = { ...config(), trials: ["fc-v1-001"] };
+      const r = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), ok()));
+      expect(r.refusals).toEqual([]);
+      expect(r.exitCode).toBe(EXIT.complete);
+      expect(JSON.parse(readFileSync(join(out, LIVE_STATUS_FILE), "utf8"))).toMatchObject({
+        runner: "r1-pilot",
+        state: "finished",
+        exitCode: 0,
+      });
+      expect(ledgerEnds(out).map((e) => e.outcome)).toEqual(["decided"]);
+    });
+
+  it("a refused launch still creates nothing, not even the directory", async () => {
+    const out = join(tmp(), "never-created");
+    const r = await launchR1Live(
+      r1Opts(twoTrials(), out, { launchRealTrials: false }),
+      deps(fakeVm(), ok()),
+    );
+    expect(r.exitCode).toBe(EXIT.refused);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it("a resume of an existing run directory keeps its ledger and continues it", async () => {
+    const out = join(tmp(), "r1-pilot-resume");
+    const cfg = twoTrials();
+    const first = fakeClaude((n) =>
+      n === 1
+        ? { stdout: resultJson("x\nDONE") }
+        : { stdout: "", stderr: "Credit balance is too low", code: 1 },
+    );
+    const r1 = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), first));
+    expect(r1.exitCode).toBe(EXIT.subscriptionStop);
+    const ledger = readFileSync(join(out, PROGRESS_FILE), "utf8");
+
+    const r2 = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), ok()));
+    expect(r2.exitCode).toBe(EXIT.complete);
+    expect(r2.result).toMatchObject({ status: "complete", ran: 1, skipped: 1 });
+    // The ledger is appended to, never replaced: the first launch's bytes are its prefix.
+    expect(readFileSync(join(out, PROGRESS_FILE), "utf8").startsWith(ledger)).toBe(true);
+    expect(ledgerEnds(out).map((e) => e.outcome)).toEqual(["decided", "harness-fault", "decided"]);
+  });
+});
+
 describe("A/B launch", () => {
   const LOADED = loadPrereg(ROOT);
   const sha = abPlanSha256(LOADED, 0, PUBLISHED);
