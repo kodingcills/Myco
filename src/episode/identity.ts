@@ -22,7 +22,9 @@
  * and `ẞ` become `ss` and a dotless `ı` or dotted `İ` becomes `i`), then letters and digits only.
  * So a spaced full name matches every joined form of it (`FirstLast`, `first.last`, `first_last`,
  * `First-Last`), `GROSS` matches a configured `Groß`, and `<name>_trial`, `<Name>2`, `xx<name>`,
- * `<name>Trial` all match `<name>`. closed.ts applies it to every string the export keeps verbatim:
+ * `<name>Trial` all match `<name>`. A configured string of several words is also matched by each
+ * word of 3 or more characters alone (#580 O1: `First Last` configured catches `<first>_trial`,
+ * `<Last>2`), the rule shared with track U and Q (`src/export-guard/identity-words.ts`). closed.ts applies it to every string the export keeps verbatim:
  * an id or token holding one is DIGESTED; any other closed pattern field (a task family, a
  * task-set id, a version, the arm, a fault code) holding one REFUSES the export, as does the export
  * filter (and `validateDataset` refuses a dataset carrying one). Free text is always digested. Enum
@@ -131,9 +133,6 @@ export function heldIdentity(
 }
 
 /** Every identity `value` holds (same rule as `heldIdentity`), in order. */
-export function heldIdentities(
-  value: string,
-  entries: readonly IdentityEntry[],
-): IdentityEntry[] {
+export function heldIdentities(value: string, entries: readonly IdentityEntry[]): IdentityEntry[] {
   return heldEntries(value, entries, IDENTITY_MIN_CHARS).map((i) => entries[i] as IdentityEntry);
 }

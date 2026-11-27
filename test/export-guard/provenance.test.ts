@@ -105,7 +105,9 @@ describe("boundary: one shared helper, no surface or benchmark code reached", ()
     for (const f of ["src/episode/closed.ts", "src/dataset/closed.ts", "src/proof/hashed.ts"])
       expect(uses(f, "keepOrHash("), f).toBe(true);
     // The accent fold reaches every surface through the one shared identity fold (#580 O1).
-    expect(uses("src/export-guard/identity-words.ts", "stripAccents("), "identity-words").toBe(true);
+    expect(uses("src/export-guard/identity-words.ts", "stripAccents("), "identity-words").toBe(
+      true,
+    );
     for (const f of ["src/episode/identity.ts", "src/dataset/closed.ts", "src/proof/identity.ts"]) {
       expect(uses(f, '"../export-guard/identity-words.ts"'), f).toBe(true);
       expect(uses(f, "identityFold("), f).toBe(true);
