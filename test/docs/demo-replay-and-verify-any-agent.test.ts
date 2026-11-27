@@ -379,7 +379,9 @@ describe("demo replay + verify-any-agent spec: the binding check follows the gat
     const runner = readFileSync(join(ROOT, "src/pilot/runner.ts"), "utf8");
     expect(runner.split("newVaultKey()").length - 1).toBe(1);
     expect(DOC).toContain("**The key is per batch, not per trial.**");
-    expect(flat(criterionText("VA-14"))).toContain("the two trials' key files hold identical bytes");
+    expect(flat(criterionText("VA-14"))).toContain(
+      "the two trials' key files hold identical bytes",
+    );
   });
 });
 
