@@ -20,13 +20,19 @@ export const DEFAULT_PORT = 8740;
 
 export const USAGE = `usage:
   myco watch --run <runId> [--run <runId> ...] [--task <id> ...]
-             [--decision-log <file>] [--frames <dir> | --sealed-capture <vaultRoot>]
+             [--decision-log <file> | --decision-log <runId>=<file> ...]
+             [--frames <dir> | --sealed-capture <vaultRoot>]
              [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--allow-non-loopback]
   myco watch --demo todo-items|calc-multi-step [--out <dir>] [--host …] [--port …]
 
   --run <id>               a run to show (repeatable); events for any other run are not shown
   --task <id>              a task id the page may show (repeatable); others show as blank
   --decision-log <file>    the gate's decision log (myco-gate --audit), read-only, tailed live
+  --decision-log <runId>=<file>
+                           one listed run's own log, the audit log of the one gate bound to
+                           that run (repeatable, one per run). The replay scrubber pins a run's
+                           decisions to its frames only from its own log (or from the plain
+                           --decision-log when one run is listed), with the one --task given
   --frames <dir>           frames from <dir>/<runId>/*.png (PNG only; re-encoded from pixels,
                            metadata dropped; other image types are never served)
   --sealed-capture <dir>   frames from the vault: <dir>/<runId>/captured/**.png (PNG only;
@@ -52,13 +58,15 @@ const VALUE_FLAGS = new Set([
   "--demo",
   "--out",
 ]);
-const REPEATABLE = new Set(["--run", "--task"]);
+const REPEATABLE = new Set(["--run", "--task", "--decision-log"]);
 const BOOL_FLAGS = new Set(["--allow-non-loopback"]);
 
 export interface ParsedWatchArgs {
   readonly runs: string[];
   readonly tasks: string[];
   readonly decisionLog?: string;
+  /** Per-run own logs (`--decision-log <runId>=<file>`), keyed by listed run. */
+  readonly decisionLogs?: ReadonlyMap<string, string>;
   readonly frames?: string;
   readonly sealedCapture?: string;
   readonly host: string;
@@ -70,11 +78,45 @@ export interface ParsedWatchArgs {
 
 export class WatchUsageError extends Error {}
 
+const PER_RUN_LOG = /^([A-Za-z0-9][A-Za-z0-9._-]{0,127})=(.+)$/;
+
+/**
+ * `--decision-log` values: one plain `<file>`, or one `<runId>=<file>` per listed run (each
+ * run's own log, spec #589 §1.2). The two forms do not mix; a run's own log is given once, and
+ * two runs never share one path (a shared log is no trial's own log). Paths are not printed.
+ */
+function splitDecisionLogs(
+  values: readonly string[],
+  runs: ReadonlySet<string>,
+): { plain: string | undefined; perRun: Map<string, string> } {
+  const perRun = new Map<string, string>();
+  const plain: string[] = [];
+  for (const value of values) {
+    const match = PER_RUN_LOG.exec(value);
+    const runId = match?.[1];
+    if (match === null || runId === undefined || !runs.has(runId)) {
+      plain.push(value);
+      continue;
+    }
+    if (perRun.has(runId)) throw new WatchUsageError("a run's own --decision-log is given twice");
+    if ([...perRun.values()].includes(match[2] as string))
+      throw new WatchUsageError("two runs name the same --decision-log (a shared log)");
+    perRun.set(runId, match[2] as string);
+  }
+  if (plain.length > 1) throw new WatchUsageError("--decision-log given twice");
+  if (plain.length > 0 && perRun.size > 0)
+    throw new WatchUsageError(
+      "give one --decision-log <file>, or <runId>=<file> per run, not both",
+    );
+  return { plain: plain[0], perRun };
+}
+
 export function parseWatchArgs(argv: readonly string[]): ParsedWatchArgs {
   const single = new Map<string, string>();
   const multi = new Map<string, string[]>([
     ["--run", []],
     ["--task", []],
+    ["--decision-log", []],
   ]);
   let allowNonLoopback = false;
   for (let i = 0; i < argv.length; i++) {
@@ -105,8 +147,11 @@ export function parseWatchArgs(argv: readonly string[]): ParsedWatchArgs {
     throw new WatchUsageError("--demo must be todo-items or calc-multi-step");
   if (single.has("--frames") && single.has("--sealed-capture"))
     throw new WatchUsageError("give --frames or --sealed-capture, not both");
+  const logs = splitDecisionLogs(multi.get("--decision-log") ?? [], new Set(runs));
   if (demo !== undefined) {
-    for (const flag of ["--decision-log", "--frames", "--sealed-capture"])
+    if (logs.plain !== undefined || logs.perRun.size > 0)
+      throw new WatchUsageError("--decision-log does not go with --demo");
+    for (const flag of ["--frames", "--sealed-capture"])
       if (single.has(flag)) throw new WatchUsageError(`${flag} does not go with --demo`);
     if (runs.length > 0 || tasks.length > 0)
       throw new WatchUsageError("--run/--task do not go with --demo (the demo names its runs)");
@@ -120,7 +165,8 @@ export function parseWatchArgs(argv: readonly string[]): ParsedWatchArgs {
     host: opt("--host") ?? "127.0.0.1",
     port,
     allowNonLoopback,
-    ...(opt("--decision-log") === undefined ? {} : { decisionLog: opt("--decision-log") }),
+    ...(logs.plain === undefined ? {} : { decisionLog: logs.plain }),
+    ...(logs.perRun.size === 0 ? {} : { decisionLogs: logs.perRun }),
     ...(opt("--frames") === undefined ? {} : { frames: opt("--frames") }),
     ...(opt("--sealed-capture") === undefined ? {} : { sealedCapture: opt("--sealed-capture") }),
     ...(demo === undefined ? {} : { demo }),
@@ -162,6 +208,7 @@ export async function startFromArgs(args: ParsedWatchArgs, stdout: Writable): Pr
     runs: args.runs,
     tasks: args.tasks,
     ...(args.decisionLog === undefined ? {} : { decisionLog: args.decisionLog }),
+    ...(args.decisionLogs === undefined ? {} : { decisionLogs: args.decisionLogs }),
     ...(frames === undefined ? {} : { frames }),
   });
   stdout.write(`myco watch (read-only): ${server.url}\n`);

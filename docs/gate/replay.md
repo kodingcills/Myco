@@ -50,3 +50,37 @@ The module is read-only. It hashes with `node:crypto` and reads files `O_RDONLY 
 It has no write call, no process spawn, no network call and no vault or key import.
 
 Not evidence: a replay shows what the gate logged. It never computes a rate or an R1 number.
+
+## The scrubber (`myco watch`, build PR B2)
+
+```
+myco watch --run <runId> --task <taskId> --decision-log <file> --frames <dir>
+myco watch --run <a> --run <b> --task <taskId> \
+           --decision-log <a>=<fileA> --decision-log <b>=<fileB> --frames <dir>
+```
+
+A recorded run directory holds the run's PNG frames and its `timeline.jsonl` in
+`<dir>/<runId>/` (`--sealed-capture <vaultRoot>`: `captured/frames/` under the run). The page's
+slider steps frame by frame, and the decision buttons jump to the previous or next frame that
+holds a pinned decision. At each frame the page shows the latest decision pinned at or before
+it, and marks a frame captured while a decision landed. The page takes every pin from
+`GET /timeline/<runId>` and never guesses one. When the join is invalid, it shows the code and
+pins nothing.
+
+A run's own log is required: `--decision-log <runId>=<file>` per run, or a plain
+`--decision-log` when exactly one run is listed. The task the run's gate was bound to is the
+one `--task` given. With no single task the join is refused (`TL_LOG_BINDING`).
+
+Everything stays read-only. `/timeline` is GET only, takes only a listed run id, and writes
+nothing.
+
+## MOCK watermark
+
+Every frame of a mock run carries a diagonal `MOCK` and the band `MOCK · NOT EVIDENCE`, both on
+the live page and in every frame the demo renders. It is machine-marked as well: `mock: true`
+in `/timeline`, `X-Myco-Mock: 1` on every frame response, and the run is absent from the
+state's `realRuns`. Mock is decided by where a run came from (`src/watch/run-trust.ts`), never
+by a flag. Only a verified real-run record removes the watermark. Records are registered by
+the module that issues them, and nothing in this stack issues one yet: it will be the
+sealed-capture opener (build PR B6, receipt-bound). Until then every run is mock, and a
+hand-built record of the same shape is refused.

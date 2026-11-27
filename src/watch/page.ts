@@ -4,7 +4,16 @@
  *
  * The script builds every node with `textContent` and `setAttribute`, never `innerHTML`, so
  * a value in the stream cannot become markup. It only ever issues GETs to its own origin:
- * `/api/events` (SSE), `/api/state` (polling fallback) and `/frames/<run>/<n>`.
+ * `/api/events` (SSE), `/api/state` (polling fallback), `/frames/<run>/<n>` and
+ * `/timeline/<run>` (replay scrubber).
+ *
+ * Replay (spec #589 B2): the scrubber steps frame by frame or jumps decision to decision, and
+ * shows the decisions pinned at or before the current frame, from the server's join only (it
+ * never guesses a pin). When the join is invalid it shows the code and pins nothing.
+ *
+ * MOCK watermark (§2.6): every frame of a run is overlaid with a diagonal `MOCK` and the band
+ * `MOCK · NOT EVIDENCE` unless the server marks the run `mock: false`. A missing or unreadable
+ * mark keeps the watermark: it is on by default and only a verified real run turns it off.
  */
 
 export const PAGE_HTML = `<!doctype html>
@@ -29,8 +38,15 @@ export const PAGE_HTML = `<!doctype html>
       <label class="follow"><input id="follow" type="checkbox" checked> follow latest</label>
       <span id="frameinfo"></span>
     </div>
-    <div id="screen"><img id="frame" alt="agent desktop frame"><p id="noframe">No frames yet.</p></div>
+    <div id="screen"><img id="frame" alt="agent desktop frame"><p id="noframe">No frames yet.</p><div id="wm" class="wm" aria-hidden="true">MOCK</div><div id="wmband" class="wmband">MOCK · NOT EVIDENCE</div></div>
     <input id="scrub" type="range" min="0" max="0" value="0" aria-label="frame">
+    <div class="steps">
+      <button id="prevdec" type="button" title="previous decision">« decision</button>
+      <button id="prevframe" type="button" title="previous frame">‹ frame</button>
+      <button id="nextframe" type="button" title="next frame">frame ›</button>
+      <button id="nextdec" type="button" title="next decision">decision »</button>
+    </div>
+    <div id="replay" aria-live="polite"><p id="joininfo" class="meta"></p><p id="pinned"></p></div>
   </section>
   <section id="timeline" aria-label="Gate timeline">
     <h2>Gate decisions</h2>
@@ -57,6 +73,13 @@ select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 #screen{background:#000;border-radius:6px;min-height:200px;display:flex;align-items:center;justify-content:center;overflow:hidden}
 #frame{max-width:100%;height:auto;display:none}#noframe{color:#888}
 #scrub{width:100%;margin-top:8px}
+#screen{position:relative}
+.wm{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:900 96px/1 system-ui,sans-serif;letter-spacing:8px;color:rgba(248,81,73,.35);transform:rotate(-30deg);pointer-events:none;user-select:none}
+.wmband{position:absolute;left:0;right:0;bottom:0;padding:3px 8px;background:rgba(248,81,73,.85);color:#fff;font:700 13px/1.4 ui-monospace,monospace;text-align:center;pointer-events:none}
+.wm.off,.wmband.off{display:none}
+.steps{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.steps button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:2px 8px;cursor:pointer}
+#replay{margin-top:6px}#pinned{margin:4px 0 0}.pin{font-weight:600}.pin.verified{color:var(--ok)}.pin.refuted{color:var(--bad)}.pin.uncertain{color:var(--unk)}
 #events{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow:auto}
 .ev{border:1px solid var(--line);border-left:4px solid var(--unk);border-radius:6px;padding:8px}
 .ev.verified{border-left-color:var(--ok)}.ev.refuted{border-left-color:var(--bad)}
@@ -72,7 +95,7 @@ select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 
 export const PAGE_JS = `"use strict";
 (function () {
-  var state = { runs: [], events: [], omitted: 0, skipped: 0, logPresent: false };
+  var state = { runs: [], realRuns: [], events: [], omitted: 0, skipped: 0, logPresent: false };
   var selected = null;
   var index = 0;
   var $ = function (id) { return document.getElementById(id); };
@@ -96,7 +119,74 @@ export const PAGE_JS = `"use strict";
     }
     if (selected !== null) sel.value = selected;
   }
+  var timeline = null;
+  var timelineKey = "";
+  function loadTimeline() {
+    var info = runInfo();
+    if (!info) { timeline = null; timelineKey = ""; return; }
+    var key = selected + "|" + info.frames + "|" + state.events.length;
+    if (key === timelineKey) return;
+    timelineKey = key;
+    var want = selected;
+    fetch("/timeline/" + encodeURIComponent(want), { method: "GET", credentials: "omit" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (t) { if (t && t.runId === want && want === selected) { timeline = t; renderFrame(); } })
+      .catch(function () { /* keep the last timeline */ });
+  }
+  function currentTimeline() { return timeline && timeline.runId === selected ? timeline : null; }
+  function renderWatermark() {
+    // On unless the state names the run in realRuns and the timeline (when loaded) agrees.
+    var t = currentTimeline();
+    var realRuns = Array.isArray(state.realRuns) ? state.realRuns : [];
+    var real = selected !== null && realRuns.indexOf(selected) >= 0 && (t === null || t.mock === false);
+    $("wm").className = real ? "wm off" : "wm";
+    $("wmband").className = real ? "wmband off" : "wmband";
+  }
+  function renderReplay() {
+    var info = $("joininfo");
+    var out = $("pinned");
+    while (out.firstChild) out.removeChild(out.firstChild);
+    var t = currentTimeline();
+    if (t === null) { info.textContent = ""; return; }
+    if (!t.joined) {
+      info.textContent = "replay: frames and decisions not joined (" + t.code + "); nothing is pinned";
+      return;
+    }
+    var upto = t.decisions.filter(function (d) { return d.frame === null || d.frame <= index; });
+    var here = null;
+    for (var i = 0; i < t.frames.length; i++) if (t.frames[i].frame === index) here = t.frames[i];
+    info.textContent = "replay: " + upto.length + " of " + t.decisions.length + " decision(s) at or before this frame" +
+      (here && here.straddles.length ? " · a decision landed while this frame was captured" : "");
+    var last = upto.length ? upto[upto.length - 1] : null;
+    if (last === null) { out.appendChild(el("span", "meta", "no decision yet")); return; }
+    out.appendChild(el("span", "pin " + last.verdict, "call " + last.call + ": " + last.verdict));
+    out.appendChild(el("span", "meta", " " + last.reasonCodes.join(" ") +
+      (last.frame === null ? " · before the first frame" : " · pinned to frame " + (last.frame + 1)) +
+      (last.namedAnotherTrial ? " · named another trial" : "")));
+  }
+  function setIndex(i) {
+    var info = runInfo();
+    var count = info ? info.frames : 0;
+    $("follow").checked = false;
+    index = Math.max(0, Math.min(i, count - 1));
+    renderFrame();
+  }
+  function jump(dir) {
+    var t = currentTimeline();
+    if (t === null || !t.joined) return;
+    var target = null;
+    t.decisions.forEach(function (d) {
+      if (d.frame === null) return;
+      if (dir > 0 ? d.frame > index && (target === null || d.frame < target) : d.frame < index && (target === null || d.frame > target)) target = d.frame;
+    });
+    if (target !== null) setIndex(target);
+  }
   function renderFrame() {
+    renderFrameImage();
+    renderWatermark();
+    renderReplay();
+  }
+  function renderFrameImage() {
     var info = runInfo();
     var count = info ? info.frames : 0;
     var scrub = $("scrub");
@@ -152,13 +242,17 @@ export const PAGE_JS = `"use strict";
       ? shown.length + " decision(s) for this run, " + acc + " accepted" + (state.skipped ? " · " + state.skipped + " other line(s) not shown" : "") + (state.omitted ? " · " + state.omitted + " earlier decision(s) not shown" : "")
       : "Waiting for the decision log…";
   }
-  function render() { renderRuns(); renderFrame(); renderEvents(); }
+  function render() { renderRuns(); loadTimeline(); renderFrame(); renderEvents(); }
   function apply(text) {
     try { state = JSON.parse(text); render(); } catch (err) { /* ignore a bad message */ }
   }
   $("run").addEventListener("change", function () { selected = $("run").value; index = 0; render(); });
   $("scrub").addEventListener("input", function () { $("follow").checked = false; index = Number($("scrub").value) || 0; renderFrame(); });
   $("follow").addEventListener("change", renderFrame);
+  $("prevframe").addEventListener("click", function () { setIndex(index - 1); });
+  $("nextframe").addEventListener("click", function () { setIndex(index + 1); });
+  $("prevdec").addEventListener("click", function () { jump(-1); });
+  $("nextdec").addEventListener("click", function () { jump(1); });
   function poll() {
     fetch("/api/state", { method: "GET", credentials: "omit" })
       .then(function (r) { return r.text(); })

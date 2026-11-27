@@ -486,6 +486,9 @@ describe("watch: passive (changes no file, holds no gate handle)", () => {
       "page.ts",
       "render-frame.ts",
       "sanitize-frame.ts",
+      // Replay B2 (spec #589 §2.8): the joiner and the run-trust classifier, extended, never relaxed.
+      "timeline.ts",
+      "run-trust.ts",
     ];
     const writes =
       /(?<!\.)\b(writeFile|writeSync|appendFile|createWriteStream|mkdir|rmSync|rmdir|unlink|rename|truncate|chmod|chown|utimes|copyFile|symlink|link|cp|cpSync|spawn|exec|fork)\w*\s*\(|["']w\+?["']|O_WRONLY|O_RDWR|O_CREAT|O_TRUNC|O_APPEND/;
@@ -502,15 +505,23 @@ describe("watch: passive (changes no file, holds no gate handle)", () => {
       const imports = [...text.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1] as string);
       for (const spec of imports) {
         const ok =
-          ["node:fs", "node:http", "node:net", "node:os", "node:path", "node:zlib"].includes(
-            spec,
-          ) ||
+          [
+            "node:fs",
+            "node:http",
+            "node:net",
+            "node:os",
+            "node:path",
+            "node:zlib",
+            "node:crypto",
+          ].includes(spec) ||
           [
             "./decision-log.ts",
             "./events.ts",
             "./frames.ts",
             "./page.ts",
             "./sanitize-frame.ts",
+            "./timeline.ts",
+            "./run-trust.ts",
             "../gate/api.ts",
             "../core/state.ts",
             "../discovery/live-runner.ts",

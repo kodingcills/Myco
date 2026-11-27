@@ -45,7 +45,12 @@ function ticking(start = Date.parse("2026-11-27T09:00:00Z")) {
 export async function recordTrial(
   binding: TrialBinding,
   steps: readonly Step[],
-  opts: { readonly root?: string; readonly sharedLog?: string[] } = {},
+  opts: {
+    readonly root?: string;
+    readonly sharedLog?: string[];
+    /** How a captured frame's bytes are made (default: a short text). */
+    readonly encode?: (index: number, label: string) => Buffer;
+  } = {},
 ): Promise<RecordedTrial> {
   const root = opts.root ?? tempRoot();
   if (opts.root === undefined) writeState(root, binding.runId, STORE, todoStore(S02_PERSISTED));
@@ -65,7 +70,8 @@ export async function recordTrial(
   const capture = async (label: string, during?: unknown) => {
     const before = currentAnchor(log());
     if (during !== undefined) await gate.check(during);
-    const bytes = Buffer.from(`frame ${frames.length}: ${label}`);
+    const bytes =
+      opts.encode?.(frames.length, label) ?? Buffer.from(`frame ${frames.length}: ${label}`);
     frames.push(bytes);
     records.push(
       timelineRecord(binding.runId, frames.length - 1, bytes, before, currentAnchor(log())),
