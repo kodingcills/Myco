@@ -245,52 +245,62 @@ export function calcCases(count = 10): SelfTestCase<CalcRecordEditParams>[] {
     { length: 10 },
     (_, i) => `oracle-selftest-${String(i + 1).padStart(2, "0")}`,
   );
-  return generateParameterSets(seeds)
-    .slice(0, count)
-    .map((p, i) => {
-      const fixture = generateFixture(p.fixtureSeed);
-      const names = DATA_COLUMNS.map((c) => c.name);
-      const neighbour = names[(names.indexOf(p.column) + 1) % names.length] as string;
-      const otherKey = fixture.rows.find((r) => r[0] !== p.rowKey)?.[0] as string;
-      const correct = editCsv(fixture.csv, [
-        { rowKey: p.rowKey, column: p.column, value: p.newValue },
-      ]);
-      const doc = (text: string | null): SavedDocument => ({
-        fileName: "doc.csv",
-        bytes: text === null ? null : utf8(text),
-      });
-      const bytes = utf8(correct);
-      return {
-        id: `calc-${String(i + 1).padStart(2, "0")}`,
-        intent: p,
-        correct: doc(correct),
-        corruptions: [
-          { cls: "edit-missing", doc: doc(fixture.csv) },
-          {
-            cls: "wrong-value",
-            doc: doc(
-              editCsv(fixture.csv, [
-                { rowKey: p.rowKey, column: p.column, value: `${p.newValue}9` },
-              ]),
-            ),
-          },
-          {
-            cls: "wrong-target",
-            doc: doc(
-              editCsv(fixture.csv, [{ rowKey: p.rowKey, column: neighbour, value: p.newValue }]),
-            ),
-          },
-          {
-            cls: "collateral",
-            doc: doc(
-              editCsv(correct, [{ rowKey: otherKey, column: "name", value: "Collateral Edit" }]),
-            ),
-          },
-          { cls: "truncated", doc: { fileName: "doc.csv", bytes: truncated(bytes, 0.5) } },
-          { cls: "missing-file", doc: doc(null) },
-        ],
-      };
+  return calcCasesFor(generateParameterSets(seeds).slice(0, count), "doc.csv");
+}
+
+/**
+ * The calc-record-edit R5 cases for the given intents, every document (clean and corrupted)
+ * named `fileName`. `calcCases` is this over the fixed public seeds; agent-written checks
+ * (track C) call it with the bound task's own intent and fresh random seeds, so nothing but
+ * a document's content tells a self-test case from a real run. Throws when an intent does
+ * not locate a record and column in its fixture.
+ */
+export function calcCasesFor(
+  params: readonly CalcRecordEditParams[],
+  fileName: string,
+): SelfTestCase<CalcRecordEditParams>[] {
+  return params.map((p, i) => {
+    const fixture = generateFixture(p.fixtureSeed);
+    const names = DATA_COLUMNS.map((c) => c.name);
+    const neighbour = names[(names.indexOf(p.column) + 1) % names.length] as string;
+    const otherKey = fixture.rows.find((r) => r[0] !== p.rowKey)?.[0] as string;
+    const correct = editCsv(fixture.csv, [
+      { rowKey: p.rowKey, column: p.column, value: p.newValue },
+    ]);
+    const doc = (text: string | null): SavedDocument => ({
+      fileName,
+      bytes: text === null ? null : utf8(text),
     });
+    const bytes = utf8(correct);
+    return {
+      id: `calc-${String(i + 1).padStart(2, "0")}`,
+      intent: p,
+      correct: doc(correct),
+      corruptions: [
+        { cls: "edit-missing", doc: doc(fixture.csv) },
+        {
+          cls: "wrong-value",
+          doc: doc(
+            editCsv(fixture.csv, [{ rowKey: p.rowKey, column: p.column, value: `${p.newValue}9` }]),
+          ),
+        },
+        {
+          cls: "wrong-target",
+          doc: doc(
+            editCsv(fixture.csv, [{ rowKey: p.rowKey, column: neighbour, value: p.newValue }]),
+          ),
+        },
+        {
+          cls: "collateral",
+          doc: doc(
+            editCsv(correct, [{ rowKey: otherKey, column: "name", value: "Collateral Edit" }]),
+          ),
+        },
+        { cls: "truncated", doc: { fileName, bytes: truncated(bytes, 0.5) } },
+        { cls: "missing-file", doc: doc(null) },
+      ],
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------

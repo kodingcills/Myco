@@ -86,3 +86,6 @@ export const csvDoc = (text: string | null) => ({
   fileName: "sheet.csv",
   bytes: text === null ? null : new TextEncoder().encode(text),
 });
+
+/** The task as the check sees it on a real run: its intent and its state file's basename. */
+export const TASK = { intent: SPEC, fileName: "sheet.csv" } as const;

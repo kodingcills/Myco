@@ -23,6 +23,7 @@ import {
 import { registerPlugin } from "../../src/plugins/host/registry.ts";
 import {
   BINDING,
+  TASK,
   CHECK_MANIFEST,
   cleanupPlugins,
   collateralCsv,
@@ -39,7 +40,7 @@ afterAll(cleanupPlugins);
 const T = 120_000;
 
 function accept(source = honestSource(), manifest: Record<string, unknown> = {}): AgentCheck {
-  const r = proposeAgentCheck(makeCheck(source, manifest), BINDING);
+  const r = proposeAgentCheck(makeCheck(source, manifest), BINDING, TASK);
   if (!r.ok) throw new Error(`refused: ${r.code} ${r.reasons.join("; ")}`);
   return r.check;
 }
@@ -98,6 +99,7 @@ describe("track C: R5 refuses every check that has not earned its claims", () =>
       const r = proposeAgentCheck(
         makeCheck('export default { oracle() { return { status: "verified", code: "OK" }; } };'),
         BINDING,
+        TASK,
       );
       expect(r.ok).toBe(false);
       if (r.ok) return;
@@ -113,6 +115,7 @@ describe("track C: R5 refuses every check that has not earned its claims", () =>
       const r = proposeAgentCheck(
         makeCheck('export default { oracle() { return { status: "refuted", code: "NO" }; } };'),
         BINDING,
+        TASK,
       );
       expect(r.ok ? "accepted" : r.code).toBe("AGENT_CHECK_SELFTEST_FAILED");
       if (!r.ok) expect(r.reasons.join(" ")).toMatch(/correct documents did not verify/);
@@ -127,6 +130,7 @@ describe("track C: R5 refuses every check that has not earned its claims", () =>
         const r = proposeAgentCheck(
           makeCheck(honestSource(), { claims: [...HONEST_CLAIMS, extra] }),
           BINDING,
+          TASK,
         );
         expect(r.ok ? "accepted" : r.code, extra).toBe("AGENT_CHECK_SELFTEST_FAILED");
         if (!r.ok) expect(r.reasons.join(" "), extra).toMatch(new RegExp(`${extra}: \\d+ of`));
@@ -141,6 +145,7 @@ describe("track C: R5 refuses every check that has not earned its claims", () =>
       const r = proposeAgentCheck(
         makeCheck('export default { oracle() { throw new Error("boom"); } };'),
         BINDING,
+        TASK,
       );
       expect(r.ok ? "accepted" : r.code).toBe("AGENT_CHECK_SELFTEST_FAILED");
     },
@@ -153,6 +158,7 @@ describe("track C: R5 refuses every check that has not earned its claims", () =>
       const r = proposeAgentCheck(
         makeCheck(honestSource({ onRefuted: 'throw new Error("refute by crash");' })),
         BINDING,
+        TASK,
       );
       expect(r.ok ? "accepted" : r.code).toBe("AGENT_CHECK_SELFTEST_HARNESS_FAULT");
       if (!r.ok) expect(r.reasons).toContain("PLUGIN_THREW");
@@ -169,6 +175,7 @@ describe("track C: R5 refuses every check that has not earned its claims", () =>
           caps: { ...CHECK_MANIFEST.caps, timeoutMs: 300 },
         }),
         BINDING,
+        TASK,
       );
       expect(r.ok ? "accepted" : r.code).toBe("AGENT_CHECK_SELFTEST_HARNESS_FAULT");
       if (!r.ok) expect(r.reasons).toContain("PLUGIN_TIMEOUT");
@@ -200,7 +207,7 @@ export default {
 };`;
       const dir = makeCheck(source);
       expect(registerPlugin(dir).ok).toBe(true);
-      const r = proposeAgentCheck(dir, BINDING);
+      const r = proposeAgentCheck(dir, BINDING, TASK);
       expect(r.ok ? "accepted" : r.code).toBe("AGENT_CHECK_SELFTEST_FAILED");
     },
     T,
@@ -215,6 +222,7 @@ export default {
           { claims: ["missing-file"] },
         ),
         BINDING,
+        TASK,
       );
       expect(r.ok ? "accepted" : r.code).toBe("AGENT_CHECK_NO_VALUE_CLAIM");
       // It did pass R5 for what it claimed: the refusal is the value-claim rule, not R5.
@@ -232,6 +240,7 @@ export default {
           { kinds: ["oracle", "reader"] },
         ),
         BINDING,
+        TASK,
       );
       expect(r.ok ? "accepted" : r.code).toBe("AGENT_CHECK_NOT_ORACLE_ONLY");
     },
@@ -242,6 +251,7 @@ export default {
     const r = proposeAgentCheck(
       makeCheck(honestSource(), { formats: [{ ext: ".txt", mediaType: "text/plain" }] }),
       BINDING,
+      TASK,
     );
     expect(r.ok ? "accepted" : r.code).toBe("AGENT_CHECK_SELFTEST_CASES_INVALID");
   });
@@ -254,12 +264,12 @@ export default {
       { ...BINDING, extra: "x" },
       null,
     ])
-      expect((proposeAgentCheck(dir, b as never) as { code?: string }).code).toBe(
+      expect((proposeAgentCheck(dir, b as never, TASK) as { code?: string }).code).toBe(
         "AGENT_CHECK_BINDING_INVALID",
       );
     for (const family of ["todo-items", "writer-doc-edit", "toString", "__proto__"])
       expect(
-        (proposeAgentCheck(dir, { ...BINDING, family } as never) as { code?: string }).code,
+        (proposeAgentCheck(dir, { ...BINDING, family } as never, TASK) as { code?: string }).code,
       ).toBe("AGENT_CHECK_FAMILY_UNSUPPORTED");
   });
 });
@@ -269,7 +279,7 @@ describe("track C: an accepted check runs only as itself, only for its own task,
     "another task or run, a forged copy, or an edited check is uncertain with a host code",
     () => {
       const dir = makeCheck(honestSource());
-      const r = proposeAgentCheck(dir, BINDING);
+      const r = proposeAgentCheck(dir, BINDING, TASK);
       if (!r.ok) throw new Error(r.code);
       const check = r.check;
       const doc = csvDoc(exactCsv);
@@ -336,7 +346,7 @@ describe("track C: the manifest file is the check's", () => {
   it("a check directory without a manifest is refused", () => {
     const dir = makeCheck(honestSource());
     writeFileSync(join(dir, "myco-plugin.json"), "{");
-    expect((proposeAgentCheck(dir, BINDING) as { code?: string }).code).toBe(
+    expect((proposeAgentCheck(dir, BINDING, TASK) as { code?: string }).code).toBe(
       "AGENT_CHECK_MANIFEST_INVALID",
     );
   });

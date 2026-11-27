@@ -8,16 +8,19 @@
  *
  *  1. PROPOSE (`proposeAgentCheck`): binds the check to one task and run of one supported
  *     family, then registers it through track T (`registerPlugin`) with HOST-OWNED self-test
- *     cases: the R5 subjects of that family (`src/oracle-selftest/subjects.ts`), plus the host
- *     read corruptions track T adds to every case. The check's own `selftestCases` hook is
- *     never called, so its author cannot pick the damage it happens to catch. The check is
+ *     cases: the R5 subjects of that family (`src/oracle-selftest/subjects.ts`) built afresh
+ *     for this proposal from the bound task's own intent and state-file name plus cases with
+ *     random seeds and names, plus the host read corruptions track T adds to every case. The
+ *     check's own `selftestCases` hook is never called, so its author cannot pick the damage it
+ *     happens to catch, and no fixed seed or name marks a call as a self-test: a check that
+ *     behaves only while it thinks it is being tested is refused. The check is
  *     refused unless R5 passes for EVERY class it claims (an over-claim, a crash, a timeout,
  *     an always-pass or an always-refute check is refused), it claims at least one value class
  *     (a check for a task must check the edit, not only that a file exists), and it is an
  *     oracle only (no reader).
  *  2. RUN (`runAgentCheck`): runs an accepted check, in track T's sandbox (no network, no
  *     filesystem write, empty environment, bounded time, memory and output), over one captured
- *     document of the SAME task and run it was proposed for. The answer is an
+ *     document of the SAME task, run, intent and file name it was proposed for. The answer is an
  *     `AgentCheckSignal`: advisory, labelled with its provenance, `r1Evidence: false`, and
  *     carrying the markers of `label.ts` that the ledger checks refuse as evidence.
  *
@@ -26,13 +29,16 @@
  *    imports nothing from it (`test/agent-checks/boundaries.test.ts`);
  *  - change a gate verdict: `myco.gate/v1` takes taskId/runId/claim only, so a request that
  *    carries a signal is rejected and the oracle does not run; no gate module imports this one;
- *  - count as R1 evidence: `checkBenchmark` and `checkPack` refuse any row carrying a signal.
+ *  - count as R1 evidence: `checkBenchmark`, `checkPack` and `checkAbPack` refuse any row
+ *    carrying a signal.
  *
  * Fail closed: every refusal and every run failure is a code only (no host path, no oracle
  * input), so an agent may see it. Operator-facing detail stays in `reasons` on refusals.
  */
+import { randomBytes, randomInt } from "node:crypto";
 import type { OracleReport } from "../oracle-selftest/run.ts";
-import { calcCases } from "../oracle-selftest/subjects.ts";
+import { calcCasesFor } from "../oracle-selftest/subjects.ts";
+import { type CalcRecordEditParams, generateParameterSets } from "../tasks/intent.ts";
 import {
   CORRUPTION_CLASSES,
   type CorruptionClass,
@@ -59,12 +65,51 @@ export interface AgentCheckBinding {
 }
 
 /**
+ * The task as the check will see it on a real run: the intent the check is called with and
+ * the basename of the captured state file. The self-test is built from these (D1, round 1 of
+ * #590), so the check cannot tell a self-test call from a real one by anything but content.
+ */
+export interface AgentCheckTask {
+  readonly intent: CalcRecordEditParams;
+  readonly fileName: string;
+}
+
+/** Fresh, host-side random cases per registration (beside the bound task's own case). */
+const RANDOM_CASES = 2;
+
+/** A seed or name nobody, the check's author included, can predict or recognise. */
+const unpredictable = (): string => randomBytes(9).toString("hex");
+
+/**
+ * The calc-record-edit self-test: the bound task's own intent and file name, plus fresh cases
+ * with random seeds, random parameter picks and random file names. Every corruption carries
+ * its case's intent and name, so only a document's content tells it from the clean copy.
+ */
+function calcSelfTestCases(task: AgentCheckTask): SelfTestCase<unknown>[] {
+  const ext = task.fileName.slice(task.fileName.lastIndexOf("."));
+  const random = Array.from({ length: RANDOM_CASES }, () => {
+    const params = generateParameterSets([unpredictable()]);
+    return calcCasesFor(
+      [params[randomInt(params.length)] as CalcRecordEditParams],
+      `${unpredictable()}${ext}`,
+    );
+  }).flat();
+  const own = calcCasesFor([task.intent], task.fileName);
+  // An intent that changes nothing has no edit to check (and no clean copy to tell apart).
+  const same = (a: SavedDocument, b: SavedDocument) =>
+    a.bytes !== null && b.bytes !== null && Buffer.from(a.bytes).equals(Buffer.from(b.bytes));
+  if (own.some((c) => c.corruptions.some((x) => same(x.doc, c.correct))))
+    throw new Error("the intent changes nothing");
+  return [...own, ...random];
+}
+
+/**
  * Families an agent may write a check for, each with the host-owned R5 cases its check must
  * pass. Writer and multi-step Calc join here when their cases fit the sandbox budget.
  */
 const FAMILY_CASES = {
-  "calc-record-edit": (): SelfTestCase<unknown>[] => calcCases(3),
-} as const satisfies Record<string, () => SelfTestCase<unknown>[]>;
+  "calc-record-edit": calcSelfTestCases,
+} as const satisfies Record<string, (task: AgentCheckTask) => SelfTestCase<unknown>[]>;
 export type AgentCheckFamily = keyof typeof FAMILY_CASES;
 export const AGENT_CHECK_FAMILIES = Object.keys(FAMILY_CASES) as AgentCheckFamily[];
 
@@ -74,9 +119,15 @@ export const VALUE_CLASSES: readonly CorruptionClass[] = CORRUPTION_CLASSES.filt
 );
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+/** A state-file basename the calc-record-edit self-test can carry (CSV cases only, for now). */
+const TASK_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,123}\.csv$/;
+const INTENT_KEYS = "column,fixtureSeed,newValue,rowKey";
+/** One CSV cell the self-test fixture can carry unquoted. */
+const CELL = /^[^,"\r\n]{1,256}$/;
 
 export const AGENT_CHECK_REFUSALS = [
   "AGENT_CHECK_BINDING_INVALID",
+  "AGENT_CHECK_TASK_INVALID",
   "AGENT_CHECK_FAMILY_UNSUPPORTED",
   "AGENT_CHECK_NOT_ORACLE_ONLY",
   "AGENT_CHECK_NO_VALUE_CLAIM",
@@ -115,6 +166,8 @@ export interface AgentCheckProvenance {
 /** An accepted check. Only objects issued by `proposeAgentCheck` run (a WeakSet, not a shape). */
 export interface AgentCheck {
   readonly binding: AgentCheckBinding;
+  /** The intent and file name the check was self-tested on; a run must carry exactly these. */
+  readonly task: AgentCheckTask;
   readonly provenance: AgentCheckProvenance;
 }
 
@@ -178,16 +231,69 @@ function validBinding(b: unknown): b is AgentCheckBinding {
   );
 }
 
+/** A copy of `t` with exactly the task fields, or null when `t` is not a valid task. */
+function validTask(t: unknown): AgentCheckTask | null {
+  if (typeof t !== "object" || t === null) return null;
+  const o = t as Record<string, unknown>;
+  if (Object.keys(o).sort().join(",") !== "fileName,intent") return null;
+  if (typeof o.fileName !== "string" || !TASK_FILE.test(o.fileName)) return null;
+  const i = o.intent;
+  if (typeof i !== "object" || i === null) return null;
+  const p = i as Record<string, unknown>;
+  if (Object.keys(p).sort().join(",") !== INTENT_KEYS) return null;
+  const fields = [p.fixtureSeed, p.rowKey, p.column, p.newValue];
+  if (!fields.every((f) => typeof f === "string" && CELL.test(f))) return null;
+  const [fixtureSeed, rowKey, column, newValue] = fields as string[];
+  return {
+    intent: {
+      fixtureSeed: fixtureSeed as string,
+      rowKey: rowKey as string,
+      column: column as string,
+      newValue: newValue as string,
+    },
+    fileName: o.fileName,
+  };
+}
+
+function sameIntent(a: unknown, b: CalcRecordEditParams): boolean {
+  if (typeof a !== "object" || a === null) return false;
+  const o = a as Record<string, unknown>;
+  return (
+    Object.keys(o).sort().join(",") === INTENT_KEYS &&
+    o.fixtureSeed === b.fixtureSeed &&
+    o.rowKey === b.rowKey &&
+    o.column === b.column &&
+    o.newValue === b.newValue
+  );
+}
+
 /**
  * Propose an agent-written check for one task. Never throws. On success the check is bound to
- * `binding` and may run only over that task's documents.
+ * `binding` and `task`, and may run only over that task's documents. The R5 self-test is built
+ * here, per proposal, from `task` and fresh host-side randomness (`calcSelfTestCases`).
  */
-export function proposeAgentCheck(checkDir: string, binding: AgentCheckBinding): ProposalResult {
+export function proposeAgentCheck(
+  checkDir: string,
+  binding: AgentCheckBinding,
+  task: AgentCheckTask,
+): ProposalResult {
   if (!validBinding(binding))
     return refuse("AGENT_CHECK_BINDING_INVALID", ["binding is { taskId, runId, family } only"]);
   if (!Object.hasOwn(FAMILY_CASES, binding.family))
     return refuse("AGENT_CHECK_FAMILY_UNSUPPORTED", [`no host cases for ${binding.family}`]);
-  const cases = FAMILY_CASES[binding.family]();
+  const bound = validTask(task);
+  if (bound === null)
+    return refuse("AGENT_CHECK_TASK_INVALID", [
+      "task is { intent, fileName } of a .csv state file",
+    ]);
+  let cases: SelfTestCase<unknown>[];
+  try {
+    cases = FAMILY_CASES[binding.family](bound);
+  } catch {
+    return refuse("AGENT_CHECK_TASK_INVALID", [
+      "the intent names no record and column, or changes nothing",
+    ]);
+  }
   const reg = registerPlugin(checkDir, { hostCases: cases });
   if (!reg.ok) return refuse(`AGENT_CHECK_${reg.code}`, reg.reasons, reg.selftest);
   const { manifest, provenance } = reg.registration;
@@ -205,6 +311,7 @@ export function proposeAgentCheck(checkDir: string, binding: AgentCheckBinding):
   const claimed = selftest.claims.map((c) => selftest.perClass[c]);
   const check: AgentCheck = deepFreeze({
     binding: { taskId: binding.taskId, runId: binding.runId, family: binding.family },
+    task: bound,
     provenance: {
       source: AGENT_CHECK_SOURCE,
       taskId: binding.taskId,
@@ -260,10 +367,14 @@ export function runAgentCheck(
     !validBinding(binding) ||
     binding.taskId !== check.binding.taskId ||
     binding.runId !== check.binding.runId ||
-    binding.family !== check.binding.family
+    binding.family !== check.binding.family ||
+    !sameIntent(intent, check.task.intent) ||
+    typeof doc?.fileName !== "string" ||
+    doc.fileName.split(/[\\/]/).pop() !== check.task.fileName
   )
     return signal("uncertain", "AGENT_CHECK_TASK_MISMATCH", "host");
-  const v = runPluginOracle(reg, doc, intent);
+  // The bound copy, so the check sees exactly what its self-test showed it.
+  const v = runPluginOracle(reg, doc, check.task.intent);
   return v.codeSource === "plugin"
     ? signal(v.status, v.code, "check")
     : signal("uncertain", v.code, "host");

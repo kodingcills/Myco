@@ -35,6 +35,7 @@ import { tempRoot, writeState } from "../gate/helpers.ts";
 import { input, manifest, r1Trials } from "../m2/pack-fixture.ts";
 import {
   BINDING,
+  TASK,
   cleanupPlugins,
   collateralCsv,
   csvDoc,
@@ -49,7 +50,7 @@ afterAll(cleanupPlugins);
 
 let signal: AgentCheckSignal;
 beforeAll(() => {
-  const r = proposeAgentCheck(makeCheck(honestSource()), BINDING);
+  const r = proposeAgentCheck(makeCheck(honestSource()), BINDING, TASK);
   if (!r.ok) throw new Error(r.code);
   signal = runAgentCheck(r.check, BINDING, csvDoc(collateralCsv), SPEC);
 }, 120_000);
