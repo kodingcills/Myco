@@ -1,0 +1,550 @@
+{
+  "schema": "myco.skills.rep-taskset/1",
+  "taskSetVersion": "rep-v1",
+  "sourceTaskSet": "fc-v1",
+  "buildSeed": "m-v1-build-2026-11-27-Rq7d",
+  "learn": [
+    {
+      "taskId": "fc-v1-056",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-06",
+      "fixtureSha256": "4cb6e1e658608362b7073f5b61bb441906ec7082ed35b6f94ae85fa76c289f0c",
+      "instructionSha256": "907e97f5201ace35e43ea3019d547c86851d1440ce6ff12d92dc3f88d77e9cbc"
+    },
+    {
+      "taskId": "fc-v1-043",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-03",
+      "fixtureSha256": "ab11d268792851a2cba94d2d8dc1056de77a8488dc9bd3cf3c07101e0a6489fa",
+      "instructionSha256": "8731cea25bb0e968d7cf5dde2ba2287296412754abdc3a5fb2096b13d6d2db9c"
+    },
+    {
+      "taskId": "fc-v1-015",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-05",
+      "fixtureSha256": "92e9858c27b387e877d2e1f36e7085b87022370cfd25e0ce6caf09164f1326ad",
+      "instructionSha256": "32778b1f20126c402188bbdd64527be60afdd49ab5411fd0f4ebcac569357232"
+    },
+    {
+      "taskId": "fc-v1-049",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-09",
+      "fixtureSha256": "02f0aec93158da1078b3cf15c189849c986b40939b635b254f6b49107b59c6e0",
+      "instructionSha256": "242ee70551eda3d5d3b04e4cf86604c2ccfa3cf7558e64deb166bb07a7e9a042"
+    },
+    {
+      "taskId": "fc-v1-040",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-10",
+      "fixtureSha256": "7fa700d8b348a730ab06bc0d0affabbcd35e06599f14e26e5bcd7b7725bb9cf1",
+      "instructionSha256": "aeebd5759ae3ab91fa28bfd03b28a67c8b72b1876cce5ba5c29809bbe4ae785b"
+    },
+    {
+      "taskId": "fc-v1-038",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-08",
+      "fixtureSha256": "f032f0d8f29353e18d310766363e79f83ff72e7aa5e9379112a657ceff2a400d",
+      "instructionSha256": "19dbfb925a3e895df19b1544143211ed1021ac5f67e75fbc18f64a36f169c824"
+    },
+    {
+      "taskId": "fc-v1-027",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-07",
+      "fixtureSha256": "a05da4091299a81b736e7adec4d80d04a5f8292cd7d6680b8680f54779aa6db0",
+      "instructionSha256": "1ce0d313bd4c614a25386ac2e904d83f12f8fc84ec4670ee78666fd7693c657c"
+    },
+    {
+      "taskId": "fc-v1-023",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-03",
+      "fixtureSha256": "702e146d5b416771e326fa2c7c546a52780f0df9742c85417d24255c5975f711",
+      "instructionSha256": "cbcf87d7830a41308db34153e891ae04f33fef2549fe7079c690e5d7697f1366"
+    },
+    {
+      "taskId": "fc-v1-018",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-08",
+      "fixtureSha256": "b526b29d98c11e1fa07de030f17a0bc11e09c6ec0e095ac87c03bff1b76d40f8",
+      "instructionSha256": "a0253f418f272a54b7e687e9f66fae217cc9a1f4a924fcaeda8b1bb9cdb7a9af"
+    },
+    {
+      "taskId": "fc-v1-009",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-09",
+      "fixtureSha256": "99c3a6f57b3d47887fb1ba77faf59d90489a759f8e6154c577b62e7971f8381f",
+      "instructionSha256": "7b5e8976be8d1ce12eb8c051d9e3c32bd20fde929f6624c88114d35fbc447519"
+    },
+    {
+      "taskId": "fc-v1-046",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-06",
+      "fixtureSha256": "4cb6e1e658608362b7073f5b61bb441906ec7082ed35b6f94ae85fa76c289f0c",
+      "instructionSha256": "88d2455ad5a2eb302be283d469fc79159dbedaab6782c628b2e2d635a8bf555c"
+    },
+    {
+      "taskId": "fc-v1-053",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-03",
+      "fixtureSha256": "ab11d268792851a2cba94d2d8dc1056de77a8488dc9bd3cf3c07101e0a6489fa",
+      "instructionSha256": "8f5a5a7bdff81b7f62efb232c8ad8cd2753c26112725ddc968baa7e2dcf72b44"
+    },
+    {
+      "taskId": "fc-v1-005",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-05",
+      "fixtureSha256": "92e9858c27b387e877d2e1f36e7085b87022370cfd25e0ce6caf09164f1326ad",
+      "instructionSha256": "b58301771334ad516a3989465924b28a65dc65ca7181718ecfdfa13fb109252c"
+    },
+    {
+      "taskId": "fc-v1-039",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-09",
+      "fixtureSha256": "02f0aec93158da1078b3cf15c189849c986b40939b635b254f6b49107b59c6e0",
+      "instructionSha256": "6e6662213035945e9df0d3a07ecdc087ff768b970d2cb2b4958da5139a9c4e58"
+    },
+    {
+      "taskId": "fc-v1-060",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-10",
+      "fixtureSha256": "7fa700d8b348a730ab06bc0d0affabbcd35e06599f14e26e5bcd7b7725bb9cf1",
+      "instructionSha256": "bdae62dc0245b06ea3e475cfb6895f3df588c7cf53fd55d73c0024b131f8f7c5"
+    },
+    {
+      "taskId": "fc-v1-048",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-08",
+      "fixtureSha256": "f032f0d8f29353e18d310766363e79f83ff72e7aa5e9379112a657ceff2a400d",
+      "instructionSha256": "516ea85f043dc05783c15a5d5ca25062f10a42ba60eeaf9d30f0707cbd522502"
+    },
+    {
+      "taskId": "fc-v1-007",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-07",
+      "fixtureSha256": "a05da4091299a81b736e7adec4d80d04a5f8292cd7d6680b8680f54779aa6db0",
+      "instructionSha256": "4216ecf365fcd8468c78a0e91a030e6738b4d90a4181052536ca73e8b13f7a08"
+    },
+    {
+      "taskId": "fc-v1-003",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-03",
+      "fixtureSha256": "702e146d5b416771e326fa2c7c546a52780f0df9742c85417d24255c5975f711",
+      "instructionSha256": "8a6d464de9b2b881189e13b9fbe08c0f5765f83335aa23cdcfca74a91a7175de"
+    },
+    {
+      "taskId": "fc-v1-028",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-08",
+      "fixtureSha256": "b526b29d98c11e1fa07de030f17a0bc11e09c6ec0e095ac87c03bff1b76d40f8",
+      "instructionSha256": "21acf1175e5e0e38247ccff6ca5865176be506bae2db02355071b14c2e6b0970"
+    },
+    {
+      "taskId": "fc-v1-029",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-09",
+      "fixtureSha256": "99c3a6f57b3d47887fb1ba77faf59d90489a759f8e6154c577b62e7971f8381f",
+      "instructionSha256": "29328079d41d8be318e1b8eed64e1235b86951c26b2c4a12a68587f92bb4b39e"
+    }
+  ],
+  "test": [
+    {
+      "unitId": "rep-v1-repeat-01",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-056",
+      "taskId": "fc-v1-056",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-06",
+      "fixtureSha256": "4cb6e1e658608362b7073f5b61bb441906ec7082ed35b6f94ae85fa76c289f0c",
+      "instructionSha256": "907e97f5201ace35e43ea3019d547c86851d1440ce6ff12d92dc3f88d77e9cbc"
+    },
+    {
+      "unitId": "rep-v1-repeat-02",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-043",
+      "taskId": "fc-v1-043",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-03",
+      "fixtureSha256": "ab11d268792851a2cba94d2d8dc1056de77a8488dc9bd3cf3c07101e0a6489fa",
+      "instructionSha256": "8731cea25bb0e968d7cf5dde2ba2287296412754abdc3a5fb2096b13d6d2db9c"
+    },
+    {
+      "unitId": "rep-v1-repeat-03",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-015",
+      "taskId": "fc-v1-015",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-05",
+      "fixtureSha256": "92e9858c27b387e877d2e1f36e7085b87022370cfd25e0ce6caf09164f1326ad",
+      "instructionSha256": "32778b1f20126c402188bbdd64527be60afdd49ab5411fd0f4ebcac569357232"
+    },
+    {
+      "unitId": "rep-v1-repeat-04",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-049",
+      "taskId": "fc-v1-049",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-09",
+      "fixtureSha256": "02f0aec93158da1078b3cf15c189849c986b40939b635b254f6b49107b59c6e0",
+      "instructionSha256": "242ee70551eda3d5d3b04e4cf86604c2ccfa3cf7558e64deb166bb07a7e9a042"
+    },
+    {
+      "unitId": "rep-v1-repeat-05",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-040",
+      "taskId": "fc-v1-040",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-10",
+      "fixtureSha256": "7fa700d8b348a730ab06bc0d0affabbcd35e06599f14e26e5bcd7b7725bb9cf1",
+      "instructionSha256": "aeebd5759ae3ab91fa28bfd03b28a67c8b72b1876cce5ba5c29809bbe4ae785b"
+    },
+    {
+      "unitId": "rep-v1-repeat-06",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-038",
+      "taskId": "fc-v1-038",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-08",
+      "fixtureSha256": "f032f0d8f29353e18d310766363e79f83ff72e7aa5e9379112a657ceff2a400d",
+      "instructionSha256": "19dbfb925a3e895df19b1544143211ed1021ac5f67e75fbc18f64a36f169c824"
+    },
+    {
+      "unitId": "rep-v1-repeat-07",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-027",
+      "taskId": "fc-v1-027",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-07",
+      "fixtureSha256": "a05da4091299a81b736e7adec4d80d04a5f8292cd7d6680b8680f54779aa6db0",
+      "instructionSha256": "1ce0d313bd4c614a25386ac2e904d83f12f8fc84ec4670ee78666fd7693c657c"
+    },
+    {
+      "unitId": "rep-v1-repeat-08",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-023",
+      "taskId": "fc-v1-023",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-03",
+      "fixtureSha256": "702e146d5b416771e326fa2c7c546a52780f0df9742c85417d24255c5975f711",
+      "instructionSha256": "cbcf87d7830a41308db34153e891ae04f33fef2549fe7079c690e5d7697f1366"
+    },
+    {
+      "unitId": "rep-v1-repeat-09",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-018",
+      "taskId": "fc-v1-018",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-08",
+      "fixtureSha256": "b526b29d98c11e1fa07de030f17a0bc11e09c6ec0e095ac87c03bff1b76d40f8",
+      "instructionSha256": "a0253f418f272a54b7e687e9f66fae217cc9a1f4a924fcaeda8b1bb9cdb7a9af"
+    },
+    {
+      "unitId": "rep-v1-repeat-10",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-009",
+      "taskId": "fc-v1-009",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-09",
+      "fixtureSha256": "99c3a6f57b3d47887fb1ba77faf59d90489a759f8e6154c577b62e7971f8381f",
+      "instructionSha256": "7b5e8976be8d1ce12eb8c051d9e3c32bd20fde929f6624c88114d35fbc447519"
+    },
+    {
+      "unitId": "rep-v1-repeat-11",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-046",
+      "taskId": "fc-v1-046",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-06",
+      "fixtureSha256": "4cb6e1e658608362b7073f5b61bb441906ec7082ed35b6f94ae85fa76c289f0c",
+      "instructionSha256": "88d2455ad5a2eb302be283d469fc79159dbedaab6782c628b2e2d635a8bf555c"
+    },
+    {
+      "unitId": "rep-v1-repeat-12",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-053",
+      "taskId": "fc-v1-053",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-03",
+      "fixtureSha256": "ab11d268792851a2cba94d2d8dc1056de77a8488dc9bd3cf3c07101e0a6489fa",
+      "instructionSha256": "8f5a5a7bdff81b7f62efb232c8ad8cd2753c26112725ddc968baa7e2dcf72b44"
+    },
+    {
+      "unitId": "rep-v1-repeat-13",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-005",
+      "taskId": "fc-v1-005",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-05",
+      "fixtureSha256": "92e9858c27b387e877d2e1f36e7085b87022370cfd25e0ce6caf09164f1326ad",
+      "instructionSha256": "b58301771334ad516a3989465924b28a65dc65ca7181718ecfdfa13fb109252c"
+    },
+    {
+      "unitId": "rep-v1-repeat-14",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-039",
+      "taskId": "fc-v1-039",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-09",
+      "fixtureSha256": "02f0aec93158da1078b3cf15c189849c986b40939b635b254f6b49107b59c6e0",
+      "instructionSha256": "6e6662213035945e9df0d3a07ecdc087ff768b970d2cb2b4958da5139a9c4e58"
+    },
+    {
+      "unitId": "rep-v1-repeat-15",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-060",
+      "taskId": "fc-v1-060",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-10",
+      "fixtureSha256": "7fa700d8b348a730ab06bc0d0affabbcd35e06599f14e26e5bcd7b7725bb9cf1",
+      "instructionSha256": "bdae62dc0245b06ea3e475cfb6895f3df588c7cf53fd55d73c0024b131f8f7c5"
+    },
+    {
+      "unitId": "rep-v1-repeat-16",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-048",
+      "taskId": "fc-v1-048",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-08",
+      "fixtureSha256": "f032f0d8f29353e18d310766363e79f83ff72e7aa5e9379112a657ceff2a400d",
+      "instructionSha256": "516ea85f043dc05783c15a5d5ca25062f10a42ba60eeaf9d30f0707cbd522502"
+    },
+    {
+      "unitId": "rep-v1-repeat-17",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-007",
+      "taskId": "fc-v1-007",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-07",
+      "fixtureSha256": "a05da4091299a81b736e7adec4d80d04a5f8292cd7d6680b8680f54779aa6db0",
+      "instructionSha256": "4216ecf365fcd8468c78a0e91a030e6738b4d90a4181052536ca73e8b13f7a08"
+    },
+    {
+      "unitId": "rep-v1-repeat-18",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-003",
+      "taskId": "fc-v1-003",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-03",
+      "fixtureSha256": "702e146d5b416771e326fa2c7c546a52780f0df9742c85417d24255c5975f711",
+      "instructionSha256": "8a6d464de9b2b881189e13b9fbe08c0f5765f83335aa23cdcfca74a91a7175de"
+    },
+    {
+      "unitId": "rep-v1-repeat-19",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-028",
+      "taskId": "fc-v1-028",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-08",
+      "fixtureSha256": "b526b29d98c11e1fa07de030f17a0bc11e09c6ec0e095ac87c03bff1b76d40f8",
+      "instructionSha256": "21acf1175e5e0e38247ccff6ca5865176be506bae2db02355071b14c2e6b0970"
+    },
+    {
+      "unitId": "rep-v1-repeat-20",
+      "kind": "repeat",
+      "learnTaskId": "fc-v1-029",
+      "taskId": "fc-v1-029",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-09",
+      "fixtureSha256": "99c3a6f57b3d47887fb1ba77faf59d90489a759f8e6154c577b62e7971f8381f",
+      "instructionSha256": "29328079d41d8be318e1b8eed64e1235b86951c26b2c4a12a68587f92bb4b39e"
+    },
+    {
+      "unitId": "rep-v1-similar-01",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-056",
+      "taskId": "fc-v1-012",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-02",
+      "fixtureSha256": "3ea3b5f78ae52df14948215572dceb83730d82768e6016073d030258f0a98d2a",
+      "instructionSha256": "e0a9ab94ce20892f515fb89227baaa0ef1ff720d9c17e02489f7d2aff64ef71f"
+    },
+    {
+      "unitId": "rep-v1-similar-02",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-043",
+      "taskId": "fc-v1-044",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-04",
+      "fixtureSha256": "412b221a5577b67a675dbf5439b712df1b48f0f79bcb344ac4b877e531805608",
+      "instructionSha256": "a702fc251b35db933e7d3e7af6895cc52cdf5fe16394bc635e1276bf9d50850c"
+    },
+    {
+      "unitId": "rep-v1-similar-03",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-015",
+      "taskId": "fc-v1-032",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-02",
+      "fixtureSha256": "fe4580bbc0449078bfbde3be53c3ffdf5d40f906360591eb132b69af5dec6333",
+      "instructionSha256": "411ee8f84d46b9da1a95ad944ee39533fe0e3cf0064b18e65b1c07de634c9745"
+    },
+    {
+      "unitId": "rep-v1-similar-04",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-049",
+      "taskId": "fc-v1-051",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-01",
+      "fixtureSha256": "e2e728ce8a4c212573efab5d8dec4363e74b11de369bfa7a46e2c9cf82cc9c5f",
+      "instructionSha256": "cd6de3c439a63e6533c17183a8c0c89683f420da16b3a7a09e2d828a7f48201f"
+    },
+    {
+      "unitId": "rep-v1-similar-05",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-040",
+      "taskId": "fc-v1-024",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-04",
+      "fixtureSha256": "e8f22b6be76930b3bbe5da3fb55a54b1bd43e93cd19b86083bf9befa2b17b5f9",
+      "instructionSha256": "8c7767f5c8497abb610dcf818de4d4a7dc14230e49c17b698cdd7d3579d7b21f"
+    },
+    {
+      "unitId": "rep-v1-similar-06",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-038",
+      "taskId": "fc-v1-026",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-06",
+      "fixtureSha256": "d0c9ef36fbce0a405e606863670e092dbb2d009deee30f3f05c4d68075a7aeea",
+      "instructionSha256": "6d8342fa6d13337a8bed6ce6ac113a81dc29d0604a92d143599dda0449490cc2"
+    },
+    {
+      "unitId": "rep-v1-similar-07",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-027",
+      "taskId": "fc-v1-021",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-01",
+      "fixtureSha256": "e2fc4fddf6704a6246a6c1782c653960e11882941a1aa5150e77180aa0a2d4f5",
+      "instructionSha256": "c007c9725d14b314a304ca307a8826e50e2bd93d21f876b34281e17095d0a180"
+    },
+    {
+      "unitId": "rep-v1-similar-08",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-023",
+      "taskId": "fc-v1-020",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-10",
+      "fixtureSha256": "09fcc6f748daa0cec06baa5001f2484ce40439f330950fad7a1bc1bf43155432",
+      "instructionSha256": "0e2cdd7889d4f2ba481a12d8f5f6352ea5c4743fd6e2f565ab6550b47a2a2b00"
+    },
+    {
+      "unitId": "rep-v1-similar-09",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-018",
+      "taskId": "fc-v1-045",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-05",
+      "fixtureSha256": "d83d28488112fcb280d57aee7027cf46c14bc8f6f640e7e8646d53bf9450fd38",
+      "instructionSha256": "5056dfc2ea68bc77506d698a9ac7bba3a6349933a1427f99aedcc63239634003"
+    },
+    {
+      "unitId": "rep-v1-similar-10",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-009",
+      "taskId": "fc-v1-054",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-04",
+      "fixtureSha256": "412b221a5577b67a675dbf5439b712df1b48f0f79bcb344ac4b877e531805608",
+      "instructionSha256": "8f1b281bc9dafd390d0d28aa81eaae198687b279c731b7ac8d6913e5d1bc02e4"
+    },
+    {
+      "unitId": "rep-v1-similar-11",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-046",
+      "taskId": "fc-v1-047",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-07",
+      "fixtureSha256": "ca721979a958bed06385608d0fc1d5909dfbc683f41d1ff36ab70345e9ef0ecb",
+      "instructionSha256": "e43d89329d8671748eebe13c400741deaa1b4ae9e9034af57a75d1081fa3a1b9"
+    },
+    {
+      "unitId": "rep-v1-similar-12",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-053",
+      "taskId": "fc-v1-052",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-02",
+      "fixtureSha256": "fe4580bbc0449078bfbde3be53c3ffdf5d40f906360591eb132b69af5dec6333",
+      "instructionSha256": "42bd0e69902101fa99cf3b85330711ae123027de529e109cfcdad37b104c8d8a"
+    },
+    {
+      "unitId": "rep-v1-similar-13",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-005",
+      "taskId": "fc-v1-002",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-02",
+      "fixtureSha256": "3ea3b5f78ae52df14948215572dceb83730d82768e6016073d030258f0a98d2a",
+      "instructionSha256": "5911156451e9fcab896aa4e4354db870c802f298183b8af9b0bdfba73772215d"
+    },
+    {
+      "unitId": "rep-v1-similar-14",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-039",
+      "taskId": "fc-v1-016",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-06",
+      "fixtureSha256": "d0c9ef36fbce0a405e606863670e092dbb2d009deee30f3f05c4d68075a7aeea",
+      "instructionSha256": "3da8ffd070df3cc263889e0d7aa4ffd045dcea6958045b822d34cdf54aee10d6"
+    },
+    {
+      "unitId": "rep-v1-similar-15",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-060",
+      "taskId": "fc-v1-031",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-01",
+      "fixtureSha256": "e2e728ce8a4c212573efab5d8dec4363e74b11de369bfa7a46e2c9cf82cc9c5f",
+      "instructionSha256": "81d17e2158b82dbae628b5c23b616c62e7c59f888182153e6d067bcdfc4c509e"
+    },
+    {
+      "unitId": "rep-v1-similar-16",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-048",
+      "taskId": "fc-v1-004",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-04",
+      "fixtureSha256": "e8f22b6be76930b3bbe5da3fb55a54b1bd43e93cd19b86083bf9befa2b17b5f9",
+      "instructionSha256": "437aadbd16acae5144ee4eaf7e0fbf2a1aa47993831c7dda4a60d3f70a3da2fd"
+    },
+    {
+      "unitId": "rep-v1-similar-17",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-007",
+      "taskId": "fc-v1-035",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-05",
+      "fixtureSha256": "d83d28488112fcb280d57aee7027cf46c14bc8f6f640e7e8646d53bf9450fd38",
+      "instructionSha256": "10e7096beb0067ff5da7ca51209559f53e0465bfce3696ba6e0fcc2214de0b66"
+    },
+    {
+      "unitId": "rep-v1-similar-18",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-003",
+      "taskId": "fc-v1-001",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-01",
+      "fixtureSha256": "e2fc4fddf6704a6246a6c1782c653960e11882941a1aa5150e77180aa0a2d4f5",
+      "instructionSha256": "d96acd2b4e410d1185dc7726edc05f32882a0fa3fb7c4a08df3b7b604b8173dd"
+    },
+    {
+      "unitId": "rep-v1-similar-19",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-028",
+      "taskId": "fc-v1-010",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-a-10",
+      "fixtureSha256": "09fcc6f748daa0cec06baa5001f2484ce40439f330950fad7a1bc1bf43155432",
+      "instructionSha256": "43836d71d28f838d2fc623b6a28f1fc7827c0dfb604b0aa0085041f4cbd08720"
+    },
+    {
+      "unitId": "rep-v1-similar-20",
+      "kind": "similar",
+      "learnTaskId": "fc-v1-029",
+      "taskId": "fc-v1-057",
+      "family": "calc-record-edit",
+      "fixtureSeed": "fc-v1-b-07",
+      "fixtureSha256": "ca721979a958bed06385608d0fc1d5909dfbc683f41d1ff36ab70345e9ef0ecb",
+      "instructionSha256": "06a5f6a5919da670b66a0d7d1d80008fdd28d128c8094c11f7f6bf797a0689e1"
+    }
+  ]
+}
