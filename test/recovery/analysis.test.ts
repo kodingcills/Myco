@@ -18,6 +18,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   type AnalysisInputs,
+  analysisExitCode,
   analyzeRecoveryPacks,
   type RecoveryPack,
 } from "../../src/recovery/analysis.ts";
@@ -262,6 +263,64 @@ describe("A4: rows must match a frozen pre-registration", () => {
   });
 });
 
+describe("A7: the shared capability-analysis guard (#652)", () => {
+  it("a frozen pre-registration with matching evidence rows is shown, exit 0", () => {
+    const r = analyzeRecoveryPacks(inputs());
+    expect(r.status === "analyzed" && r.verdict).toBe("shown");
+    expect(r.status === "analyzed" && r.reasons).toEqual([]);
+    expect(analysisExitCode(r)).toBe(0);
+  });
+
+  it("the draft (pending items) runs plumbing but is never shown: LEAD_RULING_PENDING, exit 3", () => {
+    // Real-model rows that would pass the bar: only the pending list and plumbing block it.
+    const r = analyzeRecoveryPacks(
+      inputs({
+        prereg: DRAFT,
+        files: disk,
+        k: pack("K", complete(rows("K")), DRAFT),
+        none: pack("no-recovery", complete(rows("no-recovery")), DRAFT),
+        plumbing: true,
+      }),
+    );
+    expect(r.status).toBe("analyzed");
+    if (r.status !== "analyzed") return;
+    expect(r.bar.passes).toBe(true);
+    expect(r.verdict).toBe("not-shown");
+    expect(r.reasons).toContain(
+      "LEAD_RULING_PENDING: stepBudget, taskSet.size, taskSet.manifestSha256",
+    );
+    expect(r.exitCode).toBe(3);
+    expect(analysisExitCode(r)).toBe(3);
+  });
+
+  it('a row whose simulated is the string "true" never counts (plumbing, frozen)', () => {
+    const odd = (arm: RecoveryArm) =>
+      complete(rows(arm, 40, 6, { simulated: "true" as unknown as boolean }));
+    const r = analyzeRecoveryPacks(
+      inputs({
+        k: pack("K", odd("K")),
+        none: pack("no-recovery", odd("no-recovery")),
+        plumbing: true,
+      }),
+    );
+    expect(r.status).toBe("analyzed");
+    if (r.status !== "analyzed") return;
+    expect(r.verdict).toBe("not-shown");
+    expect(r.reasons).toContain("SIMULATED: 80 row(s); simulated rows are never evidence");
+  });
+
+  it("a halted result reports exit 0 (reported, never summarized)", () => {
+    expect(
+      analysisExitCode({
+        status: "halted",
+        preregistrationHash: FROZEN.preregistrationHash,
+        arm: "K",
+        halt: { trialKey: "ms-3#K", attempt: 2, grade: "fail" },
+      }),
+    ).toBe(0);
+  });
+});
+
 describe("A5: a pre-registration that fails its check is refused", () => {
   it("an edited field without a new hash", () => {
     const tampered = { ...FROZEN, stepBudget: 30 };
@@ -296,6 +355,29 @@ describe("A6: the command line", () => {
     const r = cli(["--prereg", K_PREREG_PATH, "--k", k, "--none", none]);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/refused: the pre-registration is a draft/);
+  });
+
+  it("a plumbing run against the committed draft prints the result and exits 3 (#652)", () => {
+    // The pack's frozen commit is HEAD, which must hold this prereg.json (commit it first).
+    const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" });
+    const commit = head.stdout.trim();
+    const atHead = spawnSync("git", ["show", `${commit}:${K_PREREG_PATH}`], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    expect(preregHash(JSON.parse(atHead.stdout)), "HEAD must hold the working k-v1 prereg").toBe(
+      DRAFT.preregistrationHash,
+    );
+    const k = write("k3.json", { ...pack("K", complete(rows("K")), DRAFT), preregCommit: commit });
+    const none = write("n3.json", {
+      ...pack("no-recovery", complete(rows("no-recovery")), DRAFT),
+      preregCommit: commit,
+    });
+    const r = cli(["--prereg", K_PREREG_PATH, "--k", k, "--none", none, "--plumbing"]);
+    expect(r.status).toBe(3);
+    const out = JSON.parse(r.stdout);
+    expect(out.verdict).toBe("not-shown");
+    expect(out.reasons[0]).toMatch(/^LEAD_RULING_PENDING: /);
   });
 
   it("a plumbing run whose commit does not hold the pre-registration is refused (exit 1)", () => {

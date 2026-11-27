@@ -214,8 +214,15 @@
   ],
   "analysis": {
     "script": "src/actions/j-v1-analysis.ts",
-    "sha256": "f85ab65f7acf909085e8128854805be298cfe3425f9be535a30d8bf94ceb413f",
+    "sha256": "898456aa5020b5847f29c772e2a0cb15731a6545d0021245706706546c2162f3",
     "entry": "analyzeJV1",
+    "modules": [
+      {
+        "path": "src/capability/analysis-guard.ts",
+        "sha256": "1fc162197222414bda5dd0a65fce4eb11901489383b7de9f72330d083e96fc3d",
+        "role": "the shared capability-analysis guard (GitHub #652, lead ruling 2026-11-27 06:21Z) the script calls before any decision: a pack hash mismatch is refused; never shown while leadRulingPending is non-empty (LEAD_RULING_PENDING) or a row's simulated is anything but absent or false"
+      }
+    ],
     "rowSchema": "myco.capability.j-v1.trial/1",
     "rowParityFields": "instructionSha256, fixtureSha256, stepBudget, outputCeiling (spec §1.3)",
     "packRecords": "the pre-registration hash and the commit on main this pre-registration was frozen in (spec §3 item 2); the script checks the commit's form (40 lowercase hex), and the pack tooling, which has git, checks that the commit holds this prereg.json",
