@@ -69,7 +69,7 @@ of four modes (`affected` is for draft PRs only; see
 | `full` | Pushes to `main`; any Tier 2 signal (below); any changed path in a Tier 2 or tooling class; **any change under `src/` or `viewer/src/`**; TypeScript outside `test/` and `viewer/test/`; a test file a script can reach or a source names outside an import (below); any other file kind (yaml, json, py, sh, html, css, fixtures); a doc that a non-test source names; a diff it cannot compute, or over 300 files; no readable test sources | typecheck, lint, `pnpm test`, build: exactly what it ran before the planner existed | run |
 | `targeted` | Only `.md` docs and TypeScript under `test/` or `viewer/test/` | typecheck, lint, `vitest run --changed <PR base>` (the changed test files and every test importing them), the forked s0 launcher test, the core smoke set, **every directory-scanning test**, the doc tests, `pnpm schema-validate`, build | steps skipped, job green |
 | `docs` | Only `.md` docs, none of them named by a non-test source | the forked s0 launcher test, the core smoke set, **every directory-scanning test**, and the test files that name a changed doc | steps skipped, job green |
-| `affected` | A **draft** PR whose only full-suite paths are `src/` or `viewer/src/` outside every Tier 2 path, with at most 150 related test files | `check` is skipped; `check affected (ubuntu-latest)` runs typecheck, lint, `vitest run --changed <PR base>`, the related tests, the forked s0 launcher test, the core smoke set, the direct directory-scanning tests, `pnpm schema-validate`, build | run in full |
+| `affected` | A **draft** PR, any tier, unless it changes a tooling path (below), carries `full-ci`, or its diff is unknown or over 300 files | `check` is skipped; `check affected (ubuntu-latest)` runs typecheck, lint, `vitest run --changed <PR base>`, the related tests, the forked s0 launcher test, the core smoke set, the direct directory-scanning tests, `pnpm schema-validate`, build; past 150 related test files, `pnpm test` instead | run in full |
 
 Every narrow mode also runs the **safety set** (below): the gate-integrity, oracle-mutation
 (R5), fault-injection and security tests.
@@ -136,7 +136,9 @@ garbage and multi-line modes), evaluates every step's `if:` and the side jobs' j
 (beyond `check`'s `affected` skip, evaluated for every plan result and mode), a fallback
 does not reach full, or a mode runs the wrong steps.
 
-**Tier 2 always gets the full suite.** Any one of these forces `full`:
+**Tier 2 always gets the full suite before merge.** Outside a draft, any one of these forces
+`full` (in a draft, only tooling paths and `full-ci` do, and the draft's `affected` run cannot
+satisfy the required checks; see [Draft PRs](#draft-prs-affected-mode)):
 
 - the `tier-2` label (or `full-ci`);
 - a PR title or a body line that states the tier as 2 (`Tier: 2`, `**Tier 2.**`, `Tier 2 (locks)`),
@@ -177,9 +179,18 @@ python3 scripts/ci-plan.py --event pull_request --files $(git diff --name-only o
 
 ## Draft PRs: affected mode
 
-CI speed, #678. While a PR is a draft and its only full-suite paths are product source
-outside every Tier 2 path, CI runs only what the change can affect, on ubuntu only. Ready
-PRs, Tier 2 paths and pushes to `main` are unchanged.
+CI speed, #678. While a PR is a draft, CI runs only what the change can affect, on ubuntu
+only, whatever the tier. Three things still run the full jobs in a draft:
+
+- a tooling path (`.github/`, `.githooks/`, `package.json`, the lockfile, `tsconfig*`,
+  `vitest.config.ts`, `biome.json`, `test/setup/`, `test/ci-hygiene/`), because those change
+  CI itself;
+- the `full-ci` label;
+- a diff the planner cannot read, or one over 300 files.
+
+Ready PRs and pushes to `main` are unchanged. Tier 2 narrows in a draft because an
+`affected` run can never satisfy the required checks (below): the full suite is still
+required before any Tier 2 PR merges, and the safety set still runs on every push.
 
 **What runs.** `check affected (ubuntu-latest)` runs typecheck, lint, build and
 `pnpm schema-validate`, plus these tests:
@@ -194,8 +205,14 @@ PRs, Tier 2 paths and pushes to `main` are unchanged.
   test helper, or through a spawned script.
 
 The required-check modes (`targeted`, `docs`) instead keep the full scanning set, which
-also follows product modules. The myco-agent and runtime jobs run in full. No macOS runner
-is taken.
+also follows product modules. With more than 150 related test files, narrowing would save
+little, so the job runs `pnpm test` instead (`affected_all`), still on ubuntu and still under
+the non-required name. The myco-agent and runtime jobs run in full. No macOS runner is
+taken (the macOS agent job only if `agent/` changed).
+
+Replayed over the last 40 merged PRs' file lists (2026-11-27), a draft push would have been
+`affected` for 33 of them (32 narrowed, 1 whole suite, all without macOS). The other 7
+touched tooling.
 
 **Why a PR can never merge on it.** Branch protection requires `check (macos-latest)` and
 `check (ubuntu-latest)` for the PR's head commit. Neither is ever reported by an
