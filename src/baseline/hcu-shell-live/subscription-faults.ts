@@ -1,39 +1,38 @@
 /**
- * TIF-268 round 2 (verifier D1) - how the `hcu+shell` planner classes a headless Claude Code
- * call that did not complete normally. It halts on every class except an explicit per-trial
- * list (`PER_TRIAL_CLASSES`), so a class added later can only stop the run, never slip through
- * as a per-trial failure.
+ * TIF-268 - how the `hcu+shell` planner classes a headless Claude Code call. It halts on every
+ * class except an explicit per-trial list (`PER_TRIAL_CLASSES`), so a class added later can only
+ * stop the run, never slip through as a per-trial failure (round 2, verifier D1).
  *
- * PARITY WITH THE MYCO-GATE ARM (#598). The vocabulary, the structured-class mapping, the
- * precedence, the usage-limit refinement and the no-result text (stdout and stderr) are
- * #598's round-3 classifier (`src/pilot/claude-transport.ts` at #598 head fc01e69a:
- * `ERROR_CLASS`, `classOfStatus`, `USAGE_LIMIT_TEXT`, `RATE_LIMIT_TEXT`, `BILLING_TEXT`,
- * `classOfText`, `structuredClass`, `refineLimit`, `interpretResult`), matched exactly in
- * behaviour (`subscription-faults.test.ts` runs #598's `interpretResult` vectors through
- * `readPlannerCall`), because #598 has not merged and this arm must not change the
- * pilot runner's behaviour on main (`src/pilot/claude-cli.ts` keeps main's classifier, which
- * the pilot runner on main is reviewed against). `test/baseline/hcu-shell-live/
- * subscription-faults.test.ts` pins #598's vectors, and compares these expressions with the
- * pilot transport's own as soon as that module exports `USAGE_LIMIT_TEXT` (that is, once #598
- * merges): from then on, a drift between the two arms fails the suite. When #598 merges, this
- * module should import its classifier instead (follow-up in the round-2 changes comment).
+ * ONE CLASSIFIER (round 4; lead rulings 03:58Z and 05:39Z). This module holds no vocabulary,
+ * no whitespace fold and no structured-class table of its own: every decision is the myco-gate
+ * arm's merged classifier (#598 + #607), imported from `src/pilot/claude-cli.ts`, the
+ * dependency-free module `src/pilot/claude-transport.ts` re-exports it from (the very same
+ * functions, pinned by `test/pilot/claude-cli.test.ts`), so this arm does not load the pilot
+ * runner, which reaches Myco's gate and the benchmark grader.
+ *  - A call that did not complete normally: `classOfUncleanRun` (no result event: stdout and
+ *    stderr, so quota wording on plain stdout halts; an error result: its text, `errors[]` and
+ *    stderr; an unmapped structured error falls back to the text, #607 B2).
+ *  - A clean call with no valid decision: `classOfClaimlessCleanResult` on its text AND stderr
+ *    (#606 S1), with Unicode whitespace, format characters and hyphen variants folded (#606 S2,
+ *    #607 F-A), the usage-limit vocabulary including "You've hit your limit" (#607 B1) and the
+ *    narrow, numberless billing and auth phrases (#607 L1). A valid decision plays the part the
+ *    myco-gate arm's `DONE` / `NOT DONE` claim line plays: it is never reclassified
+ *    (`planner.ts`).
  *
- * Lead ruling 2026-11-27 02:18Z (on #597 and #598): the subscription's own quota wording
- * ("usage limit reached", "5-hour limit", "Weekly limit reached", "resets at ...") stops the
- * run at once with its own code, no retry, no attempt spent, reported to the lead. Only a
- * transient 429 / 529 / overloaded backs off, bounded.
- *
- * Pure and dependency-free apart from the pilot's unchanged login vocabulary (`AUTH_TEXT`).
+ * Lead ruling 2026-11-27 02:18Z (on #597 and #598): the subscription's own quota wording stops
+ * the run at once with its own code (exit 7), no retry, no attempt spent, reported to the lead.
+ * Only a transient 429 / 529 / overloaded backs off, bounded.
  */
-import { AUTH_TEXT } from "../../pilot/claude-cli.ts";
 
-export type SubscriptionFaultClass =
-  | "auth"
-  | "billing"
-  | "usage-limit"
-  | "rate-limit"
-  | "error-result"
-  | "transport-error";
+import {
+  apiKeySourceProblem,
+  classOfClaimlessCleanResult,
+  classOfUncleanRun,
+} from "../../pilot/claude-cli.ts";
+import type { PilotHarnessClass } from "../../pilot/ledger.ts";
+
+/** Every class the shared classifier can name for a planner call. */
+export type SubscriptionFaultClass = PilotHarnessClass;
 
 /** The only classes that are a per-trial failure; every other class halts the run. */
 export const PER_TRIAL_CLASSES: ReadonlySet<SubscriptionFaultClass> = new Set([
@@ -41,110 +40,36 @@ export const PER_TRIAL_CLASSES: ReadonlySet<SubscriptionFaultClass> = new Set([
   "transport-error",
 ]);
 
-/** Claude Code's structured error classes, as #598 round 2 maps them. */
-const ERROR_CLASS: Readonly<Record<string, SubscriptionFaultClass>> = {
-  rate_limit: "rate-limit",
-  overloaded: "rate-limit",
-  billing_error: "billing",
-  authentication_failed: "auth",
-  oauth_org_not_allowed: "auth",
-  account_on_hold: "auth",
-  verification_required: "auth",
-  cloud_credential_error: "auth",
-};
-
-/** HTTP status of an API error, as Claude Code reports it (`api_error_status`). */
-export function classOfStatus(status: number): SubscriptionFaultClass {
-  if (status === 429 || status === 529) return "rate-limit";
-  if (status === 401 || status === 403) return "auth";
-  if (status === 402) return "billing";
-  return "error-result";
-}
-
-/** The subscription's own quota (#598 round 2, D3). Wins over the transient wording. */
-export const USAGE_LIMIT_TEXT =
-  /usage[ _-]?limit|(?<!rate[ _-]?)limit (?:reached|exceeded|hit)|limit (?:will )?resets?|\bresets? (?:at |on |in )?(?:\d|mon|tue|wed|thu|fri|sat|sun|tomorrow)|(?:weekly|daily|monthly|hourly|session|\d+[ -]?hour|five[ -]hour|opus|sonnet|haiku|fable) limit/i;
-
-/** A transient API limit: bounded back-off. */
-export const RATE_LIMIT_TEXT = /rate[ _-]?limit|too many requests|\b429\b|\b529\b|overloaded/i;
-
-/** Credit, billing and quota wording, HTTP 402: does not clear by waiting. */
-export const BILLING_TEXT =
-  /credit balance|out of credits?|credits? (?:(?:are|is|have been|has been) )?(?:exhausted|depleted|used up|ran out)|insufficient (?:credits?|funds|balance)|billing|payment (?:required|failed|method)|\b402\b|quota|out of (?:extra )?usage/i;
-
-/** Text fallback, in #598's pinned order: login, billing, usage quota, transient limit. */
-export function classOfText(text: string): SubscriptionFaultClass | null {
-  if (AUTH_TEXT.test(text)) return "auth";
-  if (BILLING_TEXT.test(text)) return "billing";
-  if (USAGE_LIMIT_TEXT.test(text)) return "usage-limit";
-  if (RATE_LIMIT_TEXT.test(text)) return "rate-limit";
-  return null;
-}
-
-const isObj = (v: unknown): v is Record<string, unknown> =>
-  v !== null && typeof v === "object" && !Array.isArray(v);
-
-/** The structured class, if any message carries one (error class first, then HTTP status). */
-export function structuredClass(
-  messages: readonly Record<string, unknown>[],
-): SubscriptionFaultClass | null {
-  const found: SubscriptionFaultClass[] = [];
-  for (const m of messages) {
-    const inner = isObj(m.message) ? m.message : {};
-    for (const e of [m.error, inner.error])
-      if (typeof e === "string" && e !== "") found.push(ERROR_CLASS[e] ?? "error-result");
-    for (const st of [m.api_error_status, inner.api_error_status])
-      if (typeof st === "number" && Number.isInteger(st) && st >= 400)
-        found.push(classOfStatus(st));
-  }
-  if (found.length === 0) return null;
-  if (found.includes("auth")) return "auth";
-  if (found.includes("billing")) return "billing";
-  if (found.includes("rate-limit")) return "rate-limit";
-  return "error-result";
-}
-
-/** A structured limit is the usage quota when the failed run's own text names it. */
-function refineLimit(cls: SubscriptionFaultClass, text: string): SubscriptionFaultClass {
-  return cls === "rate-limit" && USAGE_LIMIT_TEXT.test(text) ? "usage-limit" : cls;
-}
-
 /**
- * The class of a call that did NOT complete normally. `result` is the last result event (null
- * when there is none). Never called for a clean result: its text is the agent's (the one
- * exception, a clean result with no decision that names the usage quota, is `planner.ts`'s).
- *
- * With no result event nothing is an agent outcome, so the raw stdout (parseable or not) is
- * classified with stderr: `${stdout}\n${stderr}`, as #598's `interpretResult` does at
- * fc01e69a (R2-D3a; lead ruling 03:05Z: quota wording on plain stdout is classified like
- * stderr). Round-3 verifier N2.
+ * The class of a call that did NOT complete normally, or null when it completed normally (a
+ * clean result: its text is the agent's). `result` is the last result event (null when there
+ * is none); `stdout` is the raw stdout, parseable or not.
  */
 export function failedCallClass(
   messages: readonly Record<string, unknown>[],
   result: Record<string, unknown> | null,
   stderr: string,
-  stdout = "",
-): SubscriptionFaultClass {
-  const structured = structuredClass(messages);
-  if (result === null) {
-    const noResultText = `${stdout}\n${stderr}`;
-    const cls =
-      structured === null ? classOfText(noResultText) : refineLimit(structured, noResultText);
-    return cls ?? "transport-error";
-  }
-  const text = typeof result.result === "string" ? result.result : "";
-  const errors = Array.isArray(result.errors)
-    ? result.errors.filter((e) => typeof e === "string")
-    : [];
-  const failedText = `${text}\n${errors.join("\n")}\n${stderr}`;
-  const cls = structured === null ? classOfText(failedText) : refineLimit(structured, failedText);
-  return cls ?? "error-result";
+  stdout: string,
+  code: number | null,
+): SubscriptionFaultClass | null {
+  return classOfUncleanRun(messages, result, stdout, stderr, code);
 }
 
 /**
- * #598's `apiKeySourceProblem`: any message naming an `apiKeySource` other than `none` means
- * the CLI is billing an API key, whatever the call's outcome.
+ * The fault class of a clean call with NO valid decision, from its text and stderr together,
+ * or null when it is the agent's turn. Never called for a call with a valid decision.
+ */
+export function undecidedCleanCallClass(
+  text: string,
+  stderr: string,
+): SubscriptionFaultClass | null {
+  return classOfClaimlessCleanResult(`${text}\n${stderr}`);
+}
+
+/**
+ * The myco-gate arm's `apiKeySourceProblem`: any message naming an `apiKeySource` other than
+ * `none` means the CLI is billing an API key, whatever the call's outcome.
  */
 export function reportsApiKeySource(messages: readonly Record<string, unknown>[]): boolean {
-  return messages.some((m) => Object.hasOwn(m, "apiKeySource") && m.apiKeySource !== "none");
+  return apiKeySourceProblem(messages) !== null;
 }
