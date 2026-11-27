@@ -8,7 +8,9 @@ import {
   appendFileSync,
   cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -29,11 +31,13 @@ import {
 } from "../../src/proof/bundle.ts";
 import { type CliIo, hostRedaction, main } from "../../src/proof/cli.ts";
 import {
+  assertPilotOutside,
   PILOT_ATTEMPTS_FILE,
   PILOT_DOC_FILE,
   PILOT_EVIDENCE,
   PILOT_GATE_TASKS_FILE,
   pilotProofInput,
+  writePilotBundle,
 } from "../../src/proof/from-pilot.ts";
 import { sha256Hex } from "../../src/proof/ledger.ts";
 import { config, PUBLISHED, ROOT, SOURCES, tmp } from "../pilot/helpers.ts";
@@ -320,8 +324,20 @@ describe("refusals (codes and structural messages only)", () => {
     expect(codeOf(() => pilotProofInput(dir, bad))).toBe("PROOF_PILOT_TRIAL");
   });
 
-  it("a trial key the progress ledger does not have", () => {
+  it("a trial key the progress ledger does not have (the message never quotes the key)", () => {
     expect(codeOf(() => pilotProofInput(plain.dir, "no-such-trial"))).toBe("PROOF_PILOT_TRIAL");
+    const message = messageOf(() => pilotProofInput(plain.dir, "no-such-trial"));
+    expect(message).toContain("0 times");
+    expect(message).not.toContain("no-such-trial");
+  });
+
+  it("an empty progress ledger (no header) is refused as a progress ledger fault", () => {
+    const dir = copyRun(plain.dir);
+    writeFileSync(join(dir, PROGRESS_FILE), "");
+    expect(codeOf(() => pilotProofInput(dir, key()))).toBe("PROOF_PILOT_PROGRESS");
+    expect(messageOf(() => pilotProofInput(dir, key()))).toBe(
+      "PROOF_PILOT_PROGRESS: the progress ledger has no header",
+    );
   });
 
   it("a directory with no progress ledger, or one that does not load", () => {
@@ -409,6 +425,11 @@ describe("refusals (codes and structural messages only)", () => {
     expect(codeOf(() => pilotProofInput(dir, withLedger.keys[0] as string))).toBe(
       "PROOF_LEDGER_ANCHOR",
     );
+    // Only #518's issue count is passed on: no key, path, head digest or anchor line.
+    const message = messageOf(() => pilotProofInput(dir, withLedger.keys[0] as string));
+    expect(message).toMatch(
+      /^PROOF_LEDGER_ANCHOR: the attempt ledger disagrees with its external anchor \(\d+ issues\)$/,
+    );
   });
 
   it("#518's ledger with an edited event", () => {
@@ -421,6 +442,11 @@ describe("refusals (codes and structural messages only)", () => {
     expect(codeOf(() => pilotProofInput(dir, withLedger.keys[0] as string))).toBe(
       "PROOF_LEDGER_CHAIN",
     );
+    // The chain message is narrowed (#518's check, issue count): never a ledger line or value.
+    const message = messageOf(() => pilotProofInput(dir, withLedger.keys[0] as string));
+    expect(message).toContain("1 issue(s)");
+    for (const leak of ["fc-v1-999", withLedger.keys[0] as string, dir, "{", "sha256"])
+      expect(message, leak).not.toContain(leak);
   });
 
   it("a torn ledger or anchor line", () => {
@@ -522,7 +548,194 @@ describe("CLI: proof.ts export-pilot", () => {
   });
 
   it("usage: --trial and --out are required", () => {
-    expect(run(["export-pilot", plain.dir, "--out", join(tmp(), "b.json")]).code).toBe(2);
-    expect(run(["export-pilot", plain.dir, "--trial", plain.keys[0] as string]).code).toBe(2);
+    // The message, not only the exit code: an unknown command also exits 2 (round-1 N4).
+    for (const argv of [
+      ["export-pilot", plain.dir, "--out", join(tmp(), "b.json")],
+      ["export-pilot", plain.dir, "--trial", plain.keys[0] as string],
+    ]) {
+      const r = run(argv);
+      expect(r.code).toBe(2);
+      expect(r.err).toContain("export-pilot needs --trial and --out");
+    }
+  });
+});
+
+describe("export-pilot has no write path into the run (round-1 B1)", () => {
+  const run = (argv: string[]) => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const io: CliIo = { out: (t) => out.push(t), err: (t) => err.push(t) };
+    return { code: main(argv, io), out: out.join(""), err: err.join("") };
+  };
+  const key = () => withLedger.keys[0] as string;
+  /** Export `dir`'s first trial to `out`; expect the B1 refusal and every run file unchanged. */
+  const refused = (dir: string, out: string, runDirArg = dir) => {
+    const files = [
+      join(dir, PROGRESS_FILE),
+      join(dir, PILOT_ATTEMPTS_FILE),
+      join(dir, "trials", key(), PILOT_DOC_FILE),
+      join(dir, "trials", key(), PILOT_GATE_TASKS_FILE),
+      anchorPathFor(dir),
+    ];
+    const before = files.map((f) => readFileSync(f));
+    const r = run(["export-pilot", runDirArg, "--trial", key(), "--out", out]);
+    expect(r.code, r.out + r.err).toBe(1);
+    expect(JSON.parse(r.out)).toMatchObject({ ok: false, code: "PROOF_PILOT_OUT" });
+    expect(r.out).not.toContain(dir);
+    files.forEach((f, i) => {
+      expect(readFileSync(f).equals(before[i] as Buffer), f).toBe(true);
+    });
+  };
+
+  it("refuses an --out that overwrites the captured document or the runner's ledgers", () => {
+    const dir = copyRun(withLedger.dir);
+    refused(dir, join(dir, "trials", key(), PILOT_DOC_FILE));
+    refused(dir, join(dir, PROGRESS_FILE));
+    refused(dir, join(dir, PILOT_ATTEMPTS_FILE));
+    refused(dir, dir);
+  });
+
+  it("refuses a new file inside the run directory (the natural trials/<KEY>/bundle.json)", () => {
+    const dir = copyRun(withLedger.dir);
+    const out = join(dir, "trials", key(), "bundle.json");
+    refused(dir, out);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it("refuses the external anchor and its directory", () => {
+    const dir = copyRun(withLedger.dir);
+    refused(dir, anchorPathFor(dir));
+    const out = join(dirname(anchorPathFor(dir)), "bundle.json");
+    refused(dir, out);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it("follows a symlinked parent directory into the run", () => {
+    const dir = copyRun(withLedger.dir);
+    const link = join(tmp(), "into-run");
+    symlinkSync(join(dir, "trials", key()), link);
+    refused(dir, join(link, "bundle.json"));
+    expect(existsSync(join(dir, "trials", key(), "bundle.json"))).toBe(false);
+  });
+
+  it("refuses an --out that is a symlink, even a dangling one (it would create its target)", () => {
+    const dir = copyRun(withLedger.dir);
+    const target = join(dir, "created-by-export.json");
+    const dangling = join(tmp(), "dangling.json");
+    symlinkSync(target, dangling);
+    refused(dir, dangling);
+    expect(existsSync(target)).toBe(false);
+    // A symlink to a file outside the run is refused too: the rule is "no symlink at --out".
+    const elsewhere = join(tmp(), "real.json");
+    writeFileSync(elsewhere, "keep\n");
+    const link = join(tmp(), "link.json");
+    symlinkSync(elsewhere, link);
+    refused(dir, link);
+    expect(readFileSync(elsewhere, "utf8")).toBe("keep\n");
+  });
+
+  it("a run directory passed through a symlink still guards the real run and both anchor dirs", () => {
+    const dir = copyRun(withLedger.dir);
+    const viaParent = tmp("myco-proof-pilot-via-");
+    const via = join(viaParent, basename(dir));
+    symlinkSync(dir, via);
+    // The reader looks for the anchor beside the path as given: give it one there.
+    mkdirSync(dirname(anchorPathFor(via)), { recursive: true });
+    cpSync(anchorPathFor(dir), anchorPathFor(via));
+    refused(dir, join(dir, "trials", key(), "b.json"), via);
+    refused(dir, join(dirname(anchorPathFor(via)), "b.json"), via);
+    // The anchor directory beside the REAL run directory, which the path as given does not name.
+    refused(dir, join(dirname(anchorPathFor(dir)), "b.json"), via);
+  });
+
+  it("the refusal comes before anything is read: a broken run still gets PROOF_PILOT_OUT", () => {
+    const dir = copyRun(withLedger.dir);
+    rmSync(join(dir, PROGRESS_FILE));
+    const r = run(["export-pilot", dir, "--trial", key(), "--out", join(dir, "b.json")]);
+    expect(JSON.parse(r.out)).toMatchObject({ ok: false, code: "PROOF_PILOT_OUT" });
+    expect(existsSync(join(dir, "b.json"))).toBe(false);
+  });
+
+  it("an --out beside the run (a sibling whose name starts with the run's) is allowed", () => {
+    const dir = copyRun(withLedger.dir);
+    const sibling = `${dir}-bundles`;
+    mkdirSync(sibling);
+    const out = join(sibling, "b.json");
+    const r = run(["export-pilot", dir, "--trial", key(), "--out", out]);
+    expect(r.code, r.out + r.err).toBe(0);
+    expect(existsSync(out)).toBe(true);
+  });
+
+  it("an --out that is a hard link to a run file is replaced, never written through", () => {
+    const dir = copyRun(withLedger.dir);
+    const doc = join(dir, "trials", key(), PILOT_DOC_FILE);
+    const before = readFileSync(doc);
+    const out = join(tmp(), "hardlink.json");
+    linkSync(doc, out);
+    const r = run(["export-pilot", dir, "--trial", key(), "--out", out]);
+    expect(r.code, r.out + r.err).toBe(0);
+    expect(readFileSync(doc).equals(before)).toBe(true);
+    expect(JSON.parse(readFileSync(out, "utf8"))).toHaveProperty("head");
+    // No temporary file is left beside --out.
+    expect(readdirSync(dirname(out))).toEqual(["hardlink.json"]);
+  });
+
+  it("assertPilotOutside and writePilotBundle refuse on their own, with a structural message", () => {
+    const dir = copyRun(withLedger.dir);
+    const inside = join(dir, "x.json");
+    expect(codeOf(() => assertPilotOutside(dir, inside))).toBe("PROOF_PILOT_OUT");
+    expect(messageOf(() => assertPilotOutside(dir, inside))).not.toContain(dir);
+    expect(codeOf(() => writePilotBundle(dir, inside, "{}"))).toBe("PROOF_PILOT_OUT");
+    expect(existsSync(inside)).toBe(false);
+  });
+});
+
+describe("symlinks above the evidence files are refused (round-1 N3)", () => {
+  const key = () => withLedger.keys[0] as string;
+  /** Replace `path` (inside a copy of the run) by a symlink to a copy of the same bytes. */
+  const swapForLink = (path: string) => {
+    const real = join(tmp(), basename(path));
+    cpSync(path, real, { recursive: true });
+    rmSync(path, { recursive: true });
+    symlinkSync(real, path);
+  };
+
+  it("a symlinked trials/<KEY> directory, even one holding the right bytes", () => {
+    const dir = copyRun(withLedger.dir);
+    swapForLink(join(dir, "trials", key()));
+    expect(codeOf(() => pilotProofInput(dir, key()))).toBe("PROOF_PILOT_EVIDENCE");
+  });
+
+  it("a symlinked trials directory", () => {
+    const dir = copyRun(withLedger.dir);
+    swapForLink(join(dir, "trials"));
+    expect(codeOf(() => pilotProofInput(dir, key()))).toBe("PROOF_PILOT_EVIDENCE");
+  });
+
+  it("a symlinked progress ledger", () => {
+    const dir = copyRun(withLedger.dir);
+    swapForLink(join(dir, PROGRESS_FILE));
+    expect(codeOf(() => pilotProofInput(dir, key()))).toBe("PROOF_PILOT_PROGRESS");
+  });
+
+  it("a symlinked attempt ledger, and a dangling one is not read as 'no ledger'", () => {
+    const dir = copyRun(withLedger.dir);
+    const path = join(dir, PILOT_ATTEMPTS_FILE);
+    swapForLink(path);
+    expect(codeOf(() => pilotProofInput(dir, key()))).toBe("PROOF_LEDGER_CHAIN");
+    rmSync(path);
+    symlinkSync(join(tmp(), "gone.jsonl"), path);
+    expect(codeOf(() => pilotProofInput(dir, key()))).toBe("PROOF_LEDGER_CHAIN");
+  });
+
+  it("a dangling SIMULATED symlink still marks the run simulated", () => {
+    const dir = copyRun(plain.dir);
+    const path = join(dir, PROGRESS_FILE);
+    const [header, ...rest] = readFileSync(path, "utf8").trim().split("\n");
+    const h = JSON.parse(header as string) as Record<string, unknown>;
+    writeFileSync(path, `${[JSON.stringify({ ...h, simulated: false }), ...rest].join("\n")}\n`);
+    rmSync(join(dir, SIMULATED_FILE));
+    symlinkSync(join(tmp(), "gone"), join(dir, SIMULATED_FILE));
+    expect(pilotProofInput(dir, plain.keys[0] as string).input.simulated).toBe(true);
   });
 });
