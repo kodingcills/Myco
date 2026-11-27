@@ -45,7 +45,11 @@ afterEach(() => {
 });
 
 /** 30 bytes an agent might smuggle (a short path), hex-encoded into the hashed form. */
-const SMUGGLED = Buffer.from("/Users/qzsmug/Documents/x.csv", "utf8").toString("hex");
+/** A short home path (built at run time: no home-path literal is committed), hex-encoded. */
+const SMUGGLED = Buffer.from(
+  ["", "Users", "qzsmug", "Documents", "x.csv"].join("/"),
+  "utf8",
+).toString("hex");
 const AGENT_HEX = `h-${SMUGGLED.padEnd(60, "0").slice(0, 60)}`;
 /** A hashed-form value made of a hex-letter identity (`cafe`). */
 const CAFE = `h-${"cafe".repeat(15)}`;

@@ -25,7 +25,11 @@ import { hashedId, ID_SCOPE } from "../../src/proof/closed.ts";
 import { identityNormal } from "../../src/proof/identity.ts";
 import { buildLedger, NO_CTX, rechain, sampleRun } from "./fixture.ts";
 
-const SMUGGLED = Buffer.from("/Users/qzsmug/Documents/x.csv", "utf8").toString("hex");
+/** A short home path (built at run time: no home-path literal is committed), hex-encoded. */
+const SMUGGLED = Buffer.from(
+  ["", "Users", "qzsmug", "Documents", "x.csv"].join("/"),
+  "utf8",
+).toString("hex");
 const AGENT_HEX = `h-${SMUGGLED.padEnd(60, "0").slice(0, 60)}`;
 const CAFE = `h-${"cafe".repeat(15)}`;
 

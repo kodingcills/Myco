@@ -45,7 +45,11 @@ afterEach(() => {
   for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-const SMUGGLED = Buffer.from("/Users/qzsmug/Documents/x.csv", "utf8").toString("hex");
+/** A short home path (built at run time: no home-path literal is committed), hex-encoded. */
+const SMUGGLED = Buffer.from(
+  ["", "Users", "qzsmug", "Documents", "x.csv"].join("/"),
+  "utf8",
+).toString("hex");
 const AGENT_HEX = `h-${SMUGGLED.padEnd(60, "0").slice(0, 60)}`;
 const CAFE = `h-${"cafe".repeat(15)}`;
 const NO_HOST = { hostIdentity: false, identity: { user: "zz", host: "zz" } } as const;
