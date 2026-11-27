@@ -1,0 +1,7 @@
+## Summary
+
+Adds a heartbeat check.
+
+Refs #685
+
+Tier: 1
