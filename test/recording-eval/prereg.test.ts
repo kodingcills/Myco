@@ -15,7 +15,10 @@ import { PREREG_DIR, ROOT, readPrereg } from "./helpers.ts";
 
 interface PreregDoc {
   analysis: { files: { path: string; sha256: string }[] };
-  bar: { sequence: Record<string, unknown>[]; guardrails: { id: string }[] };
+  bar: {
+    sequence: Record<string, unknown>[];
+    guardrails: { id: string; text?: string; analysisScans?: string }[];
+  };
   arms: { primary: unknown; secondary: Record<string, unknown>[]; rowKind: string };
   grader: { version: string };
   stepBudget: number;
