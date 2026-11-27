@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 const ALLOWED_EXTERNAL = new Set([
   "node:child_process",
+  "node:crypto",
   "node:fs",
   "node:os",
   "node:path",

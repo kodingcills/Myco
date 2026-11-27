@@ -25,7 +25,9 @@
  * A ledger is a harness artifact: no code path builds one from raw run inputs. What an importer
  * records is TRUSTED as harness output (it validated, but a validator cannot tell who chose the
  * hex), so a dataset written before #579 must be re-exported from its source store, not
- * re-imported.
+ * re-imported. The keyed provenance seal (`seal.ts`, #599) closes that gap where a surface
+ * adopts it: an importer refuses an artifact whose seal does not hold under the harness key, so
+ * a hand-edited artifact never reaches a ledger (track Q's `bundleHashLedger` requires it).
  *
  * This module imports nothing from any surface (and nothing from `src/benchmark`): each surface
  * keeps its own hash function and domain tag and passes it in.
@@ -37,9 +39,16 @@ export const HASHED_FORM = /^h-[0-9a-f]{60}$/;
 /** Whether `value` is exactly the hashed form (says nothing about who produced it). */
 export const isHashedForm = (value: string): boolean => HASHED_FORM.test(value);
 
+/**
+ * A scope for a value: the exact JSON path of a field (array indexes included) inside ONE owning
+ * artifact. Every surface binds the same way: the episode export and track U by episode id
+ * (`episodeScope`), track Q's proof bundles by run id (`proofScope` in `src/proof/closed.ts`).
+ */
+export const ownerScope = (owner: string, path: string): string => `${owner}\u0000${path}`;
+
 /** A scope for a value: the JSON path of a field inside one episode (`episodeId` + path). */
 export const episodeScope = (episodeId: string, path: string): string =>
-  `${episodeId}\u0000${path}`;
+  ownerScope(episodeId, path);
 
 /**
  * The hashed values the harness itself produced, each bound to the scope it was produced in.
