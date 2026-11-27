@@ -646,6 +646,7 @@ describe("ratification: never shown while a lead ruling is pending (round-1 B1)"
     ["a ruling without a source", { leadRulings: [{ ...RULING, source: "" }] }],
     ["a ruling without text", { leadRulings: [{ ...RULING, ruling: "" }] }],
     ["pending list malformed", { proposedPendingLeadRuling: "none" }],
+    ["pending list an object", { proposedPendingLeadRuling: {} }],
     ["rulings malformed", { leadRulings: "yes" }],
   ])("%s caps the decision at not shown", (_what, over) => {
     const prereg = { ...PREREG, ...over } as unknown as VPrereg;
@@ -772,6 +773,20 @@ describe("refusals added in round 2", () => {
       `BAD_DESKTOP_ACTIONS:C1|${TASK_IDS[2]}`,
     );
   });
+
+  it.each(["maxTokensByOneWorker", "workersCompletedAfterKill"])(
+    "a V control record without %s is refused (it cannot be read as 0)",
+    (field) => {
+      const res = refused(
+        editAt("V", 2, (r) => {
+          const controls = { ...CLEAN } as Record<string, unknown>;
+          delete controls[field];
+          return { ...r, controls };
+        }),
+      );
+      expect(res.reasons).toEqual([`CONTROLS_INVALID:V|${TASK_IDS[2]}:${field}`]);
+    },
+  );
 
   it("a V row whose tokens disagree with its control record is refused", () => {
     const res = refused(editAt("V", 2, (r) => ({ ...r, tokensUsed: 1 })));
