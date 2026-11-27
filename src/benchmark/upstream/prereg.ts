@@ -1,0 +1,343 @@
+/**
+ * Shape check and analysis gate for the confirmatory R1 on the public OSWorld subset (draft
+ * pre-registration docs/benchmark/upstream/r1-public-prereg.json), under the lead's
+ * 2026-11-27 rulings: 13:55Z harness (#700 comment 7220110528), 14:05Z retarget to the Myco
+ * Linux fleet, 14:37Z scope, 15:21Z UTM parity reference and 15:26Z N3 and 18:11Z self-check arm (#741).
+ *
+ * `preregProblems` checks the record states what the rulings require: OSWorld's own harness
+ * at the pinned commit on the `myco-fleet` provider (adapter, image, image digest field), its
+ * standard Claude runner, one action layer ("OSWorld controller, identical across arms"),
+ * where DONE is intercepted, exactly the three arms on the shared runner, action layer,
+ * provider and budget, the upstream evaluate path as grader, the WAA phase-2 entry, a parity
+ * section (parity before any live run, the committed sample by hash, the UTM reference as a
+ * stated deviation), the self-check arm and its labelled ablations (18:11Z), and the six ruling citations.
+ *
+ * `analyzePublicR1` refuses "shown" (the #652 rule) while:
+ *  - the record has any shape problem, is not a committed pre-registration (by hash), is not
+ *    frozen, has a pending lead ruling, any field still says PENDING, or its image is not
+ *    pinned by digest;
+ *  - no parity assessment for this record's sample has passed;
+ *  - a row is not LIVE, is simulated (`simulated` present and not exactly false), or was not
+ *    graded by the upstream evaluate path at the pin (the MOCK metric runner's
+ *    `upstream-metric-mock/1` is refused like any other grader);
+ *  - any arm's LIVE rows do not cover exactly the pre-registered n distinct subset tasks.
+ * Only then does it apply the primary outcome: 0 false accepts (the gate accepted DONE and
+ * the upstream evaluator did not pass; ungradable counts against the bar). Reasons are codes.
+ * It imports nothing from the gate or the gate hook.
+ */
+import { createHash } from "node:crypto";
+import type { ParityAssessment } from "./parity.ts";
+import { MYCO_FLEET, OSWORLD_HARNESS } from "./pins.ts";
+import { OSWORLD_EVALUATE_GRADER } from "./r1-grade.ts";
+
+/** The action-layer statement the 14:05Z ruling requires, verbatim. */
+export const ACTION_LAYER_SUMMARY = "OSWorld controller, identical across arms";
+/** Same phrase as parity.ts PARITY_RULE_PHRASE (kept here so prereg.ts imports no values from it). */
+export const PARITY_RULE_PHRASE = "Parity must pass before any live run";
+export const PARITY_SAMPLE_PATH = "docs/benchmark/upstream/r1-parity-sample.json";
+export const PARITY_HARNESS_PATH = "src/benchmark/upstream/fleet/osworld_parity.py";
+export const PARITY_REFERENCE_HYPERVISOR = "UTM (QEMU with HVF)";
+/** The lead rulings the record must cite, by time (#700 13:55Z; #741 14:05Z, 14:37Z, 15:21Z, 15:26Z, 18:11Z). */
+export const REQUIRED_RULINGS = [
+  "2026-11-27T13:55Z",
+  "2026-11-27T14:05Z",
+  "2026-11-27T14:37Z",
+  "2026-11-27T15:21Z",
+  "2026-11-27T15:26Z",
+  "2026-11-27T18:11Z",
+] as const;
+
+/**
+ * The primary self-check arm (lead rulings 15:26Z and 18:11Z): on the first DONE a fixed shell
+ * dump of the saved content through the same controller, handed back on the WAIT turn with a
+ * fixed re-verify message; the model judges. Its only code is the fail-closed one.
+ */
+export const SELF_CHECK_ARM = "self-check";
+export const SELF_CHECK_FORM = "model-reverify-dump";
+export const SELF_CHECK_RULING = "2026-11-27T18:11Z";
+export const SELF_CHECK_CODES = ["DUMP_UNAVAILABLE"] as const;
+/** 18:11Z: the fixed-probe rules and the prompt suffix, as labelled ablations only. */
+export const SELF_CHECK_ABLATIONS = ["self-check-rules", "self-check-prompt-suffix"] as const;
+/** What the self-check must never read; each must be named in `selfCheck.mayNotRead`. */
+export const SELF_CHECK_MAY_NOT_READ = [
+  "oracle",
+  "task configuration",
+  "gold",
+  "fixtures",
+  "ground truth",
+  "evaluator code",
+  "result.txt",
+] as const;
+
+export const R1_ARMS = ["no-gate", "gate-before-done", "self-check"] as const;
+export type R1Arm = (typeof R1_ARMS)[number];
+export const GATED_ARM: R1Arm = "gate-before-done";
+
+/** WAA, deferred to phase 2: the entry the record must keep. */
+export const WAA_PHASE2_ENTRY =
+  "WAA office subset (64 tasks @ eb220c4dcf64) via WAA's own Windows 11 image, in-VM server, evaluators and runner: deferred, not dropped.";
+
+export interface PublicR1Prereg {
+  readonly status: "draft" | "frozen";
+  readonly taskSet: string;
+  readonly n: number;
+  readonly leadRulingPending: readonly string[];
+  readonly [field: string]: unknown;
+}
+
+export interface PublicR1Row {
+  readonly taskSetVersion: string;
+  readonly taskId: string;
+  readonly arm: string;
+  readonly label: "LIVE" | "MOCK" | "SIMULATED";
+  readonly graderVersion: string;
+  readonly agentClaimedDone: boolean;
+  readonly upstreamStatus: "pass" | "fail" | "ungradable";
+  readonly gateVerdict: "verified" | "refuted" | "uncertain" | null;
+  /** Refused as simulated unless absent or exactly false. */
+  readonly simulated?: unknown;
+}
+
+const IMAGE_DIGEST = /^sha256:[0-9a-f]{64}$/;
+
+export interface PublicR1Analysis {
+  readonly verdict: "shown" | "not-shown" | "refused";
+  readonly reasons: readonly string[];
+  readonly falseDone: number;
+  readonly falseAccepts: number;
+  readonly caught: number;
+}
+
+/** Canonical JSON: object keys sorted at every level, no whitespace. */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object")
+    return `{${Object.keys(value)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`)
+      .join(",")}}`;
+  return JSON.stringify(value);
+}
+
+/** The pre-registration hash quoted in the .md: SHA-256 of the canonical JSON. */
+export const preregSha256 = (prereg: unknown) =>
+  createHash("sha256").update(canonicalJson(prereg)).digest("hex");
+
+const obj = (v: unknown): Record<string, unknown> =>
+  v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+
+/**
+ * Codes for every way the record misses what the rulings require (13:55Z harness, 14:05Z
+ * retarget to the fleet, 14:37Z scope, 15:21Z UTM reference, 15:26Z and 18:11Z self-check arm: no arm
+ * changes the prompt, and arm (c) is the pre-registered dump and model re-verify, the probe rules and suffix only labelled ablations). `paritySampleSha256` is the hash
+ * of the committed parity sample (docs/benchmark/upstream/r1-parity-sample.json).
+ */
+export function preregProblems(
+  prereg: PublicR1Prereg,
+  subsetSize: number,
+  paritySampleSha256: string,
+): string[] {
+  const out: string[] = [];
+  const harness = obj(prereg.harness);
+  if (harness.repo !== OSWORLD_HARNESS.repo || harness.commit !== OSWORLD_HARNESS.commit)
+    out.push("HARNESS_NOT_PINNED");
+  // 14:05Z: the provider is the Myco Linux fleet, with its adapter, image and image digest.
+  const provider = obj(harness.provider);
+  if (
+    provider.name !== MYCO_FLEET.provider ||
+    provider.adapter !== MYCO_FLEET.adapter ||
+    provider.image !== MYCO_FLEET.image ||
+    typeof provider.imageDigest !== "string"
+  )
+    out.push("HARNESS_PROVIDER_NOT_FLEET");
+  const runner = obj(prereg.agentRunner);
+  if (runner.file !== OSWORLD_HARNESS.agentRunner || runner.commit !== OSWORLD_HARNESS.commit)
+    out.push("AGENT_RUNNER_NOT_PINNED");
+
+  const layer = obj(prereg.actionLayer);
+  if (layer.identicalAcrossArms !== true || layer.summary !== ACTION_LAYER_SUMMARY)
+    out.push("ACTION_LAYER_NOT_ASSERTED_IDENTICAL");
+  if (
+    layer.actionSpace !== OSWORLD_HARNESS.actionSpace ||
+    layer.observationType !== OSWORLD_HARNESS.observationType ||
+    layer.executor !== OSWORLD_HARNESS.controller
+  )
+    out.push("ACTION_LAYER_NOT_UPSTREAM");
+
+  const arms = Array.isArray(prereg.arms) ? prereg.arms.map(obj) : [];
+  if (canonicalJson(arms.map((a) => a.id)) !== canonicalJson(R1_ARMS)) out.push("ARMS_NOT_RULED");
+  for (const a of arms) {
+    if (a.actionLayer !== "shared") out.push(`ARM_ACTION_LAYER_DIFFERS:${String(a.id)}`);
+    if (a.agentRunner !== "shared") out.push(`ARM_RUNNER_DIFFERS:${String(a.id)}`);
+    if (a.budget !== "shared") out.push(`ARM_BUDGET_DIFFERS:${String(a.id)}`);
+    if (a.provider !== "shared") out.push(`ARM_PROVIDER_DIFFERS:${String(a.id)}`);
+    if ((a.gate === true) !== (a.id === GATED_ARM)) out.push(`ARM_GATE_WRONG:${String(a.id)}`);
+    // N3: no arm changes the prompt (the prompt-suffix variant is not an arm).
+    if (a.promptSuffix !== null) out.push(`ARM_PROMPT_DIFFERS:${String(a.id)}`);
+  }
+  // N3 (15:26Z): the self-check arm is the structural re-check, pre-registered with its probe
+  // pin, its budget parity and what it may never read.
+  const selfCheck = obj(arms.find((a) => a.id === SELF_CHECK_ARM)?.selfCheck);
+  const mayNotRead = Array.isArray(selfCheck.mayNotRead) ? selfCheck.mayNotRead.map(String) : [];
+  if (
+    selfCheck.form !== SELF_CHECK_FORM ||
+    selfCheck.ruling !== SELF_CHECK_RULING ||
+    selfCheck.primary !== true ||
+    !/^[0-9a-f]{64}$/.test(String(selfCheck.dumpSha256)) ||
+    canonicalJson(selfCheck.codes) !== canonicalJson(SELF_CHECK_CODES) ||
+    typeof selfCheck.budgetParity !== "string" ||
+    typeof selfCheck.message !== "string" ||
+    typeof selfCheck.onDone !== "string" ||
+    typeof selfCheck.nothingSaved !== "string" ||
+    !selfCheck.nothingSaved.startsWith("Never a refusal") ||
+    !Array.isArray(selfCheck.mayRead) ||
+    !SELF_CHECK_MAY_NOT_READ.every((k) => mayNotRead.some((m) => m.includes(k)))
+  )
+    out.push("SELF_CHECK_NOT_RULED");
+  if (prereg.leadRulingPending.some((p) => /^self-check-form\b/.test(p)))
+    out.push("STALE_SELF_CHECK_PENDING");
+  // 18:11Z: the fixed-probe rules and the prompt suffix are labelled ablations, never a headline
+  // arm, each with the extra trials it would cost stated.
+  const ablations = Array.isArray(prereg.ablations) ? prereg.ablations.map(obj) : [];
+  if (
+    canonicalJson(ablations.map((a) => a.id)) !== canonicalJson(SELF_CHECK_ABLATIONS) ||
+    ablations.some(
+      (a) =>
+        a.headline !== false ||
+        !String(a.label).startsWith("ABLATION, never the headline baseline") ||
+        typeof a.extraTrials !== "number" ||
+        !(a.extraTrials > 0) ||
+        (R1_ARMS as readonly string[]).includes(String(a.id)),
+    )
+  )
+    out.push("ABLATIONS_NOT_LABELLED");
+  const gi = obj(prereg.gateInterception);
+  if (
+    canonicalJson(gi.request) !== canonicalJson(["taskId", "runId", "claim"]) ||
+    gi.api !== "myco.gate/v1" ||
+    gi.failClosed !== true ||
+    typeof gi.where !== "string" ||
+    typeof gi.how !== "string"
+  )
+    out.push("GATE_INTERCEPTION_MISSING");
+
+  const grader = obj(prereg.grader);
+  if (grader.version !== OSWORLD_EVALUATE_GRADER || grader.path !== OSWORLD_HARNESS.grader)
+    out.push("GRADER_NOT_UPSTREAM_EVALUATE");
+
+  const phase2 = Array.isArray(prereg.phase2) ? prereg.phase2 : [];
+  if (!phase2.includes(WAA_PHASE2_ENTRY)) out.push("WAA_PHASE2_MISSING");
+
+  if (prereg.subsetSize !== subsetSize || prereg.n !== subsetSize) out.push("SUBSET_SIZE_MISMATCH");
+  if (prereg.leadRulingPending.some((p) => /^harness\b/.test(p))) out.push("STALE_HARNESS_PENDING");
+
+  // 14:05Z: a parity section, and parity must pass before any live run; 15:21Z: the reference
+  // is OSWorld's guest image in UTM, recorded as a stated deviation, never VMware.
+  const parity = obj(prereg.parity);
+  const reference = obj(parity.reference);
+  if (
+    typeof parity.rule !== "string" ||
+    !parity.rule.includes(PARITY_RULE_PHRASE) ||
+    parity.sample !== PARITY_SAMPLE_PATH ||
+    parity.harness !== PARITY_HARNESS_PATH ||
+    parity.grader !== OSWORLD_EVALUATE_GRADER ||
+    obj(parity.fleet).provider !== MYCO_FLEET.provider
+  )
+    out.push("PARITY_MISSING");
+  if (parity.sampleSha256 !== paritySampleSha256) out.push("PARITY_SAMPLE_MISMATCH");
+  if (
+    reference.provider !== MYCO_FLEET.referenceProvider ||
+    reference.hypervisor !== PARITY_REFERENCE_HYPERVISOR ||
+    typeof reference.deviation !== "string" ||
+    !reference.deviation.startsWith("STATED DEVIATION")
+  )
+    out.push("PARITY_REFERENCE_NOT_RULED");
+
+  const cited = new Set(
+    (Array.isArray(prereg.rulings) ? prereg.rulings : []).map((r) => obj(r).at),
+  );
+  if (
+    !REQUIRED_RULINGS.every((t) => cited.has(t)) ||
+    typeof prereg.ruling !== "string" ||
+    !REQUIRED_RULINGS.every((t) => (prereg.ruling as string).includes(t.slice(11, 16)))
+  )
+    out.push("RULINGS_NOT_CITED");
+  return out;
+}
+
+function pendingFields(prereg: PublicR1Prereg): string[] {
+  const out: string[] = [];
+  const visit = (v: unknown, path: string) => {
+    if (typeof v === "string" && /^PENDING\b/.test(v)) out.push(path);
+    else if (Array.isArray(v)) for (const [i, x] of v.entries()) visit(x, `${path}[${i}]`);
+    else if (v && typeof v === "object")
+      for (const [k, x] of Object.entries(v))
+        if (k !== "leadRulingPending") visit(x, path ? `${path}.${k}` : k);
+  };
+  visit(prereg, "");
+  return out;
+}
+
+export interface PublicR1Context {
+  /** The parity assessment (parity.ts `assessParity`); parity must pass before any live run. */
+  readonly parity: ParityAssessment | null;
+  /** Hashes (`preregSha256`) of the pre-registrations committed to the repository. */
+  readonly committedPreregHashes: ReadonlySet<string>;
+}
+
+export function analyzePublicR1(
+  prereg: PublicR1Prereg,
+  subsetTaskIds: ReadonlySet<string>,
+  rows: readonly PublicR1Row[],
+  context: PublicR1Context,
+): PublicR1Analysis {
+  const reasons: string[] = [];
+  const parity = obj(prereg.parity);
+  for (const p of preregProblems(prereg, subsetTaskIds.size, String(context.parity?.sampleSha256)))
+    reasons.push(`PREREG_INVALID:${p}`);
+  if (!context.committedPreregHashes.has(preregSha256(prereg)))
+    reasons.push("PREREG_NOT_COMMITTED");
+  if (prereg.status !== "frozen") reasons.push("PREREG_NOT_FROZEN");
+  if (!Array.isArray(prereg.leadRulingPending) || prereg.leadRulingPending.length > 0)
+    reasons.push("LEAD_RULING_PENDING");
+  for (const f of pendingFields(prereg)) reasons.push(`FIELD_PENDING:${f}`);
+  if (!IMAGE_DIGEST.test(String(obj(obj(prereg.harness).provider).imageDigest)))
+    reasons.push("IMAGE_DIGEST_NOT_PINNED");
+  if (
+    context.parity?.passed !== true ||
+    context.parity.reasons.length > 0 ||
+    context.parity.sampleSha256 !== parity.sampleSha256
+  )
+    reasons.push("PARITY_NOT_PASSED");
+
+  const gated = rows.filter((r) => r.arm === GATED_ARM);
+  if (rows.some((r) => r.label !== "LIVE")) reasons.push("NON_LIVE_ROW");
+  if (rows.some((r) => r.simulated !== undefined && r.simulated !== false))
+    reasons.push("SIMULATED_ROW");
+  if (rows.some((r) => r.graderVersion !== OSWORLD_EVALUATE_GRADER))
+    reasons.push("NOT_UPSTREAM_EVALUATE_GRADED");
+  if (rows.some((r) => !(R1_ARMS as readonly string[]).includes(r.arm)))
+    reasons.push("ROW_ARM_NOT_REGISTERED");
+  if (rows.some((r) => r.taskSetVersion !== prereg.taskSet || !subsetTaskIds.has(r.taskId)))
+    reasons.push("ROW_OUTSIDE_SUBSET");
+  // Every arm's rows cover exactly the n pre-registered tasks, once each (the paired tables
+  // need all three arms, not just the gated one).
+  for (const arm of R1_ARMS) {
+    const armRows = rows.filter((r) => r.arm === arm);
+    const covered = new Set(armRows.map((r) => r.taskId));
+    if (armRows.length !== prereg.n || covered.size !== prereg.n || subsetTaskIds.size !== prereg.n)
+      reasons.push(`N_MISMATCH:${arm}`);
+  }
+
+  const falseDone = gated.filter((r) => r.agentClaimedDone && r.upstreamStatus !== "pass");
+  const falseAccepts = falseDone.filter((r) => r.gateVerdict === "verified").length;
+  const counts = {
+    falseDone: falseDone.length,
+    falseAccepts,
+    caught: falseDone.length - falseAccepts,
+  };
+  if (reasons.length > 0) return { verdict: "refused", reasons, ...counts };
+  return falseAccepts === 0
+    ? { verdict: "shown", reasons: [], ...counts }
+    : { verdict: "not-shown", reasons: ["FALSE_ACCEPT"], ...counts };
+}

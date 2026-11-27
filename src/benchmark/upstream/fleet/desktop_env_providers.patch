@@ -1,0 +1,32 @@
+diff --git a/desktop_env/desktop_env.py b/desktop_env/desktop_env.py
+index 98c44c5..b8b3765 100644
+--- a/desktop_env/desktop_env.py
++++ b/desktop_env/desktop_env.py
+@@ -165,9 +165,9 @@ class DesktopEnv(gym.Env):
+         # Track whether environment has been used (step/setup) to optimize snapshot revert
+         # docker, aws, gcp, azure are always unused as the emulator starts from a clean state 
+         # vmware, virtualbox are always used as the emulator starts from a dirty state
+-        if self.provider_name in {"docker", "aws", "gcp", "azure", "aliyun", "volcengine", "fastvm", "pyromind", "modal", "daytona"}:
++        if self.provider_name in {"docker", "aws", "gcp", "azure", "aliyun", "volcengine", "fastvm", "pyromind", "modal", "daytona", "myco-fleet"}:
+             self.is_environment_used = False
+-        elif self.provider_name in {"vmware", "virtualbox"}:
++        elif self.provider_name in {"vmware", "virtualbox", "utm-reference"}:
+             self.is_environment_used = True
+         else:
+             raise ValueError(f"Invalid provider name: {self.provider_name}")
+diff --git a/desktop_env/providers/__init__.py b/desktop_env/providers/__init__.py
+index 9f97569..3290225 100644
+--- a/desktop_env/providers/__init__.py
++++ b/desktop_env/providers/__init__.py
+@@ -55,5 +55,11 @@ def create_vm_manager_and_provider(provider_name: str, region: str, use_proxy: b
+         from desktop_env.providers.pyromind.manager import PyromindVMManager
+         from desktop_env.providers.pyromind.provider import PyromindProvider
+         return PyromindVMManager(), PyromindProvider(region)
++    elif provider_name == "myco-fleet":  # Myco Linux fleet desktops (Myco src/benchmark/upstream/fleet)
++        from myco_fleet_provider import MycoFleetVMManager, MycoFleetProvider
++        return MycoFleetVMManager(), MycoFleetProvider(region)
++    elif provider_name == "utm-reference":  # parity reference only: OSWorld's guest image in UTM
++        from utm_reference_provider import UtmReferenceVMManager, UtmReferenceProvider
++        return UtmReferenceVMManager(), UtmReferenceProvider(region)
+     else:
+         raise NotImplementedError(f"{provider_name} not implemented!")

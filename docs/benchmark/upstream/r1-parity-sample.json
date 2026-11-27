@@ -1,0 +1,129 @@
+{
+  "schema": "myco.parity.sample/1",
+  "title": "Fleet parity sample for the public R1: OSWorld LibreOffice tasks scored by upstream DesktopEnv.evaluate() on the Myco fleet and on OSWorld's reference environment",
+  "ruling": "Lead rulings 2026-11-27 14:05Z (#741 comment 7220313158: parity acceptance required; same scripted known-good and known-bad sequences on both, graded by the upstream evaluator; any mismatch is a stated gap), 14:37Z (#741 comment 7220987945: keep the parity harness and the exact host requirement; do not run it), 15:21Z (#741 comment 7221935698: UTM approved as the reference hypervisor, a stated deviation).",
+  "taskSet": "osworld-office-v1",
+  "upstreamCommit": "0ad41bee56565efe7bb3c3a5ebc67590a1b8276f",
+  "actionSpace": "claude_computer_use",
+  "actionFormat": "Each action is what AnthropicAgent hands DesktopEnv.step: {action_type: tool_use, command: <pyautogui code>} runs through PythonController.execute_python_command (the controller prefixes `import pyautogui; import time`); DONE and FAIL are upstream's own special actions. No model is involved.",
+  "selectionRule": "Pre-declared before any parity run. Tasks whose known-good sequence does not depend on the seed file's contents (so it can be written without downloading OSWorld's assets), covering all three LibreOffice domains and the getters these domains use: vm_file on .xlsx and .docx, the accessibility tree, and the infeasible rule. Gap in coverage, stated: no task here grades a .pptx through vm_file (33 of the 47 impress tasks do).",
+  "envs": {
+    "fleet": {
+      "provider": "myco-fleet",
+      "description": "The Myco Linux fleet desktop (src/benchmark/upstream/fleet/Dockerfile) via the myco-fleet DesktopEnv provider."
+    },
+    "reference": {
+      "provider": "utm-reference",
+      "description": "OSWorld's own guest image Ubuntu-arm.zip (huggingface.co/datasets/xlangai/ubuntu_osworld), its in-guest controller and OSWorld's evaluator unchanged, booted in UTM (QEMU with HVF) via the utm-reference provider. STATED DEVIATION from OSWorld's VMware reference: only the hypervisor differs."
+    }
+  },
+  "rule": "Parity must pass before any live run. For each task: the reference must score the known-good sequence as a pass (exactly 1.0) and the known-bad sequence as a fail (a gradable score below 1.0); otherwise the task is SEQUENCE_INVALID. The fleet matches when it also scores known-good as a pass and known-bad as a fail; anything else, an ungradable fleet run included, is a GAP. Parity passes only when every task matches; a mismatch is a stated gap, and a SEQUENCE_INVALID task blocks parity until the sample is amended (a new sample version, decided before any further run).",
+  "tasks": [
+    {
+      "taskId": "1334ca3e-f9e3-4db8-9ca7-b4c653be7d17",
+      "domain": "libreoffice_calc",
+      "taskFile": "evaluation_examples/examples/libreoffice_calc/1334ca3e-f9e3-4db8-9ca7-b4c653be7d17.json",
+      "taskFileSha256": "9465bce469f898817e0f124ef9bc3f99eb7443a2fa94a3050a6491d1b60a7761",
+      "evaluator": "compare_table (zoom lt 260, sheet_data) on vm_file .xlsx",
+      "knownGood": [
+        {
+          "action_type": "tool_use",
+          "command": "pyautogui.hotkey('shift', 'esc'); time.sleep(1.0); pyautogui.write('Zoom Out', interval=0.05); time.sleep(1.0); pyautogui.press('enter'); time.sleep(1.0)"
+        },
+        {
+          "action_type": "tool_use",
+          "command": "pyautogui.hotkey('shift', 'esc'); time.sleep(1.0); pyautogui.write('Zoom Out', interval=0.05); time.sleep(1.0); pyautogui.press('enter'); time.sleep(1.0)"
+        },
+        {
+          "action_type": "tool_use",
+          "command": "pyautogui.hotkey('shift', 'esc'); time.sleep(1.0); pyautogui.write('Zoom Out', interval=0.05); time.sleep(1.0); pyautogui.press('enter'); time.sleep(1.0)"
+        },
+        {
+          "action_type": "tool_use",
+          "command": "pyautogui.hotkey('shift', 'esc'); time.sleep(1.0); pyautogui.write('Zoom Out', interval=0.05); time.sleep(1.0); pyautogui.press('enter'); time.sleep(1.0)"
+        },
+        {
+          "action_type": "tool_use",
+          "command": "pyautogui.hotkey('shift', 'esc'); time.sleep(1.0); pyautogui.write('Zoom Out', interval=0.05); time.sleep(1.0); pyautogui.press('enter'); time.sleep(1.0)"
+        },
+        { "action_type": "DONE" }
+      ],
+      "knownBad": [
+        {
+          "action_type": "tool_use",
+          "command": "pyautogui.hotkey('shift', 'esc'); time.sleep(1.0); pyautogui.write('Zoom In', interval=0.05); time.sleep(1.0); pyautogui.press('enter'); time.sleep(1.0)"
+        },
+        { "action_type": "DONE" }
+      ]
+    },
+    {
+      "taskId": "2bd59342-0664-4ccb-ba87-79379096cc08",
+      "domain": "libreoffice_calc",
+      "taskFile": "evaluation_examples/examples/libreoffice_calc/2bd59342-0664-4ccb-ba87-79379096cc08.json",
+      "taskFileSha256": "ade97f54d853aeb03faee13ace505d6155fd16aaebd73cb0e3ef9038336c1178",
+      "evaluator": "infeasible (the FAIL-action rule in DesktopEnv.evaluate)",
+      "knownGood": [{ "action_type": "FAIL" }],
+      "knownBad": [{ "action_type": "DONE" }]
+    },
+    {
+      "taskId": "3ef2b351-8a84-4ff2-8724-d86eae9b842e",
+      "domain": "libreoffice_writer",
+      "taskFile": "evaluation_examples/examples/libreoffice_writer/3ef2b351-8a84-4ff2-8724-d86eae9b842e.json",
+      "taskFileSha256": "4a78ade0632e1b3134a6224850243377da8b6b3140214d24742d1ddf4a6fb84b",
+      "evaluator": "is_first_line_centered on vm_file .docx",
+      "knownGood": [
+        {
+          "action_type": "tool_use",
+          "command": "pyautogui.hotkey('ctrl', 'home'); time.sleep(0.5); pyautogui.hotkey('ctrl', 'e'); time.sleep(0.5)"
+        },
+        { "action_type": "DONE" }
+      ],
+      "knownBad": [
+        {
+          "action_type": "tool_use",
+          "command": "pyautogui.hotkey('ctrl', 'home'); time.sleep(0.5); pyautogui.hotkey('ctrl', 'r'); time.sleep(0.5)"
+        },
+        { "action_type": "DONE" }
+      ]
+    },
+    {
+      "taskId": "d53ff5ee-3b1a-431e-b2be-30ed2673079b",
+      "domain": "libreoffice_writer",
+      "taskFile": "evaluation_examples/examples/libreoffice_writer/d53ff5ee-3b1a-431e-b2be-30ed2673079b.json",
+      "taskFileSha256": "50cebf79a1c2abcc63cdc4da51a4ff1cf31d0e86ae204c34327230f4b481f9a0",
+      "evaluator": "compare_docx_files against the gold .docx on vm_file .docx",
+      "knownGood": [
+        {
+          "action_type": "tool_use",
+          "command": "pyautogui.hotkey('ctrl', 'a'); time.sleep(0.5); pyautogui.hotkey('shift', 'esc'); time.sleep(1.0); pyautogui.write('lowercase', interval=0.05); time.sleep(1.0); pyautogui.press('enter'); time.sleep(1.0)"
+        },
+        { "action_type": "DONE" }
+      ],
+      "knownBad": [
+        {
+          "action_type": "tool_use",
+          "command": "pyautogui.hotkey('ctrl', 'home'); time.sleep(0.5)"
+        },
+        { "action_type": "DONE" }
+      ]
+    },
+    {
+      "taskId": "ef9d12bd-bcee-4ba0-a40e-918400f43ddf",
+      "domain": "libreoffice_impress",
+      "taskFile": "evaluation_examples/examples/libreoffice_impress/ef9d12bd-bcee-4ba0-a40e-918400f43ddf.json",
+      "taskFileSha256": "95af4700a7ab92b518749467d727557f72d398ad28852857372978e86be2d3df",
+      "evaluator": "check_left_panel on the accessibility tree (gap 1: the AT-SPI tree LibreOffice exposes through its GTK3 VCL plugin). The known-good keys are the task's own setup keys, which toggle View > Slide Pane: pressed again they reopen it",
+      "knownGood": [
+        {
+          "action_type": "tool_use",
+          "command": "pyautogui.press('esc'); time.sleep(0.3); pyautogui.press('f10'); time.sleep(0.3); pyautogui.press('right', presses=2, interval=0.1); time.sleep(0.3); pyautogui.press('down', presses=11, interval=0.1); pyautogui.press('enter'); time.sleep(1.0)"
+        },
+        { "action_type": "DONE" }
+      ],
+      "knownBad": [
+        { "action_type": "tool_use", "command": "pyautogui.press('esc'); time.sleep(0.5)" },
+        { "action_type": "DONE" }
+      ]
+    }
+  ]
+}

@@ -777,3 +777,60 @@ jobs:
           name: verdict-budget-${{ matrix.os }}
           path: verdict-budget.ndjson
           if-no-files-found: ignore
+
+  # #682: the public-benchmark grader against the REAL upstream evaluators. Clones OSWorld and
+  # WindowsAgentArena at the pins in src/benchmark/upstream/pins.ts (the clone must land on
+  # the pinned commit), installs the evaluators' Python dependencies hash-pinned, re-checks
+  # the committed manifests byte for byte, and runs the MOCK plumbing suite, which must not
+  # skip (MYCO_UPSTREAM_REQUIRED). Not required; skipped only for a docs-only plan.
+  upstream-evaluators:
+    name: upstream evaluators (osworld, waa)
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.mode != 'docs') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      OSWORLD_COMMIT: 0ad41bee56565efe7bb3c3a5ebc67590a1b8276f
+      WAA_COMMIT: eb220c4dcf64babefc1bfc287edda91ab04132ed
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Evaluator Python dependencies (hash pinned)
+        run: |
+          python -m venv "$RUNNER_TEMP/upstream-venv"
+          "$RUNNER_TEMP/upstream-venv/bin/pip" install --require-hashes --only-binary :all: --no-deps -r scripts/upstream-evaluator-requirements.txt
+      - name: Clone the upstream benchmarks at the pins
+        run: |
+          set -euo pipefail
+          for pair in "osworld https://github.com/xlang-ai/OSWorld $OSWORLD_COMMIT" "waa https://github.com/microsoft/WindowsAgentArena $WAA_COMMIT"; do
+            set -- $pair
+            git init -q "$RUNNER_TEMP/$1"
+            git -C "$RUNNER_TEMP/$1" fetch -q --depth 1 "$2" "$3"
+            git -C "$RUNNER_TEMP/$1" checkout -q FETCH_HEAD
+            test "$(git -C "$RUNNER_TEMP/$1" rev-parse HEAD)" = "$3"
+          done
+      - name: Committed manifests match the pinned upstream
+        run: npx tsx scripts/upstream-import.ts --osworld "$RUNNER_TEMP/osworld" --waa "$RUNNER_TEMP/waa" --check
+      - name: Upstream evaluator MOCK plumbing (real evaluators; must not skip)
+        env:
+          MYCO_UPSTREAM_OSWORLD: ${{ runner.temp }}/osworld
+          MYCO_UPSTREAM_WAA: ${{ runner.temp }}/waa
+          MYCO_UPSTREAM_PYTHON: ${{ runner.temp }}/upstream-venv/bin/python
+          MYCO_UPSTREAM_REQUIRED: "1"
+        run: pnpm exec vitest run test/benchmark/upstream-evaluator.test.ts
+      - name: R1 harness at the pin (DesktopEnv.evaluate path, runner and provider patches, DONE gate hook through the real loop, fleet provider on upstream's base classes and registry; must not skip)
+        env:
+          MYCO_UPSTREAM_OSWORLD: ${{ runner.temp }}/osworld
+          MYCO_UPSTREAM_REQUIRED: "1"
+        run: pnpm exec vitest run test/benchmark/upstream-r1-grade.test.ts test/benchmark/osworld-gate-hook.test.ts test/benchmark/osworld-fleet.test.ts

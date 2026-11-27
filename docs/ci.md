@@ -179,6 +179,20 @@ The `linux path`, `newcomer path` and `m2 evidence and scorecard` jobs are not r
 a successful plan names a narrow mode and says their paths are untouched (`test/{linux,init}/`;
 `test/m2/`). Their other paths (`src/`, `scripts/`) always run everything. `viewer-perf` is unchanged.
 
+The `upstream evaluators (osworld, waa)` job (#682) is not required either and skips only for a
+docs-only plan. It clones OSWorld and WindowsAgentArena at their pinned commits, installs the
+evaluators' Python dependencies from `scripts/upstream-evaluator-requirements.txt` (hash
+pinned), checks the committed `benchmark/upstream/` manifests against the clones, and runs
+`test/benchmark/upstream-evaluator.test.ts` with `MYCO_UPSTREAM_REQUIRED=1`, so it fails
+instead of skipping when an input is missing. It then runs the public-R1 harness tests
+(`upstream-r1-grade.test.ts`, `osworld-gate-hook.test.ts`) against the OSWorld clone: the
+pinned harness file hashes, the `DesktopEnv.evaluate()` path in `run_single_example`, the
+documented runner patch, and the DONE gate hook through upstream's real loop with fakes. No VM
+or container is started. The same step runs `osworld-fleet.test.ts` (#741): the Myco fleet
+provider on upstream's real `Provider`/`VMManager` base classes, and the provider registration
+patch applied to upstream's own `desktop_env/providers/__init__.py`; the step also checks that
+patch leaves `DesktopEnv.evaluate` byte-identical. No image is built or pulled.
+
 See what the planner would do for your branch:
 
 ```sh

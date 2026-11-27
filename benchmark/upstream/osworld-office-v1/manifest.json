@@ -1,0 +1,38 @@
+{
+  "schema": "myco.upstream.taskset/1",
+  "taskSetVersion": "osworld-office-v1",
+  "upstream": {
+    "name": "OSWorld",
+    "repo": "https://github.com/xlang-ai/OSWorld",
+    "commit": "0ad41bee56565efe7bb3c3a5ebc67590a1b8276f",
+    "license": "Apache-2.0",
+    "licenseFile": "LICENSE",
+    "licenseSha256": "a8d1d88a0f9cce3cdbff73b03a80dc5e5d69e3ba2443946c268815a550c9e0ec"
+  },
+  "selectionRule": "Every task id listed in evaluation_examples/test_all.json at the pinned commit under libreoffice_calc, libreoffice_writer and libreoffice_impress, run in OSWorld's own DesktopEnv (its provider and in-VM controller). No task is dropped for difficulty, feasibility, evaluator type, the apps it needs or the getters its evaluator uses; the exclusion list is empty and any entry must be decided before any run, with a reason code, never for difficulty or outcome.",
+  "metricsDir": "desktop_env/evaluators/metrics",
+  "metricsPackage": "desktop_env.evaluators.metrics",
+  "counts": {
+    "total": 117,
+    "perDomain": {
+      "libreoffice_calc": 47,
+      "libreoffice_writer": 23,
+      "libreoffice_impress": 47
+    },
+    "infeasible": 2,
+    "excluded": 0
+  },
+  "environment": "osworld-desktopenv",
+  "exclusions": {},
+  "evaluatorFiles": {
+    "desktop_env/evaluators/metrics/chrome.py": "0c3f983fe8cdc8905abb6558a963850237e201646ed4667df0428f88ef4593ef",
+    "desktop_env/evaluators/metrics/docs.py": "2345d3ae870a52d65e29c061e90c7b76981549545e1e7eda667ce25729d7de63",
+    "desktop_env/evaluators/metrics/pdf.py": "f3fe99519113f3019ad34aa87673f77617c346cf39db0711f8d017af654f266d",
+    "desktop_env/evaluators/metrics/slides.py": "78dece12f36914d3c4a67869a21c9895b71ef4b34a63b11879943a6acec7568c",
+    "desktop_env/evaluators/metrics/table.py": "9a17d8945a4d67c50947ae8ff79197de7506ed313507f2d8764cfb104b543346",
+    "desktop_env/evaluators/metrics/utils.py": "2eb2ce6ddf0c786c242a436c91f0bc2718c27de41cb1be85be95d7d21b7d23c8",
+    "desktop_env/evaluators/metrics/vlc.py": "d90e2c0e05a2595af75a4fabe8a3653107f7d1f80e6033c4f0845f6bad90fccb",
+    "desktop_env/evaluators/metrics/vscode.py": "41519f82cc130de6ea7aa1df64379be42c126cf21a1251186af09f053a054129"
+  },
+  "tasksSha256": "ccb0ff275fdd92aa4d9da191a2b6c83a119f423282d731a45a80ba3792bdc3fc"
+}
