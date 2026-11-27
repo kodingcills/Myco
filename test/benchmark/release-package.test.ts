@@ -123,19 +123,18 @@ function header(
   name: string,
   type: string,
   size: number,
-  o: { mode?: string; uid?: string; uname?: string } = {},
+  o: { mode?: string; uid?: string; gid?: string; uname?: string; magic?: string } = {},
 ): Buffer {
   const h = Buffer.alloc(512, 0);
   h.write(name, 0, 100, "ascii");
   h.write(`${o.mode ?? "0000644"}\0`, 100, "ascii");
   h.write(`${o.uid ?? "0000000"}\0`, 108, "ascii");
-  h.write("0000000\0", 116, "ascii");
+  h.write(`${o.gid ?? "0000000"}\0`, 116, "ascii");
   h.write(`${size.toString(8).padStart(11, "0")}\0`, 124, "ascii");
   h.write("00000000000\0", 136, "ascii");
   h.write("        ", 148, "ascii");
   h.write(type, 156, "ascii");
-  h.write("ustar\0", 257, "ascii");
-  h.write("00", 263, "ascii");
+  h.write(o.magic ?? "ustar\u000000", 257, 8, "ascii");
   if (o.uname !== undefined) h.write(o.uname, 265, 32, "ascii");
   let sum = 0;
   for (const b of h) sum += b;
@@ -590,9 +589,31 @@ describe("raw-header archive check (checkReleaseArchive)", () => {
     expect(checkReleaseArchive(archive([], { uid: "0000765" }), RELEASE_ROOT)).toContain(
       "entry 1: uid is not 0",
     );
+    expect(checkReleaseArchive(archive([], { gid: "0000024" }), RELEASE_ROOT)).toContain(
+      "entry 1: gid is not 0",
+    );
     expect(checkReleaseArchive(archive([], { uname: "someone" }), RELEASE_ROOT)).toContain(
       "entry 1: has an owner or group name",
     );
+    // Old GNU format (`ustar  \0` magic, what `tar --format=gnu` writes) is not plain ustar.
+    expect(checkReleaseArchive(archive([], { magic: "ustar  \0" }), RELEASE_ROOT)).toContain(
+      "entry 1: not a plain ustar header",
+    );
+  });
+
+  it("refuses a .. path and a duplicate path", () => {
+    const up = header(`${RELEASE_ROOT}/../evil`, "0", 0);
+    expect(checkReleaseArchive(archive([up]), RELEASE_ROOT)).toContain(
+      `entry 1: path outside ${RELEASE_ROOT}/`,
+    );
+    const a = Buffer.from("a\n");
+    const twice = Buffer.concat([
+      file("a.txt", a),
+      file("a.txt", a),
+      file("SHA256SUMS", Buffer.from(`${sha(a)}  a.txt\n`)),
+      Buffer.alloc(1024, 0),
+    ]);
+    expect(checkReleaseArchive(twice, RELEASE_ROOT)).toEqual(["entry 2: duplicate path"]);
   });
 
   it("refuses a bad checksum, a path outside the root and data after the end", () => {
@@ -622,6 +643,16 @@ describe("raw-header archive check (checkReleaseArchive)", () => {
     expect(checkReleaseArchive(missing, RELEASE_ROOT)).toEqual([
       "gone.txt: in SHA256SUMS but not in the archive",
     ]);
+    const changed = Buffer.concat([
+      file("a.txt", Buffer.from("A\n")),
+      file("SHA256SUMS", Buffer.from(`${sha(a)}  a.txt\n`)),
+      Buffer.alloc(1024, 0),
+    ]);
+    expect(checkReleaseArchive(changed, RELEASE_ROOT)).toEqual([
+      "a.txt: does not match SHA256SUMS",
+    ]);
+    const noSums = Buffer.concat([file("a.txt", a), Buffer.alloc(1024, 0)]);
+    expect(checkReleaseArchive(noSums, RELEASE_ROOT)).toEqual(["no SHA256SUMS entry"]);
   });
 });
 
