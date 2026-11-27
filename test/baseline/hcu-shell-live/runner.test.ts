@@ -678,6 +678,74 @@ describe("pacing, deadline, load gate and heartbeat match #598 (round 2, D5)", (
     expect(fake.released).toHaveLength(2);
     expect(existsSync(join(dir, "rows", `sim-hcu-shell-${TASKS[0]?.taskId}.json`))).toBe(false);
   }, 10_000);
+  it("a trial whose planner answers after the deadline never writes a row or a decided line", async () => {
+    const dir = tmp();
+    const fast = hcuRunPlan(
+      TASKS,
+      { hcuGuestCommand: "hcu mcp", guestShellSha256: "0".repeat(64) },
+      { ...HCU_PACING, trialTimeoutS: 1 },
+    );
+    const fake = fakeRun();
+    // Each attempt's one call answers "done" 1.2 s in, after the 1 s deadline: the late trial
+    // would complete and produce a row if the runner let it.
+    const planner: HcuShellPlanner = {
+      paid: true,
+      act: async () => {
+        await new Promise((r) => setTimeout(r, 1200));
+        return {
+          calls: [{ model: SIMULATED_PLANNER, usage: { prompt: 1, completion: 1, cost: 0.001 } }],
+          decision: "done",
+        };
+      },
+    };
+    const r = await run(dir, { ...fake, planner }, { plan: fast, maxTrials: 1 });
+    expect(r).toMatchObject({ status: "aborted", code: "trial-timeout", decided: 0 });
+    // Let both late attempts finish unwinding, then check nothing was recorded for them.
+    await new Promise((res) => setTimeout(res, 1500));
+    expect(existsSync(join(dir, "rows", `sim-hcu-shell-${TASKS[0]?.taskId}.json`))).toBe(false);
+    expect(readLedger(dir).filter((l) => l.type === "decided")).toEqual([]);
+  }, 15_000);
+  it("a reset that returns after the deadline never starts the agent, and its guest is released", async () => {
+    const fast = hcuRunPlan(
+      TASKS,
+      { hcuGuestCommand: "hcu mcp", guestShellSha256: "0".repeat(64) },
+      { ...HCU_PACING, trialTimeoutS: 1 },
+    );
+    const fake = fakeRun();
+    let acted = 0;
+    let guiOpened = 0;
+    const env: TrialEnvironment = {
+      simulated: true,
+      async prepare(task, key) {
+        await new Promise((r) => setTimeout(r, 1200));
+        const t = await fake.env.prepare(task, key);
+        const inner = t.prepared;
+        return {
+          ...t,
+          prepared: {
+            ...inner,
+            connectGui: () => {
+              guiOpened++;
+              return inner.connectGui();
+            },
+          },
+        };
+      },
+    };
+    const planner: HcuShellPlanner = {
+      paid: true,
+      act: async (turn) => {
+        acted++;
+        return fake.planner.act(turn);
+      },
+    };
+    const r = await run(tmp(), { ...fake, env, planner }, { plan: fast, maxTrials: 1 });
+    expect(r).toMatchObject({ status: "aborted", code: "trial-timeout" });
+    await new Promise((res) => setTimeout(res, 1500));
+    expect(acted).toBe(0);
+    expect(guiOpened).toBe(0);
+    expect(fake.released).toHaveLength(2);
+  }, 15_000);
   it("live-status.json and progress.json are refreshed by a timer during a long trial", async () => {
     const dir = tmp();
     const fake = fakeRun();
