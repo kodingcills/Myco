@@ -1,6 +1,6 @@
 # M1 evaluation runbook
 
-From the trial base snapshot (`trial-base-v2`; `clean-base` is the rollback, [§3.5](#35-trial-base-trial-base-v2-and-rollback-to-clean-base)) to a validated evidence set: reset → deploy → prove the agent is
+From the trial base snapshot (`trial-base-v3`; `trial-base-v2` and `clean-base` are the rollbacks, [§3.5](#35-trial-base-trial-base-v3-and-rollback-to-trial-base-v2-or-clean-base)) to a validated evidence set: reset → deploy → prove the agent is
 on the desktop → generator proof → trials → evidence. Written to be followed by a coding agent
 with no prior context. Every command is transcribed from the repo or the host VM scripts; the
 two steps that need a human are marked GUI-ONLY.
@@ -58,8 +58,9 @@ points to the section that holds the detail; read it there.
 | Item | Where | Notes |
 |---|---|---|
 | UTM 5.0.9+ with VM `myco-win11` | macOS host, GUI session | UUID `6C6414A1-9449-4E30-9503-F3F6726C8FFE`, 6 vCPU / **6 GB** (8 GB until 2026-11-21; see `~/VMs/myco-win11/README.md` Changelog) / VirtIO disk, en-US Win11 Pro ARM64 26100 |
-| Snapshot `trial-base-v2` | inside the VM bundle | disk-only, VM powered off. The default cold reset target: `clean-base` with its maintenance done and the maintenance and Windows Update triggers disabled (§3.5) |
-| Snapshot `clean-base` | inside the VM bundle | disk-only, VM powered off. The rollback base (`MYCO_TRIAL_SNAPSHOT=clean-base`, §3.5) and the source `trial-base-v2` was built from |
+| Snapshot `trial-base-v3` | inside the VM bundle | disk-only, VM powered off. The default cold reset target since TIF-98's v3 switch: the same build as `trial-base-v2`, rerun with every build boot classified cold (§3.5) |
+| Snapshot `trial-base-v2` | inside the VM bundle | disk-only, VM powered off. The first rollback (`MYCO_TRIAL_SNAPSHOT=trial-base-v2`, §3.5); before the v3 switch, the default cold reset target: `clean-base` with its maintenance done and the maintenance and Windows Update triggers disabled (§3.5) |
+| Snapshot `clean-base` | inside the VM bundle | disk-only, VM powered off. The second rollback (`MYCO_TRIAL_SNAPSHOT=clean-base`, §3.5) and the source both trial bases were built from |
 | Snapshot `clean-base-live` | inside the VM bundle | RAM+disk, desktop logged in. Restores in ~8 s but wedges UTM under rapid cycling (§3.3) |
 | Host SSH config + key | `~/VMs/myco-win11/ssh_config` and the private key it names | alias `myco-win11` → 127.0.0.1:2222, user `myco`, key-only. **Check:** `test -e ~/VMs/myco-win11/ssh_config`; the key's only check is §2's `vssh 'whoami'` answering. Never test, read or name the key file in a command: the host secret guard blocks it (TIF-206) |
 | VM lifecycle scripts | `~/VMs/myco-win11/scripts/` | `vm.sh`, `reset.sh`, `wait-ssh.sh`, `vssh`, `shutdown.sh`. **Not in the repo** |
@@ -286,16 +287,17 @@ recorded at log 37). The earlier "not on `main` / get it from the PR branch" not
 2026-11-24 — `main` has a `scripts/` directory, and §1.3 and §2.0 above already use it.
 
 ```bash
-scripts/reset-trial-vm.sh            # optional arg: snapshot name; default trial-base-v2 (§3.5)
+scripts/reset-trial-vm.sh            # optional arg: snapshot name; default trial-base-v3 (§3.5)
 ```
 
 What it does (read from the script): force-stop → wait for `stopped` (30 s cap) → **refuse** if
 the state is `resuming` → restore → start → `wait-guest-ready.sh 600` (guest CPU must advance;
 then SSH must answer 3 consecutive probes whose **starts** are at least 5 s apart, TIF-220/TIF-98) →
-resync the guest clock. It accepts only **`trial-base-v2`** (the default), `clean-base`,
+resync the guest clock. It accepts only **`trial-base-v3`** (the default), `trial-base-v2`, `clean-base`,
 `clean-base-live`, `m1-agent-live` and **`cua-c1-base`** (the C1 screenshot-baseline snapshot,
 and the one the C1 arms run on) as snapshot names, and never restores onto a running VM.
-With no argument it restores `$MYCO_TRIAL_SNAPSHOT`, or `trial-base-v2` when that is unset.
+With no argument it restores `$MYCO_TRIAL_SNAPSHOT` (only `trial-base-v3`, `trial-base-v2` or
+`clean-base`), or `trial-base-v3` when that is unset.
 
 **Every boot must be a full cold boot (TIF-98).** The first start after a UTM configuration
 write (`scripts/guest-egress.sh allow` or `deny` rewrites it, even with no change) boots the
@@ -326,8 +328,9 @@ stability probes; the `first ssh answer` line splits them. `egress` is the TIF-2
 reads the host process table and takes under a second. The `host swap` line is informational
 only. It records the host state the reset ran under.
 
-**Onto `clean-base`, plan for 190–260 s on this Mac; onto `trial-base-v2` (the default), about
-140–165 s (§3.5).** The `clean-base` figures were measured 2026-11-25: 8 recorded resets with the TIF-98 code and 5
+**Onto `clean-base`, plan for 190–260 s on this Mac; onto `trial-base-v2`, about 140–165 s
+(§3.5). `trial-base-v3` (the default) has no reset bench yet; its build's cold boot in place
+reached the first ssh answer after 149 s.** The `clean-base` figures were measured 2026-11-25: 8 recorded resets with the TIF-98 code and 5
 without, 185–254 s, median 213 s, at host 1-minute load 3.83–9.72;
 `docs/research/experiments/tif-98-reset/`. Where the time goes (a `clean-base` reset):
 
@@ -478,9 +481,29 @@ fetch. The tree copy carries them in, and the guest installs them with `pip --no
 
 Background and threat model: `docs/security/guest-egress.md`.
 
-### 3.5 Trial base: `trial-base-v2`, and rollback to `clean-base`
+### 3.5 Trial base: `trial-base-v3`, and rollback to `trial-base-v2` or `clean-base`
 
-Trials reset to **`trial-base-v2`** by default (TIF-98). It is `clean-base` with its pending
+Trials reset to **`trial-base-v3`** by default (TIF-98). It is the `trial-base-v2` build below,
+rerun on 2026-11-26 with every build boot classified cold. Two of `trial-base-v2`'s build boots
+were fast boots (TIF-98 fast-reset evidence), so its maintenance ran on a guest that had skipped
+most of Windows' boot work. `trial-base-v3`'s did not:
+
+- step 1's reset: cold, first ssh after 154 s, 275 s of guest CPU (the first boot was fast and
+  the reset guard booted once more);
+- step 5's boot in place: the first start was fast (4 s of guest CPU, right after
+  `guest-egress.sh deny`), so the build shut down cleanly and started again: cold, 270 s.
+- Idle stage quiet with 0 counted tasks; full scan 1,982 s, 0 detections; egress verify plus all
+  5 probes denied before the snapshot.
+
+It took three attempts: attempts 1 and 2 timed out in the idle stage on `WDI\ResolutionHost`,
+which led to the third exclusion below (#557). Evidence, including both failures and every boot
+class: `docs/research/experiments/tif-98-trial-base-v3-2026-11-26/`. The table below is
+`trial-base-v2`'s; `trial-base-v3` has no reset bench or oracle parity run yet.
+
+**Rollbacks:** `MYCO_TRIAL_SNAPSHOT=trial-base-v2` (the previous default) or
+`MYCO_TRIAL_SNAPSHOT=clean-base`. Both stay on the allowlist.
+
+`trial-base-v2` is `clean-base` with its pending
 maintenance run to completion: a Defender signature update, `ngen executeQueuedItems`, Automatic
 Maintenance and idle tasks until quiet, and a Defender full scan. Then only the maintenance
 trigger and Windows Update were disabled. Defender real-time protection is on, with no
@@ -512,7 +535,9 @@ The bench and parity evidence are in the `-run3/` and `-parity/` directories nex
 **Choosing the snapshot:**
 
 ```bash
-scripts/reset-trial-vm.sh                              # trial-base-v2 (the default)
+scripts/reset-trial-vm.sh                              # trial-base-v3 (the default)
+scripts/reset-trial-vm.sh trial-base-v2                # one reset onto the previous default
+MYCO_TRIAL_SNAPSHOT=trial-base-v2 scripts/m1-sweep.sh OUT # a whole sweep on the previous default
 scripts/reset-trial-vm.sh clean-base                   # one reset onto the rollback base
 MYCO_TRIAL_SNAPSHOT=clean-base scripts/m1-sweep.sh OUT # a whole sweep on the rollback base
 MYCO_BENCH_SNAPSHOT=clean-base scripts/reset-bench.sh reset 5 out.jsonl   # bench onto clean-base
@@ -529,7 +554,7 @@ An explicit argument wins over `MYCO_TRIAL_SNAPSHOT`, and every name must pass t
 - An `OUT` with rows but no pin was started before pinning existed, on `clean-base`. It is
   refused unless resumed with `MYCO_TRIAL_SNAPSHOT=clean-base` (`REFUSED_SNAPSHOT_UNKNOWN`,
   exit 11). A symlink at `OUT/snapshot` is refused, and the pin is never written through one.
-- Only a Myco trial base resolves: `trial-base-v2` or `clean-base`. Anything else in
+- Only a Myco trial base resolves: `trial-base-v3`, `trial-base-v2` or `clean-base`. Anything else in
   `MYCO_TRIAL_SNAPSHOT` (a typo, a `*-live` snapshot, the baseline arms' `cua-c1-base`) is
   refused at the start, with exit 11.
 - Every row carries `snapshot`, parsed from the reset's `ready on '<snap>'` line (`null` when
@@ -934,7 +959,7 @@ scp -q -F ~/VMs/myco-win11/ssh_config runs/row8-host/guest-clean.ps1 myco-win11:
 ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\myco\guest-clean.ps1'
 ```
 
-On a guest just restored from the trial base (`trial-base-v2`, or `clean-base`),
+On a guest just restored from the trial base (`trial-base-v3`, `trial-base-v2`, or `clean-base`),
 `C:\myco\runs` does not exist yet, and that is a clean guest. The `-ErrorAction SilentlyContinue` keeps the check silent in that case. An older
 copy of this check without it prints `Cannot find path 'C:\myco\runs' because it does not exist`
 instead, which also means clean (operator report S5).
@@ -1354,8 +1379,9 @@ If the sweep was launched without `$OUT.commit`, compare against the commit the 
 worktree or clone was created at. **Guest configuration** (RAM, vCPUs, the trial snapshot)
 has no check: no command in the repo records it. Do not resume across a VM rebuild, a RAM or CPU
 change, a re-taken snapshot, or a change of trial snapshot; start a fresh `OUT` instead. The
-default trial snapshot moved from `clean-base` to `trial-base-v2` on 2026-11-26 (§3.5). The
-drivers enforce this (`OUT/snapshot`, exit 11). Resume a sweep started before that with
+default trial snapshot moved from `clean-base` to `trial-base-v2`, then to `trial-base-v3`, on
+2026-11-26 (§3.5). Resume a sweep started on `trial-base-v2` with
+`MYCO_TRIAL_SNAPSHOT=trial-base-v2`. The drivers enforce this (`OUT/snapshot`, exit 11). Resume a sweep started before that with
 `MYCO_TRIAL_SNAPSHOT=clean-base` exported in the supervisor's
 shell, or start a fresh `OUT`.
 

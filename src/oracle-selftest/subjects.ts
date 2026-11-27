@@ -6,6 +6,9 @@
  *  - `calc-record-edit/csv`: M1's persisted-state verifier (`calcRecordEditVerifier` over
  *    `readCsvSpreadsheet`), with the eval harness's rule that a `PersistedStateReadError` is
  *    `uncertain` (`src/core/eval.ts`).
+ *  - `calc-record-edit/gate-xlsx`: the same gate family on its xlsx read path
+ *    (`persistedFormat: "xlsx"`, `src/gate/xlsx-document.ts`; TIF-274 prerequisite), on the
+ *    calc cases saved as workbooks plus the container classes.
  *  - `writer-doc-edit`: the host-only Writer oracle (`verifyWriterFile`, TIF-99), all four
  *    postcondition kinds, in both `.docx` and `.odt`.
  *
@@ -19,6 +22,7 @@ import { PersistedStateReadError, readCsvSpreadsheet } from "../core/filepersist
 import type { TaskIntent } from "../core/verify.ts";
 import { calcRecordEditFamily } from "../gate/families.ts";
 import { calcRecordEditVerifier, intentFor } from "../tasks/calc-record-edit.ts";
+import { XLSX_MAIN_SHEET, xlsxEntriesFromCsv, xlsxFromCsv } from "../tasks/calc-xlsxgen.ts";
 import { DATA_COLUMNS, generateFixture } from "../tasks/fixture.ts";
 import { type CalcRecordEditParams, generateParameterSets } from "../tasks/intent.ts";
 import {
@@ -41,6 +45,7 @@ import {
   type WriterFormat,
   withoutMainPart,
   writeWriterDocument,
+  writeZip,
 } from "../tasks/writer-docgen.ts";
 import { verifyWriterFile } from "../verify/writer-oracle.ts";
 import type { CorruptionClass, OracleUnderTest, SavedDocument, SelfTestCase } from "./types.ts";
@@ -123,6 +128,99 @@ export const calcGateOracle: OracleUnderTest<CalcRecordEditParams> = {
     }
   },
 };
+
+/**
+ * The same whole-document gate family on its xlsx read path (TIF-274 prerequisite):
+ * `persistedFormat: "xlsx"`, the saved workbook read by `src/gate/xlsx-document.ts`. A
+ * workbook is a container with CRCs and XML, so it also claims the container classes.
+ */
+export const calcGateXlsxOracle: OracleUnderTest<CalcRecordEditParams> = {
+  name: "calc-record-edit/gate-xlsx",
+  version: `gate-family-${calcRecordEditFamily.version}`,
+  claims: new Set<CorruptionClass>([
+    "edit-missing",
+    "wrong-value",
+    "wrong-target",
+    "collateral",
+    "truncated",
+    "corrupt-byte",
+    "partial-save",
+    "missing-main-part",
+    "missing-file",
+  ]),
+  verify(doc, params) {
+    return calcGateOracle.verify(doc, {
+      ...params,
+      persistedFormat: "xlsx",
+    } as CalcRecordEditParams);
+  },
+};
+
+/** Offset of a byte inside the worksheet entry's compressed data (a flip there fails the CRC). */
+function insideMainSheet(bytes: Uint8Array): number {
+  const name = new TextEncoder().encode(XLSX_MAIN_SHEET);
+  for (let i = 0; i + 30 + name.length < bytes.length; i++) {
+    if (bytes[i] !== 0x50 || bytes[i + 1] !== 0x4b || bytes[i + 2] !== 3 || bytes[i + 3] !== 4)
+      continue;
+    const n = (bytes[i + 26] as number) | ((bytes[i + 27] as number) << 8);
+    if (n === name.length && name.every((b, k) => bytes[i + 30 + k] === b)) {
+      const extra = (bytes[i + 28] as number) | ((bytes[i + 29] as number) << 8);
+      return i + 30 + n + extra + 8;
+    }
+  }
+  throw new Error("self-test workbook has no worksheet entry");
+}
+
+/** The calc cases as workbooks (`xlsxFromCsv`), plus the container classes. */
+export function calcXlsxCases(count = 10): SelfTestCase<CalcRecordEditParams>[] {
+  const asXlsx = (doc: SavedDocument): SavedDocument => ({
+    fileName: "doc.xlsx",
+    bytes: doc.bytes === null ? null : xlsxFromCsv(new TextDecoder().decode(doc.bytes)),
+  });
+  return calcCases(count).map((c) => {
+    const correct = asXlsx(c.correct);
+    const csv = new TextDecoder().decode(c.correct.bytes as Uint8Array);
+    const bytes = correct.bytes as Uint8Array;
+    const entries = xlsxEntriesFromCsv(csv);
+    const corruptions = c.corruptions.map(({ cls, doc }) => ({
+      cls,
+      doc:
+        cls === "truncated" ? { fileName: "doc.xlsx", bytes: truncated(bytes, 0.5) } : asXlsx(doc),
+    }));
+    return {
+      id: `${c.id}-xlsx`,
+      intent: c.intent,
+      correct,
+      corruptions: [
+        ...corruptions,
+        {
+          cls: "corrupt-byte" as const,
+          doc: { fileName: "doc.xlsx", bytes: flippedByte(bytes, insideMainSheet(bytes)) },
+        },
+        {
+          cls: "partial-save" as const,
+          doc: {
+            fileName: "doc.xlsx",
+            bytes: writeZip(
+              entries.map((e) =>
+                e.name === XLSX_MAIN_SHEET
+                  ? { ...e, data: e.data.slice(0, Math.floor(e.data.length / 2)) }
+                  : e,
+              ),
+            ),
+          },
+        },
+        {
+          cls: "missing-main-part" as const,
+          doc: {
+            fileName: "doc.xlsx",
+            bytes: writeZip(entries.filter((e) => e.name !== XLSX_MAIN_SHEET)),
+          },
+        },
+      ],
+    };
+  });
+}
 
 function editCsv(
   csv: string,

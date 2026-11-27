@@ -131,7 +131,12 @@ describe("the gate's request is unchanged by this track", () => {
     expect(h(GATE_REQUEST_SCHEMA)).toBe(
       "6086e47503d52dc79fcab2308ae0099f1a56c06df33e09fcefe62ac902605186",
     );
-    expect(h(ORACLE_INPUT_FIELDS)).toBe(
+    // The xlsx gate PR (TIF-274 prerequisite, #550) adds three REJECTED field names (the
+    // persisted format is the operator's, never the agent's); the request itself stays
+    // taskId/runId/claim. Everything else is still byte-identical to main before track I.
+    const XLSX_REJECTED = ["persistedFormat", "format", "fixtureXlsx"];
+    for (const f of XLSX_REJECTED) expect(ORACLE_INPUT_FIELDS).toContain(f);
+    expect(h(ORACLE_INPUT_FIELDS.filter((f) => !XLSX_REJECTED.includes(f)))).toBe(
       "7d4d98c51b5624bd915078b2924fafe8b3acee6449852716b97ff2ee959b8927",
     );
   });

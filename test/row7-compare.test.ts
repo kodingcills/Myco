@@ -87,7 +87,7 @@ describe("m1-scorecard wilson", () => {
 });
 
 // TIF-98 (#529 round 3, D1' b): the comparator refuses to pair arms from different bases.
-// The Myco default moved to trial-base-v2; C1 restores cua-c1-base, a clean-base derivative.
+// The Myco default moved to trial-base-v2, then trial-base-v3; C1 restores cua-c1-base, a clean-base derivative.
 describe("row7-compare check_same_base", () => {
   /** Runs check_same_base(myco, baseline) in process; returns "ok" or the refusal text. */
   const same = (myco: Record<number, object>, baseline: Record<number, object>) =>
@@ -118,6 +118,18 @@ describe("row7-compare check_same_base", () => {
       { 0: {}, 1: {} },
     );
     expect(r).toContain("index 1: Myco ran on 'trial-base-v2' but the baseline on 'cua-c1-base'");
+  });
+
+  it("refuses a Myco row on trial-base-v3 against C1, and v3 against v2 (separate families)", () => {
+    expect(same({ 0: { snapshot: "trial-base-v3" } }, { 0: {} })).toContain(
+      "index 0: Myco ran on 'trial-base-v3' but the baseline on 'cua-c1-base'",
+    );
+    expect(
+      same({ 0: { snapshot: "trial-base-v3" } }, { 0: { snapshot: "trial-base-v2" } }),
+    ).toContain("index 0: Myco ran on 'trial-base-v3'");
+    expect(same({ 0: { snapshot: "trial-base-v3" } }, { 0: { snapshot: "trial-base-v3" } })).toBe(
+      "ok",
+    );
   });
 
   it("refuses an unknown Myco snapshot and an unknown baseline snapshot", () => {
