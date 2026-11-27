@@ -61,6 +61,7 @@ import {
   m2TrialOpsSchema,
 } from "../../schemas/m2-evidence.ts";
 import { validateSchema } from "../../schemas/validate.ts";
+import { agentCheckRowsError } from "../agent-checks/label.ts";
 import {
   type Arm,
   type BenchmarkArmRow,
@@ -544,6 +545,18 @@ export function checkPack(input: PackInput): PackResult {
       : { expectUnregistrable: manifest.expectUnregistrable }),
   });
   errors.push(...benchmark.errors.map((e) => `ledger: ${e}`));
+  // Track C: the arm and grade ledgers are refused by checkBenchmark above; every other
+  // committed record of the pack is refused here. An agent-written check is never evidence.
+  for (const [rows, what] of [
+    [[input.manifest], "pack.json"],
+    [input.ops, "trial-ops"],
+    [input.attempts ?? [], "attempts"],
+    [input.anchor ?? [], "anchor"],
+    [input.superseded ?? [], "superseded"],
+  ] as const) {
+    const signalled = agentCheckRowsError(rows, what);
+    if (signalled !== null) errors.push(signalled);
+  }
 
   // Valid rows only, as check.ts counts them.
   const armRows = input.arm.filter(

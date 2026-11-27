@@ -30,6 +30,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { m2AbPackManifestSchema } from "../../schemas/m2-ab-pack.ts";
 import { m2TrialOpsSchema } from "../../schemas/m2-evidence.ts";
 import { validateSchema } from "../../schemas/validate.ts";
+import { agentCheckRowsError } from "../agent-checks/label.ts";
 import type { BenchmarkArmRow } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
 import { PREREG_JSON, PREREG_MD } from "../pilot/ab-prereg.ts";
@@ -307,6 +308,22 @@ function opsErrors(side: string, a: AbPackArm): string[] {
 
 export function checkAbPack(input: AbPackInput): AbPackResult {
   const errors: string[] = [...input.readErrors];
+  // Track C: an agent-written check is advisory, never evidence, and this pack feeds the
+  // scorecard's AB row. The arm and grade ledgers are refused by checkBenchmark (through
+  // checkCorrectionsAb); every other record of the pack is refused here, on the raw input,
+  // before any schema or arm-equality rule, so the refusal names the cause.
+  for (const [rows, what] of [
+    [[input.manifest], "pack.json"],
+    [input.on.ops, "on/ops"],
+    [input.off.ops, "off/ops"],
+    [[input.on.runConfig], "on/run-config.json"],
+    [[input.off.runConfig], "off/run-config.json"],
+    [input.stage0?.on ?? [], "stage0/on"],
+    [input.stage0?.off ?? [], "stage0/off"],
+  ] as const) {
+    const signalled = agentCheckRowsError(rows, what);
+    if (signalled !== null) errors.push(signalled);
+  }
   const issues = validateSchema(input.manifest, m2AbPackManifestSchema);
   const base = { kind: "ab" as const, evidenceUse: AB_EVIDENCE_USE };
   if (issues.length > 0) {
