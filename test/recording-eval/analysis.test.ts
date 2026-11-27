@@ -6,12 +6,15 @@
 import { describe, expect, it } from "vitest";
 import {
   analyseRPack,
+  LEAD_RULING_PENDING,
   mcnemarOneSided,
+  NOT_EVIDENCE_LABEL,
   R_ARM,
   R_ARMS,
   type RAnalysis,
   type RTrialRow,
   rV1Schedule,
+  SIMULATED_LABEL,
   zeroEventUpper95,
 } from "../../src/recording-eval/analysis.ts";
 import { canonicalSha256 } from "../../src/recording-eval/canonical.ts";
@@ -80,10 +83,12 @@ describe("run order (assignment seed)", () => {
 });
 
 describe("the grader decides VERIFIED; the derived gate never does", () => {
-  it("evidence pack with 8 vs 1 discordant: primary shown, bar shown", () => {
-    const r = analysed(run(buildPack({ planner: MODEL, outcome: discordant(8, 1, 3) })));
+  it("evidence pack with 8 vs 1 discordant, every lead ruling made: primary shown, bar shown", () => {
+    const b = buildPack({ ruled: true, planner: MODEL, outcome: discordant(8, 1, 3) });
+    const r = analysed(run(b));
     expect(r.evidence).toBe(true);
     expect(r.label).toBeNull();
+    expect(r.leadRulingPending).toBe(0);
     expect(r.primary).toMatchObject({
       capabilityOnly: 8,
       baselineOnly: 1,
@@ -93,7 +98,8 @@ describe("the grader decides VERIFIED; the derived gate never does", () => {
     });
     expect(r.primary?.pOneSided).toBeCloseTo(mcnemarOneSided(8, 1), 10);
     expect(r.barShown).toBe(true);
-    expect(r.preregHash).toBe(canonicalSha256(readPrereg()));
+    expect(r.reading).toMatch(/^shown: hcu\+shell\+R better than hcu\+shell/);
+    expect(r.preregHash).toBe(canonicalSha256(b.prereg));
     expect(r.secondary.rates).toEqual([
       expect.objectContaining({ arm: R_ARM, verified: 11, trials: 30 }),
       expect.objectContaining({ arm: "hcu+shell", verified: 4, trials: 30 }),
@@ -102,6 +108,7 @@ describe("the grader decides VERIFIED; the derived gate never does", () => {
 
   it("derived gate VERIFIED but grader FAIL: not verified, counted as a false accept, bar not shown", () => {
     const b = buildPack({
+      ruled: true,
       planner: MODEL,
       outcome: (i, arm) => {
         const base = discordant(8, 0)(i, arm);
@@ -132,6 +139,7 @@ describe("the grader decides VERIFIED; the derived gate never does", () => {
 
   it("grader PASS with the derived gate refuting still counts as verified", () => {
     const b = buildPack({
+      ruled: true,
       planner: MODEL,
       outcome: (i, arm) =>
         i < 6 && arm === R_ARM
@@ -157,6 +165,7 @@ describe("the grader decides VERIFIED; the derived gate never does", () => {
 
   it("a grader pass without a done claim is not verified", () => {
     const b = buildPack({
+      ruled: true,
       planner: MODEL,
       outcome: (i, arm) =>
         i < 8 ? { grade: "pass", claim: arm === R_ARM ? "no-claim" : "done" } : { grade: "fail" },
@@ -172,6 +181,7 @@ describe("R5 prerequisite (fixed sequence: primary not tested when it fails)", (
     gateVerdict: "verified" | null,
   ) =>
     buildPack({
+      ruled: true,
       planner: MODEL,
       outcome: (i, arm) =>
         i === 0 && arm === R_ARM
@@ -226,14 +236,14 @@ describe("R5 prerequisite (fixed sequence: primary not tested when it fails)", (
 
 describe("not shown, with the reason", () => {
   it("fewer than 5 discordant: underpowered at n = 30, even at 4 vs 0", () => {
-    const r = analysed(run(buildPack({ planner: MODEL, outcome: discordant(4, 0) })));
+    const r = analysed(run(buildPack({ ruled: true, planner: MODEL, outcome: discordant(4, 0) })));
     expect(r.primary).toMatchObject({ discordant: 4, shown: false });
     expect(r.primary?.reading).toMatch(/underpowered at n = 30 \(4 discordant/);
     expect(r.barShown).toBe(false);
   });
 
   it("the 5-discordant minimum binds on its own: a prereg at alpha 0.10 still refuses 4 vs 0 (p = 0.0625)", () => {
-    const b = buildPack({ planner: MODEL, outcome: discordant(4, 0) });
+    const b = buildPack({ ruled: true, planner: MODEL, outcome: discordant(4, 0) });
     const bar = b.prereg.bar as { sequence: Record<string, unknown>[] };
     b.prereg = {
       ...b.prereg,
@@ -250,13 +260,13 @@ describe("not shown, with the reason", () => {
   });
 
   it("p above alpha: 6 vs 3", () => {
-    const r = analysed(run(buildPack({ planner: MODEL, outcome: discordant(6, 3) })));
+    const r = analysed(run(buildPack({ ruled: true, planner: MODEL, outcome: discordant(6, 3) })));
     expect(r.primary?.shown).toBe(false);
     expect(r.primary?.reading).toMatch(/p = 0\.2539/);
   });
 
   it("a planted marker anywhere in the pack breaks the bar", () => {
-    const b = buildPack({ planner: MODEL, outcome: discordant(8, 0) });
+    const b = buildPack({ ruled: true, planner: MODEL, outcome: discordant(8, 0) });
     const t = b.trials[3] as RTrialRow;
     b.trials[3] = { ...t, cause: { kind: "agent", detail: "MYCO-PLANTED-R-0042 seen" } };
     const r = analysed(run(b, true, ["MYCO-PLANTED-R-0042"]));
@@ -267,11 +277,25 @@ describe("not shown, with the reason", () => {
 });
 
 describe("simulated packs are plumbing, never evidence", () => {
-  it("analysed without --evidence, labelled SIMULATED, bar never shown", () => {
-    const r = analysed(run(buildPack({ outcome: discordant(10, 0) }), false));
+  it("analysed without --evidence, labelled SIMULATED, nothing reported as shown (N4)", () => {
+    const r = analysed(run(buildPack({ ruled: true, outcome: discordant(10, 0) }), false));
     expect(r.evidence).toBe(false);
-    expect(r.label).toMatch(/SIMULATED/);
-    expect(r.primary?.shown).toBe(true);
+    expect(r.label).toBe(SIMULATED_LABEL);
+    expect(r.primary).toMatchObject({ capabilityOnly: 10, discordant: 10, shown: false });
+    expect(r.primary?.reading).toMatch(/^SIMULATED: .*computed, not a result: p = 0\.0010/);
+    expect(r.reading).toBe(r.primary?.reading);
+    expect(r.reading).not.toMatch(/\bshown\b/);
+    expect(r.barShown).toBe(false);
+  });
+
+  it("a real-model pack without --evidence is labelled NOT EVIDENCE, never SIMULATED (N4)", () => {
+    const r = analysed(
+      run(buildPack({ ruled: true, planner: MODEL, outcome: discordant(10, 0) }), false),
+    );
+    expect(r.label).toBe(NOT_EVIDENCE_LABEL);
+    expect(r.reading).not.toMatch(/SIMULATED|\bshown\b/);
+    expect(r.reading).toMatch(/^NOT EVIDENCE: /);
+    expect(r.primary?.shown).toBe(false);
     expect(r.barShown).toBe(false);
   });
 
@@ -280,14 +304,17 @@ describe("simulated packs are plumbing, never evidence", () => {
   });
 
   it("with --evidence a scripted-human demonstration is refused", () => {
-    expect(codes(run(buildPack({ planner: MODEL, simulatedDemo: true })))).toEqual([
+    expect(codes(run(buildPack({ ruled: true, planner: MODEL, simulatedDemo: true })))).toEqual([
       "DEMONSTRATION_SIMULATED",
     ]);
   });
 
   it("real planner with a simulated demonstration, without --evidence: analysed but not evidence", () => {
     const r = analysed(
-      run(buildPack({ planner: MODEL, simulatedDemo: true, outcome: discordant(10, 0) }), false),
+      run(
+        buildPack({ ruled: true, planner: MODEL, simulatedDemo: true, outcome: discordant(10, 0) }),
+        false,
+      ),
     );
     expect(r.evidence).toBe(false);
     expect(r.barShown).toBe(false);
@@ -295,7 +322,7 @@ describe("simulated packs are plumbing, never evidence", () => {
 });
 
 describe("pack integrity refusals (codes only, no numbers)", () => {
-  const ok = () => buildPack({ planner: MODEL, outcome: discordant(8, 0) });
+  const ok = () => buildPack({ ruled: true, planner: MODEL, outcome: discordant(8, 0) });
   const mutate = (f: (b: Built) => void) => {
     const b = ok();
     f(b);
@@ -375,7 +402,7 @@ describe("pack integrity refusals (codes only, no numbers)", () => {
     ).toEqual(["ARM_INCOMPLETE"]);
   });
   it("ARM_INCOMPLETE: a partial C1 arm", () => {
-    const b = buildPack({ planner: MODEL, withC1: true, outcome: discordant(8, 0) });
+    const b = buildPack({ ruled: true, planner: MODEL, withC1: true, outcome: discordant(8, 0) });
     const i = b.trials.findIndex((t) => t.arm === "C1");
     b.trials.splice(i, 1);
     b.grades.splice(i, 1);
@@ -460,6 +487,7 @@ describe("pack integrity refusals (codes only, no numbers)", () => {
     const r = analysed(
       run(
         buildPack({
+          ruled: true,
           planner: MODEL,
           withC1: true,
           outcome: (i, arm) => (arm === "C1" ? { grade: "pass" } : discordant(8, 0)(i, arm)),
@@ -469,5 +497,194 @@ describe("pack integrity refusals (codes only, no numbers)", () => {
     expect(r.secondary.vsC1).toMatchObject({ capability: R_ARM, baseline: "C1", shown: false });
     expect(r.barShown).toBe(true);
     expect(analysed(run(ok())).secondary.vsC1).toBeNull();
+  });
+});
+
+describe("B1 (round 1): never shown while a lead ruling is pending", () => {
+  const pendingCount = (readPrereg().leadRulingPending as string[]).length;
+  const withPending = (b: Built, items: unknown) => {
+    b.prereg = { ...b.prereg, leadRulingPending: items };
+    b.pack.preregHash = canonicalSha256(b.prereg);
+    return b;
+  };
+
+  it("the committed prereg still lists pending rulings", () => {
+    expect(pendingCount).toBeGreaterThan(0);
+  });
+
+  it("the verifier's 8-vs-1 evidence pack on the committed prereg: LEAD_RULING_PENDING, bar not shown", () => {
+    const r = analysed(run(buildPack({ planner: MODEL, outcome: discordant(8, 1) })));
+    expect(r.evidence).toBe(true);
+    expect(r.leadRulingPending).toBe(pendingCount);
+    expect(r.barShown).toBe(false);
+    expect(r.primary).toMatchObject({ capabilityOnly: 8, baselineOnly: 1, shown: false });
+    expect(r.primary?.pOneSided).toBeCloseTo(10 / 512, 10);
+    expect(r.reading.startsWith(`${LEAD_RULING_PENDING}: ${pendingCount} `)).toBe(true);
+    expect(r.reading).toMatch(/computed, not a result: p = 0\.0195, 8 vs 1 discordant$/);
+    expect(r.reading).not.toMatch(/\bshown\b/);
+  });
+
+  it("the 5-vs-0 boundary pack on the committed prereg: not shown either", () => {
+    const r = analysed(run(buildPack({ planner: MODEL, outcome: discordant(5, 0) })));
+    expect(r.barShown).toBe(false);
+    expect(r.primary?.shown).toBe(false);
+    expect(r.reading).toMatch(new RegExp(`^${LEAD_RULING_PENDING}`));
+  });
+
+  it("one pending item is enough to block the bar", () => {
+    const b = withPending(buildPack({ ruled: true, planner: MODEL, outcome: discordant(8, 1) }), [
+      "one open item",
+    ]);
+    const r = analysed(run(b));
+    expect(r.leadRulingPending).toBe(1);
+    expect(r.barShown).toBe(false);
+    expect(r.primary?.shown).toBe(false);
+  });
+
+  it("the C1 secondary is withheld too", () => {
+    const r = analysed(
+      run(
+        buildPack({
+          planner: MODEL,
+          withC1: true,
+          outcome: (i, arm) => (arm === "C1" ? { grade: "fail" } : discordant(8, 0)(i, arm)),
+        }),
+      ),
+    );
+    expect(r.secondary.vsC1).toMatchObject({ capabilityOnly: 8, shown: false });
+    expect(r.secondary.vsC1?.reading).toMatch(new RegExp(`^${LEAD_RULING_PENDING}`));
+  });
+
+  it("a guardrail breach still reads not shown, prefixed with the pending state", () => {
+    const b = buildPack({
+      planner: MODEL,
+      outcome: (i, arm) =>
+        i === 20 && arm === R_ARM
+          ? {
+              grade: "fail",
+              invocations: [
+                {
+                  workflowId: "wf",
+                  recordingSha256: recordingSha("record-edit:name"),
+                  certified: true,
+                  refusal: null,
+                  gateVerdict: "verified",
+                },
+              ],
+            }
+          : discordant(8, 0)(i, arm),
+    });
+    const r = analysed(run(b));
+    expect(r.reading).toMatch(
+      new RegExp(`^${LEAD_RULING_PENDING}: .*; not shown: 1 derived-gate false accept`),
+    );
+  });
+
+  it("a prereg without a leadRulingPending list, or with a non-string item, is refused PREREG_SHAPE", () => {
+    const missing = buildPack({ ruled: true, planner: MODEL, outcome: discordant(8, 0) });
+    const { leadRulingPending: _drop, ...rest } = missing.prereg;
+    missing.prereg = rest;
+    missing.pack.preregHash = canonicalSha256(missing.prereg);
+    expect(codes(run(missing))).toEqual(["PREREG_SHAPE"]);
+    const bad = withPending(
+      buildPack({ ruled: true, planner: MODEL, outcome: discordant(8, 0) }),
+      [7],
+    );
+    expect(codes(run(bad))).toEqual(["PREREG_SHAPE"]);
+    const notList = withPending(
+      buildPack({ ruled: true, planner: MODEL, outcome: discordant(8, 0) }),
+      "none",
+    );
+    expect(codes(run(notList))).toEqual(["PREREG_SHAPE"]);
+  });
+});
+
+describe("N1 (round 1): claims the round-1 tests did not exercise", () => {
+  const derivedVerifiedGraded = (grade: "fail" | "ungradable") =>
+    buildPack({
+      ruled: true,
+      planner: MODEL,
+      outcome: (i, arm) =>
+        i === 20 && arm === R_ARM
+          ? {
+              grade,
+              invocations: [
+                {
+                  workflowId: "wf",
+                  recordingSha256: recordingSha("record-edit:name"),
+                  certified: true,
+                  refusal: null,
+                  gateVerdict: "verified",
+                },
+              ],
+            }
+          : discordant(8, 0)(i, arm),
+    });
+
+  it("V1: derived gate verified, grader ungradable: a false accept, bar not shown", () => {
+    const r = analysed(run(derivedVerifiedGraded("ungradable")));
+    expect(r.guardrails.derivedFalseAccepts).toBe(1);
+    expect(r.barShown).toBe(false);
+    expect(r.reading).toMatch(/1 derived-gate false accept/);
+  });
+
+  it("V5: steps, wall time and cost per verified task are ALL-trial sums over verified tasks", () => {
+    const r = analysed(
+      run(buildPack({ ruled: true, planner: MODEL, outcome: discordant(8, 1, 3) })),
+    );
+    // R verifies 11 of 30 (steps 10, wall 60 s, cost 0.01 each); hcu+shell verifies 4.
+    expect(r.secondary.perVerified[R_ARM]?.steps).toBeCloseTo(300 / 11, 10);
+    expect(r.secondary.perVerified[R_ARM]?.wallClockS).toBeCloseTo(1800 / 11, 10);
+    expect(r.secondary.perVerified[R_ARM]?.costUsdEstimate).toBeCloseTo(0.3 / 11, 10);
+    expect(r.secondary.perVerified["hcu+shell"]?.steps).toBeCloseTo(300 / 4, 10);
+  });
+
+  it("V6: one unmeasured cost makes that arm's cost per verified null, never 0-filled", () => {
+    const b = buildPack({ ruled: true, planner: MODEL, outcome: discordant(8, 1, 3) });
+    const i = b.trials.findIndex((t) => t.arm === R_ARM);
+    b.trials[i] = { ...(b.trials[i] as RTrialRow), costUsdEstimate: null };
+    const r = analysed(run(b));
+    expect(r.secondary.perVerified[R_ARM]?.costUsdEstimate).toBeNull();
+    expect(r.secondary.perVerified[R_ARM]?.steps).toBeCloseTo(300 / 11, 10);
+    expect(r.secondary.perVerified["hcu+shell"]?.costUsdEstimate).toBeCloseTo(0.3 / 4, 10);
+  });
+
+  it("V16: a duplicate grade row (even an identical one) is refused GRADE_SHAPE", () => {
+    const b = buildPack({ ruled: true, planner: MODEL, outcome: discordant(8, 0) });
+    b.grades.push({ ...b.grades[0] });
+    expect(codes(run(b))).toEqual(["GRADE_SHAPE"]);
+  });
+});
+
+describe("shared rule: a row is simulated unless `simulated` is absent or exactly false", () => {
+  const ok = () => buildPack({ ruled: true, planner: MODEL, outcome: discordant(8, 0) });
+
+  it("a trial row with simulated true is refused ROW_SIMULATED, with or without --evidence", () => {
+    for (const evidence of [true, false]) {
+      const b = ok();
+      b.trials[0] = { ...(b.trials[0] as RTrialRow), simulated: true } as never;
+      expect(codes(run(b, evidence))).toContain("ROW_SIMULATED");
+    }
+  });
+
+  it("any non-false value is simulated: the string 'false', 0, null", () => {
+    for (const v of ["false", 0, null]) {
+      const b = ok();
+      b.trials[0] = { ...(b.trials[0] as RTrialRow), simulated: v } as never;
+      expect(codes(run(b)), String(v)).toContain("ROW_SIMULATED");
+    }
+  });
+
+  it("a grade row with simulated true is refused ROW_SIMULATED", () => {
+    const b = ok();
+    b.grades[0] = { ...b.grades[0], simulated: true };
+    expect(codes(run(b))).toContain("ROW_SIMULATED");
+  });
+
+  it("simulated exactly false on a trial or grade row is accepted", () => {
+    const b = ok();
+    b.trials[0] = { ...(b.trials[0] as RTrialRow), simulated: false } as never;
+    b.grades[0] = { ...b.grades[0], simulated: false };
+    expect(analysed(run(b)).barShown).toBe(true);
   });
 });

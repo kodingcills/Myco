@@ -48,12 +48,19 @@ export interface BuildOptions {
   readonly planner?: string;
   readonly simulatedDemo?: boolean;
   readonly withC1?: boolean;
+  /**
+   * Analyse against a copy of the committed prereg with `leadRulingPending` emptied (and the
+   * pack's hash recomputed), as the prereg will read once the lead has ruled. Default false:
+   * the committed prereg, whose pending rulings block every "shown".
+   */
+  readonly ruled?: boolean;
   /** Outcome per (task index, arm). Default: everyone fails. */
   readonly outcome?: (taskIndex: number, arm: RArm) => Outcome;
 }
 
 export function buildPack(options: BuildOptions = {}) {
-  const prereg = readPrereg();
+  const committed = readPrereg();
+  const prereg = options.ruled ? { ...committed, leadRulingPending: [] } : committed;
   const manifest = readManifest();
   const planner = options.planner ?? "simulated:scripted";
   const seeds = prereg.seeds as { assignment: string };

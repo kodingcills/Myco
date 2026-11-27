@@ -10,7 +10,12 @@
  *     tasks. Tested only when (1) held.
  *  - **Guardrails.** Zero derived-gate false accepts (a derived verdict `verified` on a trial
  *    the grader graded `fail` or `ungradable`), with n and the one-sided 95% upper bound
- *    (capability-spec-2 §1.2); and a planted-marker scan of the pack that finds nothing.
+ *    (capability-spec-2 §1.2); and a planted-marker scan of the pack that finds nothing. The
+ *    spec's scan also covers recordings, workflows and oracles, which no pack carries yet;
+ *    that gap is a pending lead ruling in the prereg, so it blocks the bar (below).
+ *  - **Lead rulings.** While the prereg lists any `leadRulingPending` value, nothing is
+ *    reported as shown: `barShown` is false, every comparison's `shown` is false, and the
+ *    reading starts `LEAD_RULING_PENDING`. The statistics are still computed, as numbers only.
  *  - **Secondary, reported only.** `hcu+shell+R` vs `C1` (when the C1 arm ran), per-arm
  *    verified rates with Wilson 95% intervals, steps / wall time / cost per verified task over
  *    ALL trials, the share of R trials that used a workflow, and the R5 pass rate with its count.
@@ -26,7 +31,9 @@
  * fr-v1 once per task; when a row's instruction or fixture hash, planner, step budget or run
  * position differs from the pre-registration; when a grade row is missing, extra or bound to
  * other bytes; when a workflow came from an undeclared recording; and, with `evidence`, when
- * any planner or demonstration is simulated (capability-spec §3.5).
+ * any planner or demonstration is simulated (capability-spec §3.5). A trial or grade row that
+ * carries a `simulated` field other than exactly `false` is refused `ROW_SIMULATED`, with or
+ * without `evidence`.
  */
 import { assertClean } from "../recording/scrub.ts";
 import { canonicalSha256, sha256Hex } from "./canonical.ts";
@@ -40,6 +47,11 @@ export const R_ARMS = [R_ARM, "hcu+shell", "C1"] as const;
 export type RArm = (typeof R_ARMS)[number];
 const SIMULATED_PREFIX = "simulated:";
 export const SIMULATED_LABEL = "SIMULATED: plumbing only, never evidence (capability-spec §3.5)";
+export const NOT_EVIDENCE_LABEL =
+  "NOT EVIDENCE: analysed without --evidence, so the bar is not decided";
+export const LEAD_RULING_PENDING = "LEAD_RULING_PENDING";
+const pendingText = (n: number) =>
+  `${LEAD_RULING_PENDING}: ${n} pre-registered value(s) await the lead's ruling, so no result is reported`;
 
 export const REFUSAL_CODES = [
   "PREREG_SHAPE",
@@ -51,6 +63,7 @@ export const REFUSAL_CODES = [
   "DEMONSTRATIONS_INCOMPLETE",
   "DEMONSTRATION_SIMULATED",
   "TRIAL_SHAPE",
+  "ROW_SIMULATED",
   "TRIAL_KEY_DUPLICATE",
   "ARM_INCOMPLETE",
   "TASK_UNKNOWN",
@@ -99,6 +112,8 @@ interface PreregView {
   readonly alpha: number;
   readonly minDiscordant: number;
   readonly families: readonly string[];
+  /** Values still awaiting the lead's ruling. Required (an absent list is a shape error). */
+  readonly leadRulingPending: readonly string[];
 }
 
 function readPrereg(p: unknown): PreregView | undefined {
@@ -133,6 +148,7 @@ function readPrereg(p: unknown): PreregView | undefined {
     alpha: primary.alpha,
     minDiscordant: primary.minDiscordant,
     families: demo.families,
+    leadRulingPending: p.leadRulingPending,
   };
   if (
     !isStr(view.taskSetVersion) ||
@@ -145,7 +161,9 @@ function readPrereg(p: unknown): PreregView | undefined {
     !(view.alpha > 0 && view.alpha < 1) ||
     !isNonNegInt(view.minDiscordant) ||
     !Array.isArray(view.families) ||
-    !view.families.every(isStr)
+    !view.families.every(isStr) ||
+    !Array.isArray(view.leadRulingPending) ||
+    !view.leadRulingPending.every(isStr)
   )
     return undefined;
   return view as PreregView;
@@ -294,7 +312,12 @@ function isInvocation(v: unknown): v is RInvocation {
 }
 
 function isTrial(v: unknown): v is RTrialRow {
-  if (!isObj(v) || !exactKeys(v, TRIAL_KEYS) || v.schema !== R_TRIAL_SCHEMA) return false;
+  if (!isObj(v) || v.schema !== R_TRIAL_SCHEMA) return false;
+  // `simulated: false` is the only value the field may carry (a true one is refused earlier).
+  const keyed =
+    exactKeys(v, TRIAL_KEYS) ||
+    (v.simulated === false && exactKeys(v, [...TRIAL_KEYS, "simulated"]));
+  if (!keyed) return false;
   if (!isStr(v.trialKey) || !isStr(v.taskId) || !(R_ARMS as readonly unknown[]).includes(v.arm))
     return false;
   if (!isNonNegInt(v.ordinal) || !isStr(v.plannerModelId) || !isNonNegInt(v.stepBudget))
@@ -468,6 +491,8 @@ export type RAnalysis =
       readonly preregHash: string;
       readonly evidence: boolean;
       readonly label: string | null;
+      /** How many pre-registered values await the lead's ruling; any blocks every "shown". */
+      readonly leadRulingPending: number;
       readonly prerequisite: {
         readonly held: boolean;
         readonly uncertifiedVerdicts: number;
@@ -500,6 +525,10 @@ export type RAnalysis =
       readonly barShown: boolean;
       readonly reading: string;
     };
+
+/** A row is simulated unless its `simulated` field is absent or exactly `false`. */
+const claimsSimulated = (row: unknown): boolean =>
+  isObj(row) && Object.hasOwn(row, "simulated") && row.simulated !== false;
 
 const refused = (codes: Iterable<RRefusalCode>): RAnalysis => ({
   status: "refused",
@@ -589,6 +618,10 @@ export function analyseRPack(input: RAnalysisInput): RAnalysis {
   const keys = new Set<string>();
   const perArm = new Map<RArm, Map<string, number>>(R_ARMS.map((a) => [a, new Map()]));
   for (const row of input.trials) {
+    if (claimsSimulated(row)) {
+      codes.add("ROW_SIMULATED");
+      continue;
+    }
     if (!isTrial(row)) {
       codes.add("TRIAL_SHAPE");
       continue;
@@ -638,6 +671,10 @@ export function analyseRPack(input: RAnalysisInput): RAnalysis {
   // Grades: exactly one per trial, bound to the same task, fixture and captured bytes.
   const gradeByKey = new Map<string, GradeView>();
   for (const g of input.grades) {
+    if (claimsSimulated(g)) {
+      codes.add("ROW_SIMULATED");
+      continue;
+    }
     const grade = readGrade(g);
     if (!grade) {
       codes.add("GRADE_SHAPE");
@@ -730,25 +767,51 @@ export function analyseRPack(input: RAnalysisInput): RAnalysis {
     };
   }
 
-  const isEvidence = input.evidence && simulated.length === 0 && !anySimDemo;
+  const simulatedPack = simulated.length > 0 || anySimDemo;
+  const isEvidence = input.evidence && !simulatedPack;
+  const label = simulatedPack ? SIMULATED_LABEL : input.evidence ? null : NOT_EVIDENCE_LABEL;
+  const pending = prereg.leadRulingPending.length;
+  // What keeps a computed comparison from being a result: never "shown" while any applies.
+  const blockers = [label, pending > 0 ? pendingText(pending) : null].filter(
+    (b): b is string => b !== null,
+  );
+  const withheld = (c: Comparison | null): Comparison | null =>
+    c === null || blockers.length === 0
+      ? c
+      : {
+          ...c,
+          shown: false,
+          reading: `${blockers.join("; ")}; computed, not a result: p = ${c.pOneSided.toFixed(4)}, ${c.capabilityOnly} vs ${c.baselineOnly} discordant`,
+        };
   const markersClean = markerFinding === null;
   const barShown =
-    isEvidence && prerequisiteHeld && falseAccepts === 0 && markersClean && primary?.shown === true;
-  const reading = !prerequisiteHeld
+    isEvidence &&
+    pending === 0 &&
+    prerequisiteHeld &&
+    falseAccepts === 0 &&
+    markersClean &&
+    primary?.shown === true;
+  const primaryOut = withheld(primary);
+  const breach = !prerequisiteHeld
     ? "not shown: prerequisite failed (an uncertified derived oracle verified or was not refused)"
     : falseAccepts > 0
       ? `not shown: ${falseAccepts} derived-gate false accept(s)`
       : !markersClean
         ? "not shown: planted-marker scan found a marker"
-        : !isEvidence
-          ? `${SIMULATED_LABEL}; primary ${primary?.reading ?? "not tested"}`
-          : (primary as Comparison).reading;
+        : null;
+  const reading =
+    breach === null
+      ? (primaryOut as Comparison).reading
+      : blockers.length > 0
+        ? `${blockers.join("; ")}; ${breach}`
+        : breach;
 
   return {
     status: "analysed",
     preregHash,
     evidence: isEvidence,
-    label: isEvidence ? null : SIMULATED_LABEL,
+    label,
+    leadRulingPending: pending,
     prerequisite: { held: prerequisiteHeld, uncertifiedVerdicts, uncertifiedNotRefused },
     guardrails: {
       derivedFalseAccepts: falseAccepts,
@@ -756,9 +819,9 @@ export function analyseRPack(input: RAnalysisInput): RAnalysis {
       zeroEventUpper95: falseAccepts === 0 ? zeroEventUpper95(rTrials.length) : null,
       markerScan: { clean: markersClean, finding: markerFinding },
     },
-    primary,
+    primary: primaryOut,
     secondary: {
-      vsC1,
+      vsC1: withheld(vsC1),
       rates,
       perVerified,
       workflowShare: { used, rTrials: rTrials.length },
