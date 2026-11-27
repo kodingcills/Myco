@@ -124,7 +124,7 @@ function fakeRun(
       const r = await current.act(turn);
       return {
         ...r,
-        calls: r.calls.map((c) => ({
+        calls: r.calls.map(() => ({
           model,
           usage:
             opts.priced === false ? { prompt: 1 } : { prompt: 1000, completion: 20, cost: 0.0022 },
@@ -377,7 +377,13 @@ describe("stop rules", () => {
       const dir = tmp();
       const fake = fakeRun({ simulated: false, boot });
       let acted = 0;
-      const planner: HcuShellPlanner = { paid: true, act: async () => (acted++, { calls: [] }) };
+      const planner: HcuShellPlanner = {
+        paid: true,
+        act: async () => {
+          acted++;
+          return { calls: [] };
+        },
+      };
       const r = await run(dir, { ...fake, planner });
       expect(r).toMatchObject({ status: "halted", code: "boot-class-not-cold", decided: 0 });
       expect(acted).toBe(0);
