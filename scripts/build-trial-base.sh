@@ -21,6 +21,17 @@
 #      restriction is live (verify + the TIF-275 probes, every target must fail).
 #   6. shut down cleanly; take the snapshot ($NEW) with the VM stopped.
 #
+# HCU (TIF-734, optional): with MYCO_TRIAL_BASE_HCU_DIR=<dir> holding computer-use.exe,
+# computer-use-windows-provider.exe, LICENSE, THIRD_PARTY_NOTICES.md and SHA256SUMS (a pinned
+# build of microsoft/Hybrid-Computer-Use, docs/benchmark/hcu-shell-runbook.md section 1):
+#   3b. copy them in and install (scripts/trial-base/guest-hcu.ps1 install): every sha256 must
+#       match SHA256SUMS; the MycoHCU logon task runs `computer-use.exe serve` in the
+#       interactive session.
+#   5b. on the cold boot in place, egress denied: computer-use.exe runs in a session other
+#       than 0 and its daemon answers (guest-hcu.ps1 verify), and over SSH
+#       `computer-use.exe mcp --attach <socket>` initialises, lists the GUI tool and returns
+#       one screenshot image. Any failure stops the build before the snapshot.
+#
 # Fails closed: any step that fails stops the build before the snapshot. The
 # VM is then left with egress DENIED (an EXIT trap re-denies it) and clean-base
 # untouched; the next reset-trial-vm.sh restores its snapshot as usual.
@@ -34,6 +45,8 @@ VM=${MYCO_VM_SCRIPTS:-$HOME/VMs/myco-win11/scripts}
 VSSH="$VM/vssh"
 CFG=${VM_SSH_CONFIG:-$HOME/VMs/myco-win11/ssh_config}
 GUEST_PS='C:\Users\myco\trial-base-maintenance.ps1'
+HCU_DIR=${MYCO_TRIAL_BASE_HCU_DIR:-}
+GUEST_HCU_PS='C:\myco\bin\myco-hcu.ps1'
 # Overridable so the host test can stub them; the defaults are the in-repo scripts.
 EGRESS=${MYCO_EGRESS_SCRIPT:-$REPO/scripts/guest-egress.sh}
 RESET=${MYCO_RESET_SCRIPT:-$REPO/scripts/reset-trial-vm.sh}
@@ -52,6 +65,12 @@ has_snapshot() { snapshots | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -qx "$1
 status() { "$VM/vm.sh" status 2>/dev/null | tr -d '\r'; }
 
 has_snapshot "$FROM" || die "source snapshot '$FROM' not found"
+if [ -n "$HCU_DIR" ]; then
+  for f in computer-use.exe computer-use-windows-provider.exe LICENSE THIRD_PARTY_NOTICES.md SHA256SUMS; do
+    [ -f "$HCU_DIR/$f" ] || die "MYCO_TRIAL_BASE_HCU_DIR is missing $f"
+  done
+  (cd "$HCU_DIR" && shasum -a 256 -c SHA256SUMS >/dev/null 2>&1) || die "MYCO_TRIAL_BASE_HCU_DIR does not match its SHA256SUMS"
+fi
 has_snapshot "$NEW" && die "snapshot '$NEW' already exists; never overwrite a trial base (pick a new version name)"
 
 # Whatever happens, leave egress denied.
@@ -111,6 +130,25 @@ guest disable "$OUT/08-disable.log" || die "disable failed (see 08-disable.log)"
 guest state "$OUT/09-state-after.json" || die "state (after) failed"
 guest check "$OUT/10-defender-check.log" || die "Defender check failed: real-time off or exclusions present (see 10-defender-check.log)"
 
+# 3b. HCU (TIF-734), only when MYCO_TRIAL_BASE_HCU_DIR is set.
+hcu_guest() { # hcu_guest <stage> <logfile>
+  "$VSSH" "powershell -NoProfile -ExecutionPolicy Bypass -File $GUEST_HCU_PS -Stage $1" 2>&1 \
+    | tr -d '\r' | grep -v -e 'post-quantum' -e 'openssh.com/pq.html' > "$2"
+  return "${PIPESTATUS[0]}"
+}
+if [ -n "$HCU_DIR" ]; then
+  log "step 3b: install HCU from $(basename "$HCU_DIR") (sha256-checked in the guest)"
+  cp "$HCU_DIR/SHA256SUMS" "$OUT/10b-hcu-sha256sums.txt"
+  "$VSSH" "New-Item -ItemType Directory -Force -Path 'C:\myco\hcu-staging','C:\myco\bin' | Out-Null" >/dev/null 2>&1 \
+    || die "could not create the HCU staging directory"
+  scp -q -F "$CFG" -o ConnectTimeout=10 "$HCU_DIR/computer-use.exe" "$HCU_DIR/computer-use-windows-provider.exe" \
+    "$HCU_DIR/LICENSE" "$HCU_DIR/THIRD_PARTY_NOTICES.md" "$HCU_DIR/SHA256SUMS" "myco-win11:C:/myco/hcu-staging/" \
+    || die "could not copy the HCU files"
+  scp -q -F "$CFG" -o ConnectTimeout=10 "$REPO/scripts/trial-base/guest-hcu.ps1" "myco-win11:C:/myco/bin/myco-hcu.ps1" \
+    || die "could not copy guest-hcu.ps1"
+  hcu_guest install "$OUT/10c-hcu-install.log" || die "HCU install failed (see 10c-hcu-install.log)"
+fi
+
 # 4. Tidy and shut down cleanly.
 log "step 4: remove the maintenance script; clean shutdown"
 "$VSSH" "Remove-Item -LiteralPath '$GUEST_PS' -Force" >/dev/null 2>&1 || die "could not remove the maintenance script from the guest"
@@ -148,6 +186,51 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 assert d and all(v != "ok" for v in d.values()), d
 PY
+
+# 5b. HCU reachable on this cold boot, egress denied (TIF-734).
+if [ -n "$HCU_DIR" ]; then
+  log "step 5b: HCU in the interactive session; MCP over --attach: initialise, GUI tool, one screenshot"
+  hcu_guest verify "$OUT/14b-hcu-verify.log" || die "HCU verify failed (see 14b-hcu-verify.log)"
+  HCU_SOCKET=$(sed -n 's/^socket=//p' "$OUT/14b-hcu-verify.log" | tail -n 1)
+  [ -n "$HCU_SOCKET" ] || die "HCU verify printed no socket (see 14b-hcu-verify.log)"
+  { printf '%s\n' \
+      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"build-trial-base","version":"1"}}}' \
+      '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+      '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+      '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"GUI","arguments":{"actions":[{"type":"screenshot"}]}}}'
+    sleep "${MYCO_HCU_PROBE_WAIT_S:-25}"; } \
+    | ssh -F "$CFG" -o LogLevel=ERROR -o ConnectTimeout=10 myco-win11 "C:\myco\bin\computer-use.exe mcp --attach $HCU_SOCKET" 2>/dev/null | tr -d '\r' > "$OUT/14c-hcu-mcp.raw"
+  python3 - "$OUT/14c-hcu-mcp.raw" "$OUT/14c-hcu-mcp-probe.json" <<'PY' || die "HCU MCP probe failed (see 14c-hcu-mcp-probe.json)"
+import json, sys
+raw, out = sys.argv[1], sys.argv[2]
+by_id = {}
+for line in open(raw):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        j = json.loads(line)
+    except ValueError:
+        continue
+    if "id" in j:
+        by_id[j["id"]] = j
+init = (by_id.get(1) or {}).get("result") or {}
+tools = [t.get("name") for t in ((by_id.get(2) or {}).get("result") or {}).get("tools", [])]
+shot = (by_id.get(3) or {}).get("result") or {}
+images = [c for c in shot.get("content", []) if c.get("type") == "image" and c.get("data")]
+summary = {
+    "server": init.get("serverInfo"),
+    "tools": tools,
+    "screenshot_is_error": shot.get("isError"),
+    "screenshot_images": [{"mimeType": c.get("mimeType"), "base64Length": len(c["data"])} for c in images],
+    "screenshot_text": [c.get("text", "")[:300] for c in shot.get("content", []) if c.get("type") == "text"],
+}
+json.dump(summary, open(out, "w"), indent=2)
+ok = bool(init.get("serverInfo")) and "GUI" in tools and shot.get("isError") is not True and len(images) == 1
+sys.exit(0 if ok else 1)
+PY
+  rm -f "$OUT/14c-hcu-mcp.raw"
+fi
 
 # 6. Snapshot, stopped, egress denied.
 log "step 6: clean shutdown; snapshot $NEW"
