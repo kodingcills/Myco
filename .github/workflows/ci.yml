@@ -44,6 +44,7 @@ jobs:
       scanners: ${{ steps.plan.outputs.scanners }}
       safety: ${{ steps.plan.outputs.safety }}
       related: ${{ steps.plan.outputs.related }}
+      affected_all: ${{ steps.plan.outputs.affected_all }}
       agent_macos: ${{ steps.plan.outputs.agent_macos }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -231,26 +232,30 @@ jobs:
         if: env.MODE != 'docs'
         run: pnpm build
 
-  # CI speed (#678): a draft PR whose only full-suite paths are product source outside
-  # every Tier 2 path. Not a required check, by design: its name is not one of the five,
-  # and `check` is skipped in this mode, so `check (macos-latest)` and
-  # `check (ubuntu-latest)` are never reported for the commit and the PR cannot merge on
-  # this run. Marking the PR ready for review starts a run that is never `affected`.
-  # Ubuntu only: no macOS runner is taken while a PR is a draft in this mode.
+  # CI speed (#678): a draft PR that does not touch CI tooling. Not a required check, by
+  # design: its name is not one of the five, and `check` is skipped in this mode, so
+  # `check (macos-latest)` and `check (ubuntu-latest)` are never reported for the commit
+  # and the PR cannot merge on this run. Marking the PR ready for review starts a run that
+  # is never `affected`. Ubuntu only: no macOS runner is taken while a PR is a draft.
+  # With `affected_all` (too many related tests to be worth narrowing) it runs the whole
+  # suite instead of the affected subset.
   check-affected:
     name: check affected (ubuntu-latest)
     needs: plan
     if: ${{ needs.plan.result == 'success' && needs.plan.outputs.mode == 'affected' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      ALL: ${{ needs.plan.outputs.affected_all == 'true' }}
     steps:
       - name: Plan lists the guards
         env:
           SCANNERS: ${{ needs.plan.outputs.scanners }}
           SAFETY: ${{ needs.plan.outputs.safety }}
         run: |
-          # Fail closed: an affected run that cannot run the safety set or the
+          # Fail closed: a narrowed affected run that cannot run the safety set or the
           # directory-scanning guards fails instead of passing on less.
+          [ "$ALL" = true ] && exit 0
           [ -n "$SCANNERS" ] || { echo "::error::affected plan lists no directory-scanning tests"; exit 1; }
           [ -n "$SAFETY" ] || { echo "::error::affected plan lists no safety tests"; exit 1; }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -274,14 +279,19 @@ jobs:
         run: pnpm typecheck
       - name: Lint
         run: pnpm lint
+      - name: Test (whole suite, ubuntu only)
+        if: env.ALL == 'true'
+        run: pnpm test
       - name: Test (affected, files related to the change by vitest's import graph)
+        if: env.ALL != 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: pnpm exec vitest run --changed "$BASE_SHA" --passWithNoTests --exclude test/discovery/s0-live-launcher.test.ts
       - name: Test (s0 launcher, forked)
-        if: needs.plan.outputs.launcher != 'false'
+        if: env.ALL != 'true' && needs.plan.outputs.launcher != 'false'
         run: pnpm exec vitest run --pool=forks --no-file-parallelism test/discovery/s0-live-launcher.test.ts
       - name: Test (core smoke, safety set, directory-scanning, related and doc tests)
+        if: env.ALL != 'true'
         env:
           SMOKE: ${{ needs.plan.outputs.smoke }}
           SAFETY: ${{ needs.plan.outputs.safety }}
@@ -292,6 +302,7 @@ jobs:
           # shellcheck disable=SC2086 # space-separated file lists, written by scripts/ci-plan.py
           pnpm exec vitest run $SMOKE $SAFETY $SCANNERS $RELATED $DOC_TESTS
       - name: Schema validate
+        if: env.ALL != 'true'
         run: pnpm schema-validate
       - name: Build
         run: pnpm build

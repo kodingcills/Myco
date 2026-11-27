@@ -13,37 +13,38 @@ Modes, strongest first:
             directory-scanning test, schema-validate
   docs      the core smoke set, every directory-scanning test, and the test files
             that name a changed doc
-  affected  DRAFT PRs only, when product source (src/, viewer/src/) changed outside
-            every Tier 2 path: what targeted runs, plus every test that reaches a
-            changed file (related_tests: imports, spawns and file-name reads,
-            transitively), on ubuntu only and under the NON-required check name
+  affected  DRAFT PRs (CI speed, #678), unless the draft touches CI tooling (TOOLING),
+            carries the `full-ci` label, or its diff cannot be read: typecheck + lint +
+            build, `vitest run --changed <base>`, every test that reaches a changed file
+            (related_tests: imports, spawns and file-name reads, to a fixed point), the
+            safety set, the core smoke set, the direct directory-scanning tests and
+            schema-validate; or, past AFFECTED_MAX_TESTS related tests, the whole suite.
+            On ubuntu only, under the NON-required check name
             `check affected (ubuntu-latest)`. The required `check (...)` jobs are
-            skipped, so they are never reported for that commit and the PR cannot
-            merge on this run; marking the PR ready for review starts a new run, which
-            is never `affected` (a ready PR is not a draft).
+            skipped, so they are never reported for that commit and the PR cannot merge
+            on this run; marking the PR ready for review starts a new run, which is
+            never `affected` (a ready PR is not a draft). Tier 2 paths and statements
+            narrow here too, because the full suite is still required before merge.
 
 Every narrow mode (targeted, docs, affected) also runs the safety set (safety_tests:
 gate integrity, oracle mutation / R5, fault injection, security), the approved audit's
-"never dropped" tests, and every directory-scanning test (see scanning_tests), whatever
+"never dropped" tests, and the directory-scanning tests (see scanning_tests), whatever
 changed.
 
 Outside a draft, only test-only and docs-only changes are narrowed: every change under
 src/ or viewer/src/ in a ready PR runs the full suite (verifier round 2 D7: guard tests
 that scan a source directory never import the module they guard, so an import graph
-cannot find them; affected mode copes by running every scanning guard, and is never what
-a PR merges on).
+cannot find them; affected mode is never what a PR merges on).
 
 Fail safe: anything not positively classified as safe to narrow forces `full`.
-`full` is forced by
+Outside a draft, `full` is forced by
 
   - any event other than `pull_request` (pushes to main always run everything)
-  - the `tier-2` or `full-ci` label
+  - the `tier-2` or `full-ci` label (`full-ci` in a draft too)
   - a PR title or a body line that states Tier 2 ("Tier: 2", "**Tier 2**", ...)
   - a changed path in a Tier 2 or tooling class (TIER2 / TOOLING below; all of
-    scripts/ and src/benchmark/ are Tier 2), draft or not
-  - any change under src/ or viewer/src/ (SOURCE) in a PR that is not a draft; in a
-    draft, `affected` instead, unless the related-test set is too large to be worth it
-    (AFFECTED_MAX_TESTS)
+    scripts/ and src/benchmark/ are Tier 2)
+  - any change under src/ or viewer/src/ (SOURCE)
   - TypeScript outside the NARROWABLE_TS allowlist (test/ and viewer/test/)
   - TypeScript a spawned script can reach: any scripts/**/*.ts imports it
     (transitively), or a file some source names outside an import reaches it, or
@@ -54,6 +55,9 @@ Fail safe: anything not positively classified as safe to narrow forces `full`.
   - a doc that a non-test source names (a script may check it)
   - a diff that could not be computed, or one over MAX_FILES files
   - no test sources could be read (the directory-scanning set would be empty)
+
+In a draft, `full` is forced only by the `full-ci` label, a changed TOOLING path, an
+unreadable or oversized diff, or no readable test sources.
 
 Standard library only. `python3 scripts/ci-plan.py --help` for local use.
 """
@@ -250,6 +254,7 @@ class Plan:
     scanners: list[str] = field(default_factory=list)
     safety: list[str] = field(default_factory=list)
     related: list[str] = field(default_factory=list)
+    affected_all: bool = False
     agent_macos: bool = True
 
     def outputs(self) -> dict[str, str]:
@@ -264,6 +269,7 @@ class Plan:
             "scanners": " ".join(self.scanners),
             "safety": " ".join(self.safety),
             "related": " ".join(self.related),
+            "affected_all": str(self.affected_all).lower(),
             "agent_macos": str(self.agent_macos).lower(),
         }
 
@@ -542,6 +548,11 @@ def plan(
     if event != "pull_request":
         p.reasons.append(f"event {event or 'unknown'}: full on every non-PR run")
         return p
+    if "full-ci" in labels:
+        p.reasons.append("label full-ci")
+        return p
+    if draft:
+        return draft_plan(p, files, sources if sources is not None else {})
     hit = sorted(FULL_LABELS & set(labels))
     if hit:
         p.reasons.append(f"label {', '.join(hit)}")
@@ -561,9 +572,7 @@ def plan(
 
     classes = {f: classify(f) for f in files}
     forcing = [f for f, c in classes.items() if c in ("tier2", "tooling", "source", "unknown")]
-    # A draft whose only full-suite paths are product source (none Tier 2) is `affected`.
-    affected = draft and bool(forcing) and all(classes[f] == "source" for f in forcing)
-    if forcing and not affected:
+    if forcing:
         shown = ", ".join(f"{f} ({classes[f]})" for f in forcing[:5])
         more = f" and {len(forcing) - 5} more" if len(forcing) > 5 else ""
         p.reasons.append(f"full-suite path class: {shown}{more}")
@@ -593,34 +602,13 @@ def plan(
             return p
         doc_tests.update(tests)
 
-    related: list[str] = []
-    if affected:
-        related = related_tests([f for f, c in classes.items() if c in ("source", "ts")], srcs)
-        if len(related) > AFFECTED_MAX_TESTS:
-            p.reasons.append(f"draft: {len(related)} related test files (> {AFFECTED_MAX_TESTS}); full is no slower")
-            return p
-
     p.linux_path = any(starts(f, LINUX_PATH) for f in files)
     p.m2 = any(starts(f, M2) for f in files)
-    # targeted and docs report the required checks, so they keep the full scanning set;
-    # affected never does (the full run at ready for review decides), so direct scanners.
-    scanners = scanning_tests(srcs, through_source=not affected)
-    p.launcher = (
-        any(starts(f, LAUNCHER_PATHS) for f in files) or LAUNCHER_TEST in scanners or LAUNCHER_TEST in related
-    )
+    scanners = scanning_tests(srcs)
+    p.launcher = any(starts(f, LAUNCHER_PATHS) for f in files) or LAUNCHER_TEST in scanners
     p.scanners = [f for f in scanners if f not in SMOKE and f != LAUNCHER_TEST]
     p.safety = [f for f in safety_tests(srcs) if f not in SMOKE and f not in p.scanners and f != LAUNCHER_TEST]
     p.doc_tests = sorted(doc_tests)
-    if affected:
-        listed = set(SMOKE) | set(p.scanners) | set(p.safety) | set(p.doc_tests) | {LAUNCHER_TEST}
-        p.related = [f for f in related if f not in listed]
-        p.mode = "affected"
-        n_src = sum(1 for c in classes.values() if c == "source")
-        p.reasons.append(
-            f"affected (draft): {n_src} source file(s), {len(related)} related test file(s); "
-            "the required check jobs are skipped, so this run cannot satisfy them"
-        )
-        return p
     if all(c == "docs" for c in classes.values()):
         p.mode = "docs"
         p.reasons.append(f"docs only ({len(files)} file(s)); {len(p.doc_tests)} doc test(s)")
@@ -631,6 +619,60 @@ def plan(
             counts[c] = counts.get(c, 0) + 1
         p.reasons.append("targeted: " + ", ".join(f"{n} {c}" for c, n in sorted(counts.items())))
     return p
+
+
+def draft_plan(p: Plan, files: list[str] | None, srcs: dict[str, str]) -> Plan:
+    """A draft PR (CI speed, #678): `affected` unless the draft touches CI tooling or the
+    diff cannot be read. Tier 2 paths and Tier 2 statements narrow here too, because an
+    `affected` run never reports the required `check (...)` names: the full suite is still
+    required before any PR merges, and runs when the PR is marked ready."""
+    if files is None:
+        p.reasons.append("changed files unknown")
+        return p
+    if not files:
+        p.reasons.append("no changed files reported")
+        return p
+    if len(files) > MAX_FILES:
+        p.reasons.append(f"{len(files)} changed files (> {MAX_FILES})")
+        return p
+    tooling = [f for f in files if starts(f, TOOLING)]
+    if tooling:
+        p.reasons.append(f"draft changes CI tooling: {', '.join(tooling[:5])}")
+        return p
+    if not any(is_test_file(f) for f in srcs):
+        p.reasons.append("no test sources read (the directory-scanning guard set would be empty)")
+        return p
+
+    related = related_tests(files, srcs)
+    p.mode = "affected"
+    p.linux_path = any(starts(f, LINUX_PATH) for f in files)
+    p.m2 = any(starts(f, M2) for f in files)
+    if len(related) > AFFECTED_MAX_TESTS:
+        # Narrowing would not save much; run every test, still on ubuntu only and still
+        # under the non-required name.
+        p.affected_all = True
+        p.reasons.append(
+            f"affected (draft): {len(related)} related test files (> {AFFECTED_MAX_TESTS}), so the whole "
+            "suite on ubuntu; the required check jobs are skipped, so this run cannot satisfy them"
+        )
+        return p
+    # Direct scanners only: this run never reports the required checks (see scanning_tests).
+    scanners = scanning_tests(srcs, through_source=False)
+    p.launcher = any(starts(f, LAUNCHER_PATHS) for f in files) or LAUNCHER_TEST in scanners or LAUNCHER_TEST in related
+    p.scanners = [f for f in scanners if f not in SMOKE and f != LAUNCHER_TEST]
+    p.safety = [f for f in safety_tests(srcs) if f not in SMOKE and f not in p.scanners and f != LAUNCHER_TEST]
+    doc_tests: set[str] = set()
+    for doc in (f for f in files if f.endswith(".md")):
+        doc_tests.update(doc_references(doc, srcs)[0])
+    p.doc_tests = sorted(doc_tests)
+    listed = set(SMOKE) | set(p.scanners) | set(p.safety) | set(p.doc_tests) | {LAUNCHER_TEST}
+    p.related = [f for f in related if f not in listed]
+    p.reasons.append(
+        f"affected (draft): {len(files)} file(s), {len(related)} related test file(s); "
+        "the required check jobs are skipped, so this run cannot satisfy them"
+    )
+    return p
+
 
 
 SOURCE_ROOTS = ("test", "src", "scripts", "schemas", "viewer/src", "viewer/test", "viewer/e2e", "agent", "runtime")
@@ -711,7 +753,8 @@ def main(argv: list[str] | None = None) -> int:
             fh.write(f"- directory-scanning tests: {len(result.scanners)}\n")
             fh.write(f"- safety tests (gate, R5, faults, security): {len(result.safety)}\n")
             if result.mode == "affected":
-                fh.write(f"- related tests: {len(result.related)} (draft only; mark ready for the full suite)\n")
+                what = "the whole suite" if result.affected_all else f"{len(result.related)} related tests"
+                fh.write(f"- {what}, ubuntu only (draft; mark the PR ready for the full run it can merge on)\n")
             fh.write(f"- myco-agent tests (macos-latest): {outputs['agent_macos']}\n")
             if result.doc_tests:
                 fh.write(f"- doc tests: {outputs['doc_tests']}\n")
