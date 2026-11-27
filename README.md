@@ -75,6 +75,7 @@ Core invariant: **`ActResult` never claims goal success, and the runner never de
 After `pnpm install --frozen-lockfile` (see [Setup](#setup)), from the project you want your
 agents to use the gate in:
 
+<!-- newcomer-path: readme-quickstart -->
 ```sh
 /path/to/Myco/bin/myco init --dry-run   # every check and every planned change; writes nothing
 /path/to/Myco/bin/myco init             # checks, then writes ./.mcp.json and ./.codex/config.toml
@@ -90,9 +91,10 @@ any file it changes, and a second run changes nothing. It never reads or writes 
 directory as the project and never follows a symlink or hard link out of the project. With
 `--global` it only prints the exact diff until you add `--yes`. No config it writes carries a
 key or token. It does not touch the Windows VM path. `--tasks <file>` registers an operator
-task (for example a `calc-record-edit` task for the Linux Calc path); CI's `linux path` job
+task (for example `examples/linux-path/tasks.json`, the Linux Calc path's `calc-record-edit` task); CI's `linux path` job
 runs init end to end: real headless Calc edits the file under the configured evidence root,
-and a scripted MCP client gets `verified` / `refuted` through the written config. Details:
+and a scripted MCP client gets `verified` / `refuted` through the written config; CI's `newcomer path` job
+clones the repo and runs this quickstart exactly as written, timed. Details:
 [docs/product/setup.md](docs/product/setup.md).
 
 ---
