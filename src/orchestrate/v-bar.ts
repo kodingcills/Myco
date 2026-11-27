@@ -430,7 +430,9 @@ function packProblems(input: VBarInput): string[] {
     if (!isNonNeg(row.wallMs)) out.push(`BAD_WALL:${cell}`);
     if (!isCount(row.tokensUsed)) out.push(`BAD_TOKENS:${cell}`);
     if (!isCount(row.desktopActions)) out.push(`BAD_DESKTOP_ACTIONS:${cell}`);
-    const ids = Array.isArray(row.parts) ? row.parts.map((p) => p?.partId) : [];
+    const ids: readonly (string | undefined)[] = Array.isArray(row.parts)
+      ? (row.parts as readonly (VBarPart | null | undefined)[]).map((p) => p?.partId)
+      : [];
     if (ids.length !== expected.length || ids.some((id, k) => id !== expected[k]))
       out.push(`PARTS_MISMATCH:${cell}`);
     for (const part of Array.isArray(row.parts) ? row.parts : []) {

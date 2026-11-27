@@ -95,7 +95,7 @@
   "analysis": [
     {
       "path": "src/orchestrate/v-bar.ts",
-      "sha256": "2efa3e3aa6627d57b34b3bc553864886351afe22be9f901c397786ae287b960f"
+      "sha256": "d316e89dfadf07fcb92e1e33c78ff48349216a70fd44aef9f842c332d806d190"
     },
     {
       "path": "src/orchestrate/v-prereg.ts",

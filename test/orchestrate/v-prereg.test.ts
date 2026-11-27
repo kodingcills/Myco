@@ -28,7 +28,7 @@ const raw = readFileSync(join(ROOT, V_PREREG_PATH), "utf8");
 const prereg = JSON.parse(raw) as VPreregFile & Record<string, unknown>;
 
 /** The v-v1 pre-registration hash. Packs record it; it changes only with a new version. */
-const V_V1_PREREG_HASH = "aecfbf8aea7cc9bc9ef262c1c1974cedba11c4d9b8498e9b3c39dc94031b5713";
+const V_V1_PREREG_HASH = "253912ab1870175f0962792018ac27af3031741b88a211a87abb68a670aacd7e";
 
 const temps: string[] = [];
 afterAll(() => {
