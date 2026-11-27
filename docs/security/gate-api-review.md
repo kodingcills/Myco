@@ -306,8 +306,10 @@ issue.
   is `uncertain` `STATE_UNREADABLE`) when the captured state file is over `STATE_FILE_LIMIT`, before
   the oracle sees it (the check in `sealed.ts › sealedEvidenceReader › read`). Its reason names the
   limit, not a path. `test/gate/sealed-size-cap.test.ts` pins it.
-- **Deferred part:** the vault still reads the whole captured file to hash it. The full fix
-  caps artifact size at `vault.capture` (fail closed: no capture, no verdict). TO FILE 4.
+- **Deferred part:** the vault still reads the whole captured file to hash it, up to
+  `VAULT_READ_LIMIT_BYTES` (256 MiB; a larger file is refused, `readChecked` above, added by
+  the safe-parallelism FIFO fix). The full fix caps artifact size at `vault.capture` (fail
+  closed: no capture, no verdict). TO FILE 4.
 
 ### H-07: Input fuzzing (Info; tested by #522, merged)
 

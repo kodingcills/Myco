@@ -21,6 +21,7 @@ nothing is skipped or fails for lack of one.
 | `ci.yml` | `myco-agent tests (macos-latest)` | yes | no |
 | `ci.yml` | `runtime guest agent tests (ubuntu-latest)` | yes | yes |
 | `ci.yml` | `linux path (ubuntu-latest)` | yes, when the plan says so | no |
+| `ci.yml` | `safe parallelism (ubuntu-latest)` | yes (every PR; not gated by the plan) | no |
 | `ci.yml` | `m2 evidence and scorecard` | yes, when the plan says so | no |
 | `ci.yml` | `strict isolation (ubuntu-latest)` | yes | no |
 | `ci.yml` | `viewer verdict budget (…)` | only with the `perf` label | no |
@@ -34,6 +35,12 @@ nothing is skipped or fails for lack of one.
   `test/linux` with `MYCO_LINUX_PATH_REQUIRED=1` (a missing prerequisite fails the suite
   instead of skipping it), then `pnpm myco-linux --demo`, which exits non-zero unless
   every scenario gets its expected verdict. See `docs/product/linux-path.md` (TIF-269).
+- **Safe parallelism.** Track L. Installs LibreOffice Calc, Python-UNO and Xvfb, runs
+  `test/parallel` with `MYCO_PARALLEL_REQUIRED=1` (the Xvfb and real-Calc suites fail
+  instead of skipping), then a $0 throughput run at N = 1, 2, 4 with scripted agents on
+  the unprivileged `linux-plain` backend (`--allow-weak-isolation`; nothing is counted as
+  verified there). Strict namespace isolation is not in this job. See
+  `docs/product/safe-parallelism.md`.
 - **M2 evidence and scorecard.** `scripts/m2-evidence-check.ts --all` checks every
   committed `docs/research/experiments/m2-*` pack (schemas, the shared benchmark ledger,
   a cause on every non-verified row, the guest load gate record), then
@@ -266,7 +273,8 @@ test and make its child processes async (`spawn`), as
   pytest && pytest -v`. The runtime job: `cd runtime && cargo test -p myco-rt-agent`
   (its confinement tests run only on Linux). The Linux path job, after installing
   `libreoffice-calc python3-uno`: `MYCO_LINUX_PATH_REQUIRED=1 pnpm exec vitest run test/linux
-  && pnpm myco-linux --demo`.
+  && pnpm myco-linux --demo`. The safe-parallelism job, after also installing `xvfb`:
+  `MYCO_PARALLEL_REQUIRED=1 pnpm exec vitest run test/parallel`.
 - Lint workflows with [actionlint](https://github.com/rhysd/actionlint) before
   pushing a workflow change, e.g. `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7`
   and then `actionlint` from the repo root. With shellcheck on `PATH` it also checks `run:`
