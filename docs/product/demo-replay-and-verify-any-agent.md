@@ -240,7 +240,7 @@ Until it is ratified, V1 does not merge.**
   today), where the agent runs in a guest that cannot reach host files, so no later trial's
   agent can read an earlier trial's key file. On any other
   transport (`mock`, `linux-plain`, where the agent runs as the runner's uid and could read a
-  0600 file) no key file is written, and such trials are never evidence anyway. V1 adds the
+  0600 file) no key file is ever written, and such trials are never evidence anyway. V1 adds the
   transport's readonly constant (`transportKind`) to `GatedTrialTransport`; B6's provenance
   record reuses it. Because the key is per batch, a non-isolated trial would run as the
   runner's uid while an earlier isolated trial's key file, holding its own sealing key,
