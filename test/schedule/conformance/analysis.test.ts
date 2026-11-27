@@ -102,6 +102,36 @@ describe("s-v1 analysis: the bar holds only at 100%", () => {
     expect(r.verdict).toBe("not shown");
   });
 
+  it("a refused start with the wrong refusal code is a counterexample (N1)", () => {
+    const id = "trg-v1-service-state-dir-locked";
+    const r = run(only(id, (o) => ({ ...o, startupRefusal: "CONFIG_INVALID" })));
+    expect(r.verdict).toBe("not shown");
+    expect(r.cases.find((c) => c.caseId === id)?.failures).toEqual(["STARTUP_REFUSAL"]);
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["negative", -1],
+    ["fractional", 0.5],
+    ["a string", "0"],
+  ])("an observation with markerLeaks %s is malformed, never read as 0 leaks (N2)", (_, v) => {
+    const r = run(only(ID, (o) => ({ ...o, markerLeaks: v as unknown as number })));
+    expect(r.cases.find((c) => c.caseId === ID)?.failures).toEqual(["MALFORMED_RESULT"]);
+    expect(r.verdict).toBe("not shown");
+  });
+
+  it("a run id reused in another case is a double run (N4)", () => {
+    const a = "trg-v1-webhook-verified";
+    const b = "trg-v1-manual-concurrency";
+    const r = run((cid, o) =>
+      cid === a || cid === b
+        ? { ...o, runs: o.runs.map((x, i) => (i === 0 ? { ...x, runId: "shared-run" } : x)) }
+        : o,
+    );
+    expect(r.invariants.doubleRuns).toBe(1);
+    expect(r.reasons).toContain("DOUBLE_RUN");
+  });
+
   it("a runs list that disagrees with the executor-call count fails its case", () => {
     const r = run(only(ID, (o) => ({ ...o, runs: [] })));
     expect(r.cases.find((c) => c.caseId === ID)?.failures).toContain("RUNS_INCONSISTENT");
@@ -206,7 +236,8 @@ describe("s-v1 analysis: the mutation table", () => {
         { label: "b", status: "killed" },
       ]),
     );
-    expect(r.reasons).toEqual(["MUTANT_COUNT"]);
+    expect(r.reasons).toEqual(["MUTANT_COUNT", "MUTANT_MISSING"]);
+    expect(r.mutation.missing).toEqual(["c | src/schedule/c.ts"]);
   });
 
   it("a duplicated label cannot stand in for a missing mutant", () => {
@@ -218,7 +249,77 @@ describe("s-v1 analysis: the mutation table", () => {
         { label: "c", status: "killed" },
       ]),
     );
-    expect(r.reasons).toEqual(["MUTANT_LABEL_DUPLICATE"]);
+    expect(r.reasons).toEqual(["MUTANT_LABEL_DUPLICATE", "MUTANT_MISSING"]);
+  });
+
+  it("made-up labels (the right count, all killed) fail the bar (B2)", () => {
+    const r = run(
+      undefined,
+      mutation([
+        { label: "fake1", status: "killed" },
+        { label: "fake2", status: "killed" },
+        { label: "fake3", status: "killed" },
+      ]),
+    );
+    expect(r.verdict).toBe("not shown");
+    expect(r.reasons).toEqual(["MUTANT_MISSING", "MUTANT_UNKNOWN"]);
+    expect(r.mutation.unknown).toHaveLength(3);
+    expect(r.mutation.missing).toHaveLength(3);
+  });
+
+  it("one made-up label in place of a real one fails the bar", () => {
+    const r = run(
+      undefined,
+      mutation([
+        { label: "a", status: "killed" },
+        { label: "b", status: "killed" },
+        { label: "z", status: "killed" },
+      ]),
+    );
+    expect(r.reasons).toEqual(["MUTANT_MISSING", "MUTANT_UNKNOWN"]);
+    expect(r.mutation.unknown).toEqual(["z | src/schedule/z.ts"]);
+    expect(r.mutation.missing).toEqual(["c | src/schedule/c.ts"]);
+  });
+
+  it("a real label reported against another file is not that mutant", () => {
+    const r = run(
+      undefined,
+      mutation([
+        { label: "a", status: "killed" },
+        { label: "b", status: "killed" },
+        { label: "c", status: "killed", file: "src/schedule/other.ts" },
+      ]),
+    );
+    expect(r.reasons).toEqual(["MUTANT_MISSING", "MUTANT_UNKNOWN"]);
+  });
+});
+
+describe("s-v1 analysis: pending lead rulings (B1)", () => {
+  it("a conforming run reads 'not shown' with LEAD_RULING_PENDING while any ruling is pending", () => {
+    const frozen = { ...FROZEN, leadRulingPending: ["Ratification of S's property bar itself."] };
+    const r = analyzeSV1(frozen, CORPUS, perfectResults(), mutation());
+    expect(r.verdict).toBe("not shown");
+    expect(r.reasons).toEqual(["LEAD_RULING_PENDING"]);
+    expect(r.leadRulingPending).toEqual(frozen.leadRulingPending);
+  });
+
+  it("with no ruling pending the same run reads 'property holds'", () => {
+    const r = analyzeSV1(FROZEN, CORPUS, perfectResults(), mutation());
+    expect(r.verdict).toBe("property holds");
+    expect(r.leadRulingPending).toEqual([]);
+  });
+
+  it.each([
+    ["no pending list", { ...FROZEN, leadRulingPending: undefined }],
+    ["a pending list that is not strings", { ...FROZEN, leadRulingPending: [1] }],
+    ["no mutant set", { ...FROZEN, mutants: undefined }],
+    ["an empty mutant set", { ...FROZEN, mutants: [] }],
+  ])("a frozen record with %s is refused, never read as 'nothing pending'", (_, frozen) => {
+    expect(
+      refusal(() =>
+        analyzeSV1(frozen as unknown as typeof FROZEN, CORPUS, perfectResults(), mutation()),
+      ),
+    ).toBe("PREREG_SCHEMA");
   });
 });
 

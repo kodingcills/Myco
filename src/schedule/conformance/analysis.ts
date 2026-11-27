@@ -17,7 +17,13 @@
  *    with ORACLE_PASS, 0 rows claiming evidence, 0 concurrency overruns, 0 ledger chain failures
  *    and 0 marker leaks, in every case (bar items 1-5);
  *  - the mutation report covers exactly the pre-registered mutant count, with unique labels,
- *    and every mutant is killed (bar item 6).
+ *    its rows are exactly the frozen proof script's mutants (label and file; a made-up or
+ *    missing mutant fails it), and every mutant is killed (bar item 6);
+ *  - no lead ruling is pending in the pre-registration. While any is, the verdict is "not
+ *    shown" with LEAD_RULING_PENDING, whatever the data says (the bar is not yet ratified).
+ *
+ * Run ids must be unique across the whole results file: a run id reused in another case
+ * counts as a double run.
  *
  * Anything else reads "not shown", with codes saying why. Input that cannot be analysed at all
  * (the wrong corpus, prereg or manifest; missing, duplicate or unknown case ids; a file that
@@ -88,10 +94,15 @@ export interface ResultsFile {
   readonly cases: readonly CaseResult[];
 }
 
+export interface MutantRef {
+  readonly label: string;
+  readonly file: string;
+}
+
 export interface MutationReport {
   readonly schema: typeof MUTATION_SCHEMA;
   readonly scriptSha256: string;
-  readonly rows: readonly { readonly label: string; readonly status: string }[];
+  readonly rows: readonly (MutantRef & { readonly status: string })[];
 }
 
 export interface SV1Frozen {
@@ -100,6 +111,13 @@ export interface SV1Frozen {
   readonly manifestSha256: string;
   readonly mutationScriptSha256: string;
   readonly mutantCount: number;
+  /**
+   * The mutants (label and file) of the frozen mutation proof script, parsed from that script
+   * after its SHA-256 is checked. The report's rows must be exactly this set.
+   */
+  readonly mutants: readonly MutantRef[];
+  /** The pre-registration's `leadRulingPending`. While non-empty, the bar never reads "property holds". */
+  readonly leadRulingPending: readonly string[];
 }
 
 export interface CaseVerdict {
@@ -143,7 +161,13 @@ export interface SV1Report {
     readonly reported: number;
     readonly killed: number;
     readonly notKilled: readonly string[];
+    /** Reported rows that are not a mutant of the frozen script (label and file). */
+    readonly unknown: readonly string[];
+    /** Mutants of the frozen script with no reported row. */
+    readonly missing: readonly string[];
   };
+  /** The pre-registration's pending lead rulings; any one keeps the verdict at "not shown". */
+  readonly leadRulingPending: readonly string[];
   readonly cases: readonly CaseVerdict[];
   readonly simulated: true;
   readonly evidence: false;
@@ -244,7 +268,10 @@ interface CaseCounts {
   markerLeaks: number;
 }
 
-function judgeCase(c: TrgCase, raw: unknown): { verdict: CaseVerdict; counts: CaseCounts } {
+function judgeCase(
+  c: TrgCase,
+  raw: unknown,
+): { verdict: CaseVerdict; counts: CaseCounts; runIds: ReadonlySet<string> } {
   const counts: CaseCounts = {
     bypasses: 0,
     runs: 0,
@@ -261,6 +288,7 @@ function judgeCase(c: TrgCase, raw: unknown): { verdict: CaseVerdict; counts: Ca
     return {
       verdict: { caseId: c.id, inScope: c.inScope, pass: false, failures: ["MALFORMED_RESULT"] },
       counts,
+      runIds: new Set(),
     };
   const f = new Set<string>();
   const e = c.expected;
@@ -301,8 +329,11 @@ function judgeCase(c: TrgCase, raw: unknown): { verdict: CaseVerdict; counts: Ca
   return {
     verdict: { caseId: c.id, inScope: c.inScope, pass: failures.length === 0, failures },
     counts,
+    runIds: new Set(o.runs.map((x) => x.runId)),
   };
 }
+
+const mutantKey = (m: MutantRef) => `${m.label} | ${m.file}`;
 
 function refuseUnless(cond: boolean, code: string): void {
   if (!cond) throw new SV1RefusalError(code);
@@ -339,9 +370,24 @@ export function analyzeSV1(
   refuseUnless(
     Array.isArray(mut.rows) &&
       mut.rows.every(
-        (x) => isObj(x) && typeof x.label === "string" && typeof x.status === "string",
+        (x) =>
+          isObj(x) &&
+          typeof x.label === "string" &&
+          typeof x.file === "string" &&
+          typeof x.status === "string",
       ),
     "MUTATION_SCHEMA",
+  );
+  // Fail closed on a frozen record without the pending rulings or the mutant set: a missing
+  // list must never read as "no rulings pending" or "any labels will do".
+  refuseUnless(isStrArr(frozen.leadRulingPending), "PREREG_SCHEMA");
+  refuseUnless(
+    Array.isArray(frozen.mutants) &&
+      frozen.mutants.length > 0 &&
+      frozen.mutants.every(
+        (m) => isObj(m) && typeof m.label === "string" && typeof m.file === "string",
+      ),
+    "PREREG_SCHEMA",
   );
 
   const verdicts: CaseVerdict[] = [];
@@ -357,8 +403,14 @@ export function analyzeSV1(
     markerLeaks: 0,
   };
   let oosBypasses = 0;
+  // A run id may appear in one case only: a run id reused in another case is a double run too.
+  const seenRunIds = new Set<string>();
   for (const c of corpus) {
-    const { verdict, counts } = judgeCase(c, byId.get(c.id));
+    const { verdict, counts, runIds } = judgeCase(c, byId.get(c.id));
+    for (const id of runIds) {
+      if (seenRunIds.has(id)) tot.doubleRuns += 1;
+      seenRunIds.add(id);
+    }
     verdicts.push(verdict);
     if (c.inScope) {
       tot.bypasses += counts.bypasses;
@@ -378,6 +430,10 @@ export function analyzeSV1(
   const labels = mut.rows.map((x) => x.label);
   const notKilled = mut.rows.filter((x) => x.status !== "killed").map((x) => x.label);
   const killed = mut.rows.length - notKilled.length;
+  const frozenKeys = new Set(frozen.mutants.map(mutantKey));
+  const reportedKeys = new Set(mut.rows.map(mutantKey));
+  const unknown = mut.rows.filter((x) => !frozenKeys.has(mutantKey(x))).map(mutantKey);
+  const missing = frozen.mutants.filter((m) => !reportedKeys.has(mutantKey(m))).map(mutantKey);
 
   const reasons = new Set<string>();
   if (inS.some((v) => !v.pass)) reasons.add("IN_SCOPE_CASE_FAILED");
@@ -393,7 +449,11 @@ export function analyzeSV1(
   if (mut.rows.length !== frozen.mutantCount) reasons.add("MUTANT_COUNT");
   if (new Set(labels).size !== labels.length) reasons.add("MUTANT_LABEL_DUPLICATE");
   if (notKilled.length > 0) reasons.add("MUTANT_SURVIVED");
+  if (unknown.length > 0) reasons.add("MUTANT_UNKNOWN");
+  if (missing.length > 0) reasons.add("MUTANT_MISSING");
   if (inS.length === 0) reasons.add("NO_IN_SCOPE_CASES");
+  // The bar is not ratified while any lead ruling is pending: the data alone never shows it.
+  if (frozen.leadRulingPending.length > 0) reasons.add("LEAD_RULING_PENDING");
 
   return {
     schema: REPORT_SCHEMA,
@@ -423,7 +483,15 @@ export function analyzeSV1(
       chainFailures: tot.chainFailures,
       markerLeaks: tot.markerLeaks,
     },
-    mutation: { expected: frozen.mutantCount, reported: mut.rows.length, killed, notKilled },
+    mutation: {
+      expected: frozen.mutantCount,
+      reported: mut.rows.length,
+      killed,
+      notKilled,
+      unknown,
+      missing,
+    },
+    leadRulingPending: [...frozen.leadRulingPending],
     cases: verdicts,
     simulated: true,
     evidence: false,
