@@ -188,9 +188,10 @@ function asList<T>(v: T | readonly T[] | undefined | null): T[] {
 }
 
 function getterTypes(v: unknown): string[] {
-  return asList(v as Record<string, unknown> | Record<string, unknown>[]).map((g) =>
-    g && typeof g === "object" && typeof g.type === "string" ? g.type : "(none)",
-  );
+  return asList(v as Record<string, unknown> | Record<string, unknown>[]).map((g) => {
+    const type = g && typeof g === "object" ? (g as Record<string, unknown>).type : undefined;
+    return typeof type === "string" ? type : "(none)";
+  });
 }
 
 /** Collect every URL a task downloads or compares against. */
