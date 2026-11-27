@@ -89,8 +89,8 @@ fault with a fixed, code-only message, never an agent outcome):
     usual rules: a second identical fault in a row stops the run (exit 6). It is never the
     agent's NOT DONE. Code: `VmTrialStep.prepare` (`src/pilot/vm-capture.ts`) and
     `probeHcuDesktop` (`src/pilot/hcu-ssh.ts`).
-  - **Recorded loop-policy asymmetries with `hcu+shell` (#733 N1; for a lead ruling, behaviour
-    unchanged).** Budget, vocabulary, HCU client and HCU executable match. These differ:
+  - **Recorded loop-policy asymmetries with `hcu+shell` (#733 N1; behaviour unchanged by
+    lead ruling 2026-11-27T14:23Z on #733; alignment is #742).** Budget, vocabulary, HCU client and HCU executable match. These differ:
     1. `routing-refused`: the `hcu+shell` loop ends the trial on it
        (`src/baseline/hcu-shell/trial.ts`); the actuator returns it as a code and the agent
        may go on.
@@ -105,8 +105,9 @@ fault with a fixed, code-only message, never an agent outcome):
        (`DEFAULT_HCU_GUEST_COMMAND`) is still the bare form, and its runbook asks for a relay
        passed with `--hcu-command`. For parity an `hcu+shell` R2 run should pass this same
        attach command; the lead's GO names it.
-    Together these make the gate arm somewhat more lenient. Each needs a lead ruling: record
-    it as an R2 asymmetry, or align the two.
+    Together these make the gate arm somewhat more lenient. The lead's 14:23Z ruling on #733:
+    record each difference here and do not change the behaviour in #733. Aligning the two is
+    #742 (Tier 2), which must merge before any measured Windows-path trial.
   - **The gate: `myco-gate`**, bound to the trial's one task and run, with one tool,
     `mcp__myco-gate__myco_gate_check`. It is unchanged.
   - **Live preconditions (not yet met).** HCU must be in the trial base, serving the
@@ -114,7 +115,9 @@ fault with a fixed, code-only message, never an agent outcome):
     `docs/benchmark/hcu-shell-runbook.md` §1 item 3). The SSH setup
     must work with the agent's allowlisted environment (`HOME`, `PATH`, ...; no
     `SSH_AUTH_SOCK`). Mid-trial HCU loss (after the agent started) is still an agent outcome
-    (`delivered-stalled` / `ACTUATOR_UNAVAILABLE`); that is a recorded follow-up (#733 N5).
+    (`delivered-stalled` / `ACTUATOR_UNAVAILABLE`); that is #743 (#733 N5;
+    Tier 2, out of scope here by the lead's 14:23Z ruling), which must land before any
+    measured Windows-path trial.
 
   No built-in tools
   (`--tools ""`: no shell, no host file), `--strict-mcp-config` with the trial's own `mcp.json`,

@@ -117,6 +117,24 @@ describe("pilot config (track E)", () => {
     expect(runbook).toContain(`planSha256 is now ${ab0}`);
   });
 
+  it("#733 N1/N5: the runbook records the loop-policy asymmetries under the 14:23Z ruling, with #742 and #743", () => {
+    const runbook = readFileSync(join(ROOT, "docs/benchmark/pilot-runbook.md"), "utf8");
+    const start = runbook.indexOf("**Recorded loop-policy asymmetries with `hcu+shell`");
+    expect(start).toBeGreaterThan(-1);
+    const section = runbook.slice(start, runbook.indexOf("**The gate: `myco-gate`**", start));
+    expect(section).toContain("lead ruling 2026-11-27T14:23Z");
+    expect(section).toContain("#742");
+    for (const item of [
+      "`routing-refused`",
+      "Malformed actions",
+      "Screenshots",
+      "Gate calls",
+      "The HCU command",
+    ])
+      expect(section).toContain(item);
+    expect(runbook).toMatch(/Mid-trial HCU loss[\s\S]{0,200}#743/);
+  });
+
   it("the config hash changes with pacing (a pacing override is a new run, never a resume)", () => {
     expect(configSha256(config())).toBe(configSha256(config()));
     expect(configSha256(config({ concurrency: 2 }))).not.toBe(configSha256(config()));
