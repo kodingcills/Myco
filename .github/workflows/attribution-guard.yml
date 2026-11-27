@@ -1,8 +1,9 @@
 name: Attribution guard
 
 # Issue #685: fail a pull request whose commit messages, title or body carry a
-# Co-authored-by line naming Claude or Anthropic, or the "Generated with Claude Code"
-# line. `pull_request` only (never pull_request_target), read-only token, no secrets.
+# Co-authored-by line naming Claude or Anthropic, a "Generated with/by Claude Code"
+# line, a Claude session trailer or a Claude Code session link (incident #696).
+# `pull_request` only (never pull_request_target), read-only token, no secrets.
 # The job name `attribution guard` is stable so it can be marked required.
 # edited: a title or body change re-runs the check.
 on:

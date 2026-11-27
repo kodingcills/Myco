@@ -1,0 +1,4 @@
+Add the guard
+
+Refs #685
+claude-SESSION : 019wFixture
