@@ -24,6 +24,7 @@ import { homedir, hostname, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { validateEpisode } from "../../src/episode/validate.ts";
+import { POLICY_AGENT_CODES, POLICY_DECISION_CODES } from "../../src/policy/codes.ts";
 import type { RedactionContext } from "../../src/proof/backstop.ts";
 import {
   assembleProofBundle,
@@ -328,7 +329,14 @@ describe("library export defaults to the host's identity; constants of the forma
 
 describe("r2 N1: policy reason codes are a closed enum", () => {
   it("pinned list: the gate's REASON_CODES plus the repo's policy and handoff codes", () => {
-    expect(POLICY_REASON_CODES.slice(-10)).toEqual([
+    // Track O's closed enums are appended after the repo's earlier codes (pinned in
+    // test/policy/codes.test.ts); the earlier ten stay exactly as they were.
+    const tail = POLICY_DECISION_CODES.length + POLICY_AGENT_CODES.length;
+    expect(POLICY_REASON_CODES.slice(-tail)).toEqual([
+      ...POLICY_DECISION_CODES,
+      ...POLICY_AGENT_CODES,
+    ]);
+    expect(POLICY_REASON_CODES.slice(-tail - 10, -tail)).toEqual([
       "POLICY_ALLOW",
       "POLICY_DENIED",
       "POLICY_ERROR",
