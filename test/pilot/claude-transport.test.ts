@@ -21,7 +21,12 @@ import {
   parseClaim,
   type SpawnFn,
 } from "../../src/pilot/claude-transport.ts";
-import { CHILD_ENV_ALLOWLIST, configSha256 } from "../../src/pilot/config.ts";
+import {
+  ACTUATOR_GRANTS,
+  CHILD_ENV_ALLOWLIST,
+  configSha256,
+  GATE_GRANT,
+} from "../../src/pilot/config.ts";
 import { virtualClock } from "../../src/pilot/dry-run.ts";
 import { trialLaunchPlan } from "../../src/pilot/launch.ts";
 import { loadLedger, PROGRESS_FILE } from "../../src/pilot/ledger.ts";
@@ -126,6 +131,11 @@ describe("headless Claude Code transport (fake spawn)", () => {
     const { plan, fake, transport, trialDir } = setup(result("Edited the cell.\nDONE"));
     await transport.runAgent(plan, null);
     expect(readFileSync(plan.mcpConfigPath, "utf8")).toBe(mcpConfigJson(plan));
+    // #732: the written MCP config and the spawned argv carry the actuator AND the gate.
+    const written = JSON.parse(readFileSync(plan.mcpConfigPath, "utf8")).mcpServers;
+    expect(Object.keys(written).sort()).toEqual(["myco-gate", "myco-hcu"]);
+    for (const grant of [...ACTUATOR_GRANTS, GATE_GRANT])
+      expect(fake.calls[0]?.args).toContain(grant);
     expect(fake.calls).toHaveLength(1);
     expect(fake.calls[0]?.command).toBe("claude");
     expect(fake.calls[0]?.args).toEqual(plan.argv);

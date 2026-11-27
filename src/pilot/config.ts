@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 import type { BenchmarkTask } from "../benchmark/taskset.ts";
 import { GATE_TOOL, SERVER_NAME } from "../gate/mcp-server.ts";
 import { CHILD_ENV_ALLOWLIST, PILOT_MODEL } from "./claude-cli.ts";
+import { ACTUATOR_GRANTS, HCU_GUEST_COMMAND } from "./hcu-actuator.ts";
 
 // The planner model and the child environment allowlist live in `claude-cli.ts`
 // (dependency-free, TIF-268, shared with the hcu+shell planner) and are re-exported here.
@@ -120,8 +121,14 @@ export function selectPilotTasks(tasks: readonly BenchmarkTask[]): BenchmarkTask
   return out.sort((a, b) => (a.taskId < b.taskId ? -1 : 1));
 }
 
-/** The one tool the agent is granted: the gate. */
+/** The gate tool: the agent asks it, only to verify; it never acts. */
 export const GATE_GRANT = `mcp__${SERVER_NAME}__${GATE_TOOL}`;
+
+/**
+ * The agent's action tools (#732): the `myco-hcu` actuator's screenshot and C1 pixel actions,
+ * the `hcu+shell` arm's desktop reach (`src/pilot/hcu-actuator.ts`). Separate from the gate.
+ */
+export { ACTUATOR_GRANTS };
 
 /**
  * The headless Claude Code argv, with `{PROMPT}`, `{MCP_CONFIG}` and `{SYSTEM}` filled per
@@ -129,7 +136,8 @@ export const GATE_GRANT = `mcp__${SERVER_NAME}__${GATE_TOOL}`;
  *  - `-p` with the task's exact instruction as the prompt (R2 parity: the instruction text);
  *  - `--strict-mcp-config` and one `--mcp-config` (the trial's file): no user, project or
  *    local MCP server loads;
- *  - `--tools ""`: no built-in tool at all; `--allowedTools` grants the gate tool only;
+ *  - `--tools ""`: no built-in tool at all (no shell, no host file); `--allowedTools` grants
+ *    the actuator's four action tools (`ACTUATOR_GRANTS`, #732) and the gate tool, nothing else;
  *  - `--permission-mode dontAsk`: nothing outside the grant runs;
  *  - `--setting-sources ""`: no user / project / local settings file, so no permission rule,
  *    hook, `apiKeyHelper` or MCP server from settings reaches the trial (the audit's stated
@@ -151,6 +159,7 @@ export const ARGV_TEMPLATE: readonly string[] = [
   "--tools",
   "",
   "--allowedTools",
+  ...ACTUATOR_GRANTS,
   GATE_GRANT,
   "--permission-mode",
   "dontAsk",
@@ -183,6 +192,23 @@ export const GATE_SERVER_TEMPLATE = {
   ],
 } as const;
 
+/**
+ * The trial's actuator server (#732): `myco-hcu mcp`, HCU in the guest over the trial VM's SSH
+ * channel, with the `hcu+shell` arm's HCU guest command. It takes no trial, task, run or path
+ * argument: it acts on the guest desktop only, and the gate is a separate server.
+ */
+export const ACTUATOR_SERVER_TEMPLATE = {
+  command: "node",
+  args: [
+    "--import",
+    "tsx",
+    "{REPO}/scripts/myco-hcu.ts",
+    "mcp",
+    "--hcu-command",
+    HCU_GUEST_COMMAND,
+  ],
+} as const;
+
 /** The system-prompt addition: how to call the gate and how to end. Codes only come back. */
 export const SYSTEM_TEMPLATE =
   `When you believe the task is complete, call ${GATE_GRANT} with taskId "{TASK_ID}" and runId "{RUN_ID}". ` +
@@ -196,6 +222,8 @@ export interface PilotConfig {
   readonly pacing: PacingConfig;
   readonly argvTemplate: readonly string[];
   readonly gateServerTemplate: typeof GATE_SERVER_TEMPLATE;
+  /** The agent's action tools' server (#732); the gate stays `gateServerTemplate`. */
+  readonly actuatorServerTemplate: typeof ACTUATOR_SERVER_TEMPLATE;
   readonly systemTemplate: string;
   /** Child-process environment: only these variable NAMES are passed to `claude`. */
   readonly childEnvAllowlist: readonly string[];
@@ -240,6 +268,7 @@ export function pilotConfig(
     pacing: checkPacing(pacing),
     argvTemplate: ARGV_TEMPLATE,
     gateServerTemplate: GATE_SERVER_TEMPLATE,
+    actuatorServerTemplate: ACTUATOR_SERVER_TEMPLATE,
     systemTemplate: SYSTEM_TEMPLATE,
     childEnvAllowlist: CHILD_ENV_ALLOWLIST,
   };
