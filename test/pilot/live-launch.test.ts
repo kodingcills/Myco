@@ -53,7 +53,24 @@ import {
   VM_FAULT,
   type VmBackend,
 } from "../../src/pilot/vm-capture.ts";
-import { config, PUBLISHED, ROOT, SOURCES, tmp, USAGE_LIMIT_PHRASES } from "./helpers.ts";
+import {
+  CLEAN_RESULT_FAULT_PHRASES,
+  CLEAN_RESULT_TASK_DATA,
+  config,
+  FAULT_WORDING,
+  FOLDED_USAGE_PHRASES,
+  NBSP,
+  PUBLISHED,
+  ROOT,
+  SOURCES,
+  spaced,
+  THIN_SPACE,
+  tmp,
+  UNICODE_SPACES,
+  UNMAPPED_STRUCTURED,
+  USAGE_LIMIT_PHRASES,
+  ZWSP,
+} from "./helpers.ts";
 
 const sha256 = (b: Uint8Array | string) => createHash("sha256").update(b).digest("hex");
 
@@ -1273,6 +1290,375 @@ describe("round 3, R2-D3a/b: quota wording stops with exit 7 on plain stdout and
           ? "done"
           : "no-claim";
       expect([text, end?.armRow?.claim]).toEqual([text, want]);
+    }
+  });
+});
+
+describe("#606 S1+S2: stderr-only quota wording on a claimless clean result, and Unicode whitespace, stop with exit 7", () => {
+  const launchWith = async (output: { stdout: string; stderr?: string; code?: number }) => {
+    const out = tmp();
+    const cfg = twoTrials(config({ maxAttemptsPerTrial: 1 }));
+    const vm = fakeVm();
+    const claude = fakeClaude(() => output);
+    const d = deps(vm, claude);
+    const r = await launchR1Live(r1Opts(cfg, out), d);
+    const list = attemptsOf(out, "fc-v1-001");
+    return {
+      exit: r.exitCode,
+      stopCode: r.result?.stopCode ?? null,
+      spawns: claude.calls.length,
+      resets: vm.events.filter((e) => e === "reset").length,
+      classes: list.map((a) => a.end?.harnessClass ?? null),
+      open: taskStatus(list, 1).kind,
+      report: d.lines.includes(USAGE_LIMIT_REPORT),
+      t2: attemptsOf(out, "fc-v1-002").length,
+      outcomes: list.map((a) => a.end?.outcome ?? null),
+      // Only a decided end's arm row is counted (`ledgerRows`); its claim is the agent's.
+      claim: list[0]?.end?.outcome === "decided" ? (list[0].end.armRow?.claim ?? null) : null,
+    };
+  };
+  // Exit 7, one spawn, one reset, the trial still open with its one attempt unspent (nothing
+  // counted), the lead report, and the next trial never started.
+  const STOPPED = {
+    exit: EXIT.usageLimit,
+    stopCode: "usage-limit",
+    spawns: 1,
+    resets: 1,
+    classes: ["usage-limit"],
+    open: "open",
+    report: true,
+    t2: 0,
+    outcomes: ["harness-fault"],
+    claim: null,
+  };
+  // The agent's outcome: both trials decided, the claim as written, no stop.
+  const decidedAs = (claim: string) => ({
+    exit: EXIT.complete,
+    stopCode: null,
+    spawns: 2,
+    resets: 2,
+    classes: [null],
+    open: "done",
+    report: false,
+    t2: 1,
+    outcomes: ["decided"],
+    claim,
+  });
+
+  it("S1: every phrasing on stderr only, with a claimless clean result, exit 0 and exit 1: exit 7, one spawn, one reset, zero attempts, lead report", async () => {
+    for (const phrase of USAGE_LIMIT_PHRASES)
+      for (const code of [0, 1])
+        expect([
+          phrase,
+          code,
+          await launchWith({ stdout: resultJson("I edited the document."), stderr: phrase, code }),
+        ]).toEqual([phrase, code, STOPPED]);
+  });
+
+  it("S1: the same stderr with a DONE / NOT DONE claim line on a clean result stays the agent's outcome", async () => {
+    for (const phrase of USAGE_LIMIT_PHRASES)
+      for (const [line, claim] of [
+        ["DONE", "done"],
+        ["NOT DONE", "not-done"],
+      ] as const)
+        expect([
+          phrase,
+          line,
+          await launchWith({ stdout: resultJson(`Edited.\n${line}`), stderr: phrase, code: 0 }),
+        ]).toEqual([phrase, line, decidedAs(claim)]);
+  });
+
+  // Split per phrase (#607 round 1, D1): each phrase's matrix is one test, well inside the
+  // default timeout on the macOS runner. The matrix itself is unchanged.
+  it.each(USAGE_LIMIT_PHRASES)(
+    "S2: %s with each Unicode whitespace, on stderr, on plain stdout and as a claimless clean result: exit 7",
+    async (phrase) => {
+      for (const [name, sp] of UNICODE_SPACES) {
+        const t = spaced(phrase, sp);
+        for (const [shape, output] of [
+          ["stderr", { stdout: "", stderr: t, code: 1 }],
+          ["plain stdout", { stdout: t, code: 1 }],
+          ["plain stdout, exit 0", { stdout: t, code: 0 }],
+          ["clean claimless result", { stdout: resultJson(t), code: 0 }],
+          ["stderr, claimless clean result", { stdout: resultJson("Edited."), stderr: t, code: 0 }],
+        ] as const)
+          expect([phrase, name, shape, await launchWith(output)]).toEqual([
+            phrase,
+            name,
+            shape,
+            STOPPED,
+          ]);
+      }
+    },
+  );
+
+  it.each(USAGE_LIMIT_PHRASES)(
+    "S2: %s, spaced, with a claim line on a clean result stays the agent's outcome",
+    async (phrase) => {
+      for (const [name, sp] of UNICODE_SPACES) {
+        const t = spaced(phrase, sp);
+        expect([
+          phrase,
+          name,
+          await launchWith({ stdout: resultJson(`${t}\nDONE`), stderr: t, code: 0 }),
+        ]).toEqual([phrase, name, decidedAs("done")]);
+        expect([
+          phrase,
+          name,
+          await launchWith({ stdout: resultJson(`${t}\nNOT DONE`), code: 0 }),
+        ]).toEqual([phrase, name, decidedAs("not-done")]);
+      }
+    },
+  );
+
+  it("negatives: 401/403/429 task data with NBSP (in the result or on stderr) stays the agent's outcome", async () => {
+    const nb = NBSP;
+    for (const [stdout, stderr] of [
+      [resultJson(spaced("EMP-0055 qty 429; EMP-0127 qty 401; EMP-0090 qty 403", nb)), ""],
+      [resultJson("Edited."), spaced("API Error: 429 Too Many Requests", nb)],
+      [resultJson("Edited."), spaced("HTTP 401 Unauthorized; 403 Forbidden", nb)],
+      [resultJson(spaced("qty 429\nqty 401\nqty 403", nb)), spaced("status 429 401 403", nb)],
+    ] as const)
+      expect([stdout, stderr, await launchWith({ stdout, stderr, code: 0 })]).toEqual([
+        stdout,
+        stderr,
+        decidedAs("no-claim"),
+      ]);
+  });
+
+  it("round 2 F-A: quota wording with a format character or a hyphen variant inside stops with exit 7 on every shape; a claim line keeps the agent's outcome", async () => {
+    for (const [name, t] of FOLDED_USAGE_PHRASES) {
+      for (const [shape, output] of [
+        ["stderr", { stdout: "", stderr: t, code: 1 }],
+        ["plain stdout", { stdout: t, code: 1 }],
+        ["plain stdout, exit 0", { stdout: t, code: 0 }],
+        ["clean claimless result", { stdout: resultJson(t), code: 0 }],
+        ["stderr, claimless clean result", { stdout: resultJson("Edited."), stderr: t, code: 0 }],
+      ] as const)
+        expect([name, shape, await launchWith(output)]).toEqual([name, shape, STOPPED]);
+      expect([name, await launchWith({ stdout: resultJson(`${t}\nDONE`), stderr: t })]).toEqual([
+        name,
+        decidedAs("done"),
+      ]);
+    }
+  });
+
+  it("round 2 F-B: billing and auth wording with NBSP, a thin space or ZWSP on plain stdout or stderr stops with exit 5, not a spent attempt", async () => {
+    for (const [text, cls] of [
+      ["Credit balance is too low", "billing"],
+      ["You're out of extra usage", "billing"],
+      ["Not logged in", "auth"],
+      ["OAuth token has expired", "auth"],
+    ] as const)
+      for (const sp of [NBSP, THIN_SPACE, ZWSP])
+        for (const output of [
+          { stdout: spaced(text, sp), code: 1 },
+          { stdout: "", stderr: spaced(text, sp), code: 1 },
+        ]) {
+          const r = await launchWith(output);
+          expect([
+            text,
+            sp.charCodeAt(0),
+            output.stdout === "",
+            r.exit,
+            r.stopCode,
+            r.classes,
+          ]).toEqual([
+            text,
+            sp.charCodeAt(0),
+            output.stdout === "",
+            EXIT.subscriptionStop,
+            cls,
+            [cls],
+          ]);
+        }
+  });
+
+  it("round 2 F-B: the broad vocabulary with NBSP or a thin space is never applied to a clean result", async () => {
+    for (const sp of [NBSP, THIN_SPACE])
+      for (const [stdout, stderr] of [
+        [resultJson(spaced("You've hit your rate limit", sp)), spaced("rate limit reached", sp)],
+        [resultJson(spaced("Too many requests; billing address updated", sp)), ""],
+        [resultJson("Edited."), spaced("quota column fixed; credential field cleared; 403", sp)],
+      ] as const)
+        expect([stdout, stderr, await launchWith({ stdout, stderr, code: 0 })]).toEqual([
+          stdout,
+          stderr,
+          decidedAs("no-claim"),
+        ]);
+  });
+
+  // A billing or auth stop: exit 5 with the class as the stop code, one spawn, one reset, the
+  // trial still open with its one attempt unspent, nothing counted, the next trial not started.
+  const subscriptionStopped = (cls: string) => ({
+    exit: EXIT.subscriptionStop,
+    stopCode: cls,
+    spawns: 1,
+    resets: 1,
+    classes: [cls],
+    open: "open",
+    report: false,
+    t2: 0,
+    outcomes: ["harness-fault"],
+    claim: null,
+  });
+  // A transient limit, repeated: backed off once (one extra cold reset), then paused with the
+  // trial open and its attempt unspent (the ledger-durable cap, round 3 F2).
+  const TRANSIENT_PAUSED = {
+    exit: EXIT.paused,
+    stopCode: null,
+    spawns: 2,
+    resets: 2,
+    classes: ["rate-limit", "rate-limit"],
+    open: "open",
+    report: false,
+    t2: 0,
+    outcomes: ["harness-fault", "harness-fault"],
+    claim: null,
+  };
+  const expectedFor = (cls: string) =>
+    cls === "usage-limit"
+      ? STOPPED
+      : cls === "rate-limit"
+        ? TRANSIENT_PAUSED
+        : subscriptionStopped(cls);
+
+  it("round 2 F-B, updated by round 3 L1: the exact CLI billing and auth phrases on a claimless clean result now stop with exit 5", async () => {
+    for (const sp of [NBSP, THIN_SPACE])
+      for (const [stdout, stderr, cls] of [
+        [resultJson(spaced("Credit balance is too low; not logged in", sp)), "", "auth"],
+        [
+          resultJson("Edited."),
+          spaced("Too many requests; Credit balance is too low", sp),
+          "billing",
+        ],
+      ] as const)
+        expect([stdout, stderr, await launchWith({ stdout, stderr, code: 0 })]).toEqual([
+          stdout,
+          stderr,
+          subscriptionStopped(cls),
+        ]);
+  });
+
+  // #607 round 3, B2: an unmapped structured class no longer hides the text vocabulary.
+  it.each(UNMAPPED_STRUCTURED)(
+    "round 3 B2: %s with quota, billing, auth or transient wording stops or backs off as its class, the attempt unspent",
+    async (_name, s) => {
+      const withAssistant = (res: string | null) =>
+        JSON.stringify([
+          { type: "assistant", message: { content: [] }, ...s },
+          ...(res === null ? [] : [JSON.parse(res)]),
+        ]);
+      const errRes = (text: string) =>
+        resultJson(text, { is_error: true, subtype: "error_during_execution" });
+      for (const [t, cls] of FAULT_WORDING)
+        for (const [shape, output] of [
+          ["error result text", { stdout: withAssistant(errRes(t)), code: 1 }],
+          [
+            "stderr with an error result",
+            { stdout: withAssistant(errRes("API Error")), stderr: t, code: 1 },
+          ],
+          ["no result event, stderr", { stdout: withAssistant(null), stderr: t, code: 1 }],
+          [
+            "clean-looking DONE result, exit 0, stderr",
+            { stdout: withAssistant(resultJson("x\nDONE")), stderr: t, code: 0 },
+          ],
+        ] as const)
+          expect([t, shape, await launchWith(output)]).toEqual([t, shape, expectedFor(cls)]);
+      // With no vocabulary the structured class stands: an unclassified error result, which
+      // is re-run and spends the attempt (unchanged behaviour).
+      const plain = await launchWith({
+        stdout: withAssistant(errRes("Something went wrong.")),
+        code: 1,
+      });
+      expect(plain.classes[0]).toBe("error-result");
+      expect(plain.open).not.toBe("open");
+    },
+  );
+
+  // #607 round 3, L1, end to end.
+  it("round 3 L1: each narrow billing or auth phrase as a claimless clean result (text or stderr-only) stops with exit 5; with a claim line it is decided; task data stays no-claim", async () => {
+    for (const [t0, cls] of CLEAN_RESULT_FAULT_PHRASES)
+      for (const t of [t0, spaced(t0, NBSP), spaced(t0, ZWSP)]) {
+        for (const [shape, output] of [
+          ["clean claimless result", { stdout: resultJson(t), code: 0 }],
+          ["stderr, claimless clean result", { stdout: resultJson("Edited."), stderr: t, code: 0 }],
+        ] as const)
+          expect([t, shape, await launchWith(output)]).toEqual([
+            t,
+            shape,
+            subscriptionStopped(cls),
+          ]);
+        expect([
+          t,
+          await launchWith({ stdout: resultJson(`${t}\nDONE`), stderr: t, code: 0 }),
+        ]).toEqual([t, decidedAs("done")]);
+        expect([t, await launchWith({ stdout: resultJson(`${t}\nNOT DONE`), code: 0 })]).toEqual([
+          t,
+          decidedAs("not-done"),
+        ]);
+      }
+    for (const t of CLEAN_RESULT_TASK_DATA)
+      for (const output of [
+        { stdout: resultJson(t), code: 0 },
+        { stdout: resultJson("Edited."), stderr: spaced(t, NBSP), code: 0 },
+      ])
+        expect([t, await launchWith(output)]).toEqual([t, decidedAs("no-claim")]);
+  });
+
+  it("the A/B launch's live driver shares the classifier: stderr-only and NBSP quota wording is usage-limit there too", async () => {
+    const LOADED = loadPrereg(ROOT);
+    for (const output of [
+      { stdout: resultJson("Edited."), stderr: "Claude AI usage limit reached|1700000000" },
+      { stdout: resultJson(spaced("5-hour limit reached ∙ resets 3pm", NBSP)) },
+      { stdout: spaced("Weekly limit reached ∙ resets Mon", String.fromCharCode(0x202f)), code: 1 },
+    ]) {
+      const claude = fakeClaude(() => output);
+      const faults: unknown[] = [];
+      const r = await launchAbLive(
+        {
+          loaded: LOADED,
+          stage: 0,
+          published: PUBLISHED,
+          outRoot: tmp(),
+          repoRoot: ROOT,
+          oracleSources: SOURCES,
+          launchRealTrials: true,
+          planSha256: abPlanSha256(LOADED, 0, PUBLISHED),
+        },
+        deps(fakeVm(), claude),
+        {
+          refusals: () => [],
+          runStage: async (o) => {
+            const ctx = {
+              task: task1(),
+              runId: "ab-s0-on-fc-v1-001-a1",
+              trialKey: "ab-s0-on-fc-v1-001-a1",
+              trialDir: tmp(),
+              signal: new AbortController().signal,
+            };
+            mkdirSync(join(ctx.trialDir, "gate-evidence"));
+            const t = o.driver.transport(ctx);
+            await t
+              .runAgent(trialLaunchPlan(config(), task1(), ctx, ctx.trialDir, ROOT), null)
+              .catch((e: unknown) => faults.push(e));
+            return {
+              status: "complete",
+              reason: null,
+              stage: 0,
+              chunksRun: 1,
+              chunksDone: 1,
+              chunks: 1,
+              stopCode: null,
+            };
+          },
+        },
+      );
+      expect(r.exitCode).toBe(EXIT.complete);
+      expect(claude.calls).toHaveLength(1);
+      expect(faults).toHaveLength(1);
+      expect(faults[0]).toBeInstanceOf(HarnessFault);
+      expect([output, (faults[0] as HarnessFault).harnessClass]).toEqual([output, "usage-limit"]);
     }
   });
 });
