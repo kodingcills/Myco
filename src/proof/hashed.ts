@@ -9,9 +9,13 @@
  * tagged SHA-256 of the FULL raw value (`textDigest`). Only the digest's hex is kept, so no
  * input text survives; 240 bits keep equality checkable with no practical collision.
  *
- * Idempotence: a value that is EXACTLY `h-<60hex>` (lower-case hex, nothing before or after)
- * is already hashed and is kept as is. Every other `h-` form (`h-<64hex>`, 59 or 61 hex digits,
- * upper-case hex, `H-...`) is a plain value and is hashed like any other.
+ * PROVENANCE-BOUND (#579 O3, `src/export-guard/provenance.ts`): a value that is EXACTLY
+ * `h-<60hex>` (lower-case hex, nothing before or after) is kept as is ONLY when the harness
+ * produced it, that is when the harness's `HashLedger` records it for this field (`bundleHashLedger`
+ * builds one from a bundle the harness wrote and that verified). Any other `h-<60hex>` (an
+ * agent's) is re-hashed, so it can never carry agent-chosen hex out. Every other `h-` form
+ * (`h-<64hex>`, 59 or 61 hex digits, upper-case hex, `H-...`) is a plain value and is hashed
+ * like any other.
  *
  * This form is ONLY for hashed values. Full content digests (`TextRef.sha256`,
  * `evidence.sha256`, the chain's `prevSha256`, the episode digest, the ledger head) stay the
@@ -21,6 +25,7 @@
  * (which import each other) can both build schema patterns from it at load time.
  */
 import { createHash } from "node:crypto";
+import { type HashLedger, keepOrHash, NO_LEDGER } from "../export-guard/provenance.ts";
 
 /** The domain tag every text digest is computed under (versioned: a change is reviewed). */
 export const TEXT_DIGEST_TAG = "myco.proof.text/1";
@@ -50,7 +55,10 @@ export function hashedId(raw: string): string {
   return `h-${textDigest(raw).slice(0, HASHED_HEX_CHARS)}`;
 }
 
-/** Hash a value that may not be written as is, keeping an exact `h-<60hex>` as is. */
-export function hashValue(raw: string): string {
-  return isHashed(raw) ? raw : hashedId(raw);
+/**
+ * Hash a value that may not be written as is. An exact `h-<60hex>` is kept as is only when
+ * `ledger` records it for `field` (harness-produced, #579 O3); with no ledger it is re-hashed.
+ */
+export function hashValue(raw: string, field = "", ledger: HashLedger = NO_LEDGER): string {
+  return keepOrHash(raw, field, ledger, hashedId);
 }

@@ -33,6 +33,7 @@ import {
   ARM_GRAMMAR,
   closeEpisode,
   ExportInputError,
+  hashedLeaves,
   joinedIdentity,
   openStrings,
 } from "./closed.ts";
@@ -210,7 +211,8 @@ export function exportDataset(options: {
       throw new Error(
         `export refused: a ${kind ? "simulated" : "real"} store in a ${options.simulated ? "simulated" : "real"} export (simulated rows never mix into real datasets)`,
       );
-    const { episodes, blobs } = readStoreDir(root);
+    // The store's hash ledger (#579 O3): the only `h-<60 hex>` values kept as is.
+    const { episodes, blobs, ledger } = readStoreDir(root);
     for (const ep of episodes) {
       const own = blobsFor(ep, blobs);
       const issues = validateEpisode(ep, { blobs: own, host });
@@ -227,7 +229,7 @@ export function exportDataset(options: {
       // Only the closed form leaves the machine; it is validated again as written.
       let closedEp: Episode;
       try {
-        closedEp = closeEpisode(ep, entries);
+        closedEp = closeEpisode(ep, entries, ledger);
       } catch (e) {
         if (e instanceof ExportInputError)
           throw new Error(`episode ${String(ep.episodeId).slice(0, 12)}: ${e.message}`);
@@ -367,6 +369,11 @@ export function validateDataset(
  * Validate a dataset, then copy its episodes into a store of the same kind. A dataset is
  * digest-only, so an episode that references a blob cannot be restored: the store refuses it
  * (`BLOB_MISSING`) and the result says so; blob-free episodes round-trip.
+ *
+ * Each stored episode's hashed values are recorded in the store's hash ledger (#579 O3), bound to
+ * its id and path, so a re-export keeps exactly them (byte-identical). The dataset is TRUSTED as
+ * harness output here: a dataset written before #579 may hold an agent's verbatim `h-<60 hex>`,
+ * so it must be re-exported from its source store, not re-imported.
  */
 export function importDataset(dir: string, storeRoot: string, host: HostFacts = currentHost()) {
   const problems = validateDataset(dir, host);
@@ -378,6 +385,8 @@ export function importDataset(dir: string, storeRoot: string, host: HostFacts = 
     .filter((f) => f.path.startsWith("episodes/"))
     .map((f) => {
       const ep = JSON.parse(readFileSync(join(dir, f.path), "utf8")) as Episode;
-      return store.write(ep, new Map());
+      const result = store.write(ep, new Map());
+      if (result.status !== "refused") store.recordHashed(ep.episodeId, hashedLeaves(ep));
+      return result;
     });
 }
