@@ -24,7 +24,10 @@ A pack directory holds `pack.json` (`myco.capability.r-pack/1`), `trials.jsonl`
 `myco.benchmark.grade-row/1` rows). VERIFIED is a `done` claim the grader graded `pass`. The
 derived oracle's verdict counts only toward the R5 prerequisite and the false-accept guardrail.
 The analysis refuses to run if this script, the analysis module or the planted-marker
-scanner (`src/recording/scrub.ts`) no longer matches the SHA-256 frozen in `prereg.json`.
+scanner (`src/recording/scrub.ts`) no longer matches the SHA-256 frozen in `prereg.json`
+(`ANALYSIS_CODE_CHANGED`), or if `prereg.json` no longer hashes to the committed
+`prereg.sha256` (`PREREG_NOT_COMMITTED`). A pack whose recorded hash differs from the
+prereg is refused `PREREG_HASH_MISMATCH`.
 While `leadRulingPending` lists anything, the analysis reports `LEAD_RULING_PENDING`: the
 statistics are computed as numbers, but nothing is reported as shown and `barShown` is false.
 A trial or grade row whose `simulated` field is anything but exactly `false` is refused

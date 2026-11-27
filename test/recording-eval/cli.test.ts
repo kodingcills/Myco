@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { canonicalSha256 } from "../../src/recording-eval/canonical.ts";
 import { buildPack, discordant, PREREG_DIR, ROOT } from "./helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "myco-r-v1-cli-"));
@@ -89,49 +90,85 @@ describe("r-v1-analysis CLI", () => {
     expect(out.reading).not.toMatch(/\bshown\b/);
   }, 60_000);
 
+  /** A copy of the files the CLI reads, so a test can edit one without touching the repo. */
+  function copyTree(name: string): string {
+    const tree = join(dir, `tree-${name.replace(/\W/g, "-")}`);
+    const files = [
+      "scripts/r-v1-analysis.ts",
+      "src/recording-eval/analysis.ts",
+      "src/recording-eval/canonical.ts",
+      "src/recording-eval/fr-v1.ts",
+      "src/recording/scrub.ts",
+      "src/tasks/fixture.ts",
+      "src/tasks/intent.ts",
+      "src/tasks/task-text.ts",
+      "docs/product/capability-prereg/r-v1/prereg.json",
+      "docs/product/capability-prereg/r-v1/prereg.sha256",
+      "docs/product/capability-prereg/r-v1/fr-v1-manifest.json",
+    ];
+    for (const f of files) {
+      mkdirSync(dirname(join(tree, f)), { recursive: true });
+      cpSync(join(ROOT, f), join(tree, f));
+    }
+    return tree;
+  }
+  const runIn = (tree: string, args: string[]) =>
+    spawnSync(
+      process.execPath,
+      ["--import", "tsx", join(tree, "scripts", "r-v1-analysis.ts"), "analyse", ...args],
+      { cwd: ROOT, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], timeout: 60_000 },
+    );
+
   it.each([
     ["the analysis module", "src/recording-eval/analysis.ts"],
     ["the marker scanner (N5)", "src/recording/scrub.ts"],
   ])(
     "a copy of the tree with %s edited refuses ANALYSIS_CODE_CHANGED",
     (_what, edited) => {
-      const tree = join(dir, `tree-${edited.replace(/\W/g, "-")}`);
-      const files = [
-        "scripts/r-v1-analysis.ts",
-        "src/recording-eval/analysis.ts",
-        "src/recording-eval/canonical.ts",
-        "src/recording-eval/fr-v1.ts",
-        "src/recording/scrub.ts",
-        "src/tasks/fixture.ts",
-        "src/tasks/intent.ts",
-        "src/tasks/task-text.ts",
-        "docs/product/capability-prereg/r-v1/prereg.json",
-        "docs/product/capability-prereg/r-v1/fr-v1-manifest.json",
-      ];
-      for (const f of files) {
-        mkdirSync(dirname(join(tree, f)), { recursive: true });
-        cpSync(join(ROOT, f), join(tree, f));
-      }
+      const tree = copyTree(edited);
       const p = writePack(
-        `${tree}-pack`.slice(dir.length + 1),
+        `pack-${edited.replace(/\W/g, "-")}`,
         buildPack({ outcome: discordant(8, 0) }),
       );
-      const runIn = () =>
-        spawnSync(
-          process.execPath,
-          ["--import", "tsx", join(tree, "scripts", "r-v1-analysis.ts"), "analyse", "--pack", p],
-          { cwd: ROOT, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], timeout: 60_000 },
-        );
       // Control: the unmodified copy analyses.
-      const ok = runIn();
+      const ok = runIn(tree, ["--pack", p]);
       expect(ok.status, ok.stdout + ok.stderr).toBe(0);
       appendFileSync(join(tree, edited), "\n// edited after freeze\n");
-      const r = runIn();
+      const r = runIn(tree, ["--pack", p]);
       expect(r.status).toBe(1);
       expect(JSON.parse(r.stdout)).toEqual({ status: "refused", codes: ["ANALYSIS_CODE_CHANGED"] });
     },
     60_000,
   );
+
+  it("N-b (round 2): an edited prereg.json and a pack built against it refuse PREREG_NOT_COMMITTED", () => {
+    const tree = copyTree("prereg-edited");
+    // The verifier's case: empty leadRulingPending in prereg.json and hash the pack against it.
+    const b = buildPack({ ruled: true, planner: "claude-sonnet-5-5", outcome: discordant(8, 1) });
+    const p = writePack("pack-prereg-edited", b);
+    // Control: against the committed prereg this pack is a hash mismatch, not an analysis.
+    const before = runIn(tree, ["--pack", p, "--evidence"]);
+    expect(before.status).toBe(1);
+    expect(JSON.parse(before.stdout)).toEqual({
+      status: "refused",
+      codes: ["PREREG_HASH_MISMATCH"],
+    });
+    writeFileSync(
+      join(tree, "docs/product/capability-prereg/r-v1/prereg.json"),
+      JSON.stringify(b.prereg, null, 2),
+    );
+    const r = runIn(tree, ["--pack", p, "--evidence"]);
+    expect(r.status).toBe(1);
+    expect(JSON.parse(r.stdout)).toEqual({ status: "refused", codes: ["PREREG_NOT_COMMITTED"] });
+    // Re-pinning prereg.sha256 to the edited file is what a new freeze looks like: then it runs.
+    writeFileSync(
+      join(tree, "docs/product/capability-prereg/r-v1/prereg.sha256"),
+      `${canonicalSha256(b.prereg)}\n`,
+    );
+    const repinned = runIn(tree, ["--pack", p, "--evidence"]);
+    expect(repinned.status, repinned.stdout + repinned.stderr).toBe(0);
+    expect(JSON.parse(repinned.stdout)).toMatchObject({ status: "analysed", leadRulingPending: 0 });
+  }, 60_000);
 
   it("usage errors exit 3; an unreadable pack is refused, not crashed", () => {
     expect(run(["analyse"]).status).toBe(3);
