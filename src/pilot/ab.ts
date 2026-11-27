@@ -306,6 +306,28 @@ export interface IntegrityIncident {
   readonly rule: string;
 }
 
+/**
+ * A live trial whose reset was not a recorded cold boot (#546's guard; pre-registration
+ * "Harness faults, ledger, resets": such a trial "halts the run"). Sticky like a gate miss:
+ * written atomically before the run proceeds, re-derived on resume from `ab-trials.jsonl`, and
+ * cleared only by an operator's ack (`ack-incident`), never automatically.
+ */
+export interface BootClassIncident {
+  readonly schema: typeof INCIDENT_SCHEMA;
+  readonly kind: "boot-class";
+  readonly stage: AbStage;
+  readonly arm: AbArm;
+  readonly trialKey: string;
+  readonly taskId: string;
+  /** What was recorded for the reset: `"fast"`, `null` (unmeasured or missing), or anything else. */
+  readonly resetBootClass: unknown;
+  readonly at: string;
+  readonly rule: string;
+}
+
+/** Any record under `incidents/`: a gate miss or a non-cold live reset. */
+export type AbIncident = IntegrityIncident | BootClassIncident;
+
 export const incidentsDir = (stageRoot: string) => join(stageRoot, "incidents");
 
 export interface IncidentStatus {
@@ -317,16 +339,27 @@ export interface IncidentStatus {
 }
 
 export const incidentId = (trialKey: string) => `incident-${trialKey}`;
+export const bootIncidentId = (trialKey: string) => `incident-boot-${trialKey}`;
 
-/** The incident record at `path`, or null unless it is a well-formed gate-miss record for its id. */
-export function readIncident(path: string, id: string): IntegrityIncident | null {
+/**
+ * The incident record at `path`, or null unless it is a well-formed record for its id: a
+ * gate-miss record (id `incident-<trialKey>`) or a boot-class record (id
+ * `incident-boot-<trialKey>`, whose boot class is not `"cold"`).
+ */
+export function readIncident(path: string, id: string): AbIncident | null {
   try {
-    const r = JSON.parse(readFileSync(path, "utf8")) as IntegrityIncident;
-    if (r.schema !== INCIDENT_SCHEMA || r.kind !== "gate-miss" || r.gateVerdict !== "verified")
-      return null;
-    if (typeof r.trialKey !== "string" || incidentId(r.trialKey) !== id) return null;
+    const r = JSON.parse(readFileSync(path, "utf8")) as AbIncident;
+    if (r.schema !== INCIDENT_SCHEMA || typeof r.trialKey !== "string") return null;
     if ((r.arm !== "on" && r.arm !== "off") || (r.stage !== 0 && r.stage !== 1)) return null;
-    return r;
+    if (r.kind === "gate-miss")
+      return r.gateVerdict === "verified" && incidentId(r.trialKey) === id ? r : null;
+    if (r.kind === "boot-class")
+      return Object.hasOwn(r, "resetBootClass") &&
+        r.resetBootClass !== "cold" &&
+        bootIncidentId(r.trialKey) === id
+        ? r
+        : null;
+    return null;
   } catch {
     return null;
   }
@@ -343,7 +376,9 @@ function incidentFor(
   const path = join(dir, `${id}.json`);
   if (!existsSync(path)) return null;
   const record = readIncident(path, id);
-  return record !== null && record.arm === arm && record.stage === stage ? { path, record } : null;
+  return record?.kind === "gate-miss" && record.arm === arm && record.stage === stage
+    ? { path, record }
+    : null;
 }
 
 /**
@@ -378,7 +413,7 @@ export function incidentStatus(stageRoot: string): IncidentStatus[] {
       let problem: string | null = null;
       if (readIncident(path, id) === null)
         problem =
-          "not a valid gate-miss incident record (repair it by hand; it cannot be acknowledged as is)";
+          "not a valid gate-miss incident record or boot-class incident record (repair it by hand; it cannot be acknowledged as is)";
       else if (!existsSync(ackPath)) problem = "no operator ack file";
       else {
         try {
@@ -403,7 +438,7 @@ export function assertNoPendingIncidents(stageRoot: string): void {
   const pending = incidentStatus(stageRoot).filter((i) => !i.acknowledged);
   if (pending.length > 0)
     throw new AbRefusal(
-      `refusing to resume: ${pending.length} unacknowledged integrity incident(s) (gate VERIFIED, grader did not pass): ${pending.map((i) => `${i.path} (${i.problem})`).join("; ")}. ` +
+      `refusing to resume: ${pending.length} unacknowledged integrity incident(s) (a gate miss, or a live reset that was not a recorded cold boot): ${pending.map((i) => `${i.path} (${i.problem})`).join("; ")}. ` +
         "Review each record, file it, then acknowledge it with `ack-incident` (see docs/benchmark/pilot-runbook.md, corrections A/B). Never automatic.",
     );
 }
@@ -422,7 +457,9 @@ export function ackIncident(
   const st = incidentStatus(stageRoot).find((i) => i.id === id);
   if (st === undefined) throw new AbRefusal(`no incident ${id} under ${incidentsDir(stageRoot)}`);
   if (readIncident(st.path, id) === null)
-    throw new AbRefusal(`${st.path} is not a valid gate-miss incident record: refused`);
+    throw new AbRefusal(
+      `${st.path} is not a valid gate-miss incident record or boot-class incident record: refused`,
+    );
   if (ack.incidentSha256 !== st.sha256)
     throw new AbRefusal(
       `incident ${id}'s sha256 is ${st.sha256}, not ${ack.incidentSha256}: read the record first`,
@@ -624,9 +661,111 @@ function ensureIncident(
 const missReason = (trialKey: string, status: string, path: string) =>
   `HALTED: integrity incident, the gate VERIFIED ${trialKey} and the independent grader says ${status}; record ${path}. Nothing resumes until an operator acknowledges it (ack-incident).`;
 
+/** A recorded boot class as text: `fast`, `unrecorded` (null or missing), or the raw value. */
+const bootClassText = (c: unknown) =>
+  c === null || c === undefined ? "unrecorded" : typeof c === "string" ? c : JSON.stringify(c);
+
+const bootReason = (trialKey: string, cls: unknown, path: string) =>
+  `HALTED: ${trialKey}'s reset boot class is ${bootClassText(cls)}, not a recorded cold boot (#546's guard); record ${path}. Nothing resumes until an operator acknowledges it (ack-incident).`;
+
+/**
+ * Write the boot-class incident for one live trial unless a valid one is already there (never
+ * rewritten). Atomic, and written before the trial's record and grade, so a crash anywhere
+ * after the reset leaves either this record or a state `reconcileGrades` re-derives it from.
+ */
+function ensureBootIncident(
+  ctx: HookContext,
+  d: { readonly trialKey: string; readonly taskId: string },
+  resetBootClass: unknown,
+  how: "on decision" | "re-derived on resume",
+): { readonly path: string; readonly acknowledged: boolean } {
+  const dir = incidentsDir(ctx.stageRoot);
+  const id = bootIncidentId(d.trialKey);
+  const path = join(dir, `${id}.json`);
+  if (!existsSync(path)) {
+    const incident: BootClassIncident = {
+      schema: INCIDENT_SCHEMA,
+      kind: "boot-class",
+      stage: ctx.stage,
+      arm: ctx.arm,
+      trialKey: d.trialKey,
+      taskId: d.taskId,
+      resetBootClass: resetBootClass === undefined ? null : resetBootClass,
+      at: new Date(ctx.now()).toISOString(),
+      rule: `fail-closed: a live trial whose reset is not a recorded cold boot halts the run (#546; pre-registration "Harness faults, ledger, resets"); nothing resumes until an operator acknowledges this record, and a live pack with such a trial is refused regardless (recorded ${how})`,
+    };
+    mkdirSync(dir, { recursive: true });
+    writeAtomic(path, `${JSON.stringify(incident, null, 2)}\n`);
+  }
+  // A file there that is not this trial's valid record (wrong arm, stage or content) is never
+  // overwritten and never acknowledged: `incidentStatus` reports it, and the run stays halted.
+  const rec = readIncident(path, id);
+  const st = incidentStatus(ctx.stageRoot).find((i) => i.path === path);
+  const valid = rec !== null && rec.arm === ctx.arm && rec.stage === ctx.stage;
+  return { path, acknowledged: valid && st?.acknowledged === true };
+}
+
+/**
+ * The boot classes recorded per trial in an arm's `ab-trials.jsonl` (every record of a trial,
+ * in file order; a record without the field contributes `undefined`).
+ */
+function bootClassesByKey(path: string): Map<string, unknown[]> {
+  const out = new Map<string, unknown[]>();
+  for (const r of readJsonl(path)) {
+    const key = (r as { trialKey?: unknown } | null)?.trialKey;
+    if (typeof key !== "string") continue;
+    out.set(key, [...(out.get(key) ?? []), (r as { resetBootClass?: unknown }).resetBootClass]);
+  }
+  return out;
+}
+
+/**
+ * Whether a trial's recorded boot classes (every `ab-trials.jsonl` record for it) make it a
+ * recorded cold boot: true only when there is at least one record and EVERY record says exactly
+ * `"cold"`. A missing field (`undefined`), `null`, `"fast"`, an unknown string or a non-string
+ * anywhere in the list makes it not cold, and one record never masks another (#563 round 1 D1:
+ * a `find`-based check returned the `undefined` element itself and so passed it as cold).
+ * `recorded` is the first non-cold value (`null` for a missing field or no record), for the
+ * incident record and the halt message.
+ */
+export function bootVerdict(classes: readonly unknown[]): {
+  readonly cold: boolean;
+  readonly recorded: unknown;
+} {
+  const badIdx = classes.findIndex((c) => c !== "cold");
+  if (classes.length > 0 && badIdx < 0) return { cold: true, recorded: "cold" };
+  return { cold: false, recorded: badIdx < 0 ? null : (classes[badIdx] ?? null) };
+}
+
+/**
+ * Why a live pack's rows are not all recorded cold boots: each row needs at least one
+ * `ab-trials.jsonl` record and every record for it must say exactly `"cold"` (`"fast"`, `null`,
+ * a missing field or any other value is refused). Pure; export and check-pack both apply it.
+ */
+export function bootClassProblems(
+  armRows: readonly { readonly trialKey: string }[],
+  trialsPath: string,
+): string[] {
+  const byKey = bootClassesByKey(trialsPath);
+  const out: string[] = [];
+  for (const row of armRows) {
+    const classes = byKey.get(row.trialKey) ?? [];
+    if (classes.length === 0)
+      out.push(
+        `${row.trialKey} has no ${AB_TRIALS_FILE} record (its reset boot class is unrecorded)`,
+      );
+    else if (!bootVerdict(classes).cold)
+      out.push(
+        `${row.trialKey}'s reset boot class is ${classes.map(bootClassText).join("/")}, not a recorded cold boot`,
+      );
+  }
+  return out;
+}
+
 /**
  * Record a decided trial and decide whether it halts the run. Crash-safe by write order: the
- * gate-miss incident (if any) is written FIRST, then the boot-class record, and the grade LAST,
+ * incidents (a gate miss; on a live run, a reset that is not a recorded cold boot) are written
+ * FIRST, then the `ab-trials.jsonl` boot-class record, and the grade LAST,
  * so a grade on disk always means everything before it is on disk. A crash before the grade
  * leaves the trial ungraded and `reconcileGrades` re-records it (keeping an existing incident);
  * `reconcileGrades` also re-derives misses from the grades already written, so even a state
@@ -647,19 +786,35 @@ export function recordDecided(
     const inc = ensureIncident(ctx, { ...d, taskId: d.task.taskId }, g, "on decision");
     if (!inc.acknowledged) halt = missReason(d.trialKey, g.status, inc.path);
   }
-  crash("incident");
   const trialsPath = join(ctx.armDir, AB_TRIALS_FILE);
   const prior = readJsonl(trialsPath).find(
     (r) => (r as { trialKey?: string }).trialKey === d.trialKey,
   ) as AbTrialRecord | undefined;
-  const resetBootClass = prior?.resetBootClass ?? d.resetBootClass;
+  // With record(s) already on disk (a re-record after a crash), every one of them decides the
+  // class, strictly: a damaged record with no field is not cold and cannot fall back to the
+  // reset's own report, and a later non-cold record is never masked by an earlier one.
+  const priorBoot =
+    prior === undefined ? null : bootVerdict(bootClassesByKey(trialsPath).get(d.trialKey) ?? []);
+  const resetBootClass: unknown =
+    priorBoot === null ? d.resetBootClass : priorBoot.cold ? "cold" : priorBoot.recorded;
+  // A live non-cold reset: its sticky record goes to disk before the trial record and grade.
+  if (ctx.live && resetBootClass !== "cold") {
+    const inc = ensureBootIncident(
+      ctx,
+      { ...d, taskId: d.task.taskId },
+      resetBootClass,
+      "on decision",
+    );
+    if (!inc.acknowledged) halt ??= bootReason(d.trialKey, resetBootClass, inc.path);
+  }
+  crash("incident");
   if (prior === undefined) {
     const rec: AbTrialRecord = {
       schema: "myco.pilot.ab-trial/1",
       trialKey: d.trialKey,
       arm: ctx.arm,
       stage: ctx.stage,
-      resetBootClass,
+      resetBootClass: d.resetBootClass,
       hostLoad1mStart: Math.max(0, ctx.load1m()),
       graderStatus: g.status,
       gateVerdict: d.armRow.gate?.verdict ?? null,
@@ -669,10 +824,7 @@ export function recordDecided(
   crash("trial-record");
   appendFileSync(join(ctx.armDir, GRADES_FILE), `${JSON.stringify(g)}\n`);
   crash("grade");
-  if (halt !== null) return halt;
-  if (ctx.live && resetBootClass !== "cold")
-    return `HALTED: ${d.trialKey}'s reset boot class is ${resetBootClass ?? "unrecorded"}, not a recorded cold boot (#546's guard); review before resuming`;
-  return null;
+  return halt;
 }
 
 /** The decided trials in an arm's progress ledger, with their arm rows. */
@@ -703,8 +855,11 @@ const gradesByKey = (armDir: string) =>
  *  - a decided trial with no grade (the runner died before its grade was written) is recorded
  *    now from the saved document, which writes its incident if it is a miss;
  *  - every graded trial is re-checked from the rows: a gate-VERIFIED trial whose grade is not
- *    `pass` and that has no valid incident record gets one now (re-derived) and halts.
+ *    `pass` and that has no valid incident record gets one now (re-derived) and halts;
+ *  - on a live run, every graded trial's boot class is re-checked from `ab-trials.jsonl`: one
+ *    that is not a recorded cold boot gets its boot-class incident now and halts.
  * A re-recorded trial's boot class is unknown (`null`): a live run halts on it (never `cold`).
+ * Either incident halts until an operator acknowledges it; nothing here clears one.
  * Returns the first halt reason, if any.
  */
 export function reconcileGrades(
@@ -713,6 +868,7 @@ export function reconcileGrades(
 ): string | null {
   const byId = new Map(published.map((t) => [t.taskId, t]));
   const grades = gradesByKey(ctx.armDir);
+  const boots = bootClassesByKey(join(ctx.armDir, AB_TRIALS_FILE));
   let halt: string | null = null;
   for (const t of decidedTrials(ctx.armDir)) {
     const g = grades.get(t.trialKey);
@@ -730,9 +886,19 @@ export function reconcileGrades(
       });
       continue;
     }
-    if (gateMissesFromRows([t.armRow], grades).length === 0) continue;
-    const inc = ensureIncident(ctx, t, g, "re-derived on resume");
-    if (!inc.acknowledged) halt ??= missReason(t.trialKey, g.status, inc.path);
+    if (gateMissesFromRows([t.armRow], grades).length > 0) {
+      const inc = ensureIncident(ctx, t, g, "re-derived on resume");
+      if (!inc.acknowledged) halt ??= missReason(t.trialKey, g.status, inc.path);
+    }
+    // A live graded trial's boot class, re-derived from its ab-trials.jsonl record(s): a
+    // missing record, or any record that is not exactly "cold", needs its sticky incident.
+    if (ctx.live) {
+      const boot = bootVerdict(boots.get(t.trialKey) ?? []);
+      if (!boot.cold) {
+        const inc = ensureBootIncident(ctx, t, boot.recorded, "re-derived on resume");
+        if (!inc.acknowledged) halt ??= bootReason(t.trialKey, boot.recorded, inc.path);
+      }
+    }
   }
   return halt;
 }
@@ -1205,6 +1371,15 @@ export function exportAbPack(
         );
       gateMisses.push({ arm, trialKey: key, incident: incidentId(key) });
     }
+    // A live pack: every trial a recorded cold boot (#546; the pre-registration halts on any
+    // other). Refused whatever the incidents say: an ack lets a run continue, not a pack count.
+    if (header.simulated !== true) {
+      const boot = bootClassProblems(armRows, join(armDir, AB_TRIALS_FILE));
+      if (boot.length > 0)
+        throw new AbRefusal(
+          `${arm}: a live pack needs every trial's reset to be a recorded cold boot; ${boot.length} is not (${boot[0]}): refusing the pack`,
+        );
+    }
     const state = loadLedger(join(armDir, PROGRESS_FILE));
     const cfgFromLedger = state.header?.configSha256;
     if (cfgFromLedger !== header.configSha256[arm])
@@ -1403,6 +1578,13 @@ export function checkAbPack(
     const unlabelled = rows.filter((r) => canonicalJson(r.experiment ?? null) !== want).length;
     if (rows.length === 0) errors.push(`${arm}: no arm rows`);
     if (unlabelled > 0) errors.push(`${arm}: ${unlabelled} row(s) without the experiment label`);
+    // A live pack (anything not marked simulated): every row a recorded cold boot.
+    if (m.simulated !== true)
+      errors.push(
+        ...bootClassProblems(rows, join(packDir, arm, AB_TRIALS_FILE)).map(
+          (p) => `${arm}: ${p} (a live pack needs every reset to be a recorded cold boot)`,
+        ),
+      );
     // Gate misses, re-derived from the pack's rows and grades (never from a flag): each needs
     // its incident record in the pack, listed in the manifest with that file's sha256.
     const grades = readJsonl(join(packDir, arm, GRADES_FILE)) as BenchmarkGradeRow[];
@@ -1417,7 +1599,7 @@ export function checkAbPack(
       derived.push({ arm, trialKey: key, incident: id });
       const path = join(packDir, "incidents", `${id}.json`);
       const rec = existsSync(path) ? readIncident(path, id) : null;
-      if (rec === null || rec.arm !== arm || rec.stage !== m.stage)
+      if (rec?.kind !== "gate-miss" || rec.arm !== arm || rec.stage !== m.stage)
         errors.push(
           `${arm}: ${key} is a gate miss (gate VERIFIED, grader ${byKey.get(key)?.status ?? "none"}) with no valid incident record in the pack`,
         );

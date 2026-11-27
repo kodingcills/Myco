@@ -441,6 +441,46 @@ jobs:
           path: ${{ runner.temp }}/myco-linux
           if-no-files-found: ignore
 
+  # Track L (safe parallelism): N disposable Linux desktops in parallel on the unprivileged
+  # `linux-plain` backend (private root and HOME, own process group, own Xvfb), real
+  # headless Calc driven by scripted agents ($0: no model, no API, no secrets).
+  # MYCO_PARALLEL_REQUIRED=1 makes the Xvfb and real-Calc suites FAIL instead of skip when
+  # anything is missing. Strict namespace isolation (linux-ns) is NOT in this PR, so no
+  # trial here is ever counted as verified (shared-host-dirs); the run checks every gate
+  # verdict, contamination and teardown.
+  safe-parallelism:
+    name: safe parallelism (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MYCO_PYTHON: /usr/bin/python3
+      MYCO_PARALLEL_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install LibreOffice Calc, Python-UNO and Xvfb
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc python3-uno xvfb
+      - name: Probe the backend (reports linux-plain and its weak isolation)
+        run: pnpm myco-parallel --probe
+      - name: Safe-parallelism tests (Xvfb and real Calc; must not skip)
+        run: pnpm exec vitest run test/parallel
+      - name: Throughput run ($0, real Calc, N = 1,2,4; measured, never counted)
+        run: pnpm myco-parallel --n 1,2,4 --trials 8 --agent calc --display xvfb --allow-weak-isolation --out "$RUNNER_TEMP/myco-parallel"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: safe-parallelism-runs
+          path: ${{ runner.temp }}/myco-parallel
+          if-no-files-found: ignore
+
   # Runs both verdict fixture sizes on main pushes and PRs labelled `perf`.
   # The hosted 10k check compares the median against calibrated runner caps.
   # The strict local gate enforces a 150 ms maximum at both sizes

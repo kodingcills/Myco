@@ -173,15 +173,70 @@ the episode, the raw gate result (to bind the episode's gate record to its trial
 captured CSV bytes (to bind the grade, and carried as the episode's document blob), the task
 set's declared fixture digest, and U's desktop facts. It writes one directory:
 
-- `episodes/<episodeId>.json`: each exported episode, copied byte for byte as canonical JSON.
+- `episodes/<episodeId>.json`: each exported episode in its **closed** form, as canonical JSON
+  (`src/dataset/closed.ts`, TIF-265; #553's allowlist pattern). No free text leaves the
+  machine: typed text, shell commands, UI status and the instruction are written as
+  `h-<60 hex>`, ids that are not closed ids are hashed, a closed field (enum, digest, timestamp,
+  version) holding anything else refuses the export (`OPEN_VALUE`), and the record's
+  `desktop.backend` / `desktop.image` (ids or `name/N`) and `capture.path` (hashed) are closed
+  too. The leak scan still runs on the raw episode and record, so a planted marker or a secret
+  refuses the export, and on every closed output as a backstop. Why: the deny-list scan let a
+  planted username through in 40 of #553's 145 probes (92 after #542's redaction).
   Steps (actions and observations), the claim, the gate verdict (codes only), the
   independent grader's ground truth, harness metadata, provenance and the `simulated` flag
   live here, and only here.
-- `blobs/<sha256>.csv`: the persisted document each exported episode graded, byte for byte,
-  named by its digest. #542 requires a graded episode to observe the document it graded (a
-  `state` / `persisted` / `text/csv` observation whose hash is `groundTruth.persistedSha256`),
-  so the container carries it; every exported episode passes #542's `validateEpisode` with
-  these blobs. Two attempts that saved identical bytes share one blob.
+- **Identity strings are leaks** (lead ruling 2026-11-26 21:52Z). The identity strings are:
+  - this machine's account name and the first DNS label of its host name, read from `os` at
+    export time and ALWAYS merged in, whatever identity the caller passes: fake facts, an empty
+    identity or `hostIdentity: false` never switch them off;
+  - the caller's identity;
+  - each line of `hygiene.identityFile` (a full name, another account; CRLF accepted).
+
+  The scope is #560's: an account of at least 3 characters, not one of `root`, `user`, `runner`,
+  `admin`, `ubuntu`, `node`, `nobody`, `vscode`, `codespace`; a host label of at least 4, not
+  `localhost`.
+
+  Matching uses full Unicode case folding (NFKC, upper then lower case, so `GROSS` matches a
+  configured `Groß` and `yildiz` matches `Yıldız`). It compares letters and digits only, so a
+  spaced full name matches every joined form of it (`FirstLast`, `first.last`, `first_last`,
+  `First-Last`, `xx<name>9`).
+
+  What happens to a match:
+  - an id, token or desktop fact holding one is digested;
+  - any other verbatim closed field holding one refuses the export (`LEAK`, kind `username`,
+    `hostname` or `identity`, with a location, never the value);
+  - free text is always digested;
+  - enum values, digests and content-addressed names are exempt;
+  - `validateContainer` applies the same check to episodes, records and the manifest.
+- **Key and app names** (F1, lead ruling 2026-11-26 22:18Z) are written verbatim only from a
+  closed vocabulary: a known key or key combination (`KNOWN_KEYS`) or a registered app id
+  (`REGISTERED_APPS`: `localc`, `lowriter`, `soffice`, `libreoffice`, `scalc`, `swriter`).
+  Anything else, including an `h-` string that is not exactly `h-<60 hex>`, is hashed.
+- **One hashed form** (lead ruling 2026-11-26 23:06Z), the same as the episode export's: every
+  hashed value is `h-` plus the first 60 hex digits (240 bits) of the sha256 under the tag
+  `myco.dataset.export-text/1`. It carries no input text and fits the 64-character key and app
+  cap. Closing is idempotent for exactly that form; no other `h-` string (64 hex, 59 or 61 hex,
+  upper case) counts as already hashed. That holds for ids too: an id starting `h-` or `H-` that
+  is not exactly `h-<60 hex>` is hashed, and the container refuses one written verbatim.
+- **`validateContainer`** never throws. Every problem is `CODE location`, with a fixed code from
+  `CONTAINER_PROBLEM_CODES`. A location never echoes foreign text: a foreign entry name appears
+  only as `h-<12 hex>`, a JSON key that is not a plain identifier, or that holds an identity,
+  appears as `<key>`, and the manifest's `counts.excluded` is closed over the exclusion codes
+  (each a non-negative integer), so no other key can appear there. It refuses:
+  - links, non-regular files and hard links, and files over 64 MiB;
+  - JSON nested deeper than 32;
+  - record lines that fail `datasetRecordSchema` or the closed record-field grammar, or that
+    disagree with the manifest;
+  - episodes that fail `episodeMirrorSchema` or a #542 rule;
+  - manifest counts that do not match the records and episodes.
+- **No blobs** (digest-only, lead ruling 2026-11-26 20:3xZ): the persisted document each exported
+  episode graded is referenced by the sha256, byte count and content-addressed name its
+  `state` / `persisted` / `text/csv` observation carries (#542 requires the observation), and is
+  never written: a captured document can hold a host path the leak scan misses. The captured
+  bytes still bind the grade (`classify`), the closed episode is checked against them, and they
+  are scanned raw, so a planted marker or a secret in one still refuses the export. The manifest's
+  `blobs` list is empty (`maxItems: 0`), and `validateContainer` refuses a `blobs/` entry, a stray
+  entry, an edited file, an unreferenced episode and any open string.
 - `records.jsonl`: one `myco.dataset.record/3` per exported episode, sorted by episode id. A
   record references its episode by id and digest (`episode.id`, `episode.sha256`,
   `episode.file`) and carries only U's own fields: the `label` (`positive` / `negative`), the

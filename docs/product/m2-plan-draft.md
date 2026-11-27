@@ -94,6 +94,17 @@ and a Wilson 95% interval. Demo rows use 30 trials; R1 uses about 100 (decision 
 | **R7** | **Cost per verified task** | Reported for both R2 arms: model cost, wall clock and VM time, each as the total over ALL of the arm's trials (failed and refuted trials still cost) divided by the arm's `verified` count, with the denominators. A null cost is unmeasured and never counts as 0 | Per-trial cost fields in the ledgers | The check sums cost fields over all trials and divides by the verified count |
 | **R8** | **Reach** | A Linux path an outsider can run without our Windows VM, exercised in public CI; the false-completion benchmark published (tasks, grader, results); a 90-second demo of: the agent says done → REFUTED → retry → VERIFIED | The CI job; the published benchmark; the demo recording and the run it shows | CI runs the Linux path; the benchmark's grader recomputes its published numbers |
 
+### 2.1a Experiment row: corrections ON/OFF A/B (experiment-only, never R1 evidence)
+
+Tiffany asked for this row; the lead fixed its design (#524, comment 7196445749) and ruled it gets
+its own scorecard row (2026-11-26 19:2xZ). It is kept apart from R1-R8: it is not an M2 pass
+criterion, its evidence is a separate pack kind (`myco.m2.ab-pack/1`), and its rows are never R1
+evidence, in either arm.
+
+| # | Criterion | Pre-registered design | Evidence | How it is recomputed |
+|---|---|---|---|---|
+| **AB** | **Corrections ON/OFF A/B, experiment-only** | Stage 0: **30** pairs on the pilot's tasks, plumbing only, effect claim null. Stage 1: **100** pairs per arm on fc-v1 with fresh seeds; a one-sided exact sign test on the discordant pairs at alpha **0.05**, the discordant counts and a 95% CI on the paired difference. A miss reads "corrections not shown to help", never a fail; a gate miss halts the run as an integrity incident | Both arms' ledgers, trial-ops rows and run configs; Stage 0's ledgers and the pre-registration hash for Stage 1 | `src/m2/ab-pack.ts` runs `src/m2/corrections-ab.ts` with evidence on; the scorecard check quotes its figures |
+
 ### 2.2 Process checks, kept as CI gates (not rows)
 
 Decision (d) drops the process-only rows. What they guarded stays enforced, as checks:
