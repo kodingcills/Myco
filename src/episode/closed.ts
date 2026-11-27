@@ -20,8 +20,14 @@
  *
  * THE hashed form, on every field and every export surface (lead ruling 2026-11-26 23:06Z):
  * `h-<60 hex>`, the first 240 bits of the tagged sha256 (`exportDigest`), carrying no input text.
- * One form everywhere, so values stay comparable; it fits the 64-character key/app cap. Closing is
- * idempotent for exactly that form and no other `h-` string.
+ * One form everywhere, so values stay comparable; it fits the 64-character key/app cap.
+ *
+ * PROVENANCE-BOUND (#579 O3, `src/export-guard/provenance.ts`): an `h-<60 hex>` input is kept as
+ * is ONLY when the harness produced it, that is when the store's hash ledger records it for this
+ * episode id at this exact path (`importDataset` records an imported dataset's hashed values).
+ * Any other `h-<60 hex>` (an agent typed it, or it sits at another path or in another episode)
+ * is re-hashed like any other value, so it can never carry agent-chosen hex out of the machine.
+ * Export, import, export stays byte-identical. No other `h-` string is ever treated as hashed.
  *
  * Every string path an episode can hold is listed in `FIELD_TREATMENT`; a string at a path the
  * table does not name refuses the export (a new field is a reviewed change), and
@@ -41,6 +47,12 @@ import {
   EPISODE_SCHEMA,
   EPISODE_SOURCES,
 } from "../../schemas/episode.ts";
+import {
+  episodeScope,
+  type HashLedger,
+  keepOrHash,
+  NO_LEDGER,
+} from "../export-guard/provenance.ts";
 import { REASON_CODES } from "../gate/api.ts";
 import { heldIdentity, type IdentityEntry } from "./identity.ts";
 import type { Episode } from "./types.ts";
@@ -202,36 +214,47 @@ export const templateOf = (path: string) => path.replace(/\[\d+\]/g, "[]");
 const holds = (value: string, joined: readonly IdentityEntry[]) =>
   heldIdentity(value, joined) !== undefined;
 
-function treat(path: string, value: string, joined: readonly IdentityEntry[]): string {
+/** Where a value sits, for the provenance check: the input episode's id and the field's path. */
+interface Site {
+  readonly episodeId: string;
+  readonly ledger: HashLedger;
+  readonly joined: readonly IdentityEntry[];
+}
+
+function treat(path: string, value: string, site: Site): string {
   const t = FIELD_TREATMENT[templateOf(path)];
   if (t === undefined) throw new ExportInputError(templateOf(path));
+  const scope = episodeScope(site.episodeId, path);
   switch (t.kind) {
     case "text":
-      // Idempotent: an already-hashed value is closed (it carries nothing), so re-exporting an
-      // imported dataset is byte-identical.
-      return HASHED.test(value) ? value : hashed(value);
+      // Provenance-bound (#579 O3): an `h-<60 hex>` is kept only when the harness produced it
+      // (the store's ledger records it here); anything else, an agent's `h-<60 hex>` included,
+      // is hashed. So re-exporting an imported dataset is byte-identical, and nothing else is kept.
+      return keepOrHash(value, scope, site.ledger, hashed);
     // An id or token that would be kept verbatim but holds an identity string (even joined,
     // `<Name>2`) is digested instead (lead ruling 21:52Z).
-    // An already-hashed id or token is closed and carries nothing: kept as is (#556 r3, S2), so a
-    // re-export is byte-identical even when an identity's letters occur in the hash.
+    // A harness-produced hashed id or token is closed and carries nothing: kept as is (#556 r3,
+    // S2), so a re-export is byte-identical even when an identity's letters occur in the hash.
+    // Any other `h-<60 hex>` is re-hashed (#579 O3): it is CLOSED_ID-shaped, but the identity
+    // checks skip the hashed form, so an agent's one could carry a hex-letter identity.
     case "id":
-      if (HASHED.test(value)) return value;
-      return CLOSED_ID.test(value) && !holds(value, joined) ? value : hashed(value);
+      if (HASHED.test(value)) return keepOrHash(value, scope, site.ledger, hashed);
+      return CLOSED_ID.test(value) && !holds(value, site.joined) ? value : hashed(value);
     case "token":
-      if (HASHED.test(value)) return value;
-      return t.vocabulary.test(value) && !holds(value, joined) ? value : hashed(value);
+      if (HASHED.test(value)) return keepOrHash(value, scope, site.ledger, hashed);
+      return t.vocabulary.test(value) && !holds(value, site.joined) ? value : hashed(value);
     case "closed":
       if (!t.grammar.test(value)) throw new ExportInputError(templateOf(path));
       return value;
   }
 }
 
-function walk(node: unknown, path: string, joined: readonly IdentityEntry[]): unknown {
-  if (typeof node === "string") return treat(path, node, joined);
-  if (Array.isArray(node)) return node.map((item, i) => walk(item, `${path}[${i}]`, joined));
+function walk(node: unknown, path: string, site: Site): unknown {
+  if (typeof node === "string") return treat(path, node, site);
+  if (Array.isArray(node)) return node.map((item, i) => walk(item, `${path}[${i}]`, site));
   if (node !== null && typeof node === "object")
     return Object.fromEntries(
-      Object.entries(node).map(([k, v]) => [k, walk(v, `${path}.${k}`, joined)]),
+      Object.entries(node).map(([k, v]) => [k, walk(v, `${path}.${k}`, site)]),
     );
   return node;
 }
@@ -239,17 +262,46 @@ function walk(node: unknown, path: string, joined: readonly IdentityEntry[]): un
 /**
  * The closed form of an episode: every string allowlisted or hashed (above), and `episodeId`
  * recomputed over the closed content. Throws `ExportInputError` on a value the export may not
- * write or hash.
+ * write or hash. `ledger` is the harness-side hash ledger of the store the episode was read from
+ * (#579 O3): only an `h-<60 hex>` it records for this episode id and path is kept as is.
  */
-export function closeEpisode(ep: Episode, joined: readonly IdentityEntry[] = []): Episode {
+export function closeEpisode(
+  ep: Episode,
+  joined: readonly IdentityEntry[] = [],
+  ledger: HashLedger = NO_LEDGER,
+): Episode {
+  const site: Site = { episodeId: String(ep.episodeId), ledger, joined };
   const { episodeId: _old, ...rest } = walk(
     { ...ep, episodeId: "0".repeat(64) },
     "$",
-    joined,
+    site,
   ) as Episode;
   return { ...rest, episodeId: episodeIdOf(rest) } as Episode;
 }
 
+/**
+ * The hash-ledger entries of a CLOSED episode (#579 O3): every `h-<60 hex>` at a field the export
+ * hashes (text, id, token), with its exact path. `importDataset` records them, after the dataset
+ * validated, under the episode's id, so a re-export keeps exactly these values and no others.
+ */
+export function hashedLeaves(
+  ep: Episode,
+): Array<{ readonly path: string; readonly value: string }> {
+  const out: Array<{ path: string; value: string }> = [];
+  const visit = (node: unknown, path: string): void => {
+    if (typeof node === "string") {
+      const t = FIELD_TREATMENT[templateOf(path)];
+      if (t !== undefined && t.kind !== "closed" && HASHED.test(node))
+        out.push({ path, value: node });
+    } else if (Array.isArray(node)) {
+      for (const [i, item] of node.entries()) visit(item, `${path}[${i}]`);
+    } else if (node !== null && typeof node === "object") {
+      for (const [k, v] of Object.entries(node)) visit(v, `${path}.${k}`);
+    }
+  };
+  visit(ep, "$");
+  return out;
+}
 /** Strings of an exported episode that are not in their closed output grammar (path, never value). */
 export function openStrings(ep: unknown): string[] {
   const out: string[] = [];

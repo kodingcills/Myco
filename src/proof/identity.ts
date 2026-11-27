@@ -30,7 +30,9 @@
  *    `GROSS` unmatched by a configured `Groß`), then every character that is not a letter or a
  *    digit removed. The fold upper-cases then lower-cases until nothing changes, so `ß`, `ẞ`
  *    and `SS` all fold to `ss`, dotless `ı` and `I` fold to `i`, and final `ς` is mapped to `σ`
- *    after the fold (lower-casing picks one from context).
+ *    after the fold (lower-casing picks one from context). Accents are then stripped (#579
+ *    O2): NFD, combining marks removed, a few letters transliterated (`ø` -> `o`, `æ` -> `ae`),
+ *    so `JOSE` contains a configured `josé`, and `rena` a configured `reña`.
  *    So `Alice`, `ALICE`, `a.l.i.c.e`, `run-alice-1` and `alice_smith` all contain `alice`,
  *    and a full name `First Last` is matched JOINED, as `firstlast` (`FirstLast`,
  *    `first.last`, `first_last`, `First-Last`, `FIRSTLAST`), and by each of its words of
@@ -46,6 +48,7 @@
  */
 import { readFileSync } from "node:fs";
 import { homedir, hostname, userInfo } from "node:os";
+import { stripAccents } from "../export-guard/fold.ts";
 import { EMPTY_REDACTION, findLeaks } from "./backstop.ts";
 
 /** What a guard hit is, never what it matched. */
@@ -95,9 +98,13 @@ export function caseFold(text: string): string {
   return cur.replace(/ς/g, "σ");
 }
 
-/** NFKC, full case folding, letters and digits only. */
+/**
+ * NFKC, full case folding, accents stripped (#579 O2, `stripAccents`: NFD, combining marks
+ * removed, `ø`/`ł`/`æ`… transliterated, so `josé` matches `JOSE` and `reña` matches `rena`),
+ * then letters and digits only. Both sides (the configured needle and the value) fold.
+ */
 export function identityNormal(text: string): string {
-  return caseFold(text).replace(/[^\p{L}\p{N}]+/gu, "");
+  return stripAccents(caseFold(text)).replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
 export interface IdentityGuard {

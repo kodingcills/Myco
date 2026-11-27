@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   closeEpisode,
   fold,
+  hashLedgerOf,
   type JoinedIdentity,
   joinedIdentity,
 } from "../../src/dataset/closed.ts";
@@ -180,13 +181,13 @@ describe("S1-S3: exemptions, idempotence, case folding", () => {
     expect(joinedIdentity(withName, joined)).toEqual([]);
   });
 
-  it("S2: an already-hashed id stays as it is, even when an identity's letters occur in the hash", () => {
+  it("S2: a harness-produced hashed id stays as it is, even when an identity's letters occur in the hash; an agent's is re-hashed (#579 O3)", () => {
     const hashedId = `h-${"abcd".repeat(15)}`;
     const ep = candidate({}, { taskId: "task-1" }).episode;
-    const closed = closeEpisode({ ...ep, task: { ...ep.task, id: hashedId } }, [
-      ["username", "abcd"],
-    ]);
-    expect(closed.task.id).toBe(hashedId);
+    const input = { ...ep, task: { ...ep.task, id: hashedId } };
+    const kept = closeEpisode(input, [["username", "abcd"]], hashLedgerOf([input]));
+    expect(kept.task.id).toBe(hashedId);
+    expect(closeEpisode(input, [["username", "abcd"]]).task.id).not.toBe(hashedId);
   });
 
   it("S3: Unicode full case folding (ß matches ss, NFKC forms match)", () => {
