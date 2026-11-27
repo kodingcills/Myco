@@ -22,9 +22,16 @@
  * The components are tested in that fixed sequence at alpha 0.05 each: a later one is tested
  * only if every earlier one is shown. The bar is "shown" only when all three are shown and
  * nothing blocks (a lead ruling pending, a simulated row, a planner mismatch, a guardrail
- * breach). It refuses to compute at all when the pack's pre-registration hash does not match,
- * a row is malformed, or the design is not exactly the pre-registered one (every scheduled
- * trial once, with the task and arm the seeded schedule put at its position).
+ * breach, a failed parity check). It refuses to compute at all when the pack's
+ * pre-registration hash does not match, the pack does not record the commit the
+ * pre-registration was frozen in, a row is malformed, or the design is not exactly the
+ * pre-registered one (every scheduled trial once, with the task and arm the seeded schedule
+ * put at its position).
+ *
+ * Parity (spec §1.3, §1.5): every row records its instruction text's SHA-256, its fixture's
+ * SHA-256, its step budget and its output ceiling. All trials of one task, in both arms, must
+ * share the instruction and fixture hashes, and every row's step budget and output ceiling
+ * must be the pre-registered ones; otherwise the bar is not shown (`PARITY_MISMATCH`).
  *
  * The output is an analysis report for people; it is never shown to an agent.
  */
@@ -101,6 +108,8 @@ export interface JV1Prereg {
   readonly leadRulingPending: readonly string[];
   readonly modelId: string;
   readonly stepBudget: number;
+  /** The planner's output ceiling (max output tokens per turn), the same in both arms. */
+  readonly outputCeiling: number;
   /** k: trials per task per arm (lead ruling 2026-11-27 05:39Z: 2). */
   readonly runsPerTaskPerArm: number;
   readonly arms: {
@@ -139,6 +148,8 @@ export function preregProblems(raw: unknown): string[] {
   if (typeof raw.modelId !== "string" || !MODEL_ID.test(raw.modelId)) p.push("PREREG_MODEL_ID");
   if (!Number.isSafeInteger(raw.stepBudget) || (raw.stepBudget as number) < 1)
     p.push("PREREG_STEP_BUDGET");
+  if (!Number.isSafeInteger(raw.outputCeiling) || (raw.outputCeiling as number) < 1)
+    p.push("PREREG_OUTPUT_CEILING");
   if (raw.runsPerTaskPerArm !== 1 && raw.runsPerTaskPerArm !== 2) p.push("PREREG_RUNS_PER_TASK");
   if (
     !isObj(raw.arms) ||
@@ -263,22 +274,36 @@ export interface JTrialRow {
   readonly harnessFault: string | null;
   /** A route or shell access resolved outside the boundary: the trial is void (`uncertain`). */
   readonly boundaryBreach: boolean;
+  /** Parity (§1.3): SHA-256 of the instruction text the agent was given. */
+  readonly instructionSha256: string;
+  /** Parity (§1.3): SHA-256 of the task's fixture as deployed for this trial. */
+  readonly fixtureSha256: string;
+  /** Parity (§1.3): the step budget this trial ran under. */
+  readonly stepBudget: number;
+  /** Parity (§1.3): the planner output ceiling this trial ran under. */
+  readonly outputCeiling: number;
 }
 
 const ROW_KEYS = [
   "arm",
   "boundaryBreach",
   "claim",
+  "fixtureSha256",
   "grade",
   "harnessFault",
+  "instructionSha256",
+  "outputCeiling",
   "plannerModelId",
   "schema",
   "seq",
   "simulated",
+  "stepBudget",
   "steps",
   "taskId",
   "wallMs",
 ].join(",");
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const CLAIMS: ReadonlySet<unknown> = new Set(["done", "not-done", "no-claim"]);
 const GRADES: ReadonlySet<unknown> = new Set(["pass", "fail", "ungradable", null]);
 
@@ -305,6 +330,13 @@ function rowProblem(r: unknown, stepBudget: number): string | null {
   )
     return "bad harnessFault";
   if (typeof r.boundaryBreach !== "boolean") return "bad boundaryBreach";
+  if (typeof r.instructionSha256 !== "string" || !SHA256_HEX.test(r.instructionSha256))
+    return "bad instructionSha256";
+  if (typeof r.fixtureSha256 !== "string" || !SHA256_HEX.test(r.fixtureSha256))
+    return "bad fixtureSha256";
+  if (!Number.isSafeInteger(r.stepBudget) || (r.stepBudget as number) < 1) return "bad stepBudget";
+  if (!Number.isSafeInteger(r.outputCeiling) || (r.outputCeiling as number) < 1)
+    return "bad outputCeiling";
   return null;
 }
 
@@ -445,6 +477,8 @@ export interface BarComponentResult {
 export interface JV1Result {
   readonly analysis: typeof J_V1_ANALYSIS;
   readonly preregHash: string;
+  /** The commit the pack says its pre-registration was frozen in (§3 item 2); null if refused before it was read. */
+  readonly preregCommit: string | null;
   readonly verdict: "shown" | "not-shown";
   /** True when the numbers were computed; false when the pack was refused outright. */
   readonly computed: boolean;
@@ -470,13 +504,20 @@ export interface JV1Input {
   readonly prereg: unknown;
   /** The pre-registration hash the pack recorded (§3 item 2). */
   readonly packPreregHash: string;
+  /**
+   * The commit on `main` the pack says froze this pre-registration (§3 item 2): 40 lowercase
+   * hex. This script checks its form only; that the commit holds this prereg.json is checked
+   * by the pack tooling, which has git (this script imports node:crypto alone).
+   */
+  readonly packPreregCommit: string;
   readonly rows: readonly unknown[];
 }
 
-function refused(hash: string, reasons: string[]): JV1Result {
+function refused(hash: string, commit: string | null, reasons: string[]): JV1Result {
   return {
     analysis: J_V1_ANALYSIS,
     preregHash: hash,
+    preregCommit: commit,
     verdict: "not-shown",
     computed: false,
     reasons,
@@ -524,6 +565,31 @@ function armStats(rows: readonly JTrialRow[]): ArmStats {
   };
 }
 
+/**
+ * Parity checks (§1.3, §1.5 "a parity check failed"): per task, one instruction hash and one
+ * fixture hash across both arms and every repeat; every row at the pre-registered step budget
+ * and output ceiling. One `PARITY_MISMATCH` reason per kind of failure, with a count.
+ */
+function parityProblems(prereg: JV1Prereg, rows: readonly JTrialRow[]): string[] {
+  const out: string[] = [];
+  const byTask = new Map<string, JTrialRow[]>();
+  for (const r of rows) byTask.set(r.taskId, [...(byTask.get(r.taskId) ?? []), r]);
+  const split = (field: "instructionSha256" | "fixtureSha256") =>
+    [...byTask.values()].filter((rs) => new Set(rs.map((r) => r[field])).size !== 1).length;
+  const instruction = split("instructionSha256");
+  if (instruction > 0)
+    out.push(`PARITY_MISMATCH: instructionSha256 differs within ${instruction} task(s)`);
+  const fixture = split("fixtureSha256");
+  if (fixture > 0) out.push(`PARITY_MISMATCH: fixtureSha256 differs within ${fixture} task(s)`);
+  const budget = rows.filter((r) => r.stepBudget !== prereg.stepBudget).length;
+  if (budget > 0)
+    out.push(`PARITY_MISMATCH: stepBudget is not ${prereg.stepBudget} in ${budget} row(s)`);
+  const ceiling = rows.filter((r) => r.outputCeiling !== prereg.outputCeiling).length;
+  if (ceiling > 0)
+    out.push(`PARITY_MISMATCH: outputCeiling is not ${prereg.outputCeiling} in ${ceiling} row(s)`);
+  return out;
+}
+
 /** Judge a completed j-v1 pack against its pre-registered bar. */
 export function analyzeJV1(input: JV1Input): JV1Result {
   const problems = preregProblems(input.prereg);
@@ -533,11 +599,16 @@ export function analyzeJV1(input: JV1Input): JV1Result {
   } catch {
     problems.push("PREREG_NOT_CANONICAL");
   }
-  if (problems.length > 0) return refused(hash, problems);
+  if (problems.length > 0) return refused(hash, null, problems);
   if (input.packPreregHash !== hash)
-    return refused(hash, [
+    return refused(hash, null, [
       "PREREG_HASH_MISMATCH: the pack's pre-registration hash is not this pre-registration's",
     ]);
+  if (typeof input.packPreregCommit !== "string" || !COMMIT_SHA.test(input.packPreregCommit))
+    return refused(hash, null, [
+      "PACK_FROZEN_COMMIT: the pack does not record the commit its pre-registration was frozen in",
+    ]);
+  const commit = input.packPreregCommit;
   const prereg = input.prereg as JV1Prereg;
 
   // Rows: well-formed, and exactly the pre-registered schedule: every seq once, each with the
@@ -565,7 +636,7 @@ export function analyzeJV1(input: JV1Input): JV1Result {
   }
   for (const s of schedule)
     if (!bySeq.has(s.seq)) design.push(`DESIGN_MISSING: seq ${s.seq} (${s.taskId} ${s.arm})`);
-  if (design.length > 0) return refused(hash, design);
+  if (design.length > 0) return refused(hash, commit, design);
   const cell = new Map(
     schedule.map((s) => [`${s.taskId}\u0000${s.arm}\u0000${s.rep}`, bySeq.get(s.seq) as JTrialRow]),
   );
@@ -584,6 +655,7 @@ export function analyzeJV1(input: JV1Input): JV1Result {
     reasons.push(`PLANNER_MISMATCH: ${planners.join(", ")}; pre-registered ${prereg.modelId}`);
   const breaches = rows.filter((r) => r.boundaryBreach).length;
   if (breaches > 0) reasons.push(`GUARDRAIL_BOUNDARY_BREACH: ${breaches} trial(s)`);
+  reasons.push(...parityProblems(prereg, rows));
 
   const byArm = (arm: JArm) => rows.filter((r) => r.arm === arm);
   const baseline = armStats(byArm(J_BASELINE_ARM));
@@ -674,6 +746,7 @@ export function analyzeJV1(input: JV1Input): JV1Result {
   return {
     analysis: J_V1_ANALYSIS,
     preregHash: hash,
+    preregCommit: commit,
     verdict: reasons.length === 0 ? "shown" : "not-shown",
     computed: true,
     reasons,

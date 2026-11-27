@@ -50,7 +50,7 @@
   "outputCeiling": 1024,
   "retryBudget": 0,
   "wallClockBudget": null,
-  "gate": "absent in both arms; a done claim is the arm's claim (rows are gate-less, §1.1)",
+  "gate": "absent in both arms; a done claim is the arm's claim (rows are gate-less, §1.1); the J row adapter refuses a fast-path row that carries a gate verdict",
   "runsPerTaskPerArm": 2,
   "taskSet": {
     "version": "fc-v1",
@@ -207,14 +207,18 @@
     "any row is simulated (planner not a model id)",
     "the planner differs from modelId in any row",
     "a guardrail is breached",
+    "a parity check fails: the trials of one task, in both arms and every repeat, do not share one instructionSha256 and one fixtureSha256, or a row's stepBudget or outputCeiling is not the pre-registered one (spec §1.3, §1.5)",
     "the pack's pre-registration hash does not match (the pack is refused)",
-    "the design is not exactly the pre-registered one: every task, both arms, once each, in the seeded order (the pack is refused)"
+    "the pack does not record the 40-hex commit its pre-registration was frozen in (the pack is refused; spec §3 item 2)",
+    "the design is not exactly the pre-registered one: every task, both arms, runsPerTaskPerArm (k = 2) times each, every scheduled trial exactly once, in the seeded order (the pack is refused)"
   ],
   "analysis": {
     "script": "src/actions/j-v1-analysis.ts",
-    "sha256": "cd06db5d19e19e09bf05354c546c23405c5867badc163603e15efb92f81db3e6",
+    "sha256": "f85ab65f7acf909085e8128854805be298cfe3425f9be535a30d8bf94ceb413f",
     "entry": "analyzeJV1",
     "rowSchema": "myco.capability.j-v1.trial/1",
+    "rowParityFields": "instructionSha256, fixtureSha256, stepBudget, outputCeiling (spec §1.3)",
+    "packRecords": "the pre-registration hash and the commit on main this pre-registration was frozen in (spec §3 item 2); the script checks the commit's form (40 lowercase hex), and the pack tooling, which has git, checks that the commit holds this prereg.json",
     "assignment": "jV1Schedule: seeded task order; each task one ABBA block of 2k trials, alternating ABBA / BAAB over task positions"
   },
   "evidenceUse": "experiment rows only; never R1 evidence (capability spec §3 item 4)"

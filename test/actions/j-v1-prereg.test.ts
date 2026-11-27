@@ -34,7 +34,7 @@ const SPEC = readFileSync("docs/product/capability-spec.md", "utf8");
 const flat = (s: string) => s.replace(/\s+/g, " ");
 
 /** The pre-registration hash, stated in the README and the PR. Changing j-v1 changes this. */
-const J_V1_PREREG_HASH = "989cbbc20ee3d53c59b3dfbd5a77952e7f77a6c966996f7666ca284dc805690c";
+const J_V1_PREREG_HASH = "140e929c5fc94d8cfa22cef833028344c369d7b04a484f9ed3a9c19986b6cbb8";
 
 let tmp: string | null = null;
 afterEach(() => {
@@ -183,6 +183,22 @@ describe("j-v1 pre-registration (capability spec §3)", () => {
     expect(RAW.seeds.assignment).toMatch(/^j-v1\/assignment\/[0-9a-f]{32}$/);
     expect(RAW.seeds.bootstrap).toMatch(/^j-v1\/bootstrap\/[0-9a-f]{32}$/);
     expect(RAW.seeds.taskBuild).toMatch(/fc-v1 is frozen/);
+  });
+
+  it("states the k = 2 design, the parity check and the frozen-in commit in the hashed text", () => {
+    const notShown: string[] = RAW.notShownWhen;
+    const design = notShown.find((x) => x.startsWith("the design is not exactly"));
+    expect(design).toMatch(/runsPerTaskPerArm \(k = 2\) times each/);
+    expect(notShown.join(" ")).not.toMatch(/once each/);
+    expect(
+      notShown.some((x) => /^a parity check fails: .*instructionSha256.*fixtureSha256/.test(x)),
+    ).toBe(true);
+    expect(notShown.some((x) => /40-hex commit .* frozen in .*§3 item 2/.test(x))).toBe(true);
+    expect(RAW.analysis.rowParityFields).toBe(
+      "instructionSha256, fixtureSha256, stepBudget, outputCeiling (spec §1.3)",
+    );
+    expect(RAW.analysis.packRecords).toMatch(/commit on main .* frozen in \(spec §3 item 2\)/);
+    expect(RAW.gate).toMatch(/refuses a fast-path row that carries a gate verdict/);
   });
 
   it("keeps capability rows out of R1 evidence", () => {

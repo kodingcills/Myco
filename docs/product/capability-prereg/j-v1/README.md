@@ -6,9 +6,9 @@ pre-registration, and no result is claimed.**
 | | |
 |---|---|
 | Pre-registration | `prereg.json` (this directory) |
-| Pre-registration hash (SHA-256 over canonical JSON) | `989cbbc20ee3d53c59b3dfbd5a77952e7f77a6c966996f7666ca284dc805690c` |
+| Pre-registration hash (SHA-256 over canonical JSON) | `140e929c5fc94d8cfa22cef833028344c369d7b04a484f9ed3a9c19986b6cbb8` |
 | Analysis script | `src/actions/j-v1-analysis.ts`, entry `analyzeJV1` |
-| Analysis script SHA-256 | `cd06db5d19e19e09bf05354c546c23405c5867badc163603e15efb92f81db3e6` |
+| Analysis script SHA-256 | `f85ab65f7acf909085e8128854805be298cfe3425f9be535a30d8bf94ceb413f` |
 | Harness side (loader, schedule, J row adapter) | `src/actions/j-v1-harness.ts` |
 | Tests | `test/actions/j-v1-prereg.test.ts`, `test/actions/j-v1-analysis.test.ts`, `test/actions/j-v1-harness.test.ts` |
 
@@ -86,6 +86,17 @@ can change any of them before the first run. After it, only a `j-v2` can.
     record) stays in the denominator and is never verified.
   - A trial with a boundary breach is void (never verified). It also marks the bar "not shown"
     as a breached guardrail.
+- **Parity (spec §1.3, §1.5).** Every row records `instructionSha256`, `fixtureSha256`,
+  `stepBudget` and `outputCeiling`. All trials of one task, in both arms and both repeats, must
+  share one instruction hash and one fixture hash, and every row must carry the pre-registered
+  step budget (30) and output ceiling (1024). Otherwise the bar is not shown
+  (`PARITY_MISMATCH`), with the numbers still computed.
+- **The frozen-in commit (spec §3 item 2).** A pack records the pre-registration hash and the
+  commit on `main` that froze this pre-registration. The analysis refuses a pack without a
+  40-hex commit (`PACK_FROZEN_COMMIT`). The script imports only `node:crypto`, so checking that
+  the commit really holds this `prereg.json` is the pack tooling's job (it has git).
+- **No gate.** The J row adapter refuses a fast-path row that carries a gate verdict: j-v1 is
+  gate-absent in both arms, and only the independent grader's grade is read.
 - **Model id.** `claude-sonnet-5-5`, the R1 pilot's model, so the J pair shares its planner
   with the Ultra `hcu+shell` harness's head-to-head.
 - **Not run under j-v1.** The 10 invalid-target tasks are left out, because the spec's J task

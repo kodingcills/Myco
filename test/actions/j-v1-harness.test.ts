@@ -64,7 +64,19 @@ function record(over: Partial<FastPathRunRecord> = {}, actions = 2): FastPathRun
 const row = (over: Partial<FastPathRunRecord> = {}, grade: FastPathArmRow["grade"] = "pass") =>
   fastPathArmRow({ record: record(over), trialKey: "k", gateVerdict: null, grade });
 
-const counts = { seq: 7, toolCalls: 5, capToolCalls: 2, boundaryBreach: false };
+const INSTRUCTION_SHA = "a".repeat(64);
+const FIXTURE_SHA = "b".repeat(64);
+const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+const counts = {
+  seq: 7,
+  toolCalls: 5,
+  capToolCalls: 2,
+  boundaryBreach: false,
+  instructionSha256: INSTRUCTION_SHA,
+  fixtureSha256: FIXTURE_SHA,
+  stepBudget: 30,
+  outputCeiling: 1024,
+};
 
 describe("jTrialFromFastPathRow", () => {
   it("builds the analysis row: steps are ALL tool calls, not only routed actions", () => {
@@ -82,6 +94,10 @@ describe("jTrialFromFastPathRow", () => {
       wallMs: 41_000,
       harnessFault: null,
       boundaryBreach: false,
+      instructionSha256: INSTRUCTION_SHA,
+      fixtureSha256: FIXTURE_SHA,
+      stepBudget: 30,
+      outputCeiling: 1024,
     });
     expect(isVerified(t)).toBe(true);
     expect(JSON.stringify(t)).not.toContain("B12");
@@ -104,6 +120,36 @@ describe("jTrialFromFastPathRow", () => {
     ).toBe("CAPTURE_FAILED");
     expect(jTrialFromFastPathRow(row({ claim: "failure" }), counts).claim).toBe("not-done");
     expect(jTrialFromFastPathRow(row({}, null), counts).grade).toBeNull();
+  });
+
+  it("refuses a row with a gate verdict (j-v1 is gate-absent), even when gate and grader disagree", () => {
+    const gated = (gateVerdict: FastPathArmRow["gateVerdict"], grade: FastPathArmRow["grade"]) =>
+      fastPathArmRow({ record: record(), trialKey: "k", gateVerdict, grade });
+    // The gate says verified, the independent grader says fail: the grade must never be
+    // replaced by the gate's verdict, and the row did not run gate-absent, so it is refused.
+    expect(() => jTrialFromFastPathRow(gated("verified", "fail"), counts)).toThrow(
+      /gate-absent, but the row has a gate verdict/,
+    );
+    expect(() => jTrialFromFastPathRow(gated("refuted", "pass"), counts)).toThrow(/gate verdict/);
+    expect(() => jTrialFromFastPathRow(gated("uncertain", null), counts)).toThrow(/gate verdict/);
+    // Without a gate verdict the analysis row carries the grader's grade as-is.
+    expect(jTrialFromFastPathRow(gated(null, "fail"), counts).grade).toBe("fail");
+  });
+
+  it("carries the parity fields from the harness record, each to its own field", () => {
+    const t = jTrialFromFastPathRow(row(), {
+      ...counts,
+      instructionSha256: "c".repeat(64),
+      fixtureSha256: "d".repeat(64),
+      stepBudget: 29,
+      outputCeiling: 2048,
+    });
+    expect([t.instructionSha256, t.fixtureSha256, t.stepBudget, t.outputCeiling]).toEqual([
+      "c".repeat(64),
+      "d".repeat(64),
+      29,
+      2048,
+    ]);
   });
 
   it("keeps a simulated planner simulated", () => {
@@ -144,9 +190,13 @@ describe("the j-v1 harness pieces fit the frozen analysis", () => {
             wallMs: 90_000,
             harnessFault: null,
             boundaryBreach: false,
+            instructionSha256: INSTRUCTION_SHA,
+            fixtureSha256: FIXTURE_SHA,
+            stepBudget: 30,
+            outputCeiling: 1024,
           },
     );
-    const r = analyzeJV1({ prereg, packPreregHash: hash, rows });
+    const r = analyzeJV1({ prereg, packPreregHash: hash, packPreregCommit: COMMIT, rows });
     expect(r.computed).toBe(true);
     expect(r.preregHash).toBe(hash);
     expect(r.n).toBe(180);

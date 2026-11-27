@@ -9,6 +9,7 @@
  * script is killed by behaviour, not by the script's pinned SHA-256 (that is
  * `j-v1-prereg.test.ts`).
  */
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
@@ -55,6 +56,15 @@ function optionB(): Prereg {
 const MODEL = committed().modelId;
 const TASKS = committed().taskSet.taskIds;
 
+const STEP_BUDGET_30 = 30;
+const OUTPUT_CEILING_1024 = 1024;
+const hex = (s: string) => createHash("sha256").update(s).digest("hex");
+/** Per-task parity hashes: one value per task, shared by both arms and every repeat. */
+const instructionSha = (taskId: string) => hex(`instruction:${taskId}`);
+const fixtureSha = (taskId: string) => hex(`fixture:${taskId}`);
+/** A well-formed frozen-in commit for the pack (§3 item 2). */
+const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+
 type Override = (taskId: string, arm: JArm, index: number, rep: number) => Partial<JTrialRow>;
 
 /** Rows in schedule order: every trial a verified done claim, J faster and with fewer steps. */
@@ -73,6 +83,10 @@ function rows(prereg: Prereg, override: Override = () => ({})): JTrialRow[] {
     wallMs: s.arm === J_CAPABILITY_ARM ? 40_000 : 90_000,
     harnessFault: null,
     boundaryBreach: false,
+    instructionSha256: instructionSha(s.taskId),
+    fixtureSha256: fixtureSha(s.taskId),
+    stepBudget: STEP_BUDGET_30,
+    outputCeiling: OUTPUT_CEILING_1024,
     ...override(s.taskId, s.arm, index.get(s.taskId) as number, s.rep),
   }));
 }
@@ -83,8 +97,12 @@ const jFirstRep =
   (_, arm, i, rep) =>
     arm === J_CAPABILITY_ARM && rep === 1 && i < count ? o : {};
 
-const run = (prereg: Prereg, r: readonly unknown[], hash = preregHash(prereg)) =>
-  analyzeJV1({ prereg, packPreregHash: hash, rows: r });
+const run = (
+  prereg: Prereg,
+  r: readonly unknown[],
+  hash = preregHash(prereg),
+  commit: unknown = COMMIT,
+) => analyzeJV1({ prereg, packPreregHash: hash, packPreregCommit: commit as string, rows: r });
 
 const statusOf = (result: ReturnType<typeof analyzeJV1>) => result.bar.map((c) => c.status);
 
@@ -212,6 +230,21 @@ describe("j-v1 schedule (k = 2)", () => {
     );
   });
 
+  it("pins the committed seed's first blocks: opener hcu+shell+J on fc-v1-030, then fc-v1-015", () => {
+    // A fixed expected output, so a change to the opener draw, the shuffle or the block
+    // pattern fails here even though the other tests build their rows from the same function.
+    expect(schedule.slice(0, 8)).toEqual([
+      { seq: 0, taskId: "fc-v1-030", arm: J_CAPABILITY_ARM, rep: 1 },
+      { seq: 1, taskId: "fc-v1-030", arm: J_BASELINE_ARM, rep: 1 },
+      { seq: 2, taskId: "fc-v1-030", arm: J_BASELINE_ARM, rep: 2 },
+      { seq: 3, taskId: "fc-v1-030", arm: J_CAPABILITY_ARM, rep: 2 },
+      { seq: 4, taskId: "fc-v1-015", arm: J_BASELINE_ARM, rep: 1 },
+      { seq: 5, taskId: "fc-v1-015", arm: J_CAPABILITY_ARM, rep: 1 },
+      { seq: 6, taskId: "fc-v1-015", arm: J_CAPABILITY_ARM, rep: 2 },
+      { seq: 7, taskId: "fc-v1-015", arm: J_BASELINE_ARM, rep: 2 },
+    ]);
+  });
+
   it("is seeded: same seed same order, another seed another order, and not task-id order", () => {
     expect(jV1Schedule(prereg)).toEqual(schedule);
     const other = jV1Schedule({
@@ -288,6 +321,11 @@ describe("j-v1 analysis: refusals", () => {
       { harnessFault: "" },
       { claim: "failure" },
       { seq: 1.5 },
+      { instructionSha256: "abc" },
+      { instructionSha256: "A".repeat(64) },
+      { fixtureSha256: null },
+      { stepBudget: 0 },
+      { outputCeiling: 1.5 },
     ];
     for (const b of bad) {
       const r = rows(p);
@@ -339,6 +377,12 @@ describe("j-v1 analysis: refusals", () => {
       (p) => {
         (p.bar as Record<string, unknown>).alphaOneSided = 0.1;
       },
+      (p) => {
+        delete p.outputCeiling;
+      },
+      (p) => {
+        p.outputCeiling = 0;
+      },
     ];
     for (const mutate of cases) {
       const p = structuredClone(committed());
@@ -349,6 +393,68 @@ describe("j-v1 analysis: refusals", () => {
     }
     expect(preregProblems(committed())).toEqual([]);
     expect(preregProblems(optionB())).toEqual([]);
+  });
+});
+
+describe("j-v1 analysis: the frozen-in commit (spec §3 item 2)", () => {
+  it("refuses a pack that does not record a 40-hex commit, and echoes the one it records", () => {
+    const p = committed();
+    for (const bad of [undefined, "", "abc123", COMMIT.toUpperCase(), `${COMMIT}0`, 7]) {
+      const r = analyzeJV1({
+        prereg: p,
+        packPreregHash: preregHash(p),
+        packPreregCommit: bad as string,
+        rows: rows(p),
+      });
+      expect(r.computed, String(bad)).toBe(false);
+      expect(r.verdict).toBe("not-shown");
+      expect(r.preregCommit).toBeNull();
+      expect(r.reasons).toEqual([expect.stringMatching(/^PACK_FROZEN_COMMIT: /)]);
+    }
+    const ok = run(p, rows(p));
+    expect(ok.verdict).toBe("shown");
+    expect(ok.preregCommit).toBe(COMMIT);
+  });
+});
+
+describe("j-v1 analysis: parity (spec §1.3, §1.5)", () => {
+  const p = committed();
+  const parity = (o: Override) => run(p, rows(p, o));
+
+  it("is not shown when one task's instruction differs between arms, though numbers are computed", () => {
+    const r = parity((_, arm, i) =>
+      arm === J_CAPABILITY_ARM && i === 7 ? { instructionSha256: hex("other") } : {},
+    );
+    expect(r.computed).toBe(true);
+    expect(statusOf(r)).toEqual(["shown", "shown", "shown"]);
+    expect(r.verdict).toBe("not-shown");
+    expect(r.reasons).toEqual(["PARITY_MISMATCH: instructionSha256 differs within 1 task(s)"]);
+  });
+
+  it("is not shown when one task's fixture differs between repeats", () => {
+    const r = parity((_, arm, i, rep) =>
+      arm === J_BASELINE_ARM && i === 2 && rep === 2 ? { fixtureSha256: hex("other") } : {},
+    );
+    expect(r.verdict).toBe("not-shown");
+    expect(r.reasons).toEqual(["PARITY_MISMATCH: fixtureSha256 differs within 1 task(s)"]);
+  });
+
+  it("is not shown when a row's step budget or output ceiling is not the pre-registered one", () => {
+    const budget = parity((_, arm, i) =>
+      arm === J_CAPABILITY_ARM && i < 3 ? { stepBudget: 31 } : {},
+    );
+    expect(budget.reasons).toEqual(["PARITY_MISMATCH: stepBudget is not 30 in 6 row(s)"]);
+    const ceiling = parity((_, arm, i, rep) =>
+      arm === J_BASELINE_ARM && i === 0 && rep === 1 ? { outputCeiling: 2048 } : {},
+    );
+    expect(ceiling.reasons).toEqual(["PARITY_MISMATCH: outputCeiling is not 1024 in 1 row(s)"]);
+    expect(ceiling.verdict).toBe("not-shown");
+  });
+
+  it("different tasks may have different instruction and fixture hashes (parity is per task)", () => {
+    const r = run(p, rows(p));
+    expect(new Set(rows(p).map((x) => x.instructionSha256)).size).toBe(90);
+    expect(r.verdict).toBe("shown");
   });
 });
 
@@ -441,6 +547,80 @@ describe("j-v1 analysis: the bar (k = 2)", () => {
     const tight = structuredClone(p);
     (tight.bar.sequence[0] as Record<string, unknown>).marginPoints = 4;
     expect(run(tight, data).bar[0]?.status).toBe("not-shown");
+  });
+
+  it("component 1: a bound just above the 5-point margin (in [0.050, 0.055)) is not shown", () => {
+    const p = committed();
+    const r = run(
+      p,
+      rows(p, (_, arm, i, rep) => {
+        if (rep !== 1) return {};
+        if (arm === J_CAPABILITY_ARM && i < 5) return { grade: "fail" };
+        if (arm === J_BASELINE_ARM && i === 5) return { grade: "fail" };
+        return {};
+      }),
+    );
+    expect(r.table).toEqual({ a: 174, b: 5, c: 1, d: 0 });
+    const ub = r.bar[0]?.upperBound as number;
+    expect(ub).toBeGreaterThanOrEqual(0.05);
+    expect(ub).toBeLessThan(0.055);
+    expect(r.bar[0]?.threshold).toBe(0.05);
+    expect(statusOf(r)).toEqual(["not-shown", "not-tested", "not-tested"]);
+  });
+
+  it("component 1: a bound exactly equal to the margin is not shown (strictly below)", () => {
+    const p = committed();
+    const data = rows(p, (_, arm, i, rep) => {
+      if (rep !== 1) return {};
+      if (arm === J_CAPABILITY_ARM && i < 4) return { grade: "fail" };
+      if (arm === J_BASELINE_ARM && i === 4) return { grade: "fail" };
+      return {};
+    });
+    const ub = run(p, data).bar[0]?.upperBound as number;
+    expect(ub).toBeLessThan(0.05);
+    expect(run(p, data).bar[0]?.status).toBe("shown");
+    const atBound = structuredClone(p);
+    (atBound.bar.sequence[0] as Record<string, unknown>).marginPoints = ub * 100;
+    const r = run(atBound, data);
+    expect(r.bar[0]?.threshold).toBe(ub);
+    expect(r.bar[0]?.upperBound).toBe(ub);
+    expect(r.bar[0]?.status).toBe("not-shown");
+  });
+
+  it("component 2: a wall-time bound of exactly 1.0, or just above it, is not shown", () => {
+    const p = committed();
+    const equal = run(
+      p,
+      rows(p, () => ({ wallMs: 90_000 })),
+    );
+    expect(equal.bar[1]?.upperBound).toBe(1);
+    expect(statusOf(equal)).toEqual(["shown", "not-shown", "not-tested"]);
+    const slower = run(
+      p,
+      rows(p, (_, arm) => (arm === J_CAPABILITY_ARM ? { wallMs: 90_900 } : {})),
+    );
+    const ub = slower.bar[1]?.upperBound as number;
+    expect(ub).toBeGreaterThan(1);
+    expect(ub).toBeLessThan(1.02);
+    expect(statusOf(slower)).toEqual(["shown", "not-shown", "not-tested"]);
+  });
+
+  it("component 3: a steps bound of exactly 1.0, or just above it, is not shown", () => {
+    const p = committed();
+    const equal = run(
+      p,
+      rows(p, () => ({ steps: 9 })),
+    );
+    expect(equal.bar[2]?.upperBound).toBe(1);
+    expect(statusOf(equal)).toEqual(["shown", "shown", "not-shown"]);
+    const more = run(
+      p,
+      rows(p, (_, arm) => ({ steps: arm === J_CAPABILITY_ARM ? 26 : 25 })),
+    );
+    const ub = more.bar[2]?.upperBound as number;
+    expect(ub).toBeGreaterThan(1);
+    expect(ub).toBeLessThan(1.05);
+    expect(statusOf(more)).toEqual(["shown", "shown", "not-shown"]);
   });
 
   it("follows the fixed sequence: a slower J stops at component 2 even with fewer steps", () => {

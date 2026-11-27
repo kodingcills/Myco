@@ -72,12 +72,23 @@ export interface JHarnessCounts {
   readonly boundaryBreach: boolean;
   /** Any other harness fault code for this trial. */
   readonly harnessFault?: string;
+  /** Parity (spec §1.3): SHA-256 of the instruction text the agent was given. */
+  readonly instructionSha256: string;
+  /** Parity (spec §1.3): SHA-256 of the fixture as deployed for this trial. */
+  readonly fixtureSha256: string;
+  /** Parity (spec §1.3): the step budget and planner output ceiling this trial ran under. */
+  readonly stepBudget: number;
+  readonly outputCeiling: number;
 }
 
 /** The analysis row for one J trial. Throws on a row or count the harness should never produce. */
 export function jTrialFromFastPathRow(row: FastPathArmRow, counts: JHarnessCounts): JTrialRow {
   const problems = fastPathRowProblems(row);
   if (problems.length > 0) throw new Error(`fast-path row refused: ${problems.join(", ")}`);
+  // j-v1 is gate-absent in both arms (prereg.json "gate"); the analysis reads only the
+  // independent grader's grade. A row that carries a gate verdict did not run as registered.
+  if (row.gateVerdict !== null)
+    throw new Error("fast-path row refused: j-v1 is gate-absent, but the row has a gate verdict");
   for (const [name, v] of [
     ["seq", counts.seq],
     ["toolCalls", counts.toolCalls],
@@ -100,5 +111,9 @@ export function jTrialFromFastPathRow(row: FastPathArmRow, counts: JHarnessCount
     wallMs: row.wallMs,
     harnessFault: counts.harnessFault ?? (unrecorded ? "UNRECORDED_ROUTE" : null),
     boundaryBreach: counts.boundaryBreach,
+    instructionSha256: counts.instructionSha256,
+    fixtureSha256: counts.fixtureSha256,
+    stepBudget: counts.stepBudget,
+    outputCeiling: counts.outputCeiling,
   };
 }
