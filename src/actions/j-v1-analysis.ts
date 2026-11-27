@@ -7,13 +7,15 @@
  * after the first run means a new version (`j-v2`), never an edit.
  *
  * What it computes (capability spec §2 J and §1.5), on paired rows over fc-v1's 90
- * satisfiable tasks, one trial per task per arm:
+ * satisfiable tasks, k trials per task per arm (k = 2 by the lead's ruling of 2026-11-27
+ * 05:39Z; k = 1 is the spec's default and the ruling's fallback):
  *
  * 1. **Verified rate non-inferior.** The one-sided 95% upper bound of
  *    (`hcu+shell` rate − `hcu+shell+J` rate), Newcombe's paired score interval (1998,
- *    method 10, with z for one-sided 95%), is below the margin.
- * 2. **Wall time per verified task.** Paired bootstrap over tasks: the one-sided 95% upper
- *    bound of J/baseline is below 1.0.
+ *    method 10, with z for one-sided 95%) over the tasks · k (task, repeat) pairs, is below
+ *    the margin.
+ * 2. **Wall time per verified task.** Paired bootstrap over tasks (each task carrying all its
+ *    repeats): the one-sided 95% upper bound of J/baseline is below 1.0.
  * 3. **Steps per verified task.** The same resamples: the upper bound of J/baseline is below
  *    1.0.
  *
@@ -21,8 +23,8 @@
  * only if every earlier one is shown. The bar is "shown" only when all three are shown and
  * nothing blocks (a lead ruling pending, a simulated row, a planner mismatch, a guardrail
  * breach). It refuses to compute at all when the pack's pre-registration hash does not match,
- * a row is malformed, or the design is not exactly the pre-registered one (every task, both
- * arms, once each, in the pre-registered seeded order).
+ * a row is malformed, or the design is not exactly the pre-registered one (every scheduled
+ * trial once, with the task and arm the seeded schedule put at its position).
  *
  * The output is an analysis report for people; it is never shown to an agent.
  */
@@ -99,7 +101,8 @@ export interface JV1Prereg {
   readonly leadRulingPending: readonly string[];
   readonly modelId: string;
   readonly stepBudget: number;
-  readonly runsPerTaskPerArm: 1;
+  /** k: trials per task per arm (lead ruling 2026-11-27 05:39Z: 2). */
+  readonly runsPerTaskPerArm: number;
   readonly arms: {
     readonly baseline: typeof J_BASELINE_ARM;
     readonly capability: typeof J_CAPABILITY_ARM;
@@ -136,7 +139,7 @@ export function preregProblems(raw: unknown): string[] {
   if (typeof raw.modelId !== "string" || !MODEL_ID.test(raw.modelId)) p.push("PREREG_MODEL_ID");
   if (!Number.isSafeInteger(raw.stepBudget) || (raw.stepBudget as number) < 1)
     p.push("PREREG_STEP_BUDGET");
-  if (raw.runsPerTaskPerArm !== 1) p.push("PREREG_RUNS_PER_TASK");
+  if (raw.runsPerTaskPerArm !== 1 && raw.runsPerTaskPerArm !== 2) p.push("PREREG_RUNS_PER_TASK");
   if (
     !isObj(raw.arms) ||
     raw.arms.baseline !== J_BASELINE_ARM ||
@@ -195,19 +198,24 @@ export interface JScheduledTrial {
   readonly seq: number;
   readonly taskId: string;
   readonly arm: JArm;
+  /** Which repeat of this (task, arm) this trial is, 1..k. */
+  readonly rep: number;
 }
 
 /**
- * The seeded, interleaved order of (task, arm) trials (§1.3). From the assignment seed: the
- * first draw picks the arm that opens (below 0.5: `hcu+shell`); the tasks, sorted by id,
- * are then shuffled (Fisher-Yates, from the last position down). The i-th task in that
- * order runs opener-then-other when i is even and other-then-opener when i is odd, so arms
- * alternate in ABBA blocks over consecutive task pairs. Trial i of task position t has
- * seq = 2t + i.
+ * The seeded, interleaved order of (task, arm, repeat) trials (§1.3), k repeats per task per
+ * arm. From the assignment seed: the first draw picks the arm that opens (below 0.5:
+ * `hcu+shell`); the tasks, sorted by id, are then shuffled (Fisher-Yates, from the last
+ * position down). Each task's 2k trials run as one block. Task position t starts with the
+ * opener when t is even and with the other arm when t is odd; within the block, repeat r runs
+ * (first, second) when r is even and (second, first) when r is odd. At k = 2 every task is
+ * one ABBA block, alternating ABBA / BAAB over task positions. The trial at index i of task
+ * position t has seq = 2k·t + i, and repeat r of each arm is rep r + 1.
  */
 export function jV1Schedule(
-  prereg: Pick<JV1Prereg, "taskSet" | "seeds">,
+  prereg: Pick<JV1Prereg, "taskSet" | "seeds" | "runsPerTaskPerArm">,
 ): readonly JScheduledTrial[] {
+  const k = prereg.runsPerTaskPerArm;
   const rand = seededUniform(prereg.seeds.assignment);
   const opener: JArm = rand() < 0.5 ? J_BASELINE_ARM : J_CAPABILITY_ARM;
   const other: JArm = opener === J_BASELINE_ARM ? J_CAPABILITY_ARM : J_BASELINE_ARM;
@@ -218,8 +226,15 @@ export function jV1Schedule(
   }
   const out: JScheduledTrial[] = [];
   tasks.forEach((taskId, t) => {
-    const pair: [JArm, JArm] = t % 2 === 0 ? [opener, other] : [other, opener];
-    out.push({ seq: 2 * t, taskId, arm: pair[0] }, { seq: 2 * t + 1, taskId, arm: pair[1] });
+    const [first, second]: [JArm, JArm] = t % 2 === 0 ? [opener, other] : [other, opener];
+    for (let r = 0; r < k; r++) {
+      const pair: [JArm, JArm] = r % 2 === 0 ? [first, second] : [second, first];
+      const base = 2 * k * t + 2 * r;
+      out.push(
+        { seq: base, taskId, arm: pair[0], rep: r + 1 },
+        { seq: base + 1, taskId, arm: pair[1], rep: r + 1 },
+      );
+    }
   });
   return out;
 }
@@ -335,7 +350,10 @@ export function newcombePairedUpper(a: number, b: number, c: number, d: number, 
   return Math.min(1, upper);
 }
 
-/** Per task: both arms' trial (verified flag and the two ratio metrics). */
+/**
+ * Per task, summed over its k repeats in each arm: verified trials and the two ratio metrics.
+ * The bootstrap resamples tasks (clusters), so a task's repeats always travel together.
+ */
 interface Pair {
   readonly vB: number;
   readonly vJ: number;
@@ -432,8 +450,10 @@ export interface JV1Result {
   readonly computed: boolean;
   /** Codes, each with detail after a colon. Empty only when the verdict is shown. */
   readonly reasons: readonly string[];
+  /** Paired (task, repeat) trials: tasks · k. */
   readonly n: number | null;
-  /** a both verified, b baseline only, c J only, d neither. */
+  readonly tasks: number | null;
+  /** Over (task, repeat) pairs: a both verified, b baseline only, c J only, d neither. */
   readonly table: {
     readonly a: number;
     readonly b: number;
@@ -461,6 +481,7 @@ function refused(hash: string, reasons: string[]): JV1Result {
     computed: false,
     reasons,
     n: null,
+    tasks: null,
     table: null,
     discordant: null,
     arms: null,
@@ -519,7 +540,8 @@ export function analyzeJV1(input: JV1Input): JV1Result {
     ]);
   const prereg = input.prereg as JV1Prereg;
 
-  // Rows: well-formed, the pre-registered tasks and arms, each once, in the pre-registered order.
+  // Rows: well-formed, and exactly the pre-registered schedule: every seq once, each with the
+  // task and arm the seeded schedule put there (which also fixes the trial's repeat number).
   const design: string[] = [];
   const rows: JTrialRow[] = [];
   input.rows.forEach((r, i) => {
@@ -528,20 +550,27 @@ export function analyzeJV1(input: JV1Input): JV1Result {
     else design.push(`ROW_INVALID: row ${i}: ${why}`);
   });
   const schedule = jV1Schedule(prereg);
-  const wantSeq = new Map(schedule.map((s) => [`${s.taskId}\u0000${s.arm}`, s.seq]));
-  const seen = new Map<string, JTrialRow>();
+  const known = new Set(prereg.taskSet.taskIds);
+  const bySeq = new Map<number, JTrialRow>();
   for (const r of rows) {
-    const key = `${r.taskId}\u0000${r.arm}`;
-    const want = wantSeq.get(key);
-    if (want === undefined) design.push(`DESIGN_UNKNOWN_TASK: ${r.taskId}`);
-    else if (seen.has(key)) design.push(`DESIGN_DUPLICATE: ${r.taskId} ${r.arm}`);
-    else if (r.seq !== want)
-      design.push(`DESIGN_ORDER: ${r.taskId} ${r.arm} ran at ${r.seq}, scheduled ${want}`);
-    seen.set(key, r);
+    const want = schedule[r.seq];
+    if (!known.has(r.taskId)) design.push(`DESIGN_UNKNOWN_TASK: ${r.taskId}`);
+    else if (want === undefined) design.push(`DESIGN_UNKNOWN_SEQ: ${r.seq}`);
+    else if (bySeq.has(r.seq)) design.push(`DESIGN_DUPLICATE: seq ${r.seq}`);
+    else if (want.taskId !== r.taskId || want.arm !== r.arm)
+      design.push(
+        `DESIGN_ORDER: seq ${r.seq} ran ${r.taskId} ${r.arm}, scheduled ${want.taskId} ${want.arm}`,
+      );
+    else bySeq.set(r.seq, r);
   }
   for (const s of schedule)
-    if (!seen.has(`${s.taskId}\u0000${s.arm}`)) design.push(`DESIGN_MISSING: ${s.taskId} ${s.arm}`);
+    if (!bySeq.has(s.seq)) design.push(`DESIGN_MISSING: seq ${s.seq} (${s.taskId} ${s.arm})`);
   if (design.length > 0) return refused(hash, design);
+  const cell = new Map(
+    schedule.map((s) => [`${s.taskId}\u0000${s.arm}\u0000${s.rep}`, bySeq.get(s.seq) as JTrialRow]),
+  );
+  const trial = (taskId: string, arm: JArm, rep: number) =>
+    cell.get(`${taskId}\u0000${arm}\u0000${rep}`) as JTrialRow;
 
   // Blocking reasons that leave the numbers computable (useful for plumbing, never a "shown").
   const reasons: string[] = [];
@@ -560,27 +589,31 @@ export function analyzeJV1(input: JV1Input): JV1Result {
   const baseline = armStats(byArm(J_BASELINE_ARM));
   const capability = armStats(byArm(J_CAPABILITY_ARM));
 
-  const taskIds = prereg.taskSet.taskIds;
-  const pairs: Pair[] = taskIds.map((id) => {
-    const b = seen.get(`${id}\u0000${J_BASELINE_ARM}`) as JTrialRow;
-    const j = seen.get(`${id}\u0000${J_CAPABILITY_ARM}`) as JTrialRow;
-    return {
-      vB: isVerified(b) ? 1 : 0,
-      vJ: isVerified(j) ? 1 : 0,
-      wallB: b.wallMs,
-      wallJ: j.wallMs,
-      stepsB: b.steps,
-      stepsJ: j.steps,
-    };
-  });
+  // Component 1's pairs are (task, repeat): repeat r of the baseline with repeat r of J, so
+  // n = tasks · k. The bootstrap's clusters are tasks, each summed over its repeats.
+  const k = prereg.runsPerTaskPerArm;
   const table = { a: 0, b: 0, c: 0, d: 0 };
-  for (const q of pairs) {
-    if (q.vB && q.vJ) table.a++;
-    else if (q.vB) table.b++;
-    else if (q.vJ) table.c++;
-    else table.d++;
-  }
-  const n = pairs.length;
+  const pairs: Pair[] = prereg.taskSet.taskIds.map((id) => {
+    const q = { vB: 0, vJ: 0, wallB: 0, wallJ: 0, stepsB: 0, stepsJ: 0 };
+    for (let rep = 1; rep <= k; rep++) {
+      const b = trial(id, J_BASELINE_ARM, rep);
+      const j = trial(id, J_CAPABILITY_ARM, rep);
+      const vb = isVerified(b);
+      const vj = isVerified(j);
+      if (vb && vj) table.a++;
+      else if (vb) table.b++;
+      else if (vj) table.c++;
+      else table.d++;
+      q.vB += vb ? 1 : 0;
+      q.vJ += vj ? 1 : 0;
+      q.wallB += b.wallMs;
+      q.wallJ += j.wallMs;
+      q.stepsB += b.steps;
+      q.stepsJ += j.steps;
+    }
+    return q;
+  });
+  const n = table.a + table.b + table.c + table.d;
 
   // Component 1: non-inferiority of the verified rate.
   const [c1, c2, c3] = prereg.bar.sequence as [
@@ -645,6 +678,7 @@ export function analyzeJV1(input: JV1Input): JV1Result {
     computed: true,
     reasons,
     n,
+    tasks: pairs.length,
     table,
     discordant: table.b + table.c,
     arms: { baseline, capability },

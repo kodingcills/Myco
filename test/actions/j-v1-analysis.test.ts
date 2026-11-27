@@ -1,5 +1,6 @@
 /**
- * Track J, j-v1: the frozen analysis script's behaviour (capability spec §2 J, §1.5, §3).
+ * Track J, j-v1: the frozen analysis script's behaviour (capability spec §2 J, §1.5, §3; lead
+ * ruling 2026-11-27 05:39Z: 5-point margin, k = 2 repeats per task per arm).
  *
  * Every row here is synthetic and SIMULATED in spirit: no model ran. Rows marked with a model
  * id exist only to exercise the "shown" path; nothing here is evidence.
@@ -31,6 +32,7 @@ import { newcombePairedCi } from "../../src/m2/corrections-ab.ts";
 
 type Prereg = Record<string, unknown> & {
   leadRulingPending: string[];
+  runsPerTaskPerArm: number;
   modelId: string;
   taskSet: { taskIds: string[] };
   seeds: { assignment: string; bootstrap: string };
@@ -38,14 +40,22 @@ type Prereg = Record<string, unknown> & {
 };
 
 const PREREG_TEXT = readFileSync("docs/product/capability-prereg/j-v1/prereg.json", "utf8");
+/** The committed j-v1: lead ruling recorded, 5-point margin, k = 2. */
 const committed = (): Prereg => JSON.parse(PREREG_TEXT) as Prereg;
-/** The committed pre-registration with the lead's rulings marked as given (for the "shown" path). */
-const ratified = (): Prereg => ({ ...committed(), leadRulingPending: [] });
+/** j-v1 with a ruling still pending (as before 05:39Z). */
+const pending = (): Prereg => ({ ...committed(), leadRulingPending: ["x"] });
+/** The ruling's fallback, option (b): 7-point margin at k = 1. */
+function optionB(): Prereg {
+  const p = structuredClone(committed());
+  p.runsPerTaskPerArm = 1;
+  (p.bar.sequence[0] as Record<string, unknown>).marginPoints = 7;
+  return p;
+}
 
 const MODEL = committed().modelId;
 const TASKS = committed().taskSet.taskIds;
 
-type Override = (taskId: string, arm: JArm, index: number) => Partial<JTrialRow>;
+type Override = (taskId: string, arm: JArm, index: number, rep: number) => Partial<JTrialRow>;
 
 /** Rows in schedule order: every trial a verified done claim, J faster and with fewer steps. */
 function rows(prereg: Prereg, override: Override = () => ({})): JTrialRow[] {
@@ -63,9 +73,15 @@ function rows(prereg: Prereg, override: Override = () => ({})): JTrialRow[] {
     wallMs: s.arm === J_CAPABILITY_ARM ? 40_000 : 90_000,
     harnessFault: null,
     boundaryBreach: false,
-    ...override(s.taskId, s.arm, index.get(s.taskId) as number),
+    ...override(s.taskId, s.arm, index.get(s.taskId) as number, s.rep),
   }));
 }
+
+/** Override only J's first repeat of the tasks at indices below `count`. */
+const jFirstRep =
+  (count: number, o: Partial<JTrialRow>): Override =>
+  (_, arm, i, rep) =>
+    arm === J_CAPABILITY_ARM && rep === 1 && i < count ? o : {};
 
 const run = (prereg: Prereg, r: readonly unknown[], hash = preregHash(prereg)) =>
   analyzeJV1({ prereg, packPreregHash: hash, rows: r });
@@ -105,12 +121,16 @@ describe("j-v1 statistics", () => {
     expect(one).toBeLessThan(two);
   });
 
-  it("reproduces the spec's margin caveat: equality with ~10% discordant has a bound above 5 points", () => {
-    // n = 90, 10 discordant tasks split 5 / 5 (true equality, ~11% discordant): the bound on
-    // baseline − J is about 5.5 points, so component 1 fails with no real drop (spec §2 J).
-    const ub = newcombePairedUpper(76, 5, 5, 4, Z_ONE_SIDED_95);
-    expect(ub).toBeGreaterThan(0.05);
-    expect(ub).toBeLessThan(0.07);
+  it("reproduces the spec's margin caveat at k = 1, and why the ruling took k = 2", () => {
+    // True equality with ~11% discordant: at n = 90 pairs the bound on baseline − J is about
+    // 6.2 points, above the 5-point margin (spec §2 J); at n = 180 pairs (k = 2) it is about
+    // 4.2 points, below it.
+    const k1 = newcombePairedUpper(76, 5, 5, 4, Z_ONE_SIDED_95);
+    expect(k1).toBeGreaterThan(0.05);
+    expect(k1).toBeLessThan(0.07);
+    const k2 = newcombePairedUpper(152, 10, 10, 8, Z_ONE_SIDED_95);
+    expect(k2).toBeGreaterThan(0.04);
+    expect(k2).toBeLessThan(0.05);
   });
 
   it("the bootstrap is deterministic under its seed and counts a resample without verified tasks as +Infinity", () => {
@@ -148,28 +168,48 @@ describe("j-v1 statistics", () => {
   });
 });
 
-describe("j-v1 schedule", () => {
+describe("j-v1 schedule (k = 2)", () => {
   const prereg = committed();
   const schedule = jV1Schedule(prereg);
 
-  it("runs every (task, arm) once, seq 0..179", () => {
-    expect(schedule).toHaveLength(2 * TASKS.length);
+  it("runs every (task, arm, repeat) once, seq 0..359", () => {
+    expect(prereg.runsPerTaskPerArm).toBe(2);
+    expect(schedule).toHaveLength(4 * TASKS.length);
     expect(schedule.map((s) => s.seq)).toEqual(schedule.map((_, i) => i));
-    const keys = new Set(schedule.map((s) => `${s.taskId}|${s.arm}`));
-    expect(keys.size).toBe(180);
-    for (const id of TASKS) {
-      expect(keys.has(`${id}|${J_BASELINE_ARM}`)).toBe(true);
-      expect(keys.has(`${id}|${J_CAPABILITY_ARM}`)).toBe(true);
+    const keys = new Set(schedule.map((s) => `${s.taskId}|${s.arm}|${s.rep}`));
+    expect(keys.size).toBe(360);
+    for (const id of TASKS)
+      for (const arm of [J_BASELINE_ARM, J_CAPABILITY_ARM])
+        for (const rep of [1, 2]) expect(keys.has(`${id}|${arm}|${rep}`)).toBe(true);
+  });
+
+  it("runs each task as one ABBA block, alternating ABBA / BAAB over task positions", () => {
+    for (let t = 0; t < TASKS.length; t++) {
+      const block = schedule.slice(4 * t, 4 * t + 4);
+      expect(new Set(block.map((s) => s.taskId)).size).toBe(1);
+      const [a, b, c, d] = block.map((s) => s.arm);
+      expect(a).not.toBe(b);
+      expect(b).toBe(c);
+      expect(a).toBe(d);
+      expect(block.map((s) => s.rep)).toEqual([1, 1, 2, 2]);
+      if (t > 0) expect(a).not.toBe(schedule[4 * (t - 1)]?.arm);
     }
   });
 
-  it("keeps each task's two trials adjacent and alternates arms in ABBA blocks", () => {
+  it("at k = 1 (option b) is the two-trial ABBA-over-task-pairs order", () => {
+    const one = jV1Schedule(optionB());
+    expect(one).toHaveLength(180);
     for (let t = 0; t < TASKS.length; t++) {
-      const [x, y] = [schedule[2 * t], schedule[2 * t + 1]];
+      const [x, y] = [one[2 * t], one[2 * t + 1]];
       expect(x?.taskId).toBe(y?.taskId);
       expect(x?.arm).not.toBe(y?.arm);
-      if (t > 0) expect(x?.arm).toBe(schedule[2 * t - 1]?.arm);
+      expect([x?.rep, y?.rep]).toEqual([1, 1]);
+      if (t > 0) expect(x?.arm).toBe(one[2 * t - 1]?.arm);
     }
+    // Same seed, same task order and opener as k = 2.
+    expect(one.filter((_, i) => i % 2 === 0).map((s) => s.taskId)).toEqual(
+      schedule.filter((_, i) => i % 4 === 0).map((s) => s.taskId),
+    );
   });
 
   it("is seeded: same seed same order, another seed another order, and not task-id order", () => {
@@ -179,14 +219,14 @@ describe("j-v1 schedule", () => {
       seeds: { ...prereg.seeds, assignment: "x".repeat(20) },
     });
     expect(other.map((s) => s.taskId)).not.toEqual(schedule.map((s) => s.taskId));
-    const order = schedule.filter((_, i) => i % 2 === 0).map((s) => s.taskId);
+    const order = schedule.filter((_, i) => i % 4 === 0).map((s) => s.taskId);
     expect(order).not.toEqual([...TASKS].sort());
   });
 });
 
 describe("j-v1 analysis: refusals", () => {
   it("refuses a pack whose pre-registration hash does not match", () => {
-    const p = ratified();
+    const p = committed();
     const r = run(p, rows(p), "0".repeat(64));
     expect(r.computed).toBe(false);
     expect(r.verdict).toBe("not-shown");
@@ -195,23 +235,32 @@ describe("j-v1 analysis: refusals", () => {
   });
 
   it("refuses a pack whose pre-registration was edited after the hash was taken", () => {
-    const p = ratified();
+    const p = committed();
     const hash = preregHash(p);
-    const edited = { ...p, bar: { ...p.bar, sequence: p.bar.sequence.map((c) => ({ ...c })) } };
-    (edited.bar.sequence[0] as Record<string, unknown>).marginPoints = 10;
+    const edited = structuredClone(p);
+    (edited.bar.sequence[0] as Record<string, unknown>).marginPoints = 7;
     expect(run(edited, rows(edited), hash).reasons[0]).toMatch(/^PREREG_HASH_MISMATCH/);
+    // A pack recorded under k = 2 cannot be re-analysed as option (b), or the reverse.
+    expect(run(optionB(), rows(optionB()), hash).reasons[0]).toMatch(/^PREREG_HASH_MISMATCH/);
   });
 
-  it("refuses a pack with a missing, duplicated, unknown or mis-ordered trial", () => {
-    const p = ratified();
+  it("refuses a pack with a missing, duplicated, unknown, out-of-range or mis-ordered trial", () => {
+    const p = committed();
     const base = rows(p);
-    expect(run(p, base.slice(1)).reasons).toEqual([expect.stringMatching(/^DESIGN_MISSING: /)]);
+    expect(run(p, base.slice(1)).reasons).toEqual([
+      expect.stringMatching(/^DESIGN_MISSING: seq 0 /),
+    ]);
     expect(run(p, [...base, base[0]]).reasons).toEqual([
-      expect.stringMatching(/^DESIGN_DUPLICATE: /),
+      expect.stringMatching(/^DESIGN_DUPLICATE: seq 0$/),
     ]);
     expect(
       run(p, [...base, { ...base[0], taskId: "fc-v1-091" }]).reasons.some((x) =>
         x.startsWith("DESIGN_UNKNOWN_TASK: fc-v1-091"),
+      ),
+    ).toBe(true);
+    expect(
+      run(p, [...base, { ...base[0], seq: 360 }]).reasons.some((x) =>
+        x.startsWith("DESIGN_UNKNOWN_SEQ: 360"),
       ),
     ).toBe(true);
     const swapped = base.map((r) =>
@@ -222,8 +271,14 @@ describe("j-v1 analysis: refusals", () => {
     expect(res.reasons.filter((x) => x.startsWith("DESIGN_ORDER"))).toHaveLength(2);
   });
 
+  it("refuses a k = 1 pack under the k = 2 pre-registration", () => {
+    const res = run(committed(), rows(optionB()));
+    expect(res.computed).toBe(false);
+    expect(res.reasons.some((x) => x.startsWith("DESIGN_"))).toBe(true);
+  });
+
   it("refuses malformed rows: extra field, steps over the budget, bad grade, inconsistent simulated flag", () => {
-    const p = ratified();
+    const p = committed();
     const bad: Partial<Record<string, unknown>>[] = [
       { extra: 1 },
       { steps: 31 },
@@ -232,6 +287,7 @@ describe("j-v1 analysis: refusals", () => {
       { wallMs: -1 },
       { harnessFault: "" },
       { claim: "failure" },
+      { seq: 1.5 },
     ];
     for (const b of bad) {
       const r = rows(p);
@@ -266,7 +322,10 @@ describe("j-v1 analysis: refusals", () => {
         p.bar.sequence.reverse();
       },
       (p) => {
-        p.runsPerTaskPerArm = 2;
+        p.runsPerTaskPerArm = 3;
+      },
+      (p) => {
+        p.runsPerTaskPerArm = 0;
       },
       (p) => {
         p.seeds.bootstrap = p.seeds.assignment;
@@ -282,41 +341,43 @@ describe("j-v1 analysis: refusals", () => {
       },
     ];
     for (const mutate of cases) {
-      const p = structuredClone(ratified());
+      const p = structuredClone(committed());
       mutate(p);
       expect(preregProblems(p).length, mutate.toString()).toBeGreaterThan(0);
-      const res = run(p, rows(ratified()));
+      const res = run(p, rows(committed()));
       expect(res.computed).toBe(false);
     }
     expect(preregProblems(committed())).toEqual([]);
+    expect(preregProblems(optionB())).toEqual([]);
   });
 });
 
-describe("j-v1 analysis: the bar", () => {
+describe("j-v1 analysis: the bar (k = 2)", () => {
   it("is shown when J is non-inferior, faster and uses fewer steps, and every row is a real model's", () => {
-    const p = ratified();
+    const p = committed();
     const r = run(p, rows(p));
     expect(r.reasons).toEqual([]);
     expect(r.verdict).toBe("shown");
     expect(statusOf(r)).toEqual(["shown", "shown", "shown"]);
-    expect(r.n).toBe(90);
-    expect(r.table).toEqual({ a: 90, b: 0, c: 0, d: 0 });
+    expect(r.n).toBe(180);
+    expect(r.tasks).toBe(90);
+    expect(r.table).toEqual({ a: 180, b: 0, c: 0, d: 0 });
+    expect(r.arms?.capability.trials).toBe(180);
     expect(r.bar[1]?.estimate).toBeCloseTo(40 / 90, 12);
     expect(r.bar[2]?.estimate).toBeCloseTo(4 / 9, 12);
   });
 
-  it("is never shown while a lead ruling is pending (the committed j-v1: the 5-point margin)", () => {
-    const p = committed();
-    expect(p.leadRulingPending).toEqual(["bar.sequence[0].marginPoints"]);
+  it("is never shown while a lead ruling is pending", () => {
+    const p = pending();
     const r = run(p, rows(p));
     expect(r.computed).toBe(true);
     expect(statusOf(r)).toEqual(["shown", "shown", "shown"]);
     expect(r.verdict).toBe("not-shown");
-    expect(r.reasons).toEqual(["LEAD_RULING_PENDING: bar.sequence[0].marginPoints"]);
+    expect(r.reasons).toEqual(["LEAD_RULING_PENDING: x"]);
   });
 
   it("is never shown on simulated rows, though the numbers are computed (plumbing)", () => {
-    const p = ratified();
+    const p = committed();
     const r = run(
       p,
       rows(p, (_, arm) =>
@@ -325,40 +386,56 @@ describe("j-v1 analysis: the bar", () => {
     );
     expect(r.computed).toBe(true);
     expect(r.verdict).toBe("not-shown");
-    expect(r.reasons).toContain("SIMULATED: 90 row(s); simulated rows are never evidence");
+    expect(r.reasons).toContain("SIMULATED: 180 row(s); simulated rows are never evidence");
   });
 
   it("is never shown when a row's planner is not the pre-registered model", () => {
-    const p = ratified();
+    const p = committed();
     const r = run(
       p,
-      rows(p, (_, __, i) => (i === 3 ? { plannerModelId: "claude-opus-5-5" } : {})),
+      rows(p, (_, __, i, rep) =>
+        i === 3 && rep === 2 ? { plannerModelId: "claude-opus-5-5" } : {},
+      ),
     );
     expect(r.verdict).toBe("not-shown");
     expect(r.reasons.some((x) => x.startsWith("PLANNER_MISMATCH"))).toBe(true);
   });
 
-  it("stops at component 1 when J verifies fewer tasks: 2 and 3 are not tested", () => {
-    const p = ratified();
+  it("pairs repeat r with repeat r: failures on different repeats of a task are two discordant pairs", () => {
+    const p = committed();
+    const r = run(
+      p,
+      rows(p, (_, arm, i, rep) => {
+        if (i !== 0) return {};
+        if (arm === J_CAPABILITY_ARM && rep === 1) return { grade: "fail" };
+        if (arm === J_BASELINE_ARM && rep === 2) return { grade: "fail" };
+        return {};
+      }),
+    );
+    expect(r.table).toEqual({ a: 178, b: 1, c: 1, d: 0 });
+    expect(r.bar[0]?.estimate).toBe(0);
+  });
+
+  it("stops at component 1 when J verifies fewer trials: 2 and 3 are not tested", () => {
+    const p = committed();
     const r = run(
       p,
       rows(p, (_, arm, i) => (arm === J_CAPABILITY_ARM && i < 10 ? { grade: "fail" } : {})),
     );
-    expect(r.table).toEqual({ a: 80, b: 10, c: 0, d: 0 });
+    expect(r.table).toEqual({ a: 160, b: 20, c: 0, d: 0 });
     expect(statusOf(r)).toEqual(["not-shown", "not-tested", "not-tested"]);
     expect(r.bar[0]?.upperBound).toBeGreaterThan(0.05);
-    expect(r.bar[0]?.estimate).toBeCloseTo(10 / 90, 12);
+    expect(r.bar[0]?.estimate).toBeCloseTo(20 / 180, 12);
     expect(r.verdict).toBe("not-shown");
   });
 
-  it("uses the margin as a strict bound: a bound just under 5 points is shown, the same data with a 4-point margin is not", () => {
-    const p = ratified();
-    const data = rows(p, (_, arm, i) =>
-      arm === J_CAPABILITY_ARM && i === 0 ? { grade: "fail" } : {},
-    );
+  it("uses the margin as a strict bound: just under 5 points is shown, the same data at a 4-point margin is not", () => {
+    const p = committed();
+    const data = rows(p, jFirstRep(4, { grade: "fail" }));
     const r = run(p, data);
+    expect(r.table).toEqual({ a: 176, b: 4, c: 0, d: 0 });
     const ub = r.bar[0]?.upperBound as number;
-    expect(ub).toBeGreaterThan(0.04);
+    expect(ub).toBeGreaterThan(0.045);
     expect(ub).toBeLessThan(0.05);
     expect(r.bar[0]?.status).toBe("shown");
     const tight = structuredClone(p);
@@ -367,7 +444,7 @@ describe("j-v1 analysis: the bar", () => {
   });
 
   it("follows the fixed sequence: a slower J stops at component 2 even with fewer steps", () => {
-    const p = ratified();
+    const p = committed();
     const r = run(
       p,
       rows(p, (_, arm) => (arm === J_CAPABILITY_ARM ? { wallMs: 95_000 } : {})),
@@ -378,7 +455,7 @@ describe("j-v1 analysis: the bar", () => {
   });
 
   it("component 3 fails on its own when J is faster but takes more steps", () => {
-    const p = ratified();
+    const p = committed();
     const r = run(
       p,
       rows(p, (_, arm) => (arm === J_CAPABILITY_ARM ? { steps: 12 } : {})),
@@ -386,36 +463,30 @@ describe("j-v1 analysis: the bar", () => {
     expect(statusOf(r)).toEqual(["shown", "shown", "not-shown"]);
   });
 
-  it("charges every trial's time to the ratio, failed trials included, not only verified ones", () => {
-    // J: 85 verified fast trials and 5 failed slow ones. Over verified trials alone J looks
-    // faster (40 s vs 90 s); over ALL trials J spends 85·40 + 5·900 s for 85 verified.
-    const p = ratified();
-    const r = run(
-      p,
-      rows(p, (_, arm, i) => {
-        if (arm !== J_CAPABILITY_ARM) return {};
-        return i < 5 ? { grade: "fail", wallMs: 900_000 } : {};
-      }),
-    );
+  it("charges every trial's time to the ratio, failed trials and both repeats included", () => {
+    // J: 170 verified fast trials and 10 failed slow ones. Over verified trials alone J looks
+    // faster (40 s vs 90 s); over ALL trials J spends 170·40 + 10·900 s for 170 verified.
+    const p = committed();
+    const r = run(p, rows(p, jFirstRep(10, { grade: "fail", wallMs: 900_000 })));
     const point = r.bar[1]?.estimate as number;
-    expect(point).toBeCloseTo((85 * 40_000 + 5 * 900_000) / 85 / 90_000, 12);
+    expect(point).toBeCloseTo((170 * 40_000 + 10 * 900_000) / 170 / 90_000, 12);
     expect(point).toBeGreaterThan(1);
   });
 
   it("a harness fault or boundary breach is counted in the denominator and never verified", () => {
-    const p = ratified();
+    const p = committed();
     const r = run(
       p,
-      rows(p, (_, arm, i) => {
-        if (arm !== J_CAPABILITY_ARM) return {};
+      rows(p, (_, arm, i, rep) => {
+        if (arm !== J_CAPABILITY_ARM || rep !== 1) return {};
         if (i === 0) return { harnessFault: "UNRECORDED_ROUTE" };
         if (i === 1) return { boundaryBreach: true };
         return {};
       }),
     );
     const j = r.arms?.capability;
-    expect(j?.trials).toBe(90);
-    expect(j?.verified).toBe(88);
+    expect(j?.trials).toBe(180);
+    expect(j?.verified).toBe(178);
     expect(j?.harnessFaults).toEqual({ UNRECORDED_ROUTE: 1 });
     expect(j?.boundaryBreaches).toBe(1);
     expect(r.reasons).toContain("GUARDRAIL_BOUNDARY_BREACH: 1 trial(s)");
@@ -423,23 +494,18 @@ describe("j-v1 analysis: the bar", () => {
   });
 
   it("a harness fault alone is not a guardrail breach (it is counted, not voiding the bar)", () => {
-    const p = ratified();
-    const r = run(
-      p,
-      rows(p, (_, arm, i) =>
-        arm === J_CAPABILITY_ARM && i === 0 ? { harnessFault: "UNRECORDED_ROUTE" } : {},
-      ),
-    );
+    const p = committed();
+    const r = run(p, rows(p, jFirstRep(1, { harnessFault: "UNRECORDED_ROUTE" })));
     expect(r.reasons.some((x) => x.startsWith("GUARDRAIL"))).toBe(false);
-    expect(r.arms?.capability.verified).toBe(89);
+    expect(r.arms?.capability.verified).toBe(179);
   });
 
   it("reports false done and ungraded trials, and a pass without a done claim is not verified", () => {
-    const p = ratified();
+    const p = committed();
     const r = run(
       p,
-      rows(p, (_, arm, i) => {
-        if (arm !== J_BASELINE_ARM) return {};
+      rows(p, (_, arm, i, rep) => {
+        if (arm !== J_BASELINE_ARM || rep !== 1) return {};
         if (i === 0) return { grade: "fail" };
         if (i === 1) return { grade: "ungradable" };
         if (i === 2) return { claim: "not-done" };
@@ -450,13 +516,13 @@ describe("j-v1 analysis: the bar", () => {
     const b = r.arms?.baseline;
     expect(b?.falseDone).toBe(2);
     expect(b?.ungraded).toBe(1);
-    expect(b?.verified).toBe(86);
-    expect(r.table).toEqual({ a: 86, b: 0, c: 4, d: 0 });
+    expect(b?.verified).toBe(176);
+    expect(r.table).toEqual({ a: 176, b: 0, c: 4, d: 0 });
     expect(b?.verifiedRateWilson95[0]).toBeLessThan(b?.verifiedRate as number);
   });
 
-  it("an arm with no verified task gives no per-verified figure and an infinite bound", () => {
-    const p = ratified();
+  it("an arm with no verified trial gives no per-verified figure and an infinite bound", () => {
+    const p = committed();
     const r = run(
       p,
       rows(p, (_, arm) => (arm === J_BASELINE_ARM ? { claim: "no-claim" } : {})),
@@ -468,10 +534,33 @@ describe("j-v1 analysis: the bar", () => {
   });
 
   it("is deterministic: the same pack gives the same report", () => {
-    const p = ratified();
-    const data = rows(p, (_, arm, i) =>
-      arm === J_CAPABILITY_ARM ? { wallMs: 30_000 + 997 * i } : {},
+    const p = committed();
+    const data = rows(p, (_, arm, i, rep) =>
+      arm === J_CAPABILITY_ARM ? { wallMs: 30_000 + 997 * i + 13 * rep } : {},
     );
     expect(run(p, data)).toEqual(run(p, data));
+  });
+});
+
+describe("j-v1 analysis: option (b) fallback (7-point margin, k = 1)", () => {
+  it("analyses a k = 1 pack with n = 90 pairs and the 7-point margin", () => {
+    const p = optionB();
+    const ok = run(p, rows(p));
+    expect(ok.verdict).toBe("shown");
+    expect(ok.n).toBe(90);
+    expect(ok.bar[0]?.threshold).toBe(0.07);
+    // Equality with ~11% discordant: about 6.2 points, under 7 (it fails the 5-point margin).
+    const equal = run(
+      p,
+      rows(p, (_, arm, i) => {
+        if (i < 5) return arm === J_CAPABILITY_ARM ? { grade: "fail" } : {};
+        if (i < 10) return arm === J_BASELINE_ARM ? { grade: "fail" } : {};
+        if (i < 14) return { grade: "fail" };
+        return {};
+      }),
+    );
+    expect(equal.table).toEqual({ a: 76, b: 5, c: 5, d: 4 });
+    expect(equal.bar[0]?.upperBound).toBeGreaterThan(0.05);
+    expect(equal.bar[0]?.status).toBe("shown");
   });
 });

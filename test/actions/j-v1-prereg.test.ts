@@ -34,7 +34,7 @@ const SPEC = readFileSync("docs/product/capability-spec.md", "utf8");
 const flat = (s: string) => s.replace(/\s+/g, " ");
 
 /** The pre-registration hash, stated in the README and the PR. Changing j-v1 changes this. */
-const J_V1_PREREG_HASH = "5b749c6563d8a56d911782bb3d4b0bc64c302d81093229b058d67a53e157549e";
+const J_V1_PREREG_HASH = "989cbbc20ee3d53c59b3dfbd5a77952e7f77a6c966996f7666ca284dc805690c";
 
 let tmp: string | null = null;
 afterEach(() => {
@@ -131,15 +131,41 @@ describe("j-v1 pre-registration (capability spec §3)", () => {
     expect(steps.resamples).toBe(10_000);
     expect(flat(SPEC)).toContain("paired bootstrap over tasks, 10,000 resamples");
     expect(RAW.bar.alphaOneSided).toBe(0.05);
+    // The spec's k = 1 is replaced by the lead's ruling (k = 2), recorded below.
     expect(j).toContain("fc-v1 satisfiable tasks (90), k = 1.");
-    expect(RAW.runsPerTaskPerArm).toBe(1);
+    expect(RAW.runsPerTaskPerArm).toBe(2);
   });
 
-  it("flags the 5-point margin as lead ruling pending (spec §6), not ratified", () => {
-    expect(RAW.leadRulingPending).toEqual(["bar.sequence[0].marginPoints"]);
-    expect(RAW.status).toMatch(/^proposed, not ratified/);
+  it("records the lead's 05:39Z ruling on spec §6's margin question: option (c), nothing pending", () => {
+    expect(RAW.leadRulingPending).toEqual([]);
+    expect(RAW.leadRulings).toHaveLength(1);
+    const [ruling] = RAW.leadRulings;
+    expect(ruling.at).toBe("2026-11-27T05:39Z");
+    expect(ruling.ruling).toMatch(/^option \(c\): keep the 5-point non-inferiority margin/);
+    expect(ruling.ruling).toMatch(/k = 2 repeats per task/);
+    expect(ruling.condition).toMatch(/option \(b\), a 7-point margin at k = 1, before freezing/);
+    expect(ruling.applied).toMatch(/^option \(c\)/);
+    expect(RAW.status).toMatch(/^lead ruling 2026-11-27 05:39Z recorded/);
     expect(SPEC).toContain("Whether the 5-point non-inferiority margin (J, L) is right for n = 90");
-    expect(README).toMatch(/lead ruling pending/i);
+    expect(RAW.spec.openQuestion).toMatch(/^§6: whether the 5-point/);
+    expect(README).toMatch(/05:39Z/);
+  });
+
+  it("estimates the VM-hours at k = 2 from the repo's measured per-trial figures", () => {
+    const v = RAW.vmHoursEstimate;
+    expect(v.trials).toBe(RAW.taskSet.taskIds.length * 2 * RAW.runsPerTaskPerArm);
+    expect(v.trials).toBe(360);
+    expect(v.secondsPerTrial).toBe(140 + 100 + 135);
+    expect(v.vmHours).toBe((v.trials * v.secondsPerTrial) / 3600);
+    expect(v.ifTrialTimeDoubles.secondsPerTrial).toBe(140 + 100 + 2 * 135);
+    expect(v.ifTrialTimeDoubles.vmHours).toBe((360 * 510) / 3600);
+    expect(v.atOptionB.trials).toBe(180);
+    expect(v.atOptionB.vmHours).toBe((180 * 375) / 3600);
+    const source = flat(readFileSync("docs/baseline/screenshot-agent.md", "utf8"));
+    expect(source).toContain("cold reset **140 s**");
+    expect(source).toContain("140 + 100 + ~135 = 375 s");
+    expect(v.trackL).toMatch(/Linux path/);
+    expect(README).toContain("37.5");
   });
 
   it("pairs hcu+shell+J with hcu+shell on the shared harness's parameters", () => {

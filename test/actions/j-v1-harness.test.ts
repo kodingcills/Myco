@@ -149,11 +149,12 @@ describe("the j-v1 harness pieces fit the frozen analysis", () => {
     const r = analyzeJV1({ prereg, packPreregHash: hash, rows });
     expect(r.computed).toBe(true);
     expect(r.preregHash).toBe(hash);
+    expect(r.n).toBe(180);
+    expect(r.reasons.some((x) => x.startsWith("LEAD_RULING_PENDING"))).toBe(false);
     expect(r.verdict).toBe("not-shown");
     expect(r.reasons).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/^LEAD_RULING_PENDING/),
-        expect.stringMatching(/^SIMULATED: 180 row/),
+        expect.stringMatching(/^SIMULATED: 360 row/),
         expect.stringMatching(/^PLANNER_MISMATCH/),
       ]),
     );

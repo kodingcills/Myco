@@ -3,8 +3,29 @@
   "track": "J",
   "version": "j-v1",
   "capability": "Fastest reliable action path",
-  "status": "proposed, not ratified: frozen for review; no run has used it",
-  "leadRulingPending": ["bar.sequence[0].marginPoints"],
+  "status": "lead ruling 2026-11-27 05:39Z recorded (margin and k); frozen for review; no run has used it",
+  "leadRulingPending": [],
+  "leadRulings": [
+    {
+      "at": "2026-11-27T05:39Z",
+      "question": "capability spec §6: whether the 5-point non-inferiority margin (J, L) is right for n = 90",
+      "ruling": "option (c): keep the 5-point non-inferiority margin at n = 90 tasks and pre-register k = 2 repeats per task per arm; the same margin rule applies to track L",
+      "condition": "estimate the VM-hours J needs at k = 2 before freezing (vmHoursEstimate); if that would delay the R1 pilot, the hcu+shell head-to-head, the corrections A/B or the 90 s demo, switch to option (b), a 7-point margin at k = 1, before freezing and never after any data",
+      "applied": "option (c): marginPoints 5, runsPerTaskPerArm 2 (see vmHoursEstimate.criticalPath)",
+      "source": "coordinator relay on PR #636, comment 7210826863"
+    }
+  ],
+  "vmHoursEstimate": {
+    "basis": "measured M1 figures on the single Windows VM (docs/baseline/screenshot-agent.md, budget): cold reset 140 s + redeploy ~100 s + trial ~135 s = 375 s per trial, one reset per trial; the Ultra trial time is not measured yet",
+    "trials": 360,
+    "trialsFormula": "90 tasks x 2 arms x k = 2",
+    "secondsPerTrial": 375,
+    "vmHours": 37.5,
+    "ifTrialTimeDoubles": { "secondsPerTrial": 510, "vmHours": 51 },
+    "atOptionB": { "trials": 180, "vmHours": 18.75 },
+    "trackL": "track L runs on the Linux path (spec §2 L), not the Windows VM; its estimate belongs to L's own pre-registration",
+    "criticalPath": "Spec §4 and m2-plan §7.0 give a capability track VM time only when the critical path does not need the VM, and J's Windows arm also waits for the guest-side router (fast-path.md §6). Run that way, J's VM-hours come after and around the R1 pilot, the hcu+shell head-to-head, the corrections A/B and the 90 s demo and do not delay them, so option (c) applies. If the coordinator's VM schedule shows otherwise before this pre-registration is frozen, j-v1 switches to option (b) before freezing."
+  },
   "spec": {
     "path": "docs/product/capability-spec.md",
     "section": "§2 J. Fastest reliable action path",
@@ -30,7 +51,7 @@
   "retryBudget": 0,
   "wallClockBudget": null,
   "gate": "absent in both arms; a done claim is the arm's claim (rows are gate-less, §1.1)",
-  "runsPerTaskPerArm": 1,
+  "runsPerTaskPerArm": 2,
   "taskSet": {
     "version": "fc-v1",
     "manifestPath": "benchmark/false-completion/fc-v1/manifest.json",
@@ -151,7 +172,7 @@
       {
         "id": "verified-rate-non-inferiority",
         "test": "newcombe-paired-score-upper",
-        "statistic": "hcu+shell verified rate minus hcu+shell+J verified rate, paired by task",
+        "statistic": "hcu+shell verified rate minus hcu+shell+J verified rate over the 180 (task, repeat) pairs: repeat r of one arm with repeat r of the other",
         "confidenceOneSided": 0.95,
         "marginPoints": 5,
         "shownWhen": "the one-sided 95% upper bound is strictly below marginPoints / 100"
@@ -191,10 +212,10 @@
   ],
   "analysis": {
     "script": "src/actions/j-v1-analysis.ts",
-    "sha256": "515c2ad3bbbee69a9b0443483c98e2c661670554a89d010076b74ba1026a3a01",
+    "sha256": "cd06db5d19e19e09bf05354c546c23405c5867badc163603e15efb92f81db3e6",
     "entry": "analyzeJV1",
     "rowSchema": "myco.capability.j-v1.trial/1",
-    "assignment": "jV1Schedule: seeded ABBA order over task pairs"
+    "assignment": "jV1Schedule: seeded task order; each task one ABBA block of 2k trials, alternating ABBA / BAAB over task positions"
   },
   "evidenceUse": "experiment rows only; never R1 evidence (capability spec §3 item 4)"
 }
