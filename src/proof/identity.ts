@@ -48,7 +48,12 @@
  */
 import { readFileSync } from "node:fs";
 import { homedir, hostname, userInfo } from "node:os";
-import { stripAccents } from "../export-guard/fold.ts";
+import {
+  IDENTITY_WORD_MIN_CHARS,
+  identityFold,
+  identityNeedles,
+  caseFold as sharedCaseFold,
+} from "../export-guard/identity-words.ts";
 import { EMPTY_REDACTION, findLeaks } from "./backstop.ts";
 
 /** What a guard hit is, never what it matched. */
@@ -80,31 +85,24 @@ export function mergeIdentity(...ctxs: readonly (IdentityContext | undefined)[])
 /** Needles shorter than this (after normalisation) are not matched. */
 export const MIN_IDENTITY = 2;
 /** A word of a multi-word name is matched alone from this length. */
-export const MIN_NAME_PART = 3;
+export const MIN_NAME_PART = IDENTITY_WORD_MIN_CHARS;
 
 /**
  * Full Unicode case folding by round trip: upper-case then lower-case, repeated until the
  * value stops changing (at most a few passes). `ẞ` needs two: `ẞ` -> `ß` -> `ss`.
  */
-export function caseFold(text: string): string {
-  let cur = text.normalize("NFKC");
-  for (let i = 0; i < 4; i++) {
-    const next = cur.toUpperCase().toLowerCase().normalize("NFKC");
-    if (next === cur) break;
-    cur = next;
-  }
-  // JS lower-casing picks final `ς` or `σ` from context, so `Νίκος` alone ends in `ς` but
-  // `ΝίκοςTrial` folds to `...σtrial`. Map `ς` to `σ` so both sides agree (#562 r1 nit).
-  return cur.replace(/ς/g, "σ");
-}
+// JS lower-casing picks final `ς` or `σ` from context, so `Νίκος` alone ends in `ς` but
+// `ΝίκοςTrial` folds to `...σtrial`; the shared fold maps `ς` to `σ` so both sides agree.
+export const caseFold = (text: string): string => sharedCaseFold(text);
 
 /**
  * NFKC, full case folding, accents stripped (#579 O2, `stripAccents`: NFD, combining marks
  * removed, `ø`/`ł`/`æ`… transliterated, so `josé` matches `JOSE` and `reña` matches `rena`),
- * then letters and digits only. Both sides (the configured needle and the value) fold.
+ * then letters and digits only. Both sides (the configured needle and the value) fold. The
+ * fold shared by every export surface (`src/export-guard/identity-words.ts`, #580 O1).
  */
 export function identityNormal(text: string): string {
-  return stripAccents(caseFold(text)).replace(/[^\p{L}\p{N}]+/gu, "");
+  return identityFold(text);
 }
 
 export interface IdentityGuard {
@@ -123,9 +121,10 @@ export function compileIdentity(ctx: IdentityContext): IdentityGuard {
     if (n.length >= min && !needles.has(n)) needles.set(n, cls);
   };
   for (const name of ctx.names) {
-    add(name, "identity");
-    const words = name.trim().split(/\s+/);
-    if (words.length > 1) for (const w of words) add(w, "identity", MIN_NAME_PART);
+    // The whole name and each word of 3+ characters of a multi-word one: the rule shared by
+    // every export surface (#580 O1, `src/export-guard/identity-words.ts`).
+    for (const n of identityNeedles(name, MIN_IDENTITY))
+      if (!needles.has(n)) needles.set(n, "identity");
     const label = name.split(".")[0];
     if (label !== undefined && label !== name) add(label, "identity");
   }
