@@ -332,9 +332,11 @@ run (#546). The halt is sticky, in the same way as a gate miss:
    before the trial's `ab-trials.jsonl` record and its grade. The record holds the arm, trial,
    task, the recorded boot class (`fast`, `null` or anything else) and the rule.
 2. On every invocation the runner re-derives the boot class of each decided trial in a live run
-   from `ab-trials.jsonl`. A trial with no record, or with a record that is not exactly `cold`,
-   gets its incident record if it is missing. A trial re-recorded after a crash has an unknown
-   boot class (`null`), so it halts too.
+   from `ab-trials.jsonl`. A trial with no record, or with any record that is not exactly `cold`,
+   gets its incident record if it is missing. "Not exactly `cold`" covers a missing field, `null`,
+   `fast`, an unknown string and a non-string, and one record never masks another: a trial with
+   one `cold` and one missing-field record halts. A trial re-recorded after a crash has an
+   unknown boot class (`null`), so it halts too.
 3. Every later invocation refuses (exit 3) until the record is acknowledged with `ack-incident`,
    exactly as for a gate miss (`--incident incident-boot-<trialKey>`). Nothing clears it
    automatically.
@@ -342,3 +344,9 @@ run (#546). The halt is sticky, in the same way as a gate miss:
    refuse a live pack whose trials are not all recorded cold boots, so do not ack and carry on
    unless the lead has ruled how the stage is to be completed. A Stage 0 boot-class incident
    also blocks Stage 1, like any Stage 0 incident.
+5. Only decided trials are checked. A trial that ends as a harness fault never reaches the
+   decided-trial hook, so its boot class is never checked: it is not data, and the
+   pre-registration's "Harness faults, ledger, resets" section already splits faults (closed,
+   counted against the fault budget and re-run) from decided trials (the only ones whose reset
+   must be a recorded cold boot). This is by design. If the re-run is decided, its own reset is
+   checked.

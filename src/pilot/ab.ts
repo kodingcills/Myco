@@ -720,6 +720,24 @@ function bootClassesByKey(path: string): Map<string, unknown[]> {
 }
 
 /**
+ * Whether a trial's recorded boot classes (every `ab-trials.jsonl` record for it) make it a
+ * recorded cold boot: true only when there is at least one record and EVERY record says exactly
+ * `"cold"`. A missing field (`undefined`), `null`, `"fast"`, an unknown string or a non-string
+ * anywhere in the list makes it not cold, and one record never masks another (#563 round 1 D1:
+ * a `find`-based check returned the `undefined` element itself and so passed it as cold).
+ * `recorded` is the first non-cold value (`null` for a missing field or no record), for the
+ * incident record and the halt message.
+ */
+export function bootVerdict(classes: readonly unknown[]): {
+  readonly cold: boolean;
+  readonly recorded: unknown;
+} {
+  const badIdx = classes.findIndex((c) => c !== "cold");
+  if (classes.length > 0 && badIdx < 0) return { cold: true, recorded: "cold" };
+  return { cold: false, recorded: badIdx < 0 ? null : (classes[badIdx] ?? null) };
+}
+
+/**
  * Why a live pack's rows are not all recorded cold boots: each row needs at least one
  * `ab-trials.jsonl` record and every record for it must say exactly `"cold"` (`"fast"`, `null`,
  * a missing field or any other value is refused). Pure; export and check-pack both apply it.
@@ -736,7 +754,7 @@ export function bootClassProblems(
       out.push(
         `${row.trialKey} has no ${AB_TRIALS_FILE} record (its reset boot class is unrecorded)`,
       );
-    else if (classes.some((c) => c !== "cold"))
+    else if (!bootVerdict(classes).cold)
       out.push(
         `${row.trialKey}'s reset boot class is ${classes.map(bootClassText).join("/")}, not a recorded cold boot`,
       );
@@ -772,7 +790,13 @@ export function recordDecided(
   const prior = readJsonl(trialsPath).find(
     (r) => (r as { trialKey?: string }).trialKey === d.trialKey,
   ) as AbTrialRecord | undefined;
-  const resetBootClass = prior?.resetBootClass ?? d.resetBootClass;
+  // With record(s) already on disk (a re-record after a crash), every one of them decides the
+  // class, strictly: a damaged record with no field is not cold and cannot fall back to the
+  // reset's own report, and a later non-cold record is never masked by an earlier one.
+  const priorBoot =
+    prior === undefined ? null : bootVerdict(bootClassesByKey(trialsPath).get(d.trialKey) ?? []);
+  const resetBootClass: unknown =
+    priorBoot === null ? d.resetBootClass : priorBoot.cold ? "cold" : priorBoot.recorded;
   // A live non-cold reset: its sticky record goes to disk before the trial record and grade.
   if (ctx.live && resetBootClass !== "cold") {
     const inc = ensureBootIncident(
@@ -790,7 +814,7 @@ export function recordDecided(
       trialKey: d.trialKey,
       arm: ctx.arm,
       stage: ctx.stage,
-      resetBootClass,
+      resetBootClass: d.resetBootClass,
       hostLoad1mStart: Math.max(0, ctx.load1m()),
       graderStatus: g.status,
       gateVerdict: d.armRow.gate?.verdict ?? null,
@@ -869,11 +893,10 @@ export function reconcileGrades(
     // A live graded trial's boot class, re-derived from its ab-trials.jsonl record(s): a
     // missing record, or any record that is not exactly "cold", needs its sticky incident.
     if (ctx.live) {
-      const classes = boots.get(t.trialKey) ?? [];
-      const bad = classes.length === 0 ? null : classes.find((c) => c !== "cold");
-      if (classes.length === 0 || bad !== undefined) {
-        const inc = ensureBootIncident(ctx, t, bad ?? null, "re-derived on resume");
-        if (!inc.acknowledged) halt ??= bootReason(t.trialKey, bad ?? null, inc.path);
+      const boot = bootVerdict(boots.get(t.trialKey) ?? []);
+      if (!boot.cold) {
+        const inc = ensureBootIncident(ctx, t, boot.recorded, "re-derived on resume");
+        if (!inc.acknowledged) halt ??= bootReason(t.trialKey, boot.recorded, inc.path);
       }
     }
   }

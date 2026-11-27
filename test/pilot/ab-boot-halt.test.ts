@@ -8,7 +8,7 @@
  * hook level (`HookContext.live`) exactly as the runner's per-trial hook sees it. No model, no
  * `claude` process, no VM, $0.
  */
-import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { BenchmarkArmRow } from "../../src/benchmark/check.ts";
@@ -220,6 +220,93 @@ describe("a live non-cold reset is a sticky halt (crash-safe, ack-only)", () => 
     expect(incidentStatus(t4.root)).toEqual([]);
   });
 
+  it("#563 D1: any record that is not exactly cold halts on resume, and none masks another", {
+    timeout: 60_000,
+  }, async () => {
+    const t = await oneDecidedTrial("myco-ab-boot-d1-");
+    expect(
+      recordDecided(liveCtx(t.root, t.arm), { ...t.decided, resetBootClass: "cold" }),
+    ).toBeNull();
+    const p = join(t.root, t.arm, "ab-trials.jsonl");
+    const [coldLine] = readFileSync(p, "utf8").split("\n");
+    const cold = JSON.parse(coldLine as string) as Record<string, unknown>;
+    const { resetBootClass: _drop, ...noField } = cold;
+    const cases: readonly [string, readonly Record<string, unknown>[], RegExp][] = [
+      ["no resetBootClass field", [noField], /boot class is unrecorded/],
+      ["null", [{ ...cold, resetBootClass: null }], /boot class is unrecorded/],
+      [
+        "a missing-field record, then fast",
+        [noField, { ...cold, resetBootClass: "fast" }],
+        /boot class is unrecorded/,
+      ],
+      [
+        "fast, then a missing-field record",
+        [{ ...cold, resetBootClass: "fast" }, noField],
+        /boot class is fast/,
+      ],
+      ["cold, then a missing-field record", [cold, noField], /boot class is unrecorded/],
+      ["an unknown string", [{ ...cold, resetBootClass: "warm" }], /boot class is warm/],
+      ["a non-string", [{ ...cold, resetBootClass: 1 }], /boot class is 1/],
+    ];
+    for (const [name, records, reason] of cases) {
+      rmSync(join(t.root, "incidents"), { recursive: true, force: true });
+      writeFileSync(p, records.map((r) => `${JSON.stringify(r)}\n`).join(""));
+      for (let i = 0; i < 2; i++) {
+        expect(reconcileGrades(liveCtx(t.root, t.arm), PUBLISHED), name).toMatch(reason);
+        expect(() => assertNoPendingIncidents(t.root), name).toThrow(/unacknowledged integrity/);
+      }
+      expect(ackFiles(t.root), name).toEqual([]);
+      const rec = JSON.parse(
+        readFileSync(join(t.root, "incidents", `${bootIncidentId(t.key)}.json`), "utf8"),
+      );
+      expect(rec.resetBootClass, name).not.toBe("cold");
+      ack(t.root, bootIncidentId(t.key));
+      expect(reconcileGrades(liveCtx(t.root, t.arm), PUBLISHED), name).toBeNull();
+      expect(() => assertNoPendingIncidents(t.root), name).not.toThrow();
+    }
+    // A re-record over a damaged record (no field) does not fall back to the reset's "cold".
+    rmSync(join(t.root, "incidents"), { recursive: true, force: true });
+    writeFileSync(p, `${JSON.stringify(noField)}\n`);
+    expect(recordDecided(liveCtx(t.root, t.arm), { ...t.decided, resetBootClass: "cold" })).toMatch(
+      /boot class is unrecorded/,
+    );
+    // All cold (two records): no incident.
+    rmSync(join(t.root, "incidents"), { recursive: true, force: true });
+    writeFileSync(p, `${JSON.stringify(cold)}\n${JSON.stringify(cold)}\n`);
+    expect(reconcileGrades(liveCtx(t.root, t.arm), PUBLISHED)).toBeNull();
+    expect(incidentStatus(t.root)).toEqual([]);
+  });
+
+  it("#563 N1: junk at the record path, a record edited to cold, or another stage never clears", {
+    timeout: 60_000,
+  }, async () => {
+    const t = await oneDecidedTrial("myco-ab-boot-n1-");
+    const id = bootIncidentId(t.key);
+    const path = join(t.root, "incidents", `${id}.json`);
+    // Junk already at the record path: never overwritten, never ackable, the run stays halted.
+    mkdirSync(join(t.root, "incidents"), { recursive: true });
+    writeFileSync(path, "junk\n");
+    expect(recordDecided(liveCtx(t.root, t.arm), { ...t.decided, resetBootClass: "fast" })).toMatch(
+      /HALTED/,
+    );
+    expect(readFileSync(path, "utf8")).toBe("junk\n");
+    expect(() => ack(t.root, id)).toThrow(/not a valid/);
+    expect(reconcileGrades(liveCtx(t.root, t.arm), PUBLISHED)).toMatch(/HALTED/);
+    expect(() => assertNoPendingIncidents(t.root)).toThrow(/unacknowledged integrity/);
+    // The record rebuilt valid, then edited to say cold: refused, not ackable, still halted.
+    rmSync(path);
+    expect(reconcileGrades(liveCtx(t.root, t.arm), PUBLISHED)).toMatch(/boot class is fast/);
+    const rec = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify({ ...rec, resetBootClass: "cold" }));
+    expect(() => ack(t.root, id)).toThrow(/not a valid/);
+    expect(reconcileGrades(liveCtx(t.root, t.arm), PUBLISHED)).toMatch(/HALTED/);
+    // The record rewritten to name another stage: an ack of it does not clear this stage's halt.
+    writeFileSync(path, JSON.stringify({ ...rec, stage: 1 }));
+    ack(t.root, id);
+    expect(incidentStatus(t.root)[0]?.acknowledged).toBe(true);
+    expect(reconcileGrades(liveCtx(t.root, t.arm), PUBLISHED)).toMatch(/HALTED/);
+  });
+
   it("a stale ack (wrong sha) or a record for another arm does not clear the halt", {
     timeout: 60_000,
   }, async () => {
@@ -281,6 +368,24 @@ describe("a live pack refuses any reset that is not a recorded cold boot", () =>
     ["unknown value", (l) => Object.assign(l[0] as object, { resetBootClass: "warm" })],
     ["missing record", (l) => l.splice(0, 1)],
     ["a second, fast record", (l) => l.push({ ...(l[0] as object), resetBootClass: "fast" })],
+    // #563 D1: a missing field next to a fast record, either order, is refused; so is a non-string.
+    [
+      "a missing-field record, then fast",
+      (l) => {
+        const fast = { ...(l[0] as object), resetBootClass: "fast" };
+        delete (l[0] as Record<string, unknown>).resetBootClass;
+        l.splice(1, 0, fast);
+      },
+    ],
+    [
+      "fast, then a missing-field record",
+      (l) => {
+        const { resetBootClass: _drop, ...noField } = l[0] as Record<string, unknown>;
+        Object.assign(l[0] as object, { resetBootClass: "fast" });
+        l.splice(1, 0, noField);
+      },
+    ],
+    ["a non-string", (l) => Object.assign(l[0] as object, { resetBootClass: 1 })],
   ];
 
   it("export refuses a live run with a non-cold boot; a simulated run is unaffected", {
