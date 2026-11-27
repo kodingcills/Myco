@@ -29,6 +29,11 @@
  *  - a transient 429 / 529 / overloaded is a `PlannerTransient`: the runner backs off, bounded;
  *  - an unclassified error result or unreadable output is a `SubscriptionPlannerFailure` for
  *    this trial only, with a code the runner's two-identical-failures rule counts.
+ * A call that DID complete normally is the agent's turn, with one fail-closed exception (round
+ * 3, verifier N1, #598's R2-D3b): a clean result with no parseable decision whose text names
+ * the usage quota (`USAGE_LIMIT_TEXT`) halts `planner-usage-limit`. A result with a valid
+ * decision is never reclassified. With no result event, stdout and stderr are classified
+ * together (N2, #598's R2-D3a).
  * A halt is final for the run (no retry loop). An `apiKeySource` other than `none` on ANY
  * message halts `planner-api-key-path`, whatever the call's outcome (as #598).
  *
@@ -71,6 +76,7 @@ import {
   PER_TRIAL_CLASSES,
   reportsApiKeySource,
   type SubscriptionFaultClass,
+  USAGE_LIMIT_TEXT,
 } from "./subscription-faults.ts";
 
 /** The planner model: the myco-gate arm's, so the head-to-head compares one model. */
@@ -166,7 +172,8 @@ export class SubscriptionPlannerFailure extends Error {
 /**
  * A transient limit (HTTP 429 / 529, overloaded, "rate limit", "too many requests") with no
  * usage-quota wording. The runner backs off and re-runs the trial at most
- * `MAX_TRANSIENT_RETRIES_PER_TRIAL` times per invocation, never spending an attempt.
+ * `MAX_TRANSIENT_RETRIES_PER_TRIAL` times in total in the run directory (counted from the
+ * ledger, so `--resume` cannot reset it), never spending an attempt.
  */
 export class PlannerTransient extends Error {
   readonly code = "planner-rate-limit";
@@ -271,7 +278,8 @@ export function readPlannerCall(
   }
   if (!completed) {
     const results = all.filter((m) => m.type === "result");
-    const cls = failedCallClass(all, results[results.length - 1] ?? null, stderr);
+    // No result event: the raw stdout (even unparseable) is classified with stderr (N2).
+    const cls = failedCallClass(all, results[results.length - 1] ?? null, stderr, stdout);
     if (PER_TRIAL_CLASSES.has(cls))
       throw new SubscriptionPlannerFailure(`planner-${cls}`, `the CLI call failed (${cls})`);
     if (cls === "rate-limit")
@@ -281,6 +289,21 @@ export function readPlannerCall(
       `the CLI reported a ${cls} fault; no retry`,
     );
   }
+  const results = all.filter((m) => m.type === "result");
+  const result = results[results.length - 1] ?? {};
+  const text = typeof result.result === "string" ? result.result : "";
+  // The one narrow, fail-closed exception to "a clean result is the agent's" (round-3 verifier
+  // N1; lead rulings 02:18Z and 03:05Z; #598's R2-D3b at fc01e69a, where a claim line plays the
+  // part a parseable decision plays here): a clean result with NO parseable decision whose text
+  // names the subscription's usage quota is the CLI reporting the quota, not an agent turn. It
+  // halts `planner-usage-limit` (exit 7; no row, nothing counted, no further call). The usage
+  // vocabulary has no bare numbers, so task data (qty 401 / 403 / 429) cannot trigger it, and a
+  // result WITH a valid decision is never reclassified.
+  if (parseHcuShellDecision(text.trim()) === undefined && USAGE_LIMIT_TEXT.test(text))
+    throw new PlannerHalt(
+      "planner-usage-limit",
+      "the CLI returned a clean result with no decision whose text names the usage limit; no retry",
+    );
   const init = all.find((m) => m.type === "system" && m.subtype === "init");
   if (init === undefined || typeof init.apiKeySource !== "string")
     throw new PlannerHalt(
@@ -297,9 +320,6 @@ export function readPlannerCall(
       "planner-model-mismatch",
       `the CLI ran ${String(init.model)}, not ${HCU_PLANNER_MODEL}`,
     );
-  const results = all.filter((m) => m.type === "result");
-  const result = results[results.length - 1] ?? {};
-  const text = typeof result.result === "string" ? result.result : "";
   const tokens = parseUsage(result.usage);
   const usage: Usage = {};
   if (tokens !== null) {

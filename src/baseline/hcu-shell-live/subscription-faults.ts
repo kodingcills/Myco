@@ -5,10 +5,12 @@
  * as a per-trial failure.
  *
  * PARITY WITH THE MYCO-GATE ARM (#598). The vocabulary, the structured-class mapping, the
- * precedence and the usage-limit refinement are #598's round-2 classifier
- * (`src/pilot/claude-transport.ts` at #598 head 13fccd96: `ERROR_CLASS`, `classOfStatus`,
- * `USAGE_LIMIT_TEXT`, `RATE_LIMIT_TEXT`, `BILLING_TEXT`, `classOfText`, `structuredClass`,
- * `refineLimit`), matched exactly, because #598 has not merged and this arm must not change the
+ * precedence, the usage-limit refinement and the no-result text (stdout and stderr) are
+ * #598's round-3 classifier (`src/pilot/claude-transport.ts` at #598 head fc01e69a:
+ * `ERROR_CLASS`, `classOfStatus`, `USAGE_LIMIT_TEXT`, `RATE_LIMIT_TEXT`, `BILLING_TEXT`,
+ * `classOfText`, `structuredClass`, `refineLimit`, `interpretResult`), matched exactly in
+ * behaviour (`subscription-faults.test.ts` runs #598's `interpretResult` vectors through
+ * `readPlannerCall`), because #598 has not merged and this arm must not change the
  * pilot runner's behaviour on main (`src/pilot/claude-cli.ts` keeps main's classifier, which
  * the pilot runner on main is reviewed against). `test/baseline/hcu-shell-live/
  * subscription-faults.test.ts` pins #598's vectors, and compares these expressions with the
@@ -109,16 +111,25 @@ function refineLimit(cls: SubscriptionFaultClass, text: string): SubscriptionFau
 
 /**
  * The class of a call that did NOT complete normally. `result` is the last result event (null
- * when there is none). Never called for a clean result: its text is the agent's.
+ * when there is none). Never called for a clean result: its text is the agent's (the one
+ * exception, a clean result with no decision that names the usage quota, is `planner.ts`'s).
+ *
+ * With no result event nothing is an agent outcome, so the raw stdout (parseable or not) is
+ * classified with stderr: `${stdout}\n${stderr}`, as #598's `interpretResult` does at
+ * fc01e69a (R2-D3a; lead ruling 03:05Z: quota wording on plain stdout is classified like
+ * stderr). Round-3 verifier N2.
  */
 export function failedCallClass(
   messages: readonly Record<string, unknown>[],
   result: Record<string, unknown> | null,
   stderr: string,
+  stdout = "",
 ): SubscriptionFaultClass {
   const structured = structuredClass(messages);
   if (result === null) {
-    const cls = structured === null ? classOfText(stderr) : refineLimit(structured, stderr);
+    const noResultText = `${stdout}\n${stderr}`;
+    const cls =
+      structured === null ? classOfText(noResultText) : refineLimit(structured, noResultText);
     return cls ?? "transport-error";
   }
   const text = typeof result.result === "string" ? result.result : "";

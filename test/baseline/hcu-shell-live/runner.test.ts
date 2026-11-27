@@ -173,6 +173,7 @@ describe("a full run keyed to fc-v1", () => {
       failed: 0,
       total: DEMO_TRIALS,
       exhausted: [],
+      transientCapped: [],
     });
     const pack = exportHcuPack(dir, ROOT, TASKS);
     expect(pack).toMatchObject({ armRows: 30, requests: 30, simulated: false, unmeasuredCost: 0 });
@@ -358,6 +359,7 @@ describe("stop rules", () => {
       failed: 2,
       total: 30,
       exhausted: [],
+      transientCapped: [],
     });
     expect(fake.prepared).toHaveLength(2);
     expect(progress(dir)).toMatchObject({

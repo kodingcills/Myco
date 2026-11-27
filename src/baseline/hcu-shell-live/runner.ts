@@ -22,8 +22,12 @@
  *    spending no attempt. Two failed attempts in a row with the same fault signature (no
  *    decided trial between) abort it; the signature is persisted in the ledger and restored on
  *    `--resume` (round-2 verifier D2). A transient 429 / 529 / overloaded backs off (300 s,
- *    doubling to 3600 s) and re-runs the trial at most once per invocation, so it costs at most
- *    one extra cold reset per trial and never spends an attempt; then the run pauses.
+ *    doubling to 3600 s) and re-runs the trial at most once in total in the run directory,
+ *    counted from the ledger so `--resume` cannot reset it (round-3 verifier N3, #598's
+ *    `transientFaultCounts` / `transientCapped`): at most one extra cold reset per trial, never
+ *    an attempt spent. The next transient limit on that trial pauses the run, and later
+ *    invocations never start that trial again in that run directory (they run the others,
+ *    then pause `rate-limit-capped` naming it for the lead).
  *  - **Watchdog files.** `progress.json` (status, pid, counts, the current trial, the last
  *    failure, the stop code) and `live-status.json` (#598's heartbeat shape) are replaced
  *    atomically on every event AND on a 60 s timer, so a hang is told from progress.
@@ -289,6 +293,12 @@ export interface HcuRunResult {
   readonly total: number;
   /** Trials that spent `maxAttemptsPerTrial` attempts: closed for this run directory. */
   readonly exhausted: readonly string[];
+  /**
+   * Open trials the ledger-durable transient cap keeps from starting again (each already had
+   * its one transient re-run in this run directory); the run is `paused` while any remain
+   * (#598's `transientCapped`).
+   */
+  readonly transientCapped: readonly string[];
 }
 
 export const trialKeyFor = (task: FcTask, simulated: boolean) =>
@@ -368,6 +378,20 @@ export function resumeFaultSignature(ledger: readonly LedgerRecord[]): string | 
     else if (r.type === "failed" && r.transient !== true) sig = r.signature ?? r.code;
   }
   return sig;
+}
+
+/**
+ * Transient limits per task, from the whole ledger (every invocation), so the per-trial
+ * transient re-run cap is durable across `--resume` (round-3 verifier N3; lead rulings 02:18Z
+ * and 03:05Z: at most one extra cold reset per trial, in total). #598's `transientFaultCounts`
+ * (`src/pilot/ledger.ts` at fc01e69a).
+ */
+export function transientFaultCounts(ledger: readonly LedgerRecord[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const r of ledger)
+    if (r.type === "failed" && r.transient === true)
+      out.set(r.taskId, (out.get(r.taskId) ?? 0) + 1);
+  return out;
 }
 
 /** Counted (non-transient) failed attempts per task, from the ledger. */
@@ -481,6 +505,11 @@ export async function runHcuShell(opts: HcuRunOptions): Promise<HcuRunResult> {
   for (const r of existing)
     if (r.type === "start") starts.set(r.trialKey, (starts.get(r.trialKey) ?? 0) + 1);
   const exhausted: string[] = [];
+  // Ledger-durable (round-3 verifier N3): the transient limits each trial already had in this
+  // run directory, over every earlier invocation, so `--resume` cannot reset the cap.
+  const transientByTask = transientFaultCounts(existing);
+  const transientCap = simulated ? Number.POSITIVE_INFINITY : opts.plan.maxTransientRetriesPerTrial;
+  const transientCapped: string[] = [];
   let failed = 0;
   // Seeded from the ledger, so the repeat rule survives --resume (round-2 verifier D2).
   let lastFailure: string | null = resumeFaultSignature(existing);
@@ -536,6 +565,7 @@ export async function runHcuShell(opts: HcuRunOptions): Promise<HcuRunResult> {
       failed,
       total: opts.tasks.length,
       exhausted,
+      transientCapped,
     };
   };
   const pause = (code: string, trialKey: string | null, why: string): HcuRunResult => {
@@ -682,9 +712,14 @@ export async function runHcuShell(opts: HcuRunOptions): Promise<HcuRunResult> {
         exhausted.push(task.taskId);
         continue;
       }
+      // Its one transient re-run is already spent in this run directory: never started again
+      // here (no further cold reset); the operator takes it to the lead.
+      if ((transientByTask.get(task.taskId) ?? 0) > transientCap) {
+        transientCapped.push(task.taskId);
+        continue;
+      }
       if (opts.maxTrials !== undefined && ran >= opts.maxTrials) break;
       ran++;
-      let transient = 0;
       for (;;) {
         // Gates before every attempt: the pause file, the spacing, the host load gate.
         if (existsSync(join(outDir, PAUSE_FILE)))
@@ -727,6 +762,9 @@ export async function runHcuShell(opts: HcuRunOptions): Promise<HcuRunResult> {
           // No retry, no attempt spent: the operator (and, for a usage limit, the lead) decides.
           appendDurable(ledgerPath, { type: "halt", code: outcome.code, trialKey, at: now() });
           log(`HALTED: ${outcome.code} on ${trialKey}; no retry. Fix the cause, then --resume.`);
+          // The lead's report, on the log and as the heartbeat's lastLog (#598's O-6), besides
+          // the CLI's exit 7 and its stderr line.
+          if (outcome.code === "planner-usage-limit") log(USAGE_LIMIT_REPORT);
           return finish("halted", outcome.code);
         }
         if (outcome.kind === "transient") {
@@ -739,14 +777,16 @@ export async function runHcuShell(opts: HcuRunOptions): Promise<HcuRunResult> {
             at: now(),
           });
           consecutiveRateLimits++;
-          transient++;
-          const cap = simulated ? Number.POSITIVE_INFINITY : opts.plan.maxTransientRetriesPerTrial;
-          if (transient > cap)
+          const transient = (transientByTask.get(task.taskId) ?? 0) + 1;
+          transientByTask.set(task.taskId, transient);
+          if (transient > transientCap) {
+            transientCapped.push(task.taskId);
             return pause(
               "rate-limit-repeat",
               trialKey,
-              `a transient rate limit hit ${task.taskId} again after its re-run; no further cold reset this run`,
+              `a transient rate limit hit ${task.taskId} again after its re-run; no further cold reset for this trial in this run directory (a resume runs the other trials only). Take it to the lead`,
             );
+          }
           if (consecutiveRateLimits >= pacing.maxConsecutiveRateLimits)
             return pause(
               "rate-limit-pause",
@@ -789,6 +829,14 @@ export async function runHcuShell(opts: HcuRunOptions): Promise<HcuRunResult> {
         }
       }
     }
+    // A trial left open by the transient cap is never `complete`: the run pauses (resumable
+    // for the other trials) and names it for the lead (#598's end-of-run pause).
+    if (transientCapped.length > 0)
+      return pause(
+        "rate-limit-capped",
+        null,
+        `${transientCapped.length} trial(s) already had their one transient re-run (at most one extra cold reset per trial) and are not started again in this run directory: ${transientCapped.join(", ")}. Take them to the lead`,
+      );
     const complete = opts.tasks.every((t) => decidedKeys.has(trialKeyFor(t, simulated)));
     return finish(complete ? "complete" : "incomplete", null);
   } finally {
