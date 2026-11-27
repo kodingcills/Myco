@@ -44,6 +44,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { m2AttemptEventSchema } from "../../schemas/m2-evidence.ts";
 import { type JsonSchema, validateSchema } from "../../schemas/validate.ts";
+import { HashLedger, NO_LEDGER } from "../export-guard/provenance.ts";
 import { GATE_API_VERSION, REASON_CODES } from "../gate/api.ts";
 import { findLeaks, findLeaksDeep, type RedactionContext } from "./backstop.ts";
 import {
@@ -55,6 +56,8 @@ import {
   HASHED_SOURCE,
   HEX64,
   HEX64_SOURCE,
+  ID_SCOPE,
+  isHashed,
   KNOWN_ARMS,
   MEDIA_TYPE_SOURCE,
   MEDIA_TYPES,
@@ -642,10 +645,16 @@ export function exportProofBundle(
   input: ProofRunInput,
   ctx: RedactionContext,
   identity?: IdentityContext,
+  /**
+   * The harness's hash ledger (#579 O3; `bundleHashLedger`, from a bundle the harness wrote
+   * and that verified): the only `h-<60hex>` inputs written as is. Default: none, so every
+   * `h-<60hex>` input (an agent's) is re-hashed.
+   */
+  ledger: HashLedger = NO_LEDGER,
 ): ProofBundle {
   // The backstop's registered account names are identity strings too.
   const guard = guardWithHost(mergeIdentity(identity, { names: ctx.usernames, homes: [] }));
-  const bundle = assembleWithGuard(input, guard);
+  const bundle = assembleWithGuard(input, guard, ledger);
   // Self-verify: the closed schemas, the chain, the bindings, the BACKSTOP scanner and the
   // identity scan, under the same host-merged guard.
   const result = verifyWithGuard(
@@ -671,13 +680,21 @@ export function exportProofBundle(
  * help from the backstop. Like export, it takes an identity to ADD and always merges the
  * host's in (`guardWithHost`); it takes no caller-built guard (#562, D1).
  */
-export function assembleProofBundle(input: ProofRunInput, identity?: IdentityContext): ProofBundle {
-  return assembleWithGuard(input, guardWithHost(identity));
+export function assembleProofBundle(
+  input: ProofRunInput,
+  identity?: IdentityContext,
+  ledger: HashLedger = NO_LEDGER,
+): ProofBundle {
+  return assembleWithGuard(input, guardWithHost(identity), ledger);
 }
 
 /** Internal: the guard is always `guardWithHost(...)` (export and `assembleProofBundle`). */
-function assembleWithGuard(input: ProofRunInput, guard: IdentityGuard): ProofBundle {
-  const a = allowlist(guard);
+function assembleWithGuard(
+  input: ProofRunInput,
+  guard: IdentityGuard,
+  hashLedger: HashLedger,
+): ProofBundle {
+  const a = allowlist(guard, hashLedger);
   const raw = input as unknown as Record<string, unknown>;
   need(isStr(raw.runId), "run.runId");
   need(isStr(raw.taskId), "run.taskId");
@@ -863,6 +880,67 @@ function indexEvidenceDir(dir: string): Map<string, EvidenceIndexEntry> {
   };
   walk(root, false);
   return index;
+}
+
+/**
+ * The hash ledger of a bundle this harness wrote (#579 O3), for re-exporting its run: the bundle
+ * must verify first (`verifyProofBundle`, same options), then every `h-<60hex>` it carries in a
+ * hashed field is recorded under that field's scope (`ID_SCOPE` for every id; the field name for
+ * a vocabulary field). A bundle that does not verify throws (codes only). The bundle is TRUSTED
+ * as harness output: one written before #579 may hold an agent's verbatim `h-<60hex>`; re-export
+ * it from its source run instead.
+ */
+export function bundleHashLedger(text: string, options: VerifyOptions = {}): HashLedger {
+  const result = verifyProofBundle(text, options);
+  if (!result.ok)
+    throw new ProofExportError(
+      result.errors[0]?.code ?? "PROOF_INVALID",
+      "hash ledger refused: the bundle does not verify",
+    );
+  const bundle = JSON.parse(text) as ProofBundle;
+  const ledger = new HashLedger();
+  const add = (scope: string, v: unknown) => {
+    if (typeof v === "string" && isHashed(v)) ledger.record(scope, v);
+  };
+  add(ID_SCOPE, bundle.run.runId);
+  add(ID_SCOPE, bundle.run.taskId);
+  add(ID_SCOPE, bundle.run.arm);
+  for (const r of bundle.records) {
+    const b = r.body as unknown as Record<string, unknown>;
+    switch (r.kind) {
+      case "action":
+        add("action.tool", b.tool);
+        add("action.keys", b.keys);
+        add("action.app", b.app);
+        break;
+      case "evidence":
+        add(ID_SCOPE, b.evidenceId);
+        add(ID_SCOPE, b.kind);
+        add("evidence.mediaType", b.mediaType);
+        break;
+      case "verdict": {
+        add(ID_SCOPE, b.taskId);
+        add(ID_SCOPE, b.runId);
+        for (const e of (b.evidence as unknown[] | undefined) ?? []) add(ID_SCOPE, e);
+        const o = b.oracle as Record<string, unknown> | undefined;
+        add(ID_SCOPE, o?.family);
+        add(ID_SCOPE, o?.version);
+        break;
+      }
+      case "handoff":
+        add(ID_SCOPE, b.from);
+        add(ID_SCOPE, b.to);
+        break;
+      case "policy":
+        add(ID_SCOPE, b.policyId);
+        add("policy.subject", b.subject);
+        add("policy.reasonCode", b.reasonCode);
+        break;
+      default:
+        break;
+    }
+  }
+  return ledger;
 }
 
 /**
