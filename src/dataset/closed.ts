@@ -26,6 +26,8 @@
  * values stay equal; a guessed exact input can be confirmed (as in #553).
  */
 import { createHash } from "node:crypto";
+import { LOCAL_PROCESS_BACKEND } from "../desktops/local-process.ts";
+import { malformedHash, skipsIdentityCheck } from "../export-guard/hash-like.ts";
 import { heldEntries, identityFold } from "../export-guard/identity-words.ts";
 import { episodeScope, HashLedger, keepOrHash, NO_LEDGER } from "../export-guard/provenance.ts";
 import {
@@ -62,9 +64,10 @@ export const ARM_GRAMMAR = /^[a-z][a-z0-9+-]{1,31}(?::[a-z0-9][a-z0-9-]{0,31})?$
 export const HASHED = /^h-[0-9a-f]{60}$/;
 /**
  * Looks hashed: an id starting `h-` or `H-` that is not exactly `HASHED` is never kept verbatim
- * (#559 round 3, S1), so a reader can never mistake another `h-` form for a hash.
+ * (#559 round 3, S1), so a reader can never mistake another `h-` form for a hash. The rule now
+ * lives in `src/export-guard/hash-like.ts` (`malformedHash`, #612 D2), shared with the episode
+ * export.
  */
-const HASH_LIKE = /^[hH]-/;
 
 export const EXPORT_TEXT_TAG = "myco.dataset.export-text/1";
 
@@ -76,7 +79,12 @@ export const hashed = (raw: string): string => `h-${exportDigest(raw).slice(0, 6
 
 export type Treatment =
   | { readonly kind: "text" }
-  | { readonly kind: "id"; readonly also?: RegExp }
+  | {
+      readonly kind: "id";
+      readonly also?: RegExp;
+      /** Harness-fixed values: kept as is and exempt from the identity check (exact match). */
+      readonly fixed?: readonly string[];
+    }
   | { readonly kind: "token"; readonly vocabulary: RegExp }
   | {
       readonly kind: "closed";
@@ -189,10 +197,19 @@ export const EPISODE_FIELD_TREATMENT: Readonly<Record<string, Treatment>> = {
 /** A versioned name, `name/N` (`local-process/1`, `myco-linux-desktop/1`): closed, never a path. */
 export const VERSIONED_NAME = /^[a-z0-9][a-z0-9.-]{0,47}\/[0-9]{1,6}$/;
 const desktopId: Treatment = { kind: "id", also: VERSIONED_NAME };
+/**
+ * The backend names the harness itself writes (`LOCAL_PROCESS_BACKEND`, src/desktops): fixed
+ * vocabulary, so exempt from the identity check when the value is EXACTLY one of them (#612 N1:
+ * a spaced ComputerName configured as an identity, `<Name>'s MacBook Pro`, has the 3-letter word
+ * `pro`, which matched inside `local-process/1` and falsely refused). Any other backend value is
+ * an id as before, and is checked.
+ */
+export const KNOWN_BACKENDS: readonly string[] = [LOCAL_PROCESS_BACKEND];
+const backendId: Treatment = { kind: "id", also: VERSIONED_NAME, fixed: KNOWN_BACKENDS };
 
 /** Track U's own free fields of a record: the desktop facts are ids, the capture path is text. */
 export const RECORD_FIELD_TREATMENT: Readonly<Record<string, Treatment>> = {
-  "$.desktop.backend": desktopId,
+  "$.desktop.backend": backendId,
   "$.desktop.image": desktopId,
   "$.capture.path": text,
 };
@@ -261,7 +278,8 @@ function treat(
     case "id":
       // A harness-produced hashed id is closed (it carries nothing): kept (#556 r3, S2; #579).
       if (HASHED.test(value)) return keep();
-      if (HASH_LIKE.test(value)) return hashed(value);
+      if (malformedHash(value)) return hashed(value);
+      if (t.fixed?.includes(value) === true) return value;
       return (CLOSED_ID.test(value) || t.also?.test(value) === true) && !holds(value, joined)
         ? value
         : hashed(value);
@@ -374,8 +392,8 @@ function accepts(t: Treatment | undefined, value: string): boolean {
     case "text":
       return HASHED.test(value);
     case "id":
-      if (HASH_LIKE.test(value)) return HASHED.test(value);
-      return CLOSED_ID.test(value) || t.also?.test(value) === true;
+      if (malformedHash(value)) return false;
+      return HASHED.test(value) || CLOSED_ID.test(value) || t.also?.test(value) === true;
     case "token":
       return t.vocabulary.test(value) || HASHED.test(value);
     case "closed":
@@ -459,7 +477,12 @@ export function joinedIdentity(
   for (const [path, v] of stringLeaves(value, joined)) {
     const t = fields[templateOf(path)];
     if (t === undefined || t.kind === "text" || (t.kind === "closed" && t.exempt)) continue;
-    if (HASHED.test(v)) continue;
+    // #612 D1: an `h-<60 hex>` skips the check only in a field the exporter hashes (an id or a
+    // token); in a closed-pattern field (task family, task-set version, fault class, oracle
+    // family) it is checked like any other value.
+    if (skipsIdentityCheck(t.kind, v)) continue;
+    if (t.kind === "id" && t.fixed?.includes(v) === true) continue; // #612 N1
+
     for (const [kind] of held(v, joined)) out.push({ kind, path });
   }
   return out;
