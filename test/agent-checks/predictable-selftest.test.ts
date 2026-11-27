@@ -200,6 +200,16 @@ describe("D1 round 3: every corruption of the bound task is drawn, not fixed", (
     expect(drawn.includes(fixedHost)).toBe(false);
   });
 
+  it("a broken random source fails closed, promptly, instead of looping forever", () => {
+    const stuck = () => 0;
+    const started = Date.now();
+    expect(() => calcCasesFor([SPEC], TASK.fileName, stuck)).toThrow(/no usable draw/);
+    expect(() => hostCorruptions(fixed.correct, stuck)).toThrow(/no usable draw/);
+    const reg = registerPlugin(makeCheck(honestSource()), { hostCases: [fixed], draw: stuck });
+    expect(reg.ok ? "accepted" : reg.code).toBe("SELFTEST_CASES_INVALID");
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
   it(
     "the registration applies the proposal's draw: the check sees random host truncations",
     () => {

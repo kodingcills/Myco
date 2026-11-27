@@ -248,6 +248,13 @@ function editCsv(
   return `${rows.map((r) => r.join(",")).join("\n")}\n`;
 }
 
+/**
+ * A bound on every draw loop: a broken random source (one that repeats itself) fails closed
+ * with an error instead of looping forever. An honest source needs a handful of draws.
+ */
+export const MAX_DRAWS = 1000;
+export const NO_USABLE_DRAW = "the random source gives no usable draw";
+
 export function calcCases(count = 10): SelfTestCase<CalcRecordEditParams>[] {
   const seeds = Array.from(
     { length: 10 },
@@ -283,7 +290,7 @@ function sameCell(a: string, b: string): boolean {
  * self-test cannot draw has little room left (track C, D1 round 2 of #590).
  */
 function randomValue(draw: Draw, base: string, cells: readonly string[], avoid: string[]): string {
-  for (;;) {
+  for (let tries = 0; tries < MAX_DRAWS; tries++) {
     let v: string;
     const kind = draw(6);
     if (kind === 0) {
@@ -307,6 +314,7 @@ function randomValue(draw: Draw, base: string, cells: readonly string[], avoid: 
     // One CSV cell, no edge spaces (a reader may trim them), unlike every value to avoid.
     if (/^\S(?:[^,"\r\n]{0,62}\S)?$/.test(v) && !avoid.some((a) => sameCell(a, v))) return v;
   }
+  throw new Error(NO_USABLE_DRAW);
 }
 
 /**
@@ -327,13 +335,14 @@ function drawnValueCorruptions(
   const cells = fixture.rows.flatMap((r) => r.slice(1));
   /** A random data cell other than the target whose value differs from `unlike`. */
   const otherCell = (unlike: (cur: string) => boolean) => {
-    for (;;) {
+    for (let tries = 0; tries < MAX_DRAWS; tries++) {
       const row = fixture.rows[draw(fixture.rows.length)] as string[];
       const column = columns[draw(columns.length)] as string;
       const cur = row[fixture.header.indexOf(column)] as string;
       if ((row[0] !== p.rowKey || column !== p.column) && !unlike(cur))
         return { rowKey: row[0] as string, column, cur };
     }
+    throw new Error(NO_USABLE_DRAW);
   };
   const wrong = randomValue(draw, p.newValue, cells, [p.newValue, original]);
   const moved = otherCell((cur) => sameCell(cur, p.newValue));

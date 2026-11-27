@@ -228,10 +228,16 @@ function fromWire(doc: WireDocument): SavedDocument {
   };
 }
 
-/** Up to three distinct offsets in `[0, n)` drawn by `draw`. */
+/**
+ * Up to three distinct offsets in `[0, n)` drawn by `draw`. A source that repeats itself
+ * throws (bounded draws) rather than loop forever; registration then refuses.
+ */
 function drawnOffsets(draw: Draw, n: number): number[] {
   const at = new Set<number>();
-  while (at.size < Math.min(3, n)) at.add(draw(n));
+  for (let tries = 0; at.size < Math.min(3, n); tries++) {
+    if (tries >= 1000) throw new Error("the random source gives no usable draw");
+    at.add(draw(n));
+  }
   return [...at];
 }
 
@@ -333,11 +339,17 @@ export function registerPlugin(pluginDir: string, opts: RegisterOptions = {}): R
           throw new Refusal("SELFTEST_CASES_INVALID", [
             `case ${c.id}: ${c.correct.fileName} is not a format the manifest declares`,
           ]);
+        let host: ReturnType<typeof hostCorruptions>;
+        try {
+          host = hostCorruptions(c.correct, opts.draw);
+        } catch {
+          throw new Refusal("SELFTEST_CASES_INVALID", [`case ${c.id}: no usable host draw`]);
+        }
         return {
           id: c.id,
           intent: c.intent,
           correct: c.correct,
-          corruptions: [...c.corruptions, ...hostCorruptions(c.correct, opts.draw)],
+          corruptions: [...c.corruptions, ...host],
         };
       });
       const faults: string[] = [];
