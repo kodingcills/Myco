@@ -46,6 +46,7 @@ import {
   actuatorToolDefinitions,
   createActuator,
   HCU_GUEST_COMMAND,
+  HCU_SESSION_SOCKET,
   serveActuatorStdio,
 } from "../../src/pilot/hcu-actuator.ts";
 import { trialLaunchPlan } from "../../src/pilot/launch.ts";
@@ -167,10 +168,20 @@ describe("#732: the launch plan grants action tools and the gate", () => {
       expect(JSON.stringify(ACTUATOR_SERVER_TEMPLATE)).not.toContain(name);
     }
     // The actuator's own CLI reads no key and no API variable, and spawns only `ssh`.
+    // Its SSH channel (`src/pilot/hcu-ssh.ts`, shared with the pre-agent probe) is the same.
     const cli = readFileSync(join(ROOT, "scripts/myco-hcu.ts"), "utf8");
-    for (const word of ["ANTHROPIC", "secret-file", "process.env", "readFileSync", "api.anthropic"])
-      expect(cli).not.toContain(word);
-    expect([...cli.matchAll(/spawn\("([^"]+)"/g)].map((m) => m[1])).toEqual(["ssh"]);
+    const channel = readFileSync(join(ROOT, "src/pilot/hcu-ssh.ts"), "utf8");
+    for (const src of [cli, channel])
+      for (const word of [
+        "ANTHROPIC",
+        "secret-file",
+        "process.env",
+        "readFileSync",
+        "api.anthropic",
+      ])
+        expect(src).not.toContain(word);
+    expect([...cli.matchAll(/spawn\(/g)]).toHaveLength(0);
+    expect([...channel.matchAll(/spawn\("([^"]+)"/g)].map((m) => m[1])).toEqual(["ssh"]);
   });
 
   it("a launch plan reverted to gate-only is caught (mutant: drop the action grants)", () => {
@@ -230,7 +241,8 @@ describe("#732: actuator parity with the hcu+shell arm", () => {
     expect(names).toEqual([...ACTUATOR_TOOLS]);
     expect(Object.keys(MYCO_HCU_MCP_TOOLS)).toEqual(names);
     expect(ACTUATOR_GRANTS).toEqual(names.map((n) => `mcp__myco-hcu__${n}`));
-    expect(HCU_GUEST_COMMAND).toBe(DEFAULT_HCU_GUEST_COMMAND);
+    // The arm's HCU executable and `mcp` subcommand, in the attach form (lead ruling 14:00Z).
+    expect(HCU_GUEST_COMMAND).toBe(`${DEFAULT_HCU_GUEST_COMMAND} --attach ${HCU_SESSION_SOCKET}`);
     expect(ACTION_BUDGET).toBe(STEP_BUDGET);
     expect([...ACTION_TOOLS]).toEqual(["click", "type_text", "press_key"]);
   });
@@ -369,4 +381,109 @@ describe("#732: actuator parity with the hcu+shell arm", () => {
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/usage: myco-hcu mcp --hcu-command/);
   });
+
+  it("the CLI refuses the bare session-0 HCU command (attach form only; lead ruling 14:00Z)", () => {
+    for (const bad of [
+      DEFAULT_HCU_GUEST_COMMAND,
+      `${DEFAULT_HCU_GUEST_COMMAND} --attach`,
+      `${HCU_GUEST_COMMAND} & calc.exe`,
+      `${HCU_GUEST_COMMAND} --verbose`,
+    ]) {
+      const r = spawnSync(
+        process.execPath,
+        ["--import", "tsx", join(ROOT, "scripts/myco-hcu.ts"), "mcp", "--hcu-command", bad],
+        { cwd: ROOT, encoding: "utf8", input: "" },
+      );
+      expect(r.status, bad).toBe(2);
+      expect(r.stderr).toMatch(/attach form/);
+    }
+  });
+
+  it("N2: the budget survives re-initialisation, ping and tools/list (mutant V3)", async () => {
+    const { gui, executed } = fakeGui();
+    const a = createActuator(async () => gui);
+    for (let i = 0; i < ACTION_BUDGET - 1; i++) await call(a, "click", { x: i, y: i });
+    for (const method of ["initialize", "ping", "tools/list", "initialize"])
+      await a.handleLine(
+        JSON.stringify({ jsonrpc: "2.0", id: `re-${method}`, method, params: {} }),
+      );
+    await a.handleLine(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }));
+    expect(a.spent()).toBe(ACTION_BUDGET - 1);
+    expect(resultBody(await call(a, "click", { x: 1, y: 1 }))).toEqual({
+      outcome: "delivered",
+      stepsLeft: 0,
+    });
+    await a.handleLine(JSON.stringify({ jsonrpc: "2.0", id: "again", method: "initialize" }));
+    expect(resultBody(await call(a, "click", { x: 1, y: 1 }))).toEqual({
+      code: ACTUATOR_CODES.budget,
+    });
+    expect(executed).toHaveLength(ACTION_BUDGET);
+  });
+});
+
+describe("#733 N3: the launch audit pins the actuator server's command and args", () => {
+  const RUN = "r1p-fc-v1-001-a1";
+  const audit = (
+    mutate: (args: string[]) => { command?: string; args: string[]; env?: object },
+  ) => {
+    const p = plan();
+    const act = p.mcpServers[ACTUATOR_SERVER_NAME];
+    if (act === undefined) throw new Error("fixture");
+    const changed = mutate([...act.args]);
+    const servers = {
+      ...p.mcpServers,
+      [ACTUATOR_SERVER_NAME]: {
+        command: changed.command ?? act.command,
+        args: changed.args,
+        env: (changed.env ?? act.env) as Record<string, string>,
+      },
+    };
+    return auditAgentLaunch(
+      { ...p, mcpServers: servers },
+      { runId: RUN, extraServers: GATE_SERVER_CLASS },
+    );
+  };
+  const actuatorViolations = (a: ReturnType<typeof auditAgentLaunch>) =>
+    a.violations.filter((v) => v.tool === `mcp__${ACTUATOR_SERVER_NAME}`);
+
+  it("the reviewed actuator passes", () => {
+    const a = audit((args) => ({ args }));
+    expect(a.ok, JSON.stringify(a.violations)).toBe(true);
+  });
+
+  for (const [name, mutate] of [
+    [
+      "any command under the actuator's name (bash -c)",
+      () => ({ command: "bash", args: ["-c", "cat ~/.ssh/id_rsa"] }),
+    ],
+    [
+      "the bare session-0 HCU command",
+      (a: string[]) => ({ args: [...a.slice(0, 5), DEFAULT_HCU_GUEST_COMMAND] }),
+    ],
+    [
+      "a chained HCU command",
+      (a: string[]) => ({ args: [...a.slice(0, 5), `${HCU_GUEST_COMMAND} & calc.exe`] }),
+    ],
+    [
+      "a different script",
+      (a: string[]) => ({ args: [a[0], a[1], "/tmp/evil/scripts/myco-hcu2.ts", ...a.slice(3)] }),
+    ],
+    [
+      "a relative script path",
+      (a: string[]) => ({ args: [a[0], a[1], "scripts/myco-hcu.ts", ...a.slice(3)] }),
+    ],
+    [
+      "a script path that climbs",
+      (a: string[]) => ({ args: [a[0], a[1], "/repo/x/../scripts/myco-hcu.ts", ...a.slice(3)] }),
+    ],
+    ["an extra flag", (a: string[]) => ({ args: ["--inspect", ...a] })],
+    ["a trailing argument", (a: string[]) => ({ args: [...a, "--extra"] })],
+    ["a missing --hcu-command", (a: string[]) => ({ args: a.slice(0, 4) })],
+    ["an env key", (a: string[]) => ({ args: a, env: { SSH_AUTH_SOCK: "/tmp/agent" } })],
+  ] as const)
+    it(`refuses ${name}`, () => {
+      const a = audit(mutate as (args: string[]) => { command?: string; args: string[] });
+      expect(a.ok).toBe(false);
+      expect(actuatorViolations(a).length).toBeGreaterThan(0);
+    });
 });

@@ -110,8 +110,8 @@ describe("pilot config (track E)", () => {
   it("#732: the new plan hashes (R1 and A/B stage 0) are the ones the runbook states", () => {
     const r1 = configSha256(config());
     const ab0 = abPlanSha256(loadPrereg(ROOT), 0, PUBLISHED);
-    expect(r1).toBe("b9b69348988acd24f33c63cdde45064017186faa5c4aaa5c285437c3d5e05f30");
-    expect(ab0).toBe("1dbc1deadf964fca4e06f61404b0b073949799abb18dfe1dee876fc0a50acb1c");
+    expect(r1).toBe("2127d5b11ad0f1aa72ae2b9b18373f85a7ef46442f46d4721e182b615343c5fc");
+    expect(ab0).toBe("251b7a9f146f7f77b4cbffa125e702004717354831ff2b191983d740902454cb");
     const runbook = readFileSync(join(ROOT, "docs/benchmark/pilot-runbook.md"), "utf8");
     expect(runbook).toContain(`configSha256 ${r1}`);
     expect(runbook).toContain(`planSha256 is now ${ab0}`);

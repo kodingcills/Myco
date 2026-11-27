@@ -48,8 +48,22 @@ import { HCU_ACTUATOR_SERVER_NAME } from "../integrity/surface.ts";
 export const ACTUATOR_SERVER_NAME = HCU_ACTUATOR_SERVER_NAME;
 export const ACTUATOR_SERVER_VERSION = "0.1.0";
 
-/** HCU's stdio MCP server in the guest: the `hcu+shell` arm's default command, unchanged. */
-export const HCU_GUEST_COMMAND = "C:\\myco\\bin\\computer-use.exe mcp";
+/**
+ * The HCU session socket the trial base's `MycoHCU` logon task serves on in the interactive
+ * session (#734). #734 must register `computer-use.exe serve` on exactly this socket; a
+ * different socket is a config change (it re-pins the plan hash), never an operator flag.
+ */
+export const HCU_SESSION_SOCKET = "C:\\myco\\run\\hcu-session.sock";
+
+/**
+ * HCU's stdio MCP server in the guest, in the ATTACH form (VM-owner finding on #733, lead
+ * ruling 14:00Z): the `hcu+shell` arm's default executable and `mcp` subcommand
+ * (`DEFAULT_HCU_GUEST_COMMAND`), plus `--attach <session socket>`, so HCU acts on the
+ * interactive desktop and never in SSH's session 0. The plan's actuator template carries it
+ * (reviewed, hashed), the CLI and the launch audit refuse any non-attach command
+ * (`isHcuAttachCommand`), and the pre-agent probe (`src/pilot/hcu-ssh.ts`) runs the same one.
+ */
+export const HCU_GUEST_COMMAND = `C:\\myco\\bin\\computer-use.exe mcp --attach ${HCU_SESSION_SOCKET}`;
 
 export const SCREENSHOT_TOOL = "screenshot";
 /** C1's pixel actions: the `hcu+shell` planner's whole action vocabulary. */

@@ -14,7 +14,7 @@
  *    transcript, the gate's evidence root) is read by the capture;
  *  - the gate keeps its contract: `myco.gate/v1` takes taskId/runId/claim only, bound to this
  *    one trial; every mid-run call stays `uncertain` (the capture happens after the stop);
- *  - every failure of the VM step (reset, deploy, channel, seed, read-back) is a `HarnessFault` with a
+ *  - every failure of the VM step (reset, deploy, channel, seed, the pre-agent HCU check, read-back) is a `HarnessFault` with a
  *    fixed, code-only message, never an agent outcome. The read-back never substitutes bytes:
  *    an unreadable document is a fault, not an empty document.
  *
@@ -35,6 +35,8 @@ import { resolveRunLiveToken } from "../integration/run-live-token.ts";
 import type { CaptureInput } from "../integrity/vault.ts";
 import { AgentClient, SshTunnel } from "../win/agent-client.ts";
 import { type ClaudeDriverOptions, claudeDriver, type SpawnFn } from "./claude-transport.ts";
+import { HCU_GUEST_COMMAND } from "./hcu-actuator.ts";
+import { openHcuSession, probeHcuDesktop } from "./hcu-ssh.ts";
 import {
   type AgentReport,
   type AttemptContext,
@@ -65,6 +67,13 @@ export interface VmBackend {
   deploy(): Promise<void>;
   /** Open the guest channel (after a reset the old one is gone with the guest). */
   open(): Promise<GuestChannel>;
+  /**
+   * The pre-agent HCU check (lead ruling 13:38Z, B1): resolves only once HCU in the reset guest
+   * answered over the agent's own channel (the actuator's attach command) AND produced one
+   * screenshot of the interactive desktop. Any other result rejects. The real backend runs
+   * `probeHcuDesktop` (`src/pilot/hcu-ssh.ts`).
+   */
+  probeHcu(): Promise<void>;
 }
 
 export const DEFAULT_GUEST_ROOT = "C:\\myco\\pilot";
@@ -131,6 +140,8 @@ export const VM_FAULT = {
   seed: "the task document could not be seeded in the guest",
   seedReadBack: "the seeded task document did not read back intact",
   read: "the persisted document could not be read back from the guest",
+  hcu: "hcu-unreachable: HCU produced no screenshot of the interactive desktop before the agent",
+  hcuTimeout: "the trial deadline passed before the HCU check",
 } as const;
 
 /** One attempt's VM step: `prepare` before the agent, `capture` after it stopped. */
@@ -190,6 +201,23 @@ export class VmTrialStep {
       throw new HarnessFault("transport-error", VM_FAULT.seedReadBack);
     }
     this.seededSha256 = sha256(doc);
+    // The pre-agent HCU check (lead ruling 13:38Z, B1; hcu+shell's `hcu-unreachable`): after
+    // reset, deploy and seed, and before the agent starts, HCU must answer on the actuator's
+    // own channel and produce ONE screenshot of the interactive desktop. An unreachable HCU,
+    // or one that answers but cannot screenshot the desktop (e.g. a session-0 HCU), is a
+    // HARNESS fault with a fixed code-only message: the attempt is kept and re-runs in place
+    // under the runner's attempt and abort rules. It is never the agent's NOT DONE, nothing is
+    // counted, and the agent is never started.
+    if (this.ctx.signal.aborted) {
+      await this.close();
+      throw new HarnessFault("timeout", VM_FAULT.hcuTimeout);
+    }
+    try {
+      await this.opts.backend.probeHcu();
+    } catch {
+      await this.close();
+      throw new HarnessFault("transport-error", VM_FAULT.hcu);
+    }
   }
 
   /** The host's copy of the persisted document, read from the guest; never the agent's. */
@@ -231,7 +259,7 @@ export class VmTrialStep {
 
 /**
  * The live driver: `claudeDriver` (subscription only; API-key paths refused) with the VM step
- * around it. Per attempt: reset, deploy, open, seed, run the agent, then capture from the guest. The report
+ * around it. Per attempt: reset, deploy, open, seed, the pre-agent HCU check, run the agent, then capture from the guest. The report
  * carries the reset's boot class.
  */
 export function liveVmDriver(
@@ -437,6 +465,11 @@ export function realVmBackend(opts: RealVmBackendOptions): VmBackend {
           else resolve({ bootClass: parseBootClass(stderr) });
         });
       });
+    },
+    probeHcu() {
+      // The actuator's own channel and command (`ACTUATOR_SERVER_TEMPLATE` carries the same
+      // `HCU_GUEST_COMMAND`; pinned equal by test), so the probe sees what the agent will see.
+      return probeHcuDesktop(() => openHcuSession(spawn, HCU_GUEST_COMMAND, homedir()));
     },
     async open() {
       // The file the deploy just wrote (`agentTokenFile`), read at the point of use.

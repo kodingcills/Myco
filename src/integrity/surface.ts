@@ -206,6 +206,21 @@ export const MYCO_HCU_MCP_TOOLS: Readonly<Record<string, ToolClass>> = {
 
 export const HCU_ACTUATOR_SERVER_NAME = "myco-hcu";
 
+/**
+ * The only HCU guest command the actuator may run (VM-owner finding on #733, lead ruling
+ * 14:00Z): the ATTACH form, `<...>\computer-use.exe mcp --attach <session socket>`, which
+ * reaches the HCU `serve` process the trial base's `MycoHCU` logon task runs in the
+ * interactive session (#734). The bare `computer-use.exe mcp` runs in SSH's session 0 and sees
+ * no desktop, so it is refused (here, in the launch audit, and by the CLI). One token per part:
+ * no shell metacharacter, no extra flag.
+ */
+export const HCU_ATTACH_COMMAND =
+  /^[A-Za-z]:\\(?:[A-Za-z0-9_.-]+\\)*computer-use\.exe mcp --attach [A-Za-z0-9_.:\\/-]+$/;
+
+export function isHcuAttachCommand(command: string): boolean {
+  return HCU_ATTACH_COMMAND.test(command) && !command.includes("..");
+}
+
 /** MCP servers by the name a harness registers them under. */
 export const MCP_SERVERS: Readonly<Record<string, Readonly<Record<string, ToolClass>>>> = {
   "myco-rt": MYCO_RT_MCP_TOOLS,
