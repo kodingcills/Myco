@@ -1,0 +1,14 @@
+{
+  "soffice": "LibreOffice 24.2.7.2 420(Build:2)",
+  "command": "soffice -env:UserInstallation=file://<tmp>/profile --headless --convert-to xlsx --outdir <tmp> escapes.csv tab-newline.csv",
+  "files": {
+    "escapes.lo.xlsx": {
+      "from": "escapes.csv",
+      "sha256": "dc03de88d8d2bc2cf1b8ebaa547b7bfde214cac15963b4479821b9bbb680a383"
+    },
+    "tab-newline.lo.xlsx": {
+      "from": "tab-newline.csv",
+      "sha256": "520c81bc44ae569f45383047d43181ef00edf5ee18fdaf0966678cebbefd73cc"
+    }
+  }
+}

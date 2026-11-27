@@ -1,0 +1,6 @@
+v3-wrapper: 18:13:58Z snapshots before: trial-base-v2, cua-c1-base, m1-agent-live, clean-base-live, clean-base
+v3-wrapper: 18:13:58Z attempt 1: start
+v3-wrapper: 19:45:15Z attempt 1: rc=1 build-trial-base: idle/maintenance tasks did not finish (see 06-idle.log)
+v3-wrapper: 19:45:15Z attempt 2: start
+v3-wrapper: 21:10:39Z attempt 2: rc=1 build-trial-base: idle/maintenance tasks did not finish (see 06-idle.log)
+v3-wrapper: 21:10:39Z STOP: two identical failures: build-trial-base: idle/maintenance tasks did not finish (see 06-idle.log)
