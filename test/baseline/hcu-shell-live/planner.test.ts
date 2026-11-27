@@ -10,6 +10,7 @@ import {
   PLANNER_ARGV,
   PLANNER_FIXED_ENV,
   PlannerHalt,
+  PlannerTransient,
   PROBE_SCREENSHOT,
   plannerInput,
   readPlannerCall,
@@ -129,38 +130,102 @@ describe("no API-key path", () => {
   });
 });
 
-describe("auth, credit, billing and quota faults fail closed", () => {
-  const errorResult = (extra: Record<string, unknown>) =>
-    stream(init(), result("", { is_error: true, subtype: "error_during_execution", ...extra }));
-  it.each([
-    ["authentication_failed", "planner-auth"],
-    ["oauth_org_not_allowed", "planner-auth"],
-    ["billing_error", "planner-quota"],
-    ["rate_limit", "planner-quota"],
-  ])("structured error %s halts with %s", async (cls, code) => {
-    const e = await haltOf(
-      stream(init(), { type: "assistant", error: cls, message: {} }, result("")),
+describe("auth, credit, billing, quota and usage-limit faults fail closed (round 2, D1)", () => {
+  const errorResult = (extra: Record<string, unknown> = {}, text = "") =>
+    stream(init(), result(text, { is_error: true, subtype: "error_during_execution", ...extra }));
+  const structured = (extra: Record<string, unknown>, text = "") =>
+    stream(init(), { type: "assistant", message: {}, ...extra }, result(text));
+  const codeOf = (e: unknown) => (e as { code?: string } | null)?.code;
+
+  // Every input from the round-1 verdict's D1 table, plus each class by every channel the CLI
+  // reports it on: structured error, HTTP status, result text and bare stderr.
+  const halts: [string, string, string, number | null, string][] = [
+    // [label, stdout, stderr, exit, halt code]
+    [
+      "authentication_failed",
+      structured({ error: "authentication_failed" }),
       "",
       1,
-    );
+      "planner-auth",
+    ],
+    [
+      "oauth_org_not_allowed",
+      structured({ error: "oauth_org_not_allowed" }),
+      "",
+      1,
+      "planner-auth",
+    ],
+    ["status 401", errorResult({ api_error_status: 401 }), "", 1, "planner-auth"],
+    ["status 403", errorResult({ api_error_status: 403 }), "", 1, "planner-auth"],
+    ["/login text", errorResult({}, "Invalid API key · Please run /login"), "", 1, "planner-auth"],
+    ["OAuth expiry on stderr", "", "OAuth token has expired", 1, "planner-auth"],
+    ["billing_error", structured({ error: "billing_error" }), "", 1, "planner-billing"],
+    ["api_error_status 402", errorResult({ api_error_status: 402 }), "", 1, "planner-billing"],
+    ["Payment required text", errorResult({}, "Payment required"), "", 1, "planner-billing"],
+    ["stderr API Error 402", "", "API Error: 402 payment required", 1, "planner-billing"],
+    ["Credit balance text", errorResult({}, "Credit balance is too low"), "", 1, "planner-billing"],
+    ["quota exceeded", "", "quota exceeded", 1, "planner-billing"],
+    ["out of extra usage", errorResult({}, "You're out of extra usage"), "", 1, "planner-billing"],
+    [
+      "usage limit text",
+      errorResult({}, "Claude usage limit reached. Your limit will reset at 3pm"),
+      "",
+      1,
+      "planner-usage-limit",
+    ],
+    ["5-hour limit", "", "5-hour limit reached ∙ resets 3pm", 1, "planner-usage-limit"],
+    [
+      "Weekly limit",
+      errorResult({}, "Weekly limit reached ∙ resets Mon"),
+      "",
+      1,
+      "planner-usage-limit",
+    ],
+    ["reset at", "", "Your limit will reset at 5pm", 1, "planner-usage-limit"],
+    ["usage_limit_reached", "", "usage_limit_reached", 1, "planner-usage-limit"],
+    // Claude Code reports the quota through the structured rate_limit class too: refined.
+    [
+      "rate_limit + quota text",
+      structured({ error: "rate_limit" }, "Claude AI usage limit reached|1700000000"),
+      "",
+      1,
+      "planner-usage-limit",
+    ],
+    [
+      "429 + quota text",
+      errorResult({ api_error_status: 429 }, "Weekly limit reached"),
+      "",
+      1,
+      "planner-usage-limit",
+    ],
+  ];
+  it.each(halts)("%s halts the run with its own code", async (_label, out, err, code, halt) => {
+    const e = await haltOf(out, err, code);
     expect(e).toBeInstanceOf(PlannerHalt);
-    expect((e as PlannerHalt).code).toBe(code);
+    expect(codeOf(e)).toBe(halt);
   });
-  it.each([
-    ["Credit balance is too low", "planner-quota"],
-    ["Claude usage limit reached. Your limit will reset at 3pm", "planner-quota"],
-    ["API Error: 429 Too Many Requests", "planner-quota"],
-    ["Invalid API key · Please run /login", "planner-auth"],
-    ["OAuth token has expired", "planner-auth"],
-  ])("CLI text %j halts with %s", async (text, code) => {
-    const e = await haltOf(errorResult({}), text, 1);
-    expect((e as PlannerHalt).code).toBe(code);
-  });
-  it("an HTTP 401 status halts with planner-auth, a 529 with planner-quota", async () => {
-    const e401 = await haltOf(errorResult({ api_error_status: 401 }), "", 1);
-    expect((e401 as PlannerHalt).code).toBe("planner-auth");
-    const e529 = await haltOf(errorResult({ api_error_status: 529 }), "", 1);
-    expect((e529 as PlannerHalt).code).toBe("planner-quota");
+
+  const transients: [string, string, string][] = [
+    ["rate_limit", structured({ error: "rate_limit" }), ""],
+    ["overloaded", structured({ error: "overloaded" }), ""],
+    ["status 429", errorResult({ api_error_status: 429 }), ""],
+    ["status 529", errorResult({ api_error_status: 529 }), ""],
+    ["429 on stderr", "", "API Error: 429 Too Many Requests"],
+    ["overloaded on stderr", "", "API Error: 529 overloaded_error"],
+  ];
+  it.each(transients)(
+    "a transient %s is a PlannerTransient (bounded back-off), not a halt",
+    async (_l, out, err) => {
+      const e = await haltOf(out, err, 1);
+      expect(e).toBeInstanceOf(PlannerTransient);
+      expect(codeOf(e)).toBe("planner-rate-limit");
+    },
+  );
+
+  it("each halting class has a distinct code", () => {
+    expect(new Set(halts.map((h) => h[4]))).toEqual(
+      new Set(["planner-auth", "planner-billing", "planner-usage-limit"]),
+    );
   });
   it("an unclassified error is a per-trial failure, not a halt", async () => {
     const e = await haltOf(errorResult({}), "something odd", 1);
@@ -171,11 +236,42 @@ describe("auth, credit, billing and quota faults fail closed", () => {
     const e = await haltOf("not json at all", "", 0);
     expect((e as SubscriptionPlannerFailure).code).toBe("planner-transport-error");
   });
+  it("an apiKeySource other than none halts even on a failed call (as #598)", async () => {
+    const e = await haltOf(
+      stream(init({ apiKeySource: "ANTHROPIC_API_KEY" }), result("", { is_error: true })),
+      "something odd",
+      1,
+    );
+    expect(codeOf(e)).toBe("planner-api-key-path");
+  });
+  it("the text vocabulary never applies to a clean call (fc-v1 holds qty 401, 402-like text)", async () => {
+    for (const text of ["qty 402 billing quota", "Weekly limit column", "429"]) {
+      const r = readPlannerCall(stream(init(), result(text)), "", 0, price);
+      expect(r.text).toBe(text);
+    }
+  });
   it("a halt is final: the planner surfaces it once and spawns nothing more", async () => {
     const fake = fakeClaude([{ stdout: "", stderr: "Credit balance is too low", code: 1 }]);
     const p = planner(fake.spawn);
-    await expect(p.act(turn)).rejects.toMatchObject({ code: "planner-quota" });
+    await expect(p.act(turn)).rejects.toMatchObject({ code: "planner-billing" });
     expect(fake.calls).toHaveLength(1);
+  });
+  it("cancel() stops an in-flight call at once (the runner's trial deadline)", async () => {
+    const fake = fakeClaude([{ stdout: "", hang: true }]);
+    const p = createSubscriptionPlanner({
+      spawn: fake.spawn,
+      command: "claude",
+      env: ENV,
+      cwd: "/tmp",
+      price,
+      callTimeoutMs: 60_000,
+      killGraceMs: 50,
+    });
+    const pending = p.act(turn);
+    await new Promise((r) => setImmediate(r));
+    p.cancel?.();
+    await expect(pending).rejects.toMatchObject({ code: "planner-timeout" });
+    expect(fake.signals[0]).toBe("SIGTERM");
   });
 });
 

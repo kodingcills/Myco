@@ -374,7 +374,8 @@ export function resumeFaultSignature(ledger: readonly LedgerRecord[]): string | 
 export function attemptsSpent(ledger: readonly LedgerRecord[]): Map<string, number> {
   const out = new Map<string, number>();
   for (const r of ledger)
-    if (r.type === "failed" && r.transient !== true) out.set(r.taskId, (out.get(r.taskId) ?? 0) + 1);
+    if (r.type === "failed" && r.transient !== true)
+      out.set(r.taskId, (out.get(r.taskId) ?? 0) + 1);
   return out;
 }
 
@@ -477,7 +478,8 @@ export async function runHcuShell(opts: HcuRunOptions): Promise<HcuRunResult> {
   );
   const spent = attemptsSpent(existing);
   const starts = new Map<string, number>();
-  for (const r of existing) if (r.type === "start") starts.set(r.trialKey, (starts.get(r.trialKey) ?? 0) + 1);
+  for (const r of existing)
+    if (r.type === "start") starts.set(r.trialKey, (starts.get(r.trialKey) ?? 0) + 1);
   const exhausted: string[] = [];
   let failed = 0;
   // Seeded from the ledger, so the repeat rule survives --resume (round-2 verifier D2).
@@ -642,11 +644,14 @@ export async function runHcuShell(opts: HcuRunOptions): Promise<HcuRunResult> {
         timedOut = true;
         fenced = true;
         opts.planner.cancel?.();
-        // The attempt unwinds in the background; its guest is released when it gets one.
-        attempt
-          .catch(() => undefined)
-          .then(() => trial?.release())
-          .catch(() => undefined);
+        // Release the guest now; an attempt still inside its reset releases when that returns.
+        const prepared = trial as PreparedTrial | undefined;
+        if (prepared !== undefined) await prepared.release().catch(() => undefined);
+        else
+          attempt
+            .catch(() => undefined)
+            .then(() => trial?.release())
+            .catch(() => undefined);
         log(`trial ${trialKey}: deadline of ${pacing.trialTimeoutS}s passed`);
         return { kind: "failed", code: "trial-timeout" };
       }
@@ -771,7 +776,9 @@ export async function runHcuShell(opts: HcuRunOptions): Promise<HcuRunResult> {
         if (code === lastFailure) {
           lastFailure = code;
           appendDurable(ledgerPath, { type: "abort", code, trialKey, at: now() });
-          log(`ABORTED: two failures in a row with ${code}; no retry. Fix the cause, then --resume.`);
+          log(
+            `ABORTED: two failures in a row with ${code}; no retry. Fix the cause, then --resume.`,
+          );
           return finish("aborted", code);
         }
         lastFailure = code;
