@@ -72,7 +72,8 @@ resume re-runs the trial. So a limit spell on the shared subscription can never 
 and recovering from one needs no config change (and so no new run directory).
 
 `error-result` (an error result the classifier cannot name, including a limit message worded in
-a way the vocabulary does not know) **does** spend `maxAttemptsPerTrial`, with no backoff. That
+a way the vocabulary does not know; an unmapped structured error whose text names a quota,
+billing, auth or transient fault is classified by that text instead, #607 round 3) **does** spend `maxAttemptsPerTrial`, with no backoff. That
 is bounded (3 attempts, `interTrialDelayS` apart) and safe for the data, but it can exhaust a
 trial. Recovering an `exhausted` trial: there is no in-place reset; start a **new run
 directory** (`--out` to a fresh path) once the cause is understood, and keep the old directory
@@ -139,6 +140,19 @@ start hitting limits, raise `--delay-s`. Override per invocation with `--concurr
   result with no claim line whose text **or stderr** matches the usage-limit vocabulary (no
   bare numbers; stderr since #606 S1, lead ruling 03:58Z) is `usage-limit` (exit 7, nothing
   counted); a clean result with a claim line is never reclassified, whatever stderr says.
+  Since #607 round 3 (L1, lead rule 04:52Z) the same exception covers a narrow, numberless
+  set of exact CLI billing and auth phrases, folded like the rest: "credit balance is too
+  low" and "out of extra usage" (`billing`), "please run /login", "not logged in", "invalid
+  api key" and "oauth token has expired" (`auth`). A claimless clean result matching one
+  stops with exit 5 and its class, nothing counted and no attempt spent; the broad words
+  ("billing", "quota", "credential", "forbidden", bare 401/403/429) are still never applied to
+  a clean result. **Unmapped structured errors (#607 round 3, B2):** when the only structured
+  class is one the classifier does not map (an `error` string such as `invalid_request`,
+  `server_error` or `unknown`, or an `api_error_status` other than 401/402/403/429/529, e.g.
+  400 or 500), the text vocabulary still decides: quota, billing, auth or transient wording
+  stops or backs off as its class and does not spend the attempt. With no such wording it
+  stays `error-result`. A mapped structured class (auth, billing, rate limit) still wins over
+  the text. `AUTH_TEXT` also matches "log-in again" (hyphenated) since round 3 (F-E).
   Under the
   topped-up-run ruling (lead, 2026-11-26 12:22Z) the faulted attempt stays in the ledger with
   its arm row (cause `harness`) and its cost estimate, and the re-run's `start` line names it
