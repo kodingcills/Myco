@@ -98,7 +98,7 @@ const CORRECTABLE: ReadonlyMap<string, CorrectableFamily> = new Map<string, Corr
   [
     "calc-record-edit",
     {
-      version: "2",
+      version: "3", // v3 = v2's CSV rule plus the xlsx path; non-CSV tasks are refused below
       targets(spec) {
         const { fixtureSeed, rowKey, column, newValue } = spec as RecordEditSpec;
         return [

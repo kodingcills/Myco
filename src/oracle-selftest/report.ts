@@ -7,7 +7,9 @@ import { type OracleReport, runSelfTest, type SelfTestRow } from "./run.ts";
 import {
   calcCases,
   calcGateOracle,
+  calcGateXlsxOracle,
   calcRecordEditOracle,
+  calcXlsxCases,
   writerCases,
   writerOracle,
 } from "./subjects.ts";
@@ -26,6 +28,7 @@ export function buildSelfTest(): SelfTestBundle {
   const results = [
     runSelfTest(calcRecordEditOracle, cases),
     runSelfTest(calcGateOracle, cases),
+    runSelfTest(calcGateXlsxOracle, calcXlsxCases()),
     runSelfTest(writerOracle, writerCases()),
   ];
   return {

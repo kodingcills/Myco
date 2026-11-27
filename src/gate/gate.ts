@@ -148,7 +148,7 @@ export function buildRegistry(
       problems.push(`${where}: stateFile must be a relative path without "." or ".." segments`);
       continue;
     }
-    const specProblem = family.checkSpec(entry.spec);
+    const specProblem = family.checkSpec(entry.spec) ?? stateFileProblem(family, entry);
     if (specProblem) {
       problems.push(`${where}: ${specProblem}`);
       continue;
@@ -952,4 +952,12 @@ export function createGate(config: GateConfig): Gate {
       }
     },
   };
+}
+
+/** A family's check of the task's state file against its spec (TIF-274 prerequisite). */
+function stateFileProblem(
+  family: OracleFamily,
+  entry: { readonly stateFile: string; readonly spec: unknown },
+): string | undefined {
+  return family.checkStateFile?.(entry.stateFile, entry.spec);
 }

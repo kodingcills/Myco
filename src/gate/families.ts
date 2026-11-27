@@ -4,7 +4,10 @@
  *
  *  - `todo-items`        : `persistedStoreOracle` (src/discovery/s0-sequence.ts), the oracle
  *                          `myco-run` uses; the store is parsed by the runner's `parseStore`.
- *  - `calc-record-edit`  : one Calc edit, over the CSV the app saved (strict `parseDocument`).
+ *  - `calc-record-edit`  : one Calc edit, over the document the app saved: CSV (strict
+ *                          `parseDocument`) or, with `persistedFormat: "xlsx"` (version 3,
+ *                          TIF-274 prerequisite), the workbook itself (`xlsx-document.ts`),
+ *                          read into the same cell model.
  *                          Version 2 (TIF-270) checks the WHOLE document: it must equal the
  *                          pristine fixture with the edit applied (`calc-document.ts`). The
  *                          pristine fixture is the operator's sealed fixture when the spec
@@ -34,12 +37,17 @@ import {
   type CellEdit,
   checkEdit,
   collateralReason,
+  DocumentReadError,
   diffDocument,
   expectedCells,
   fixtureCells,
   listRefs,
-  parseDocument,
+  numberDomainRefusal,
+  PERSISTED_FORMATS,
+  type PersistedFormat,
   pristineCells,
+  readSavedDocument,
+  type SavedDocument,
   targetRef,
 } from "./calc-document.ts";
 import { crossAppFamily } from "./cross-app.ts";
@@ -91,6 +99,11 @@ export interface OracleFamily {
   /** Validate an operator task spec at registry load. Returns an error message or undefined. */
   checkSpec(spec: unknown): string | undefined;
   /**
+   * Validate the task's state file against a (valid) spec at registry load, for families
+   * whose spec names the persisted format (TIF-274 prerequisite). Optional.
+   */
+  checkStateFile?(stateFile: string, spec: unknown): string | undefined;
+  /**
    * The sealed fixture a (valid) spec names, if any (TIF-270 round 3). The gate reads it
    * through the operator's evidence reader, checks its digest, and passes the bytes to
    * `decide` as `inputs.fixture`.
@@ -119,6 +132,23 @@ function utf8(bytes: Uint8Array): string {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+/**
+ * Read a Calc document in its declared format. A document that is not that format, or not
+ * readable, is `uncertain` STATE_CORRUPT with a code only: never a path, never a value.
+ */
+function readCalcDocument(bytes: Uint8Array, format: PersistedFormat): SavedDocument {
+  try {
+    return readSavedDocument(bytes, format);
+  } catch (error) {
+    if (!(error instanceof DocumentReadError)) throw error;
+    if (error.code === "CSV_NOT_UTF8")
+      throw new StateCorruptError("persisted state is not valid UTF-8");
+    throw new StateCorruptError(
+      `persisted document is not a readable ${format} document (${error.code})`,
+    );
+  }
 }
 
 export const todoItemsFamily: OracleFamily = {
@@ -171,6 +201,36 @@ export interface CalcRecordEditSpec extends CellEdit {
    */
   readonly fixtureFile?: string;
   readonly fixtureSha256?: string;
+  /**
+   * The format the app saves (TIF-274 prerequisite): `csv` (the default) or `xlsx`, the
+   * format every fc-v1 task names. The task's state file must carry the matching extension,
+   * and the persisted bytes must be that format, or the gate cannot look (STATE_CORRUPT).
+   */
+  readonly persistedFormat?: PersistedFormat;
+}
+
+function formatProblem(spec: Record<string, unknown>): string | undefined {
+  const { persistedFormat } = spec;
+  if (persistedFormat === undefined) return undefined;
+  if (!(PERSISTED_FORMATS as readonly unknown[]).includes(persistedFormat))
+    return `spec.persistedFormat must be one of ${PERSISTED_FORMATS.join(", ")}`;
+  return undefined;
+}
+
+/** An xlsx task's state file ends in `.xlsx`; a CSV task's does not. */
+function stateFileProblem(stateFile: string, format: PersistedFormat): string | undefined {
+  const xlsxName = stateFile.toLowerCase().endsWith(".xlsx");
+  if (format === "xlsx" && !xlsxName)
+    return 'stateFile must end in ".xlsx" when spec.persistedFormat is "xlsx"';
+  if (format === "csv" && xlsxName)
+    return 'stateFile ends in ".xlsx": set spec.persistedFormat to "xlsx"';
+  return undefined;
+}
+
+/** The workbook's sheet set must be the fixture's: one sheet. Refuted reason, or undefined. */
+function sheetSetReason(doc: SavedDocument): string | undefined {
+  if (doc.sheetCount === 1) return undefined;
+  return `SHEET_SET_MISMATCH: the workbook has ${doc.sheetCount} sheets; the fixture has 1`;
 }
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -202,7 +262,7 @@ function recordEditPristine(
   try {
     cells = fixtureCells(inputs.fixture);
   } catch (error) {
-    throw new Error("the sealed fixture is not valid UTF-8", { cause: error });
+    throw new Error("the sealed fixture could not be read", { cause: error });
   }
   const found = locateInFixture(spec.fixtureSeed, spec.rowKey, spec.column);
   if ("error" in found) throw new Error("the spec does not target the fixture");
@@ -217,14 +277,19 @@ function recordEditPristine(
 
 export const calcRecordEditFamily: OracleFamily = {
   id: "calc-record-edit",
-  // 2: whole-document check (TIF-270). 1 checked the target cell only.
-  version: "2",
+  // 3: the persisted document may be xlsx (spec.persistedFormat; TIF-274 prerequisite),
+  // read into the same cell model; zip bytes declared CSV are refused. 2: whole-document
+  // check (TIF-270). 1 checked the target cell only.
+  version: "3",
   checkSpec(spec) {
     if (!isObject(spec)) return "spec must be an object";
     if (typeof spec.fixtureSeed !== "string") return "spec.fixtureSeed must be a string";
     const problem = checkEdit(spec.fixtureSeed, spec, false);
     if (problem !== undefined) return `spec ${problem}`;
-    return sealedFixtureProblem(spec);
+    return formatProblem(spec) ?? sealedFixtureProblem(spec);
+  },
+  checkStateFile(stateFile, spec) {
+    return stateFileProblem(stateFile, (spec as CalcRecordEditSpec).persistedFormat ?? "csv");
   },
   sealedFixture(spec) {
     const { fixtureFile, fixtureSha256 } = spec as CalcRecordEditSpec;
@@ -235,11 +300,27 @@ export const calcRecordEditFamily: OracleFamily = {
     const recordSpec = spec as CalcRecordEditSpec;
     const { fixtureSeed, rowKey, column, newValue } = recordSpec;
     const edit = { rowKey, column, newValue };
-    const { cells } = parseDocument(utf8(bytes));
+    const doc = readCalcDocument(bytes, recordSpec.persistedFormat ?? "csv");
+    const { cells } = doc;
     const target = targetRef(fixtureSeed, edit);
     const expected = expectedCells(fixtureSeed, [edit], recordEditPristine(recordSpec, inputs));
     const diff = diffDocument(cells, expected, new Set([target]));
-    if (diff.targets.length === 0 && diff.collateral.length === 0) {
+    const sheets = sheetSetReason(doc);
+    if (diff.targets.length === 0 && diff.collateral.length === 0 && sheets === undefined) {
+      // Every cell's text matches, but a stored number whose column type does not accept
+      // it fails the grader whatever text it renders to (verdict 7205644970, D3 VA-VD):
+      // refused, never verified (fail closed). Only the verify path changes: a document the
+      // text comparison already refutes stays refuted (R1's evidence rules are unchanged).
+      // A date the gate does not judge (1904 serial 0: a real day the grader denies) is
+      // refused the same way, never refuted as no day (round-1 verdict 7206609374, D1).
+      if ((doc.ungradedDates ?? []).length > 0)
+        throw new StateCorruptError(
+          "persisted document holds a date the gate does not judge (XLSX_DATE_DOMAIN)",
+        );
+      if (numberDomainRefusal(doc, expected))
+        throw new StateCorruptError(
+          "persisted document holds a value the gate does not judge (XLSX_NUMBER_DOMAIN)",
+        );
       return {
         status: "verified",
         reasons: [
@@ -256,6 +337,10 @@ export const calcRecordEditFamily: OracleFamily = {
     if (diff.collateral.length > 0) {
       codes.push("DOCUMENT_COLLATERAL");
       reasons.push(collateralReason(diff.collateral));
+    }
+    if (sheets !== undefined) {
+      codes.push("SHEET_SET_MISMATCH");
+      reasons.push(sheets);
     }
     return { status: "refuted", reasons, codes };
   },
@@ -292,6 +377,9 @@ export const calcMultiStepFamily: OracleFamily = {
     // checkpoint from the seed (`documentCsv`), so refuse rather than silently ignore them.
     if (spec.fixtureFile !== undefined || spec.fixtureSha256 !== undefined)
       return "spec.fixtureFile / spec.fixtureSha256 are not supported by calc-multi-step yet";
+    // Likewise xlsx: the retry restores checkpoints as CSV (`documentCsv`).
+    if (spec.persistedFormat !== undefined && spec.persistedFormat !== "csv")
+      return 'spec.persistedFormat must be "csv" for calc-multi-step (xlsx is calc-record-edit only for now)';
     if (!Array.isArray(steps) || steps.length < MULTI_STEP_MIN || steps.length > MULTI_STEP_MAX)
       return `spec.steps must be an array of ${MULTI_STEP_MIN}-${MULTI_STEP_MAX} edits`;
     const seen = new Set<string>();
@@ -306,7 +394,7 @@ export const calcMultiStepFamily: OracleFamily = {
   },
   decide(bytes, spec) {
     const { fixtureSeed, steps } = spec as CalcMultiStepSpec;
-    const { cells } = parseDocument(utf8(bytes));
+    const { cells } = readCalcDocument(bytes, "csv");
     const pristine = pristineCells(fixtureSeed);
     const targets = steps.map((step) => targetRef(fixtureSeed, step));
     const { collateral } = diffDocument(cells, pristine, new Set(targets));
