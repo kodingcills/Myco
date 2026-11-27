@@ -45,6 +45,22 @@ import { manifest, input as packInput, r1Trials, writePack } from "./pack-fixtur
 const fresh = () => mkdtempSync(join(tmpdir(), "m2-ab-"));
 const check = (dir: string, repoRoot: string) => checkAbPack(readAbPack(dir, repoRoot));
 
+/** Whether this process can bind-mount (root with the capability): the #573 test needs it. */
+const CAN_BIND = (() => {
+  if (process.getuid?.() !== 0) return false;
+  const probe = mkdtempSync(join(tmpdir(), "m2-ab-bindprobe-"));
+  try {
+    mkdirSync(join(probe, "a"));
+    mkdirSync(join(probe, "b"));
+    if (spawnSync("mount", ["--bind", join(probe, "a"), join(probe, "b")]).status !== 0)
+      return false;
+    spawnSync("umount", [join(probe, "b")]);
+    return true;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
 describe("an A/B pack, Stage 1", () => {
   it("is checked by the A/B analysis with evidence on, and reports the pre-registered test", () => {
     const root = fresh();
@@ -634,6 +650,49 @@ describe("#554 round 1 fixes", () => {
         rmSync(root, { recursive: true, force: true });
       }
     });
+
+    // #573 (R3-4): Linux has no case folding, so the D1 test cannot tell identity containment
+    // from realpath-spelling containment there. A bind mount gives a second spelling of the
+    // pack directory with no link and no second file name (what APFS presents), and realpath
+    // does not see through it. Root only (mount needs it); skipped where mounting is refused.
+    it.skipIf(!CAN_BIND)(
+      "R3-4: a bind-mounted alias of the pack is still the pack (root only)",
+      () => {
+        const root = fresh();
+        const mounts: string[] = [];
+        const bind = (src: string, dst: string) => {
+          mkdirSync(dst, { recursive: true });
+          const m = spawnSync("mount", ["--bind", src, dst], { encoding: "utf8" });
+          expect(m.status, m.stderr).toBe(0);
+          mounts.push(dst);
+        };
+        try {
+          // Outside the evidence tree, so only the pack check can refuse it.
+          const dir = writeAbPack("m2-ab-bind", { stage: 1 }, root);
+          const text = "# the design, written after the run\n";
+          writeFileSync(join(dir, "README.md"), text);
+          writeFileSync(join(dir, basename(PREREG_MD)), text);
+          // preregLocation itself, on an alias spelling of the pack's own README.
+          bind(dir, join(root, "M2-AB-BIND"));
+          expect(existsSync(join(root, "M2-AB-BIND", "README.md"))).toBe(true);
+          expect(preregLocation(dir, root, "M2-AB-BIND/README.md").error).toBe(
+            "inside the pack (a pack cannot certify its own pre-registration)",
+          );
+          // End to end through the pin: the pinned path's directory is the pack under another name.
+          rmSync(dirname(pinned(root)), { recursive: true, force: true });
+          bind(dir, dirname(pinned(root)));
+          setPrereg(dir, PREREG_MD, text);
+          const r = check(dir, root);
+          expect(r.ok).toBe(false);
+          expect(r.errors).toContain(
+            `${LOCATED}: inside the pack (a pack cannot certify its own pre-registration)`,
+          );
+        } finally {
+          for (const m of mounts.reverse()) spawnSync("umount", [m]);
+          rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
   });
 });
 
