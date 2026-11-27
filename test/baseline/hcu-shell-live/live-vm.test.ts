@@ -47,6 +47,15 @@ import {
   runHcuShell,
   USAGE_LIMIT_REPORT,
 } from "../../../src/baseline/hcu-shell-live/runner.ts";
+import {
+  CLEAN_RESULT_FAULT_PHRASES,
+  FAULT_WORDING,
+  USAGE_LIMIT_PHRASES as GATE_USAGE_LIMIT_PHRASES,
+  NBSP,
+  spaced,
+  THIN_SPACE,
+  UNMAPPED_STRUCTURED,
+} from "../../pilot/helpers.ts";
 import { scripted } from "../hcu-shell/planners.ts";
 import {
   fakeClaude,
@@ -480,5 +489,129 @@ describe("a usage-limit notice stops the run end to end (round 3, N1 / N2)", () 
   it("plain stdout with no quota wording is still a per-trial transport error", async () => {
     const q = await quotaRun([{ stdout: "not json", code: 1 }]);
     expect(q.r).toMatchObject({ status: "aborted", code: "planner-transport-error", failed: 2 });
+  });
+
+  /**
+   * Round 4 (lead rulings 03:58Z and 05:39Z; the myco-gate arm's #607): the arm imports the
+   * myco-gate arm's classifier, so the same vectors stop it. The phrases are the myco-gate arm's
+   * own (`test/pilot/helpers.ts`), "You've hit your limit" among them.
+   */
+  const SPACES = [
+    ["NBSP", NBSP],
+    ["thin space U+2009", THIN_SPACE],
+    ["tab", "\t"],
+  ] as const;
+  const decisionReplies = (decisionText: string, stderr = "") => [
+    {
+      stdout: stream(
+        init(),
+        result(
+          JSON.stringify({ tool: "type_text", arguments: { x: 10, y: 10, text: decisionText } }),
+        ),
+      ),
+      stderr,
+      code: 0,
+    },
+    { stdout: stream(init(), result('{"claim":"done"}')), stderr, code: 0 },
+  ];
+  const expectAgentOutcome = (q: Awaited<ReturnType<typeof quotaRun>>) => {
+    expect(q.r.status).not.toBe("halted");
+    // maxTrials 2 of more: the invocation pauses at its cap (exit 4) once both are decided.
+    expect(exitCodeFor(q.r)).toBe(EXIT.paused);
+    expect(q.r.status).not.toMatch(/halted|aborted/);
+    expect(q.r.decided).toBe(2);
+    expect(q.fake.calls.length).toBeGreaterThan(1);
+    expect(q.lines).not.toContain(USAGE_LIMIT_REPORT);
+  };
+  it.each(GATE_USAGE_LIMIT_PHRASES.flatMap((t) => [[t, 0] as const, [t, 1] as const]))(
+    "S1: %j on stderr only, with a clean claimless result, exit %d, halts exit 7",
+    async (text, code) => {
+      expectUsageStop(await quotaRun([{ stdout: stream(init(), result("")), stderr: text, code }]));
+    },
+  );
+  it.each(GATE_USAGE_LIMIT_PHRASES.flatMap((t) => SPACES.map(([l, s]) => [t, l, s] as const)))(
+    "S2: %j with %s halts exit 7 as a clean result and as plain stdout (exit 0 and 1)",
+    async (phrase, _label, space) => {
+      const text = spaced(phrase, space);
+      expectUsageStop(await quotaRun([{ stdout: stream(init(), result(text)), code: 0 }]));
+      expectUsageStop(await quotaRun([{ stdout: text, code: 0 }]));
+      expectUsageStop(await quotaRun([{ stdout: text, code: 1 }]));
+    },
+  );
+  it.each(GATE_USAGE_LIMIT_PHRASES.flatMap((t) => SPACES.map(([l, s]) => [t, l, s] as const)))(
+    "negative: %j with %s inside a valid decision, or on stderr beside one, is the agent's",
+    async (phrase, _label, space) => {
+      const text = spaced(phrase, space);
+      expectAgentOutcome(await quotaRun(decisionReplies(text)));
+      expectAgentOutcome(await quotaRun(decisionReplies("B2", text)));
+    },
+  );
+  it.each([
+    ["clean result", "EMP-0127 401, EMP-0090 403, qty 429", ""],
+    ["stderr", "", "API Error: 401 · HTTP 403 Forbidden · qty 429"],
+    ["clean result + stderr", "qty 429; HTTP 401", "403 forbidden; billing address; credential"],
+  ])(
+    "401 / 403 / 429 task data with no usage wording (%s) stays the agent's turn",
+    async (_l, text, stderr) => {
+      const q = await quotaRun([{ stdout: stream(init(), result(text)), stderr, code: 0 }]);
+      expect(q.r).toMatchObject({ decided: 2, failed: 0 });
+      // maxTrials 2 of more: the invocation pauses at its cap (exit 4) once both are decided.
+      expect(exitCodeFor(q.r)).toBe(EXIT.paused);
+      expect(q.r.status).not.toMatch(/halted|aborted/);
+      expect(q.lines).not.toContain(USAGE_LIMIT_REPORT);
+    },
+  );
+  it.each(
+    CLEAN_RESULT_FAULT_PHRASES.flatMap(([t, cls]) => [
+      [t, cls, "text"] as const,
+      [t, cls, "stderr"] as const,
+    ]),
+  )(
+    "L1: %j (%s) on a claimless clean result's %s halts exit 5, nothing counted",
+    async (phrase, cls, where) => {
+      const text = spaced(phrase, NBSP);
+      const q = await quotaRun([
+        where === "text"
+          ? { stdout: stream(init(), result(text)), code: 0 }
+          : { stdout: stream(init(), result("")), stderr: text, code: 0 },
+      ]);
+      expect(q.r).toMatchObject({
+        status: "halted",
+        code: `planner-${cls}`,
+        decided: 0,
+        failed: 0,
+      });
+      expect(exitCodeFor(q.r)).toBe(EXIT.subscriptionStop);
+      expect(q.fake.calls).toHaveLength(1);
+      expect(readdirSync(join(q.dir, "rows"))).toEqual([]);
+      expect(attemptsSpent(readLedger(q.dir)).size).toBe(0);
+    },
+  );
+  it.each(CLEAN_RESULT_FAULT_PHRASES.map(([t]) => t))(
+    "L1 negative: %j inside a valid decision is the agent's",
+    async (phrase) => {
+      expectAgentOutcome(await quotaRun(decisionReplies(phrase)));
+      expectAgentOutcome(await quotaRun(decisionReplies("B2", phrase)));
+    },
+  );
+  it.each(
+    UNMAPPED_STRUCTURED.flatMap(([field, extra]) =>
+      FAULT_WORDING.filter(([, cls]) => cls !== "rate-limit").map(
+        ([t, cls]) => [field, t, cls, extra] as const,
+      ),
+    ),
+  )("B2: unmapped %s with %j halts as %s, no attempt spent", async (_f, text, cls, extra) => {
+    const q = await quotaRun([
+      { stdout: stream(init(), result(text, { is_error: true, ...extra })), code: 1 },
+    ]);
+    expect(q.r).toMatchObject({ status: "halted", code: `planner-${cls}`, decided: 0, failed: 0 });
+    expect(q.fake.calls).toHaveLength(1);
+    expect(attemptsSpent(readLedger(q.dir)).size).toBe(0);
+  });
+  it("B2 control: an unmapped status 500 with no wording is still a per-trial error result", async () => {
+    const q = await quotaRun([
+      { stdout: stream(init(), result("odd", { is_error: true, api_error_status: 500 })), code: 1 },
+    ]);
+    expect(q.r).toMatchObject({ status: "aborted", code: "planner-error-result" });
   });
 });
