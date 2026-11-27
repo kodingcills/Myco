@@ -36,7 +36,7 @@ import type { CaptureInput } from "../integrity/vault.ts";
 import { AgentClient, SshTunnel } from "../win/agent-client.ts";
 import { type ClaudeDriverOptions, claudeDriver, type SpawnFn } from "./claude-transport.ts";
 import { HCU_GUEST_COMMAND } from "./hcu-actuator.ts";
-import { openHcuSession, probeHcuDesktop } from "./hcu-ssh.ts";
+import { HCU_PROBE_TIMEOUT_MS, type HcuSpawn, openHcuSession, probeHcuDesktop } from "./hcu-ssh.ts";
 import {
   type AgentReport,
   type AttemptContext,
@@ -411,6 +411,20 @@ export interface RealVmBackendOptions {
   readonly pingIntervalMs?: number;
 }
 
+/**
+ * The real backend's pre-agent HCU check (#733 B1): the actuator's own SSH channel and command
+ * (`ACTUATOR_SERVER_TEMPLATE` carries the same `HCU_GUEST_COMMAND`; pinned equal by test), so
+ * the probe sees what the agent will see. Connect, initialise, one screenshot, bounded.
+ * Exported so a test drives it through a fake `ssh` (`test/pilot/hcu-ssh.test.ts`).
+ */
+export function realHcuProbe(
+  spawn: HcuSpawn,
+  home: string,
+  timeoutMs: number = HCU_PROBE_TIMEOUT_MS,
+): Promise<void> {
+  return probeHcuDesktop(() => openHcuSession(spawn, HCU_GUEST_COMMAND, home), timeoutMs);
+}
+
 export function realVmBackend(opts: RealVmBackendOptions): VmBackend {
   // A test must never reach the VM (brief: fakes only). Refused, not skipped.
   if (process.env.VITEST !== undefined)
@@ -466,11 +480,7 @@ export function realVmBackend(opts: RealVmBackendOptions): VmBackend {
         });
       });
     },
-    probeHcu() {
-      // The actuator's own channel and command (`ACTUATOR_SERVER_TEMPLATE` carries the same
-      // `HCU_GUEST_COMMAND`; pinned equal by test), so the probe sees what the agent will see.
-      return probeHcuDesktop(() => openHcuSession(spawn, HCU_GUEST_COMMAND, homedir()));
-    },
+    probeHcu: () => realHcuProbe(spawn, homedir()),
     async open() {
       // The file the deploy just wrote (`agentTokenFile`), read at the point of use.
       const token = resolveRunLiveToken(["--token-file", tokenOut], process.env, homedir());

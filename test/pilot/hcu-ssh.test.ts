@@ -5,6 +5,8 @@
  */
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_HCU_GUEST_COMMAND } from "../../src/baseline/hcu-shell-live/live-vm.ts";
@@ -19,7 +21,9 @@ import {
   openHcuSession,
   probeHcuDesktop,
 } from "../../src/pilot/hcu-ssh.ts";
+import { realHcuProbe } from "../../src/pilot/vm-capture.ts";
 import { fakeHcuSession } from "./fake-hcu.ts";
+import { ROOT } from "./helpers.ts";
 
 describe("the attach form (VM-owner finding on #733, lead ruling 14:00Z)", () => {
   it("the actuator's HCU command is the attach form, and the plan carries exactly it", () => {
@@ -122,5 +126,78 @@ describe("probeHcuDesktop: connect plus ONE successful screenshot (lead ruling 1
 
   it("is bounded (60 s by default)", () => {
     expect(HCU_PROBE_TIMEOUT_MS).toBe(60_000);
+  });
+});
+
+/**
+ * A fake `ssh` whose child speaks HCU's MCP on stdio (newline-delimited JSON-RPC), so the real
+ * backend's probe runs end to end: `openHcuSession` -> `mcpStdio` -> `connectHcuGui`.
+ */
+function fakeSshHcu(screenshot: "ok" | "error") {
+  const calls: { command: string; args: readonly string[] }[] = [];
+  let killed = 0;
+  const spawn: HcuSpawn = (command, args) => {
+    calls.push({ command, args });
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    let buf = "";
+    stdin.on("data", (d: Buffer) => {
+      buf += d.toString("utf8");
+      let nl = buf.indexOf("\n");
+      while (nl >= 0) {
+        const msg = JSON.parse(buf.slice(0, nl)) as { id?: number; method: string };
+        buf = buf.slice(nl + 1);
+        nl = buf.indexOf("\n");
+        if (msg.id === undefined) continue;
+        const result =
+          msg.method === "initialize"
+            ? { protocolVersion: "2025-06-18" }
+            : msg.method === "tools/list"
+              ? { tools: [{ name: "GUI" }] }
+              : screenshot === "ok"
+                ? {
+                    content: [
+                      { type: "text", text: '{"ok":true}' },
+                      { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+                    ],
+                  }
+                : { isError: true, content: [{ type: "text", text: '{"ok":false}' }] };
+        stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result })}\n`);
+      }
+    });
+    const child = new EventEmitter() as ChildProcess & EventEmitter;
+    Object.assign(child, {
+      stdin,
+      stdout,
+      kill: () => {
+        killed += 1;
+        return true;
+      },
+    });
+    return child;
+  };
+  return { spawn, calls, killed: () => killed };
+}
+
+describe("the real backend's probe (realHcuProbe), end to end through a fake ssh", () => {
+  it("runs ssh with the actuator's attach command and resolves on one screenshot; ssh is closed", async () => {
+    const ssh = fakeSshHcu("ok");
+    await expect(realHcuProbe(ssh.spawn, "/home/op", 2000)).resolves.toBeUndefined();
+    expect(ssh.calls).toEqual([
+      { command: "ssh", args: hcuSshArgs(HCU_GUEST_COMMAND, "/home/op") },
+    ]);
+    expect(ssh.killed()).toBe(1);
+  });
+
+  it("rejects when the guest HCU cannot screenshot the desktop", async () => {
+    const ssh = fakeSshHcu("error");
+    await expect(realHcuProbe(ssh.spawn, "/home/op", 2000)).rejects.toThrow("hcu-unreachable");
+    expect(ssh.killed()).toBe(1);
+  });
+
+  it("realVmBackend wires probeHcu to realHcuProbe (the backend itself is never built in a test)", () => {
+    const src = readFileSync(join(ROOT, "src/pilot/vm-capture.ts"), "utf8");
+    const backend = src.slice(src.indexOf("export function realVmBackend("));
+    expect(backend).toMatch(/probeHcu: \(\) => realHcuProbe\(spawn, homedir\(\)\),/);
   });
 });
