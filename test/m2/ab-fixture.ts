@@ -6,11 +6,12 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { BenchmarkArmRow } from "../../src/benchmark/check.ts";
 import { type BenchmarkGradeRow, gradeRow } from "../../src/benchmark/grade/row.ts";
 import { type BenchmarkTask, buildTaskSet } from "../../src/benchmark/taskset.ts";
 import type { TrialOps } from "../../src/m2/evidence.ts";
+import { PREREG_MD } from "../../src/pilot/ab-prereg.ts";
 
 export const AB_TASKS = buildTaskSet().tasks;
 const H = (n: number) => n.toString(16).padStart(64, "0");
@@ -149,7 +150,7 @@ export interface AbPackSpec {
   arms?: { on: AbArmFiles; off: AbArmFiles };
   manifest?: Record<string, unknown>;
   configs?: { on: unknown; off: unknown };
-  /** Written as `<repoRoot>/prereg/<name>.md`; the manifest declares its sha256 unless overridden. */
+  /** Written as `<repoRoot>/<PREREG_MD>`; the manifest declares its sha256 unless overridden. */
   prereg?: string;
   /** Use this already-committed repository file as the pre-registration instead (nothing written). */
   preregRepoFile?: { root: string; file: string };
@@ -199,13 +200,14 @@ export function writeAbPack(
         },
       };
     } else {
+      // The pinned path (#554 S1): the fixture repository's own copy of PREREG_MD.
       const text = spec.prereg ?? "# corrections A/B pre-registration (fixture)\n";
-      mkdirSync(join(repoRoot, "prereg"), { recursive: true });
-      writeFileSync(join(repoRoot, "prereg", `${name}.md`), text);
+      mkdirSync(dirname(join(repoRoot, PREREG_MD)), { recursive: true });
+      writeFileSync(join(repoRoot, PREREG_MD), text);
       manifest = {
         ...manifest,
         preregistration: {
-          file: `prereg/${name}.md`,
+          file: PREREG_MD,
           sha256: createHash("sha256").update(text).digest("hex"),
         },
       };

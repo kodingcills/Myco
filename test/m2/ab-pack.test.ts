@@ -17,17 +17,21 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { m2AbPackManifestSchema } from "../../schemas/m2-ab-pack.ts";
+import { validateSchema } from "../../schemas/validate.ts";
 import type { BenchmarkArmRow } from "../../src/benchmark/check.ts";
 import {
   checkAbPack,
   EVIDENCE_TREE,
+  PREREG_FILES,
   preregLocation,
   preregSha256,
   readAbPack,
 } from "../../src/m2/ab-pack.ts";
 import { checkPack, readPack } from "../../src/m2/evidence.ts";
+import { PREREG_JSON, PREREG_MD } from "../../src/pilot/ab-prereg.ts";
 import {
   AB_TASKS,
   type AbArmFiles,
@@ -68,7 +72,7 @@ describe("an A/B pack, Stage 1", () => {
     const root = fresh();
     try {
       const dir = writeAbPack("m2-ab-s1", { stage: 1 }, root);
-      writeFileSync(join(root, "prereg", "m2-ab-s1.md"), "edited after the run\n");
+      writeFileSync(join(root, PREREG_MD), "edited after the run\n");
       expect(check(dir, root).errors.join("\n")).toMatch(/pre-registration/i);
       const none = writeAbPack(
         "m2-ab-none",
@@ -87,9 +91,11 @@ describe("an A/B pack, Stage 1", () => {
       );
       expect(check(outside, root).ok).toBe(false);
       // The reader never opens a file outside the repository, whatever the schema says later.
+      // Since #554 S1 it is refused by the pin, before the location check could open anything.
       expect(readAbPack(outside, root).readErrors).toContain(
-        "preregistration.file ../x.md: outside the repository",
+        `preregistration.file ../x.md: not the pre-registration (it must be exactly ${PREREG_MD} or ${PREREG_JSON})`,
       );
+      expect(preregLocation(outside, root, "../x.md").error).toBe("outside the repository");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -152,10 +158,11 @@ describe("an A/B pack, Stage 0: plumbing, effect claim null", () => {
     try {
       const pre = writeAbPack(
         "m2-ab-s0p",
-        { stage: 0, manifest: { preregistration: { file: "p.md", sha256: "a".repeat(64) } } },
+        { stage: 0, manifest: { preregistration: { file: PREREG_MD, sha256: "a".repeat(64) } } },
         root,
       );
-      writeFileSync(join(root, "p.md"), "x");
+      mkdirSync(join(root, "docs", "benchmark"), { recursive: true });
+      writeFileSync(join(root, PREREG_MD), "x");
       expect(check(pre, root).errors).toContain(
         "pack.json: a Stage-0 pack carries no pre-registration (Stage 0 claims nothing)",
       );
@@ -387,6 +394,17 @@ describe("#554 round 1 fixes", () => {
     }
   });
 
+  // Since #554 S1 the bound file is pinned to PREREG_MD or PREREG_JSON (the pin tests are in
+  // "the pre-registration path is pinned" below). The location rules still apply to the pinned
+  // path itself, so each case here makes `<repo>/<PREREG_MD>` the offending object.
+  const pinned = (root: string) => join(root, PREREG_MD);
+  const replacePinned = (root: string) => {
+    rmSync(pinned(root), { recursive: true, force: true });
+    mkdirSync(dirname(pinned(root)), { recursive: true });
+    return pinned(root);
+  };
+  const LOCATED = `preregistration.file ${PREREG_MD}`;
+
   describe("D2: the pre-registration must be a repository file the pack cannot have written", () => {
     it("the pack's own README (written after the run, hash matching) is refused", () => {
       const root = fresh();
@@ -394,11 +412,16 @@ describe("#554 round 1 fixes", () => {
         const dir = writeAbPack("m2-ab-self", { stage: 1 }, root);
         const text = "# the design, written after the run\n";
         writeFileSync(join(dir, "README.md"), text);
-        setPrereg(dir, "m2-ab-self/README.md", text);
+        symlinkSync(join(dir, "README.md"), replacePinned(root));
+        setPrereg(dir, PREREG_MD, text);
         const r = check(dir, root);
         expect(r.ok).toBe(false);
         expect(r.errors).toContain(
-          "preregistration.file m2-ab-self/README.md: inside the pack (a pack cannot certify its own pre-registration)",
+          `${LOCATED}: inside the pack (a pack cannot certify its own pre-registration)`,
+        );
+        // preregLocation itself, on the README's own spelling (no pin at this layer).
+        expect(preregLocation(dir, root, "m2-ab-self/README.md").error).toBe(
+          "inside the pack (a pack cannot certify its own pre-registration)",
         );
       } finally {
         rmSync(root, { recursive: true, force: true });
@@ -413,9 +436,10 @@ describe("#554 round 1 fixes", () => {
         mkdirSync(other, { recursive: true });
         const text = "# a design inside the evidence tree\n";
         writeFileSync(join(other, "README.md"), text);
-        setPrereg(dir, "docs/research/experiments/m2-other/README.md", text);
-        expect(check(dir, root).errors.join("\n")).toMatch(
-          /preregistration\.file docs\/research\/experiments\/m2-other\/README\.md: inside the evidence tree/,
+        symlinkSync(join(other, "README.md"), replacePinned(root));
+        setPrereg(dir, PREREG_MD, text);
+        expect(check(dir, root).errors.join("\n")).toContain(
+          `${LOCATED}: inside the evidence tree`,
         );
       } finally {
         rmSync(root, { recursive: true, force: true });
@@ -429,11 +453,10 @@ describe("#554 round 1 fixes", () => {
         const dir = writeAbPack("m2-ab-link", { stage: 1 }, root);
         const text = "# a design outside the repository\n";
         writeFileSync(join(outside, "design.md"), text);
-        mkdirSync(join(root, "docs"), { recursive: true });
-        symlinkSync(join(outside, "design.md"), join(root, "docs", "design.md"));
-        setPrereg(dir, "docs/design.md", text);
+        symlinkSync(join(outside, "design.md"), replacePinned(root));
+        setPrereg(dir, PREREG_MD, text);
         expect(check(dir, root).errors).toContain(
-          "preregistration.file docs/design.md: outside the repository (through a link)",
+          `${LOCATED}: outside the repository (through a link)`,
         );
       } finally {
         rmSync(root, { recursive: true, force: true });
@@ -451,10 +474,10 @@ describe("#554 round 1 fixes", () => {
         const dir = writeAbPack("m2-ab-sib", { stage: 1 }, root);
         const text = "# a design next door\n";
         writeFileSync(join(sibling, "design.md"), text);
-        symlinkSync(join(sibling, "design.md"), join(root, "design.md"));
-        setPrereg(dir, "design.md", text);
+        symlinkSync(join(sibling, "design.md"), replacePinned(root));
+        setPrereg(dir, PREREG_MD, text);
         expect(check(dir, root).errors).toContain(
-          "preregistration.file design.md: outside the repository (through a link)",
+          `${LOCATED}: outside the repository (through a link)`,
         );
       } finally {
         rmSync(parent, { recursive: true, force: true });
@@ -465,27 +488,27 @@ describe("#554 round 1 fixes", () => {
       const root = fresh();
       try {
         const dir = writeAbPack("m2-ab-missing", { stage: 1 }, root);
-        setPrereg(dir, "docs/benchmark/absent.md", "x");
+        rmSync(pinned(root));
+        setPrereg(dir, PREREG_JSON, "x");
         expect(check(dir, root).errors).toContain(
-          "preregistration.file docs/benchmark/absent.md: not committed",
+          `preregistration.file ${PREREG_JSON}: not committed`,
         );
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
     });
 
-    it("a directory is not a pre-registration; a committed design document outside the pack is bound", () => {
+    it("a directory is not a pre-registration; the committed pre-registration outside the pack is bound", () => {
       const root = fresh();
       try {
         const dir = writeAbPack("m2-ab-dir", { stage: 1 }, root);
-        mkdirSync(join(root, "docs", "benchmark"), { recursive: true });
-        setPrereg(dir, "docs/benchmark", "");
-        expect(check(dir, root).errors).toContain(
-          "preregistration.file docs/benchmark: not a file",
-        );
+        mkdirSync(replacePinned(root));
+        setPrereg(dir, PREREG_MD, "");
+        expect(check(dir, root).errors).toContain(`${LOCATED}: not a file`);
         const text = "# corrections A/B pre-registration\n";
-        writeFileSync(join(root, "docs", "benchmark", "prereg.md"), text);
-        setPrereg(dir, "docs/benchmark/prereg.md", text);
+        rmSync(pinned(root), { recursive: true });
+        writeFileSync(pinned(root), text);
+        setPrereg(dir, PREREG_MD, text);
         const r = check(dir, root);
         expect(r.errors).toEqual([]);
         expect(r.ok).toBe(true);
@@ -512,8 +535,14 @@ describe("#554 round 1 fixes", () => {
           setPrereg(dir, spelling, text);
           const r = check(dir, root);
           expect(r.ok, spelling).toBe(false);
-          expect(r.errors, spelling).toContain(
-            `preregistration.file ${spelling}: ${folds ? "inside the pack (a pack cannot certify its own pre-registration)" : "not committed"}`,
+          // Refused by the pin before it is opened; the location layer alone refuses it too.
+          expect(r.errors.join("\n"), spelling).toContain(
+            `preregistration.file ${spelling}: not the pre-registration`,
+          );
+          expect(preregLocation(dir, root, spelling).error, spelling).toBe(
+            folds
+              ? "inside the pack (a pack cannot certify its own pre-registration)"
+              : "not committed",
           );
         }
       } finally {
@@ -531,12 +560,11 @@ describe("#554 round 1 fixes", () => {
         const dir = writeAbPack("m2-ab-tl", { stage: 1 }, root);
         const text = "# a design inside the evidence tree\n";
         writeFileSync(join(store, "m2-other", "README.md"), text);
-        setPrereg(dir, "store/experiments/m2-other/README.md", text);
+        symlinkSync(join(store, "m2-other", "README.md"), replacePinned(root));
+        setPrereg(dir, PREREG_MD, text);
         const r = check(dir, root);
         expect(r.ok).toBe(false);
-        expect(r.errors.join("\n")).toMatch(
-          /preregistration\.file store\/experiments\/m2-other\/README\.md: inside the evidence tree/,
-        );
+        expect(r.errors.join("\n")).toContain(`${LOCATED}: inside the evidence tree`);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
@@ -548,13 +576,12 @@ describe("#554 round 1 fixes", () => {
         const dir = writeAbPack("m2-ab-hl", { stage: 1 }, root);
         const text = "# the design, written after the run\n";
         writeFileSync(join(dir, "README.md"), text);
-        mkdirSync(join(root, "docs"), { recursive: true });
-        linkSync(join(dir, "README.md"), join(root, "docs", "design.md"));
-        setPrereg(dir, "docs/design.md", text);
+        linkSync(join(dir, "README.md"), replacePinned(root));
+        setPrereg(dir, PREREG_MD, text);
         const r = check(dir, root);
         expect(r.ok).toBe(false);
         expect(r.errors).toContain(
-          "preregistration.file docs/design.md: a file with 2 hard links (its other names are invisible to realpath, so its location cannot be checked)",
+          `${LOCATED}: a file with 2 hard links (its other names are invisible to realpath, so its location cannot be checked)`,
         );
       } finally {
         rmSync(root, { recursive: true, force: true });
@@ -566,21 +593,23 @@ describe("#554 round 1 fixes", () => {
       try {
         const dir = writeAbPack("m2-ab-real", { stage: 1 }, root);
         const text = "# corrections A/B pre-registration\n";
-        mkdirSync(join(root, "docs", "benchmark"), { recursive: true });
-        writeFileSync(join(root, "docs", "benchmark", "prereg.md"), text);
-        symlinkSync(join(root, "docs", "benchmark"), join(root, "via"));
-        setPrereg(dir, "via/prereg.md", text);
+        // The pinned path reached through a directory link (docs/benchmark -> real/benchmark).
+        rmSync(dirname(pinned(root)), { recursive: true });
+        mkdirSync(join(root, "real", "benchmark"), { recursive: true });
+        writeFileSync(join(root, "real", "benchmark", basename(PREREG_MD)), text);
+        symlinkSync(join(root, "real", "benchmark"), dirname(pinned(root)));
+        setPrereg(dir, PREREG_MD, text);
         const input = readAbPack(dir, root);
         expect(input.readErrors).toEqual([]);
         expect(input.preregCommittedSha256).toBe(sha256(text));
         expect(checkAbPack(input).ok).toBe(true);
         // A file replaced between the check and the read is not bound (one descriptor, same inode).
-        const where = preregLocation(dir, root, "via/prereg.md");
+        const where = preregLocation(dir, root, PREREG_MD);
         expect(where.error).toBeNull();
         if (where.error !== null) return;
         expect(preregSha256(where)).toBe(sha256(text));
-        writeFileSync(join(root, "docs", "benchmark", "swap.md"), "# a different design\n");
-        renameSync(join(root, "docs", "benchmark", "swap.md"), where.real);
+        writeFileSync(join(root, "real", "benchmark", "swap.md"), "# a different design\n");
+        renameSync(join(root, "real", "benchmark", "swap.md"), where.real);
         expect(preregSha256(where)).toBeNull();
         // And a pre-registration left unread (null hash) never passes on its own.
         const unread = checkAbPack({ ...input, preregCommittedSha256: null });
@@ -606,4 +635,135 @@ describe("#554 round 1 fixes", () => {
       }
     });
   });
+});
+
+describe("#554 S1: the pre-registration path is pinned to track E's file", () => {
+  const sha256 = (b: string | Buffer) => createHash("sha256").update(b).digest("hex");
+  const TEXT = "# corrections A/B pre-registration (pinned)\n";
+  const JSON_TEXT = '{"schema":"myco.pilot.corrections-ab-prereg/1"}\n';
+  /** A fixture repository with both pinned files committed, and one Stage-1 pack in it. */
+  const repo = (name: string) => {
+    const root = fresh();
+    const dir = writeAbPack(name, { stage: 1, prereg: TEXT }, root);
+    writeFileSync(join(root, PREREG_JSON), JSON_TEXT);
+    return { root, dir };
+  };
+  const bind = (dir: string, file: string, digest: string) => {
+    const m = JSON.parse(readFileSync(join(dir, "pack.json"), "utf8"));
+    m.preregistration = { file, sha256: digest };
+    writeFileSync(join(dir, "pack.json"), `${JSON.stringify(m, null, 2)}\n`);
+  };
+  const pinError = (file: string) =>
+    `preregistration.file ${file}: not the pre-registration (it must be exactly ${PREREG_MD} or ${PREREG_JSON})`;
+
+  it("the pinned paths are the constants of src/pilot/ab-prereg.ts, and both bind with a matching hash", () => {
+    expect(PREREG_FILES).toEqual([PREREG_MD, PREREG_JSON]);
+    const { root, dir } = repo("m2-ab-pin-ok");
+    try {
+      for (const [file, text] of [
+        [PREREG_MD, TEXT],
+        [PREREG_JSON, JSON_TEXT],
+      ] as const) {
+        bind(dir, file, sha256(text));
+        const input = readAbPack(dir, root);
+        expect(input.readErrors, file).toEqual([]);
+        expect(input.preregCommittedSha256, file).toBe(sha256(text));
+        const r = checkAbPack(input);
+        expect(r.errors, file).toEqual([]);
+        expect(r.ok, file).toBe(true);
+        // The hash is still enforced on the pinned path.
+        bind(dir, file, sha256(`${text}edited`));
+        expect(check(dir, root).ok, `${file} with another hash`).toBe(false);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("every other path is refused, hash matching or not, and is never opened", () => {
+    const { root, dir } = repo("m2-ab-pin-other");
+    try {
+      // A copy of the pre-registration elsewhere, a link to it, the pack's README, another file.
+      mkdirSync(join(root, "docs", "other"), { recursive: true });
+      writeFileSync(join(root, "docs", "other", basename(PREREG_MD)), TEXT);
+      symlinkSync(join(root, PREREG_MD), join(root, "docs", "benchmark", "prereg-link.md"));
+      symlinkSync(join(root, "docs", "benchmark"), join(root, "bench"));
+      writeFileSync(join(dir, "README.md"), TEXT);
+      writeFileSync(join(root, "docs", "design.md"), TEXT);
+      const upper = PREREG_MD.replace("corrections-ab-prereg", "Corrections-AB-Prereg");
+      for (const file of [
+        "docs/other/corrections-ab-prereg.md",
+        upper,
+        PREREG_MD.toUpperCase(),
+        `./${PREREG_MD}`,
+        PREREG_MD.replace("docs/", "docs//"),
+        "docs/benchmark/prereg-link.md",
+        `bench/${basename(PREREG_MD)}`,
+        "m2-ab-pin-other/README.md",
+        "docs/design.md",
+        "docs/benchmark/corrections-ab-prereg",
+      ]) {
+        bind(dir, file, sha256(TEXT));
+        const input = readAbPack(dir, root);
+        expect(input.readErrors, file).toContain(pinError(file));
+        // Never opened: no hash is computed for an unpinned path.
+        expect(input.preregCommittedSha256, file).toBeNull();
+        const r = checkAbPack(input);
+        expect(r.ok, file).toBe(false);
+        // The schema refuses it independently of the reader.
+        expect(
+          validateSchema(
+            JSON.parse(readFileSync(join(dir, "pack.json"), "utf8")),
+            m2AbPackManifestSchema,
+          )
+            .map((i) => i.path)
+            .join(),
+          file,
+        ).toContain("preregistration");
+      }
+      // The pinned spellings pass the schema.
+      for (const file of [PREREG_MD, PREREG_JSON]) {
+        bind(dir, file, sha256(TEXT));
+        expect(
+          validateSchema(
+            JSON.parse(readFileSync(join(dir, "pack.json"), "utf8")),
+            m2AbPackManifestSchema,
+          ),
+          file,
+        ).toEqual([]);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("P3: the CLI's R path applies the experiment-label refusal (an R pack with one labelled row, no marker)", () => {
+    const root = fresh();
+    try {
+      const trials = r1Trials();
+      const first = trials[0];
+      if (first === undefined) throw new Error("no trial");
+      trials[0] = {
+        ...first,
+        arm: {
+          ...(first.arm as BenchmarkArmRow),
+          experiment: { id: "corrections-ab", stage: 1, arm: "off", seed: "s1-off" },
+        } as BenchmarkArmRow,
+      };
+      const dir = writePack("m2-fx-labelled", trials, manifest(), root);
+      expect(existsSync(join(dir, "EXPERIMENT"))).toBe(false);
+      expect(existsSync(join(dir, "SIMULATED"))).toBe(false);
+      const r = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "scripts/m2-evidence-check.ts", "--all", "--root", root],
+        { encoding: "utf8" },
+      );
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(
+        /ERROR \S*m2-fx-labelled: provenance: 1 arm row\(s\) labelled experiment-only: experiment rows are never R1 evidence/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
