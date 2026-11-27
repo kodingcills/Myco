@@ -64,9 +64,13 @@ npx tsx scripts/benchmark-release-package.ts --ref origin/main --out <new dir> \
   - the fixture untouched, which must grade `fail`;
   - one missing document per fault class, which must grade `ungradable`.
 
-  That is 195 requests. It runs the bundled grader from the bundle tree with a bare
-  environment and refuses the build unless every status is the constructed one. The rows
-  become `reproduce-expected.jsonl`.
+  That is 195 requests. It runs the bundled verifier and grader from a staging copy of the
+  bundle tree with a bare environment. It refuses the build unless every row, in request
+  order, has the constructed status and the task set's `graderVersion`
+  (`regradeFindings`). The rows become `reproduce-expected.jsonl`. The generated
+  `reproduce-expected.jsonl`, `release-manifest.json` and `SHA256SUMS` get the same leak scan.
+  Nothing is written to `<out>` until every check passes, so a refused build leaves no partial
+  output.
 
 Exit codes: 0 when built, with a JSON summary; 1 when refused; 2 on a usage error.
 
@@ -75,9 +79,18 @@ Exit codes: 0 when built, with a JSON summary; 1 when refused; 2 on a usage erro
 Job `benchmark release (bundle alone)` (`docs/ci.md`) runs on every PR:
 
 1. It builds the release twice and requires byte-identical archives.
-2. It runs `scripts/benchmark-release-repro.sh <archive>`. The script checks that every tar
-   entry is a 0644 regular file owned by 0/0, then unpacks the archive into a new, empty
-   directory with no clone and no `node_modules`.
+2. It runs `scripts/benchmark-release-repro.sh <archive>`. The script first reads the raw
+   tar headers (`scripts/benchmark-release-check-archive.ts`), not a `tar -tv` listing:
+   GNU tar applies pax headers silently, so a `SCHILY.xattr.com.apple.provenance` record never
+   shows in a listing. It refuses:
+   - any header whose typeflag is not `0` (pax `x`/`g`, GNU `L`/`K`, a directory or a link);
+   - a mode other than 0644, a uid or gid other than 0, or an owner or group name;
+   - a path outside the bundle root, or a bad checksum;
+   - any entry that `SHA256SUMS` does not list, and any listed file that is missing or differs
+     (`sha256sum -c` alone passes an unlisted extra file).
+
+   Then it unpacks the archive into a new, empty directory with no clone and no
+   `node_modules`.
 3. From there, with `PATH` as the only environment variable, it runs `sha256sum -c
    SHA256SUMS`, the bundled task-set verifier and the bundled grader with plain Node 24. The
    regraded rows must equal `reproduce-expected.jsonl` byte for byte.

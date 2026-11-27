@@ -29,7 +29,16 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join, posix } from "node:path";
 import { type HygieneOptions, identityStrings, leaksIn } from "../../dataset/hygiene.ts";
 import { heldEntries, type IdentityPair } from "../../export-guard/identity-words.ts";
@@ -584,12 +593,44 @@ export interface BuildResult {
 const TASK_BUNDLE = RELEASE_REPO_TREES[0] as string;
 
 /**
+ * Findings for the grader's output over the reproduction requests: one row per request, in
+ * order, each with the request's trial key, the status the construction guarantees, and the
+ * task set's grader version. Empty when the grader reproduces the construction exactly.
+ */
+export function regradeFindings(
+  cases: readonly ReproCase[],
+  regraded: string,
+  graderVersion: string,
+): string[] {
+  const rows = regraded
+    .split("\n")
+    .filter((l) => l !== "")
+    .map((l) => JSON.parse(l) as { trialKey?: unknown; status?: unknown; graderVersion?: unknown });
+  const findings: string[] = [];
+  if (rows.length !== cases.length)
+    findings.push(`grader wrote ${rows.length} rows for ${cases.length} requests`);
+  for (const [i, c] of cases.entries()) {
+    const row = rows[i];
+    const key = String(c.request.trialKey);
+    if (row === undefined || row.trialKey !== c.request.trialKey)
+      findings.push(`${key}: no grade row in request order`);
+    else if (row.status !== c.expectStatus)
+      findings.push(`${key}: grader gave ${String(row.status)} (construction: ${c.expectStatus})`);
+    else if (row.graderVersion !== graderVersion)
+      findings.push(`${key}: grader version differs from the task set's`);
+  }
+  return findings;
+}
+
+/**
  * Builds the release into `outDir`: the bundle tree `outDir/<RELEASE_ROOT>/`, the archive
  * `outDir/<RELEASE_ROOT>.tar` and its `.sha256`. Order: collect (allowlist and closure),
- * scan everything, write the tree, run the bundled verifier and grader from the tree with a
- * bare environment (the expected grade rows are the grader's own output, and each row's
- * status must be the one the construction guarantees), then write the manifest, the sums and
- * the archive. The archive is built from the bytes in memory, never re-read from disk.
+ * scan everything, write the tree to a staging directory, run the bundled verifier and grader
+ * from it with a bare environment (the expected grade rows are the grader's own output, and
+ * each row must carry the status the construction guarantees and the task set's grader
+ * version: `regradeFindings`), scan the generated rows, manifest and sums, and only then write
+ * anything to `outDir`: the tree, the archive and its `.sha256`. A refused build leaves
+ * `outDir` as it found it. The archive is built from the bytes in memory, never re-read.
  */
 export function buildRelease(options: BuildOptions): BuildResult {
   const reader = gitReader(options.repoDir, options.ref);
@@ -635,39 +676,31 @@ export function buildRelease(options: BuildOptions): BuildResult {
   assertClean(content, options.scan);
 
   assertFreshOut(options.outDir);
-  mkdirSync(options.outDir, { recursive: true });
-  const tree = join(options.outDir, RELEASE_ROOT);
-  mkdirSync(tree);
-  const write = (f: BundleFile) =>
-    writeFileSync(destinationInside(tree, f.path), f.bytes, { flag: "wx" });
-  for (const f of content) write(f);
+  const writeTree = (tree: string, files: readonly BundleFile[]) => {
+    mkdirSync(tree, { recursive: true });
+    for (const f of files) writeFileSync(destinationInside(tree, f.path), f.bytes, { flag: "wx" });
+  };
 
-  // The bundled code, run from the tree alone: bare environment, the tree as cwd.
-  const run = (args: string[]) =>
-    execFileSync(process.execPath, args, {
-      cwd: tree,
-      env: { PATH: process.env.PATH ?? "" },
-      maxBuffer: 64 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  run(["scripts/benchmark-verify-bundle.ts", TASK_BUNDLE.replace(/\/$/, "")]);
-  const regraded = run(["scripts/benchmark-grade.ts", GENERATED.requests]).toString("utf8");
-  const rows = regraded
-    .split("\n")
-    .filter((l) => l !== "")
-    .map((l) => JSON.parse(l) as { trialKey: string; status: string; graderVersion: string });
-  const findings: string[] = [];
-  if (rows.length !== cases.length)
-    findings.push(`grader wrote ${rows.length} rows for ${cases.length} requests`);
-  for (const [i, c] of cases.entries()) {
-    const row = rows[i];
-    if (row === undefined || row.trialKey !== c.request.trialKey || row.status !== c.expectStatus)
-      findings.push(
-        `${String(c.request.trialKey)}: grader gave ${row?.status} (construction: ${c.expectStatus})`,
-      );
-    else if (row.graderVersion !== graderVersion)
-      findings.push(`${String(c.request.trialKey)}: grader version differs from the task set's`);
+  // The bundled code, run from a staging copy of the tree alone (bare environment, the tree
+  // as cwd), so a refused build leaves nothing in `outDir`.
+  const staging = mkdtempSync(join(tmpdir(), "myco-release-stage-"));
+  let regraded: string;
+  try {
+    const stageTree = join(staging, RELEASE_ROOT);
+    writeTree(stageTree, content);
+    const run = (args: string[]) =>
+      execFileSync(process.execPath, args, {
+        cwd: stageTree,
+        env: { PATH: process.env.PATH ?? "" },
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    run(["scripts/benchmark-verify-bundle.ts", TASK_BUNDLE.replace(/\/$/, "")]);
+    regraded = run(["scripts/benchmark-grade.ts", GENERATED.requests]).toString("utf8");
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
   }
+  const findings = regradeFindings(cases, regraded, graderVersion);
   if (findings.length > 0) throw new ReleaseRefusal(findings);
   const expected: BundleFile = { path: GENERATED.expected, bytes: utf8(regraded) };
 
@@ -680,8 +713,9 @@ export function buildRelease(options: BuildOptions): BuildResult {
   const sums = sha256Sums([...withExpected, manifest]);
   const all = [...withExpected, manifest, sums];
   assertClean([expected, manifest, sums], options.scan);
-  for (const f of [expected, manifest, sums]) write(f);
 
+  mkdirSync(options.outDir, { recursive: true });
+  writeTree(join(options.outDir, RELEASE_ROOT), all);
   const archiveBytes = ustarArchive(RELEASE_ROOT, all, reader.time);
   const archive = `${RELEASE_ROOT}.tar`;
   const archiveSha256 = sha256Hex(archiveBytes);
