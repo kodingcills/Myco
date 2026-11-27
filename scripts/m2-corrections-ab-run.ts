@@ -15,6 +15,13 @@
  *       --incident-sha256 SHA --operator NAME --statement TEXT
  *   scripts/vm-session.sh -- node --import tsx scripts/m2-corrections-ab-run.ts launch \
  *       --stage 0|1 --out DIR --launch-real-trials --plan-sha256 SHA [--token-file PATH]
+ *   scripts/vm-session.sh -- node --import tsx scripts/m2-corrections-ab-run.ts stage0 \
+ *       --out DIR --launch-real-trials --plan-sha256 SHA [--start-new] [--token-file PATH]
+ *
+ * `stage0` is the one Stage 0 command for the VM owner (`src/pilot/ab-stage0.ts`): `launch
+ * --stage 0` plus never-from-0 (`--start-new` on the first invocation only), a refusal while a
+ * PAUSE file or an unacknowledged incident is present, a `claude auth status` preflight, and an
+ * abort (exit 5) on the first transport-error, auth or billing fault.
  *
  * `simulate` runs one stage on the fake transport (virtual clock, chunk budget honoured, so
  * pause/resume can be practised). `launch` prints the plan, checks every real-run precondition
@@ -52,6 +59,7 @@ import {
   stageTasks,
 } from "../src/pilot/ab.ts";
 import { abDryRun } from "../src/pilot/ab-dry-run.ts";
+import { runStage0 } from "../src/pilot/ab-stage0.ts";
 import { configSha256 } from "../src/pilot/config.ts";
 import { fakeDriver, virtualClock } from "../src/pilot/dry-run.ts";
 import { preflightRefusal, subscriptionPreflight } from "../src/pilot/launch.ts";
@@ -245,6 +253,47 @@ try {
           `refusing to launch the corrections A/B:\n${r.refusals.map((x) => `  - ${x}\n`).join("")}`,
         );
       else out(`LIVE corrections A/B, Stage ${stage}: ${JSON.stringify(r.result)}\n`);
+      process.exitCode = r.exitCode;
+      break;
+    }
+    case "stage0": {
+      // Stage 0 as one gated, resumable command (#676): never from 0, nothing pending, every
+      // `launch` precondition, `claude auth status`, and the first transport-error / auth /
+      // billing fault aborts. Runbook: "Stage 0: the one command".
+      const pre = subscriptionPreflight(Object.keys(process.env));
+      if (!pre.ok) {
+        err(`${preflightRefusal(pre)}\n`);
+        process.exitCode = 3;
+        break;
+      }
+      const dir = need("--out");
+      const { loaded, published } = printPlan(0);
+      const r = await runStage0(
+        {
+          loaded,
+          published,
+          outRoot: dir,
+          repoRoot: ROOT,
+          oracleSources: SOURCES,
+          launchRealTrials: rest.includes("--launch-real-trials"),
+          planSha256: flag("--plan-sha256"),
+          startNew: rest.includes("--start-new"),
+        },
+        realLiveDeps(ROOT, flag("--token-file"), (l) => err(`${l}\n`)),
+      );
+      if (r.refusals.length > 0)
+        err(`refusing Stage 0:\n${r.refusals.map((x) => `  - ${x}\n`).join("")}`);
+      else if (r.alreadyComplete)
+        out(
+          `Stage 0 is complete in ${dir}; nothing launched. Next: export --out ${dir} --stage 0 --to <new pack dir>, then check-pack and analyze\n`,
+        );
+      else {
+        if (r.abort !== null)
+          err(
+            `STAGE 0 ABORTED on the first ${r.abort.harnessClass} fault (${r.abort.trialKey}): ${r.abort.rule}\n`,
+          );
+        out(`LIVE corrections A/B, Stage 0: ${JSON.stringify(r.result)}\n`);
+      }
       process.exitCode = r.exitCode;
       break;
     }
