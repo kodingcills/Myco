@@ -365,12 +365,190 @@ function drawnValueCorruptions(
 }
 
 /**
+ * The single errors a calc-record-edit document can carry, combined in pairs by the drawn
+ * self-test (#610 item 1): `wrong-value` (the target holds a wrong value), `wrong-target` (the
+ * target keeps its original value and the new value lands in another cell), `cell` (1 to 3
+ * other cells changed), `row-insert` (a row with a fresh key added) and `row-delete` (a row
+ * other than the target's removed).
+ */
+export const CALC_ERRORS = [
+  "wrong-value",
+  "wrong-target",
+  "cell",
+  "row-insert",
+  "row-delete",
+] as const;
+export type CalcError = (typeof CALC_ERRORS)[number];
+
+/** Every pair of distinct single errors: the drawn two-error documents, one of each per case. */
+export const CALC_ERROR_PAIRS: ReadonlyArray<readonly [CalcError, CalcError]> = CALC_ERRORS.flatMap(
+  (a, i) => CALC_ERRORS.slice(i + 1).map((b) => [a, b] as const),
+);
+
+/**
+ * Wrong values outside `randomValue`'s grammar, one of each per case (#610 item 1): over 64
+ * characters, CSV-quoted (the quoted text may hold a comma or a space), with an edge space, and
+ * a negative number at or below -20000.
+ */
+export const CALC_ODD_VALUES = ["long", "quoted", "space-edged", "large-negative"] as const;
+export type CalcOddValue = (typeof CALC_ODD_VALUES)[number];
+
+/** The R5 class a document carrying `errors` belongs to: the target's own error decides it. */
+function classOf(errors: ReadonlySet<CalcError>): CorruptionClass {
+  if (errors.has("wrong-value")) return "wrong-value";
+  if (errors.has("wrong-target")) return "wrong-target";
+  return "collateral";
+}
+
+/** A wrong target value of the given out-of-grammar shape, its text unlike every `avoid`. */
+function oddValue(draw: Draw, shape: CalcOddValue, avoid: string[]): string {
+  for (let tries = 0; tries < MAX_DRAWS; tries++) {
+    let shown: string;
+    let read: string;
+    if (shape === "long") {
+      shown = randomString(draw, VALUE_CHARS, 65, 200);
+      read = shown;
+    } else if (shape === "quoted") {
+      const inner = randomString(draw, `${VALUE_CHARS} ,`, 1, 24);
+      shown = `"${inner}"`;
+      read = inner;
+    } else if (shape === "space-edged") {
+      read = randomString(draw, VALUE_CHARS, 1, 16);
+      const edge = draw(3);
+      shown = `${edge === 1 ? "" : " "}${read}${edge === 0 ? "" : " "}`;
+    } else {
+      shown = `-${2 + draw(8)}${randomString(draw, DIGITS, 4, 11)}`;
+      read = shown;
+    }
+    // A wrong value whichever way a reader takes it: as written, unquoted or trimmed.
+    if (read.trim() !== "" && ![shown, read].some((v) => avoid.some((a) => sameCell(a, v))))
+      return shown;
+  }
+  throw new Error(NO_USABLE_DRAW);
+}
+
+/**
+ * One document carrying exactly the single errors in `errors`, every one drawn from `draw`:
+ * the wrong value, the cell the new value moves to, the changed cells and their values, the
+ * inserted row (its key, values and position) and the deleted row. The errors never undo each
+ * other: changed cells avoid the target and the moved cell, and the deleted row is one no other
+ * error touched.
+ */
+function compoundCsv(
+  draw: Draw,
+  p: CalcRecordEditParams,
+  fixture: { readonly csv: string; readonly header: string[]; readonly rows: string[][] },
+  correct: string,
+  errors: ReadonlySet<CalcError>,
+): string {
+  const header = fixture.header;
+  const columns = header.slice(1);
+  const col = header.indexOf(p.column);
+  const original = (fixture.rows.find((r) => r[0] === p.rowKey) as string[])[col] as string;
+  const cells = fixture.rows.flatMap((r) => r.slice(1));
+  const rows = correct
+    .trimEnd()
+    .split("\n")
+    .map((l) => l.split(","));
+  const target = rows.find((r, i) => i > 0 && r[0] === p.rowKey) as string[];
+  const touched = new Set<string>([p.rowKey]);
+  const busy = new Set<string>([`${p.rowKey}/${p.column}`]);
+  /** A random data cell no earlier error used whose current value `ok` accepts. */
+  const freeCell = (ok: (cur: string) => boolean) => {
+    for (let tries = 0; tries < MAX_DRAWS; tries++) {
+      const row = rows[1 + draw(rows.length - 1)] as string[];
+      const column = columns[draw(columns.length)] as string;
+      const at = `${row[0]}/${column}`;
+      const cur = row[header.indexOf(column)] as string;
+      if (!busy.has(at) && ok(cur)) {
+        busy.add(at);
+        touched.add(row[0] as string);
+        return { row, c: header.indexOf(column), cur };
+      }
+    }
+    throw new Error(NO_USABLE_DRAW);
+  };
+  if (errors.has("wrong-value"))
+    target[col] = randomValue(draw, p.newValue, cells, [p.newValue, original]);
+  else if (errors.has("wrong-target")) target[col] = original;
+  if (errors.has("wrong-target")) {
+    const m = freeCell((cur) => !sameCell(cur, p.newValue));
+    m.row[m.c] = p.newValue;
+  }
+  if (errors.has("cell"))
+    for (let k = 1 + draw(3); k > 0; k--) {
+      const e = freeCell(() => true);
+      e.row[e.c] = randomValue(draw, e.cur, cells, [e.cur]);
+    }
+  if (errors.has("row-delete")) {
+    const free = rows.flatMap((r, i) => (i > 0 && !touched.has(r[0] as string) ? [i] : []));
+    if (free.length === 0) throw new Error(NO_USABLE_DRAW);
+    rows.splice(free[draw(free.length)] as number, 1);
+  }
+  if (errors.has("row-insert")) {
+    const keys = new Set(fixture.rows.map((r) => (r[0] as string).trim().toLowerCase()));
+    let key: string | undefined;
+    for (let tries = 0; key === undefined && tries < MAX_DRAWS; tries++) {
+      const k =
+        draw(2) === 0
+          ? `EMP-${randomString(draw, DIGITS, 4, 4)}`
+          : `${VALUE_CHARS[draw(62)]}${randomString(draw, VALUE_CHARS, 0, 11)}`;
+      if (!keys.has(k.toLowerCase())) key = k;
+    }
+    if (key === undefined) throw new Error(NO_USABLE_DRAW);
+    const fresh = [key, ...columns.map(() => cells[draw(cells.length)] as string)];
+    rows.splice(1 + draw(rows.length), 0, fresh);
+  }
+  return `${rows.map((r) => r.join(",")).join("\n")}\n`;
+}
+
+/**
+ * The drawn corruptions beyond one error per document (#610 item 1): a two-error document for
+ * every pair of `CALC_ERRORS`, a document for each single structural error (`row-insert`,
+ * `row-delete`), and a wrong value of each `CALC_ODD_VALUES` shape. Drawn afresh per case from
+ * host-side randomness, like the single-error corruptions; never built without a `draw`.
+ */
+function drawnWideCorruptions(
+  draw: Draw,
+  p: CalcRecordEditParams,
+  fixture: { readonly csv: string; readonly header: string[]; readonly rows: string[][] },
+  correct: string,
+): { cls: CorruptionClass; text: string }[] {
+  const original = (fixture.rows.find((r) => r[0] === p.rowKey) as string[])[
+    fixture.header.indexOf(p.column)
+  ] as string;
+  const sets: ReadonlySet<CalcError>[] = [
+    ...CALC_ERROR_PAIRS.map((pair) => new Set<CalcError>(pair)),
+    new Set<CalcError>(["row-insert"]),
+    new Set<CalcError>(["row-delete"]),
+  ];
+  return [
+    ...sets.map((errors) => ({
+      cls: classOf(errors),
+      text: compoundCsv(draw, p, fixture, correct, errors),
+    })),
+    ...CALC_ODD_VALUES.map((shape) => ({
+      cls: "wrong-value" as const,
+      text: editCsv(fixture.csv, [
+        {
+          rowKey: p.rowKey,
+          column: p.column,
+          value: oddValue(draw, shape, [p.newValue, original]),
+        },
+      ]),
+    })),
+  ];
+}
+
+/**
  * The calc-record-edit R5 cases for the given intents, every document (clean and corrupted)
  * named `fileName`. `calcCases` is this over the fixed public seeds, with fixed corruptions
  * (`draw` absent). Agent-written checks (track C) pass `draw`, a host-side random source: then
  * the wrong value, the wrong target, the collateral cells and values and the truncation point
  * are drawn afresh for every case, so a check's author cannot compute the self-test documents
- * from the task's intent. Throws when an intent does not locate a record and column.
+ * from the task's intent. With `draw`, every case also carries the wider drawn corruptions of
+ * `drawnWideCorruptions` (two errors, out-of-grammar values, inserted and deleted rows) after
+ * its six single-error ones. Throws when an intent does not locate a record and column.
  */
 export function calcCasesFor(
   params: readonly CalcRecordEditParams[],
@@ -391,6 +569,7 @@ export function calcCasesFor(
     let wrongTarget: string;
     let collateral: string;
     let cut: Uint8Array;
+    let wide: { cls: CorruptionClass; text: string }[] = [];
     if (draw === undefined) {
       const names = DATA_COLUMNS.map((c) => c.name);
       const neighbour = names[(names.indexOf(p.column) + 1) % names.length] as string;
@@ -408,6 +587,7 @@ export function calcCasesFor(
     } else {
       ({ wrongValue, wrongTarget, collateral } = drawnValueCorruptions(draw, p, fixture, correct));
       cut = bytes.slice(0, 1 + draw(bytes.length - 1));
+      wide = drawnWideCorruptions(draw, p, fixture, correct);
     }
     return {
       id: `calc-${String(i + 1).padStart(2, "0")}`,
@@ -420,6 +600,8 @@ export function calcCasesFor(
         { cls: "collateral", doc: doc(collateral) },
         { cls: "truncated", doc: { fileName, bytes: cut } },
         { cls: "missing-file", doc: doc(null) },
+        // After the six above, so the first corruption of each class stays the single-error one.
+        ...wide.map((w) => ({ cls: w.cls, doc: doc(w.text) })),
       ],
     };
   });
