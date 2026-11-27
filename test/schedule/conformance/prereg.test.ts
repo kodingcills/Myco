@@ -19,6 +19,7 @@ import {
   MANIFEST_PATH,
   MUTANT_COUNT,
   MUTATION_SCRIPT,
+  mutantsFromScript,
   PREREG_PATH,
   parseMutationLog,
   preregFileText,
@@ -68,6 +69,17 @@ function copyRoot(): string {
 
 const append = (dir: string, p: string, text: string) =>
   writeFileSync(join(dir, p), readFileSync(join(dir, p), "utf8") + text);
+
+// biome-ignore lint/suspicious/noExplicitAny: tests tamper with arbitrary prereg fields.
+type Prereg = any;
+
+/** Edit the copy's prereg body and re-hash it consistently, as a forger would. */
+function rehash(dir: string, edit: (p: Prereg) => unknown): void {
+  const f = JSON.parse(readFileSync(join(dir, PREREG_PATH), "utf8"));
+  edit(f.preregistration);
+  f.preregSha256 = preregSha256(f.preregistration);
+  writeFileSync(join(dir, PREREG_PATH), JSON.stringify(f));
+}
 
 describe("trg-v1: the conformance corpus", () => {
   const cases = buildTrgV1();
@@ -181,6 +193,8 @@ describe("s-v1: the frozen pre-registration", () => {
     expect(p.corpus.manifestSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(p.seeds.caseOrder).toMatch(/\w/);
     expect(p.seeds.marker).toMatch(/\w/);
+    expect(p.seeds).toMatchObject({ taskBuild: null, assignment: null, bootstrap: null });
+    expect(p.seeds.note).toMatch(/assignment and bootstrap seeds do not apply/);
     expect(p.stepBudget).toBeNull();
     expect(p.stepBudgetNote).toMatch(/Not applicable/);
     expect(p.modelId).toBeNull();
@@ -199,6 +213,9 @@ describe("s-v1: the frozen pre-registration", () => {
     expect(p.evidence).toMatchObject({ evidence: false, simulated: true, r1Evidence: false });
     expect(p.status).toMatch(/lead ruling pending \(not ratified\)/);
     expect(p.leadRulingPending.length).toBeGreaterThan(0);
+    // No ruling was posted on #637 before the freeze; any later one is recorded with its time.
+    expect(p.leadRulings).toEqual([]);
+    expect(p.leadRulingsNote).toMatch(/No lead ruling was posted/);
     expect(p.executor).toMatch(/no VM lock/);
   });
 
@@ -242,18 +259,84 @@ describe("s-v1: the analysis refuses a tree that changed after the freeze", () =
     writeFileSync(join(dir, PREREG_PATH), JSON.stringify(f));
     expect(refusal(() => loadSV1Prereg(dir))).toBe("PREREG_HASH_MISMATCH");
   });
+
+  it("a re-hashed prereg whose manifest hash disagrees with the committed manifest", () => {
+    const dir = copyRoot();
+    rehash(dir, (p) => {
+      p.corpus.manifestSha256 = "00".repeat(32);
+    });
+    expect(refusal(() => loadSV1Prereg(dir))).toBe("CORPUS_CHANGED");
+  });
+
+  it("cases edited with a re-hashed prereg but the manifest left as frozen", () => {
+    const dir = copyRoot();
+    append(dir, CASES_PATH, "\n");
+    const sha = sha256Hex(readFileSync(join(dir, CASES_PATH)));
+    rehash(dir, (p) => {
+      p.corpus.cases.sha256 = sha;
+    });
+    expect(refusal(() => loadSV1Prereg(dir))).toBe("CORPUS_CHANGED");
+  });
+
+  it.each([
+    ["no pending list", (p: Prereg) => delete p.leadRulingPending],
+    ["a pending list that is not strings", (p: Prereg) => (p.leadRulingPending = [1])],
+    ["no lead-rulings list", (p: Prereg) => delete p.leadRulings],
+  ])("a re-hashed prereg with %s is refused (B1)", (_, edit) => {
+    const dir = copyRoot();
+    rehash(dir, edit);
+    expect(refusal(() => loadSV1Prereg(dir))).toBe("PREREG_SCHEMA");
+  });
+
+  it("a re-hashed prereg whose mutant count disagrees with the frozen script (B2)", () => {
+    const dir = copyRoot();
+    rehash(dir, (p) => {
+      p.mutationProof.mutants = MUTANT_COUNT + 1;
+    });
+    expect(refusal(() => loadSV1Prereg(dir))).toBe("MUTANT_COUNT_MISMATCH");
+  });
+});
+
+describe("s-v1: the frozen mutant set comes from the frozen script (B2)", () => {
+  it("loads every mutant of schedule-mutation-proof.py with its file", () => {
+    const { mutants } = loadSV1Prereg(ROOT).frozen;
+    expect(mutants).toHaveLength(MUTANT_COUNT);
+    expect(mutants).toContainEqual({
+      label: "idempotency: duplicate key check",
+      file: "src/schedule/scheduler.ts",
+    });
+    expect(mutants).toContainEqual({
+      label: "cron: scan bound",
+      file: "src/schedule/cron.ts",
+    });
+    expect(new Set(mutants.map((m) => m.label)).size).toBe(MUTANT_COUNT);
+  });
+
+  const script = read(MUTATION_SCRIPT);
+  it.each([
+    [
+      "a tuple line that does not parse",
+      script.replace('("cron: scan bound", S+', '("cron: scan bound", T+'),
+    ],
+    ["no S prefix", script.replace('S="src/schedule/"', 'S = "src/schedule/"')],
+    ["a repeated label", script.replace('("cron: scan bound",', '("cron: dom/dow OR rule",')],
+    ["no tuples", 'S="src/schedule/"\nM=[]\n'],
+  ])("refuses a script with %s", (_, text) => {
+    expect(refusal(() => mutantsFromScript(text))).toBe("MUTATION_SCRIPT_UNPARSEABLE");
+  });
 });
 
 describe("s-v1: the mutation log and the CLI", () => {
   it("parses the mutation proof script's table", () => {
     const log = "a b | src/x.ts | killed\nc | src/y.ts | SURVIVED\n1/2 mutants killed\n";
     expect(parseMutationLog(log, "ab").rows).toEqual([
-      { label: "a b", status: "killed" },
-      { label: "c", status: "SURVIVED" },
+      { label: "a b", file: "src/x.ts", status: "killed" },
+      { label: "c", file: "src/y.ts", status: "SURVIVED" },
     ]);
   });
 
-  function cli(results: unknown, log: string) {
+  /** Run the analysis CLI of the tree at `root` (the repo, or a tampered copy). */
+  function cli(results: unknown, log: string, root = ROOT) {
     const dir = tmp("myco-sv1-cli-");
     writeFileSync(join(dir, "results.json"), JSON.stringify(results));
     writeFileSync(join(dir, "mutation.txt"), log);
@@ -261,7 +344,7 @@ describe("s-v1: the mutation log and the CLI", () => {
       "npx",
       [
         "tsx",
-        ANALYSIS_SCRIPT,
+        join(root, ANALYSIS_SCRIPT),
         "--results",
         join(dir, "results.json"),
         "--mutation-log",
@@ -272,19 +355,52 @@ describe("s-v1: the mutation log and the CLI", () => {
   }
 
   const committed = JSON.parse(read(PREREG_PATH));
-  const allKilled = read(MUTATION_SCRIPT)
-    .match(/^\("([^"]*)"/gm)
-    ?.map((m) => `${m.slice(2, -1)} | src/schedule/x.ts | killed`)
+  // What `python3 scripts/schedule-mutation-proof.py` prints when every mutant is killed.
+  const allKilled = mutantsFromScript(read(MUTATION_SCRIPT))
+    .map((m) => `${m.label} | ${m.file} | killed`)
     .join("\n");
+  const fabricated = Array.from(
+    { length: MUTANT_COUNT },
+    (_, i) => `fake${i} | nowhere | killed`,
+  ).join("\n");
 
-  it("exits 0 'property holds' on a conforming run and 1 'not shown' on a counterexample", () => {
+  /** A copy of the tree with no lead ruling pending, re-hashed: the bar can hold there. */
+  function ruledRoot() {
+    const dir = copyRoot();
+    rehash(dir, (p) => {
+      p.leadRulingPending = [];
+    });
+    const sha = JSON.parse(readFileSync(join(dir, PREREG_PATH), "utf8")).preregSha256 as string;
+    return { dir, results: { ...perfectResults(), preregSha256: sha } };
+  }
+
+  it("on this tree, a conforming run exits 1 'not shown' with LEAD_RULING_PENDING (B1)", () => {
     const ok = { ...perfectResults(), preregSha256: committed.preregSha256 };
     const r = cli(ok, `${allKilled}\n`);
+    expect(r.status, r.stderr).toBe(1);
+    const report = JSON.parse(r.stdout);
+    expect(report.verdict).toBe("not shown");
+    expect(report.reasons).toEqual(["LEAD_RULING_PENDING"]);
+    expect(report.leadRulingPending).toEqual(committed.preregistration.leadRulingPending);
+  }, 60_000);
+
+  it("with no ruling pending, exits 0 'property holds' and 1 on a surviving mutant", () => {
+    const { dir, results } = ruledRoot();
+    const r = cli(results, `${allKilled}\n`, dir);
     expect(r.status, r.stderr).toBe(0);
     expect(JSON.parse(r.stdout).verdict).toBe("property holds");
-    const bad = cli(ok, `${allKilled?.replace(/killed$/, "SURVIVED")}\n`);
+    const bad = cli(results, `${allKilled.replace(/killed$/, "SURVIVED")}\n`, dir);
     expect(bad.status, bad.stderr).toBe(1);
     expect(JSON.parse(bad.stdout).reasons).toEqual(["MUTANT_SURVIVED"]);
+  }, 60_000);
+
+  it("a fabricated mutation log (56 made-up labels, all killed) is 'not shown' (B2)", () => {
+    const { dir, results } = ruledRoot();
+    const r = cli(results, `${fabricated}\n${MUTANT_COUNT}/${MUTANT_COUNT} mutants killed\n`, dir);
+    expect(r.status, r.stderr).toBe(1);
+    const report = JSON.parse(r.stdout);
+    expect(report.reasons).toEqual(["MUTANT_MISSING", "MUTANT_UNKNOWN"]);
+    expect(report.mutation.missing).toHaveLength(MUTANT_COUNT);
   }, 60_000);
 
   it("exits 2 and analyses nothing for a results file under another pre-registration", () => {

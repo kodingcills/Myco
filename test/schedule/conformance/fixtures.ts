@@ -22,6 +22,8 @@ export const FROZEN: SV1Frozen = {
   manifestSha256: MANIFEST_SHA,
   mutationScriptSha256: SCRIPT_SHA,
   mutantCount: 3,
+  mutants: ["a", "b", "c"].map((label) => ({ label, file: `src/schedule/${label}.ts` })),
+  leadRulingPending: [],
 };
 
 /** What a conforming run observes for case `c`. */
@@ -70,12 +72,17 @@ export function perfectResults(
   };
 }
 
+/** A mutation report; each row's file is the fixture's `src/schedule/<label>.ts` unless given. */
 export function mutation(
-  rows = [
+  rows: { label: string; status: string; file?: string }[] = [
     { label: "a", status: "killed" },
     { label: "b", status: "killed" },
     { label: "c", status: "killed" },
   ],
 ): MutationReport {
-  return { schema: "myco.schedule.mutation-report/1", scriptSha256: SCRIPT_SHA, rows };
+  return {
+    schema: "myco.schedule.mutation-report/1",
+    scriptSha256: SCRIPT_SHA,
+    rows: rows.map((r) => ({ ...r, file: r.file ?? `src/schedule/${r.label}.ts` })),
+  };
 }

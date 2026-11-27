@@ -16,7 +16,12 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type SV1Frozen, SV1RefusalError } from "./analysis.ts";
+import {
+  type MutantRef,
+  type MutationReport,
+  type SV1Frozen,
+  SV1RefusalError,
+} from "./analysis.ts";
 import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { manifestSha256, TRG_VERSION, type TrgCase, type TrgManifest } from "./trg-v1.ts";
 
@@ -86,6 +91,8 @@ export interface SV1Preregistration {
     readonly caseOrder: string;
     readonly marker: string;
     readonly taskBuild: null;
+    readonly assignment: null;
+    readonly bootstrap: null;
     readonly note: string;
   };
   readonly stepBudget: null;
@@ -111,7 +118,19 @@ export interface SV1Preregistration {
   };
   readonly constraints: readonly string[];
   readonly notPreregisteredHere: readonly string[];
+  /** Lead rulings posted on the freeze PR, applied before the freeze, with when they were posted. */
+  readonly leadRulings: readonly LeadRuling[];
+  readonly leadRulingsNote: string;
+  /** While non-empty, the analysis never reads "property holds" (LEAD_RULING_PENDING). */
   readonly leadRulingPending: readonly string[];
+}
+
+export interface LeadRuling {
+  readonly ruling: string;
+  /** ISO 8601 time the ruling was posted. */
+  readonly postedAt: string;
+  /** Where it was posted (a PR comment URL). */
+  readonly source: string;
 }
 
 export interface SV1PreregFile {
@@ -178,7 +197,9 @@ export function buildSV1Prereg(root: string): SV1PreregFile {
       caseOrder: "s-v1-case-order-2026-11-27-q7Tn",
       marker: "s-v1-marker-2026-11-27-Lw3c",
       taskBuild: null,
-      note: "caseOrder fixes the order the runner executes cases in (one shuffled pass, to expose state leaking between cases); marker derives the planted marker values; the corpus build has no randomness, so there is no task-build seed.",
+      assignment: null,
+      bootstrap: null,
+      note: "caseOrder fixes the order the runner executes cases in (one shuffled pass, to expose state leaking between cases); marker derives the planted marker values; the corpus build has no randomness, so there is no task-build seed. capability-spec §3.1's assignment and bootstrap seeds do not apply: a property bar has no arms to assign and no statistic to bootstrap (every case must hold).",
     },
     stepBudget: null,
     stepBudgetNote:
@@ -215,6 +236,9 @@ export function buildSV1Prereg(root: string): SV1PreregFile {
       "#536's P1/P2 unattended-completion experiment (spec-2 §2 S: a secondary experiment, not this bar).",
       "The vm-lock-held case: deferred to the corpus version that ships S-live.",
     ],
+    leadRulings: [],
+    leadRulingsNote:
+      "No lead ruling was posted on the freeze PR (#637) before this freeze, so every item below is still pending and the analysis reports LEAD_RULING_PENDING ('not shown') until a ruling moves it here.",
     leadRulingPending: [
       "Ratification of S's property bar itself (spec-2 status: every bar is a proposal).",
       "Spec-2 §6: property bar for S, with #536's P1/P2 as a secondary experiment rather than part of S's decision.",
@@ -284,6 +308,17 @@ export function loadSV1Prereg(root: string): LoadedSV1 {
     .map((l) => JSON.parse(l) as TrgCase);
   if (corpus.length !== manifest.counts.total) refuse("CORPUS_CHANGED");
 
+  // Lead rulings: a missing or malformed list must never read as "nothing pending".
+  const pending = p.leadRulingPending as unknown;
+  if (!Array.isArray(pending) || !pending.every((x) => typeof x === "string"))
+    refuse("PREREG_SCHEMA");
+  if (!Array.isArray(p.leadRulings)) refuse("PREREG_SCHEMA");
+
+  // The mutant set comes from the frozen script itself (its SHA-256 was checked above), so a
+  // mutation log can only meet bar item 6 by reporting exactly those mutants.
+  const mutants = mutantsFromScript(readFileSync(join(root, p.mutationProof.script.path), "utf8"));
+  if (mutants.length !== p.mutationProof.mutants) refuse("MUTANT_COUNT_MISMATCH");
+
   return {
     frozen: {
       preregSha256: file.preregSha256,
@@ -291,23 +326,48 @@ export function loadSV1Prereg(root: string): LoadedSV1 {
       manifestSha256: p.corpus.manifestSha256,
       mutationScriptSha256: p.mutationProof.script.sha256,
       mutantCount: p.mutationProof.mutants,
+      mutants,
+      leadRulingPending: p.leadRulingPending,
     },
     corpus,
     prereg: file,
   };
 }
 
+const SCRIPT_PREFIX = /^S="([^"\\]+)"$/m;
+const SCRIPT_TUPLE_START = /^\("/gm;
+const SCRIPT_TUPLE = /^\("([^"\\]+)", S\+"([^"\\]+)", /gm;
+
+/**
+ * The mutants (label and file) of `scripts/schedule-mutation-proof.py`: one `("label",
+ * S+"file", old, new)` tuple per line of its `M` list, with `S` the `src/schedule/` prefix.
+ * Refuses (MUTATION_SCRIPT_UNPARSEABLE) when any tuple line does not parse, there is none,
+ * or a label repeats, so the set can never be silently short.
+ */
+export function mutantsFromScript(text: string): MutantRef[] {
+  const prefix = SCRIPT_PREFIX.exec(text)?.[1];
+  if (prefix === undefined) return refuse("MUTATION_SCRIPT_UNPARSEABLE");
+  const out: MutantRef[] = [];
+  for (const m of text.matchAll(SCRIPT_TUPLE))
+    out.push({ label: m[1] as string, file: prefix + (m[2] as string) });
+  const tuples = text.match(SCRIPT_TUPLE_START)?.length ?? 0;
+  if (out.length === 0 || out.length !== tuples) refuse("MUTATION_SCRIPT_UNPARSEABLE");
+  if (new Set(out.map((x) => x.label)).size !== out.length) refuse("MUTATION_SCRIPT_UNPARSEABLE");
+  return out;
+}
+
 /**
  * Parse `scripts/schedule-mutation-proof.py`'s output ("label | file | status" per mutant, then
- * a summary line) into a mutation report bound to the script's SHA-256.
+ * a summary line) into a mutation report. `scriptSha256` is the frozen script's hash; the rows
+ * are bound to that script by the analysis, which requires them to equal its mutant set.
  */
-export function parseMutationLog(text: string, scriptSha256: string) {
-  const rows: { label: string; status: string }[] = [];
+export function parseMutationLog(text: string, scriptSha256: string): MutationReport {
+  const rows: (MutantRef & { status: string })[] = [];
   for (const line of text.split("\n")) {
     const parts = line.split(" | ");
     if (parts.length !== 3) continue;
-    const [label, , status] = parts as [string, string, string];
-    rows.push({ label, status: status.trim() });
+    const [label, file, status] = parts as [string, string, string];
+    rows.push({ label, file, status: status.trim() });
   }
-  return { schema: "myco.schedule.mutation-report/1" as const, scriptSha256, rows };
+  return { schema: "myco.schedule.mutation-report/1", scriptSha256, rows };
 }
