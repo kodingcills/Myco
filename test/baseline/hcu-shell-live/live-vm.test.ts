@@ -143,6 +143,16 @@ describe("liveEnvironment.prepare", () => {
     expect(t.prepared.snapshot).toBe("trial-base-v3");
     expect(t.prepared.fixtureSha256).toBe(TASK.fixtureSha256);
     expect(t.prepared.driver.pipeReachable).toBe(true);
+    // Defence in depth: the verifier's conversion dir and the harness dir are denied by name,
+    // on top of lying outside the read roots.
+    expect(t.prepared.shellPolicy.groundTruthDirs).toEqual([
+      "c:/users/myco/appdata/local/temp",
+      "c:/myco/harness",
+    ]);
+    expect(t.prepared.shellPolicy.readRoots).toEqual([
+      "c:/myco/work/hcu-shell-x/n1",
+      "c:/myco/scratch/hcu-shell-x",
+    ]);
     expect(writes).toContain(`${HARNESS_DIR}\\hcu-shell.ps1`);
     expect(log).toContain("hcu hcu.exe mcp");
     // Capture: the harness reads the path IT created; nothing comes from the agent.
