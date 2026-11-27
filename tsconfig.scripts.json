@@ -35,6 +35,7 @@
     "scripts/m2-fault-suite.ts",
     "scripts/m2-evidence-check.ts",
     "scripts/parallel-run.ts",
+    "scripts/fleet-run.ts",
     "scripts/m2-corrections-ab.ts",
     "scripts/myco-schedule.ts",
     "scripts/myco-record.ts"

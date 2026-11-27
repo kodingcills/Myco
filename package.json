@@ -24,6 +24,7 @@
     "myco-linux": "tsx scripts/linux-run.ts",
     "myco-gate": "tsx scripts/myco-gate.ts",
     "myco-parallel": "tsx scripts/parallel-run.ts",
+    "myco-fleet": "tsx scripts/fleet-run.ts",
     "myco-schedule": "tsx scripts/myco-schedule.ts",
     "myco-watch": "tsx scripts/myco-watch.ts",
     "myco": "bash bin/myco",
