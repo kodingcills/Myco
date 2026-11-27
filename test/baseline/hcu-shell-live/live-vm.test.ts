@@ -7,21 +7,42 @@
  *    stopped (the agent never supplies it);
  *  - the shell policy denies the verifier's conversion dir and the harness dir, so a link
  *    that resolves there makes the row `uncertain` (violated), never verified;
- *  - an unreachable HCU makes the driver not ready (row `uncertain`), with its code;
+ *  - an unreachable HCU is a harness fault with its own code: no row, nothing counted, and the
+ *    runner aborts on the second one (round 2, D3);
+ *  - the reset spawner passes the session lock on FD 9 (a real stub reset under exec 9>lock);
  *  - the guest is released on success and on a failed prepare.
  */
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Mcp } from "../../../src/baseline/c1.ts";
 import { runHcuShellTrial } from "../../../src/baseline/hcu-shell/trial.ts";
 import {
+  defaultLiveDeps,
   HARNESS_DIR,
   type LiveDeps,
   liveEnvironment,
   parseBootClass,
+  RESET_STDIO,
   VERIFIER_TEMP,
 } from "../../../src/baseline/hcu-shell-live/live-vm.ts";
-import { PROBE_SCREENSHOT } from "../../../src/baseline/hcu-shell-live/planner.ts";
-import { demoTasks, type FcTask, loadFcV1 } from "../../../src/baseline/hcu-shell-live/runner.ts";
+import {
+  HCU_PLANNER_MODEL,
+  PROBE_SCREENSHOT,
+} from "../../../src/baseline/hcu-shell-live/planner.ts";
+import {
+  demoTasks,
+  EXIT,
+  exitCodeFor,
+  type FcTask,
+  hcuRunPlan,
+  loadFcV1,
+  readLedger,
+  runHcuShell,
+} from "../../../src/baseline/hcu-shell-live/runner.ts";
 import { scripted } from "../hcu-shell/planners.ts";
 import { useClaudeTrap, useFetchTrap } from "./helpers.ts";
 
@@ -155,10 +176,15 @@ describe("liveEnvironment.prepare", () => {
     ]);
     expect(writes).toContain(`${HARNESS_DIR}\\hcu-shell.ps1`);
     expect(log).toContain("hcu hcu.exe mcp");
-    // Capture: the harness reads the path IT created; nothing comes from the agent.
-    expect(reads).toEqual([]);
-    const doc = await t.prepared.capturePersisted();
+    // Seed read-back (as #598): the harness read the seeded document before the agent ran.
     expect(reads).toEqual([XLSX]);
+    expect(t.capture).toEqual({
+      guestPath: XLSX,
+      seededSha256: createHash("sha256").update(SAVED).digest("hex"),
+    });
+    // Capture: the harness reads the path IT created; nothing comes from the agent.
+    const doc = await t.prepared.capturePersisted();
+    expect(reads).toEqual([XLSX, XLSX]);
     expect(doc?.format).toBe("xlsx");
     expect(Buffer.from(doc?.bytes ?? []).equals(SAVED)).toBe(true);
     await t.release();
@@ -197,17 +223,60 @@ describe("liveEnvironment.prepare", () => {
     expect(log).toContain("cleanup");
     expect(log).toContain("agent-stop");
   });
-  it("an unreachable HCU leaves the driver not ready, with its code, and the row uncertain", async () => {
-    const t = await liveEnvironment(".", deps({ hcuUp: false }).d).prepare(TASK, "k");
-    expect(t.prepared.driver.pipeReachable).toBe(false);
-    expect(t.prepared.driver.diagnostic).toBe("hcu-unreachable");
-    const row = await runHcuShellTrial(
-      { index: 0, params: t.params, ...t.target },
-      t.prepared,
-      scripted(["done"]),
-    );
-    expect(row.verdict).toBe("uncertain");
-    expect(row.verdictReason).toBe("driver-unreachable");
+  it("an unreachable HCU is a harness fault with its own code, and the guest is released (round 2, D3)", async () => {
+    const { d, log } = deps({ hcuUp: false });
+    await expect(liveEnvironment(".", d).prepare(TASK, "k")).rejects.toMatchObject({
+      code: "hcu-unreachable",
+    });
+    expect(log).toContain("hcu-close");
+    expect(log).toContain("cleanup");
+    expect(log).toContain("agent-stop");
+  });
+  it("end to end: an unreachable HCU counts nothing, never calls the planner, and aborts with its code", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hcu-live-"));
+    let acted = 0;
+    const r = await runHcuShell({
+      outDir: dir,
+      repoRoot: ".",
+      tasks: TASKS,
+      plan: hcuRunPlan(TASKS, { hcuGuestCommand: "hcu mcp", guestShellSha256: "0".repeat(64) }),
+      env: liveEnvironment(".", deps({ hcuUp: false }).d),
+      planner: {
+        paid: true,
+        act: async () => {
+          acted++;
+          return { calls: [] };
+        },
+      },
+      plannerModelId: HCU_PLANNER_MODEL,
+      sleep: async () => undefined,
+      load1m: () => 0,
+    });
+    expect(r).toMatchObject({ status: "aborted", code: "hcu-unreachable", decided: 0, failed: 2 });
+    expect(exitCodeFor(r)).toBe(EXIT.repeatFailure);
+    expect(acted).toBe(0);
+    expect(readdirSync(join(dir, "rows"))).toEqual([]);
+    expect(readLedger(dir).filter((l) => l.type === "decided")).toEqual([]);
+  });
+  it("a seeded document that cannot be read back fails closed before the agent runs", async () => {
+    for (const readFile of [
+      async () => Buffer.alloc(0),
+      async () => {
+        throw new Error("read failed");
+      },
+    ]) {
+      const { d, log } = deps();
+      const start = d.startAgent;
+      d.startAgent = async () => {
+        const s = await start();
+        return { ...s, agent: { ...s.agent, readFile } };
+      };
+      await expect(liveEnvironment(".", d).prepare(TASK, "k")).rejects.toMatchObject({
+        code: "seed-readback-failed",
+      });
+      expect(log.some((l) => l.startsWith("hcu "))).toBe(false);
+      expect(log).toContain("agent-stop");
+    }
   });
   it("a shell read that resolves into the verifier's temp dir is a violation: uncertain, output withheld", async () => {
     const escaped = `${VERIFIER_TEMP}\\abc\\fixture.csv`;
@@ -243,5 +312,63 @@ describe("liveEnvironment.prepare", () => {
     );
     expect(row.shell.integrity).toBe("unaudited");
     expect(row.verdict).toBe("uncertain");
+  });
+});
+
+describe("the VM lock reaches the reset through FD 9 (round 2, D4)", () => {
+  const probe = resolve("test/baseline/hcu-shell-live/fixtures/reset-fd9-probe.ts");
+  /** A stub reset: reports the inode FD 9 refers to (or none), then a cold boot line. */
+  function stub(): string {
+    const dir = mkdtempSync(join(tmpdir(), "reset-stub-"));
+    const path = join(dir, "reset-trial-vm.sh");
+    writeFileSync(
+      path,
+      [
+        "#!/bin/bash",
+        "ino=$(ls -iL /dev/fd/9 2>/dev/null | awk '{print $1}')",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal bash parameter expansion.
+        'echo "fd9-inode=${ino:-none}" >&2',
+        'echo "reset-trial-vm: boot class=cold" >&2',
+        "",
+      ].join("\n"),
+    );
+    return path;
+  }
+  const launch = (script: string) =>
+    spawnSync("bash", ["-c", script], {
+      encoding: "utf8",
+      timeout: 60_000,
+      env: { ...process.env },
+    });
+
+  it("passes FD 9 and closes FDs 3-8", () => {
+    expect(RESET_STDIO[9]).toBe(9);
+    expect(RESET_STDIO.slice(3, 9)).toEqual(Array(6).fill("ignore"));
+  });
+  it("under `exec 9>lock; node --import tsx ...` the reset process holds the lock file on FD 9", () => {
+    const lock = join(mkdtempSync(join(tmpdir(), "vm-lock-")), "myco-win11.vm.lock");
+    writeFileSync(lock, "");
+    const s = stub();
+    const r = launch(`exec 9>"${lock}"; exec node --import tsx "${probe}" "${s}"`);
+    expect(r.status, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout.trim().split("\n").at(-1) ?? "{}");
+    expect(out.code).toBe(0);
+    expect(out.stderr).toContain(`fd9-inode=${statSync(lock).ino}`);
+    expect(parseBootClass(out.stderr)).toBe("cold");
+    // Without the session's FD 9 the reset sees nothing there (it would refuse the lock).
+    const bare = launch(`exec 9>&-; exec node --import tsx "${probe}" "${s}"`);
+    const none = JSON.parse(bare.stdout.trim().split("\n").at(-1) ?? "{}");
+    expect(none.stderr).not.toContain(`fd9-inode=${statSync(lock).ino}`);
+  }, 60_000);
+  it("the documented launch commands use node --import tsx, never npx", () => {
+    const want = "scripts/vm-session.sh -- node --import tsx scripts/m2-hcu-shell-run.ts launch";
+    for (const file of ["docs/benchmark/hcu-shell-runbook.md", "scripts/m2-hcu-shell-run.ts"]) {
+      const text = readFileSync(file, "utf8");
+      expect(text, file).toContain(want);
+      expect(text, file).not.toMatch(/vm-session\.sh -- npx/);
+    }
+  });
+  it("the real VM seams are never built under a test runner", () => {
+    expect(() => defaultLiveDeps(".")).toThrow(/never built under a test runner/);
   });
 });

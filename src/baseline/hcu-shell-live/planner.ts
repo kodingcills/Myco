@@ -114,6 +114,14 @@ export const PLANNER_DIFFERENCES: readonly string[] = [
   "--max-turns 1 and no tool at all: the arm's actions are returned as JSON and executed by the harness, not by Claude Code",
   "per-call output ceiling 1024 tokens (CLAUDE_CODE_MAX_OUTPUT_TOKENS), C1's ceiling recorded on every hcu+shell row; the gate arm sets none",
   "the hcu+shell prompt (C1's prompt with the shell sentence) is the user message; the gate arm appends its gate instruction to the system prompt",
+  // Round 2 (verifier D6): every remaining difference from the myco-gate arm (#598 @ 13fccd96).
+  "the agent's tools: HCU's pixel GUI tool plus the read-only shell, where the gate arm's agent has Myco's gate tool (the head-to-head itself)",
+  "document: the published fixture CSV is hash-checked on the host, converted to .xlsx in the guest and opened in Calc, and the .xlsx is captured; the gate arm seeds and captures the raw CSV (doc.csv). fc-v1 declares persistedFormat xlsx and a GUI agent needs the document open; the gate arm's CSV is its pilot gate's CSV-only limit (#598 follow-up 1). Material to R2: the lead's GO on this plan decides it",
+  "seed check: the guest-made .xlsx is read back, required non-empty and hashed (seededSha256), not compared to host bytes, because the host never holds the .xlsx; the gate arm compares its read-back with the bytes it wrote",
+  "repeat-failure signature: the harness's failure code, where the gate arm uses class plus message; both persist it in the ledger and restore it on --resume",
+  "load gate: an attempt waits (30 s polls, pause after 1800 s) while host 1-minute load >= 10; the gate arm records the start load and the M2 evidence rule refuses rows at >= 10 (same threshold)",
+  "the reset is given trial-base-v3 explicitly and killed after 20 min; the gate arm relies on the script's default and its trial deadline",
+  "own ledger, progress and host-capture schemas (myco.hcu-shell.*); live-status.json has the gate arm's shape with runner hcu-shell",
 ];
 
 export type PlannerHaltCode =
@@ -310,9 +318,7 @@ export function readPlannerCall(
  * measured, as a token-derived estimate at frozen rates (`src/pilot/cost.ts`), the same
  * convention as the myco-gate pilot. Nothing is billed per token on the subscription.
  */
-export function createSubscriptionPlanner(
-  opts: SubscriptionPlannerOptions,
-): CancellablePlanner {
+export function createSubscriptionPlanner(opts: SubscriptionPlannerOptions): CancellablePlanner {
   const pre = subscriptionPreflight(Object.keys(opts.env));
   if (!pre.ok)
     throw new PlannerHalt(

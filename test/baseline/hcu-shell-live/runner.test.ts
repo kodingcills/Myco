@@ -10,7 +10,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -20,25 +20,36 @@ import type { HcuShellPlanner } from "../../../src/baseline/hcu-shell/trial.ts";
 import {
   HCU_PLANNER_MODEL,
   PlannerHalt,
+  PlannerTransient,
   SubscriptionPlannerFailure,
 } from "../../../src/baseline/hcu-shell-live/planner.ts";
 import {
+  attemptsSpent,
   DEMO_TRIALS,
   demoTasks,
+  EXIT,
+  exitCodeFor,
   exportHcuPack,
   type FcTask,
+  HCU_PACING,
   hcuRunPlan,
   hcuStatus,
   LEDGER_FILE,
+  LIVE_STATUS_FILE,
+  LOAD_GATE,
   loadFcV1,
+  PAUSE_FILE,
   PROGRESS_FILE,
   planSha256,
   readLedger,
+  resumeFaultSignature,
   runHcuShell,
   SIMULATED_PLANNER,
   TASK_BUNDLE,
   type TrialEnvironment,
 } from "../../../src/baseline/hcu-shell-live/runner.ts";
+import { LOAD_GATE as M2_LOAD_GATE } from "../../../src/m2/evidence.ts";
+import { DEFAULT_PACING } from "../../../src/pilot/config.ts";
 import { groundTruth } from "../../../src/tasks/intent.ts";
 import { fakeCalc } from "../hcu-shell/fake-calc.ts";
 import { honest, type ScriptedPlanner } from "../hcu-shell/planners.ts";
@@ -144,6 +155,8 @@ const run = (dir: string, fake: Fake, extra: Partial<Parameters<typeof runHcuShe
     env: fake.env,
     planner: fake.planner,
     plannerModelId: fake.env.simulated ? SIMULATED_PLANNER : HCU_PLANNER_MODEL,
+    sleep: async () => undefined,
+    load1m: () => 0.5,
     ...extra,
   });
 
@@ -159,6 +172,7 @@ describe("a full run keyed to fc-v1", () => {
       decided: 30,
       failed: 0,
       total: DEMO_TRIALS,
+      exhausted: [],
     });
     const pack = exportHcuPack(dir, ROOT, TASKS);
     expect(pack).toMatchObject({ armRows: 30, requests: 30, simulated: false, unmeasuredCost: 0 });
@@ -290,15 +304,31 @@ describe("resume", () => {
       code: "resume-mode-mismatch",
     });
   });
-  it("a failed trial is retried on resume", async () => {
+  it("a failed attempt re-runs the trial in place (as #598), and the trial is decided once", async () => {
     const dir = tmp();
-    const r = await run(dir, fakeRun({ fail: (_t, n) => (n === 0 ? new Error("x") : undefined) }), {
-      maxTrials: 2,
+    const fake = fakeRun({ fail: (_t, n) => (n === 0 ? new Error("x") : undefined) });
+    const r = await run(dir, fake, { maxTrials: 2 });
+    expect(r).toMatchObject({ decided: 2, failed: 1, exhausted: [] });
+    expect(fake.prepared).toEqual([TASKS[0]?.taskId, TASKS[0]?.taskId, TASKS[1]?.taskId]);
+    const starts = readLedger(dir).filter((l) => l.type === "start");
+    expect(starts.map((s) => (s as { attempt?: number }).attempt)).toEqual([1, 2, 1]);
+  });
+  it("a trial that spends its 3 attempts is exhausted, and stays closed on resume", async () => {
+    const dir = tmp();
+    const codes = ["a-code", "b-code", "c-code"];
+    const fake = fakeRun({
+      fail: (t, n) =>
+        t.taskId === TASKS[0]?.taskId
+          ? Object.assign(new Error("x"), { code: codes[n] ?? "z-code" })
+          : undefined,
     });
-    expect(r).toMatchObject({ decided: 1, failed: 1 });
+    const r = await run(dir, fake, { maxTrials: 2 });
+    expect(r).toMatchObject({ status: "incomplete", decided: 1, failed: 3 });
+    expect(r.exhausted).toEqual([TASKS[0]?.taskId]);
     const b = fakeRun();
-    await run(dir, b, { resume: true, maxTrials: 1 });
-    expect(b.prepared).toEqual([TASKS[0]?.taskId]);
+    const r2 = await run(dir, b, { resume: true, maxTrials: 1 });
+    expect(b.prepared).toEqual([TASKS[2]?.taskId]);
+    expect(r2.exhausted).toEqual([TASKS[0]?.taskId]);
   });
   it("drops a torn final ledger line but refuses corruption earlier", async () => {
     const dir = tmp();
@@ -327,6 +357,7 @@ describe("stop rules", () => {
       decided: 0,
       failed: 2,
       total: 30,
+      exhausted: [],
     });
     expect(fake.prepared).toHaveLength(2);
     expect(progress(dir)).toMatchObject({
@@ -345,7 +376,8 @@ describe("stop rules", () => {
       },
     });
     const r = await run(tmp(), fake, { maxTrials: 5 });
-    expect(r).toMatchObject({ status: "incomplete", failed: 3, decided: 2 });
+    // fc-v1-001: a, b, decided; fc-v1-002: b (the decided trial cleared the signature), decided.
+    expect(r).toMatchObject({ status: "incomplete", failed: 3, decided: 5 });
   });
   it("a planner failure code counts toward the rule like any other", async () => {
     const fake = fakeRun();
@@ -358,8 +390,15 @@ describe("stop rules", () => {
     const r = await run(tmp(), { ...fake, planner });
     expect(r).toMatchObject({ status: "aborted", code: "planner-timeout", failed: 2 });
   });
-  it.each(["planner-auth", "planner-quota", "planner-api-key-path"] as const)(
-    "a planner halt (%s) stops the run on the first trial, with no retry",
+  it.each([
+    "planner-auth",
+    "planner-billing",
+    "planner-usage-limit",
+    "planner-api-key-path",
+    "planner-auth-source-unknown",
+    "planner-model-mismatch",
+  ] as const)(
+    "a planner halt (%s) stops the run on the first trial: no retry, no attempt spent",
     async (code) => {
       const dir = tmp();
       const fake = fakeRun({ halt: () => new PlannerHalt(code, "x") });
@@ -369,6 +408,11 @@ describe("stop rules", () => {
       expect(fake.released).toHaveLength(1);
       expect(progress(dir)).toMatchObject({ status: "halted", code });
       expect(readLedger(dir).at(-1)).toMatchObject({ type: "halt", code });
+      expect(readLedger(dir).filter((l) => l.type === "failed")).toEqual([]);
+      // A resume after the operator fixed the cause re-runs the trial (attempt not spent).
+      const b = fakeRun();
+      await run(dir, b, { resume: true, maxTrials: 1 });
+      expect(b.prepared).toEqual([TASKS[0]?.taskId]);
     },
   );
   it.each(["fast", null] as const)(
@@ -428,8 +472,8 @@ describe("task parity (#491)", () => {
       },
     };
     const r = await run(dir, { ...fake, env }, { maxTrials: 1 });
-    expect(r).toMatchObject({ decided: 0, failed: 1 });
-    expect(readLedger(dir).at(-1)).toMatchObject({ type: "failed", code: "trial-error" });
+    expect(r).toMatchObject({ status: "aborted", code: "trial-error", decided: 0, failed: 2 });
+    expect(readLedger(dir).at(-2)).toMatchObject({ type: "failed", code: "trial-error" });
     expect(existsSync(join(dir, "rows", `sim-hcu-shell-${TASKS[0]?.taskId}.json`))).toBe(false);
   });
 });
@@ -457,5 +501,254 @@ describe("the pack re-checks evidence from disk", () => {
     expect(exportHcuPack(dir, ROOT, TASKS).unmeasuredCost).toBe(1);
     const row = JSON.parse(readFileSync(join(dir, "arm.jsonl"), "utf8"));
     expect(row.cost.modelUsd).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Round 2 (verifier D2, D5, D6; lead ruling 02:18Z).
+// ---------------------------------------------------------------------------------------------
+
+const failWith = (code: string) => Object.assign(new Error(code), { code });
+
+describe("the repeat rule survives --resume (round 2, D2)", () => {
+  it("a failure, a pause, then the identical failure after --resume aborts at once", async () => {
+    const dir = tmp();
+    // Run 1: one reset-failed, then the operator pauses before the in-place re-run.
+    const a = fakeRun({
+      fail: () => {
+        writeFileSync(join(dir, PAUSE_FILE), "");
+        return failWith("reset-failed");
+      },
+    });
+    expect(await run(dir, a)).toMatchObject({ status: "paused", code: "pause-file", failed: 1 });
+    expect(readLedger(dir).find((l) => l.type === "failed")).toMatchObject({
+      code: "reset-failed",
+      signature: "reset-failed",
+    });
+    rmSync(join(dir, PAUSE_FILE));
+    // Run 2: the same failure. The signature was restored from the ledger: abort after ONE.
+    const b = fakeRun({ fail: () => failWith("reset-failed") });
+    const r = await run(dir, b, { resume: true });
+    expect(r).toMatchObject({ status: "aborted", code: "reset-failed", failed: 1 });
+    expect(b.prepared).toHaveLength(1);
+  });
+  it("after an abort, a resume with the same failure aborts after one more attempt", async () => {
+    const dir = tmp();
+    await run(dir, fakeRun({ fail: () => failWith("agent-unreachable") }));
+    const b = fakeRun({ fail: () => failWith("agent-unreachable") });
+    expect(await run(dir, b, { resume: true })).toMatchObject({ status: "aborted", failed: 1 });
+    expect(b.prepared).toHaveLength(1);
+  });
+  it("a decided trial after the failure clears the restored signature", async () => {
+    const dir = tmp();
+    const a = fakeRun({ fail: (_t, n) => (n === 0 ? failWith("reset-failed") : undefined) });
+    await run(dir, a, { maxTrials: 1 });
+    expect(resumeFaultSignature(readLedger(dir))).toBeNull();
+    const b = fakeRun({ fail: (_t, n) => (n === 0 ? failWith("reset-failed") : undefined) });
+    expect(await run(dir, b, { resume: true, maxTrials: 1 })).toMatchObject({ decided: 2 });
+  });
+  it("transient limits, halts and pauses neither set nor clear the restored signature", () => {
+    const base = { trialKey: "k", taskId: "t", at: 0 };
+    expect(
+      resumeFaultSignature([
+        { ...base, type: "failed", code: "x", signature: "x" },
+        { ...base, type: "failed", code: "planner-rate-limit", transient: true },
+        { type: "halt", code: "planner-auth", trialKey: "k", at: 0 },
+        { type: "pause", code: "pause-file", trialKey: null, at: 0 },
+      ]),
+    ).toBe("x");
+  });
+});
+
+describe("transient limits back off, bounded (lead ruling 02:18Z)", () => {
+  const transientOnce = (fake: Fake, times: number): HcuShellPlanner => {
+    let left = times;
+    return {
+      paid: true,
+      act: async (turn) => {
+        if (left > 0) {
+          left--;
+          throw new PlannerTransient("429");
+        }
+        return fake.planner.act(turn);
+      },
+    };
+  };
+  it("one transient limit backs off 300 s, re-runs the trial once and spends no attempt", async () => {
+    const dir = tmp();
+    const fake = fakeRun({ simulated: false });
+    const sleeps: number[] = [];
+    let t = 0;
+    const r = await run(
+      dir,
+      { ...fake, planner: transientOnce(fake, 1) },
+      {
+        maxTrials: 1,
+        now: () => t,
+        sleep: async (ms) => {
+          sleeps.push(ms);
+          t += ms;
+        },
+      },
+    );
+    expect(r).toMatchObject({ status: "incomplete", decided: 1, failed: 0 });
+    expect(fake.prepared).toHaveLength(2);
+    expect(sleeps).toContain(300_000);
+    expect(attemptsSpent(readLedger(dir)).size).toBe(0);
+  });
+  it("a second transient limit on the same trial pauses: at most one extra cold reset", async () => {
+    const dir = tmp();
+    const fake = fakeRun({ simulated: false });
+    const r = await run(dir, { ...fake, planner: transientOnce(fake, 5) });
+    expect(r).toMatchObject({ status: "paused", code: "rate-limit-repeat", failed: 0 });
+    expect(fake.prepared).toHaveLength(2);
+    expect(exitCodeFor(r)).toBe(EXIT.paused);
+  });
+});
+
+describe("pacing, deadline, load gate and heartbeat match #598 (round 2, D5)", () => {
+  it("the pacing is the myco-gate arm's DEFAULT_PACING and the load gate the M2 one", () => {
+    expect(HCU_PACING).toEqual(DEFAULT_PACING);
+    expect(PLAN.pacing).toEqual(DEFAULT_PACING);
+    expect(PLAN.maxTransientRetriesPerTrial).toBe(1);
+    expect(LOAD_GATE).toBe(M2_LOAD_GATE);
+  });
+  it("live trial starts are 90 s apart", async () => {
+    const fake = fakeRun({ simulated: false });
+    const starts: number[] = [];
+    let t = 0;
+    const env: TrialEnvironment = {
+      simulated: false,
+      prepare: (task, key) => {
+        starts.push(t);
+        return fake.env.prepare(task, key);
+      },
+    };
+    await run(
+      tmp(),
+      { ...fake, env },
+      {
+        maxTrials: 3,
+        now: () => t,
+        sleep: async (ms) => {
+          t += ms;
+        },
+      },
+    );
+    expect(starts).toEqual([0, 90_000, 180_000]);
+  });
+  it("no live attempt starts at host load >= 10; a load that stays high pauses the run", async () => {
+    const fake = fakeRun({ simulated: false });
+    const loads = [12, 11, 3];
+    let t = 0;
+    const sleeps: number[] = [];
+    const clock = {
+      now: () => t,
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+        t += ms;
+      },
+    };
+    await run(tmp(), fake, { maxTrials: 1, load1m: () => loads.shift() ?? 3, ...clock });
+    expect(sleeps.slice(0, 2)).toEqual([30_000, 30_000]);
+    const stuck = fakeRun({ simulated: false });
+    const r = await run(tmp(), stuck, { load1m: () => 10, ...clock });
+    expect(r).toMatchObject({ status: "paused", code: "host-load-high" });
+    expect(stuck.prepared).toHaveLength(0);
+  });
+  it("an attempt past its deadline fails trial-timeout, cancels the planner and writes no row", async () => {
+    const dir = tmp();
+    const fast = hcuRunPlan(
+      TASKS,
+      { hcuGuestCommand: "hcu mcp", guestShellSha256: "0".repeat(64) },
+      { ...HCU_PACING, trialTimeoutS: 1 },
+    );
+    const fake = fakeRun();
+    let cancelled = 0;
+    const planner = {
+      paid: true,
+      act: () => new Promise<never>(() => undefined),
+      cancel: () => {
+        cancelled++;
+      },
+    };
+    const r = await run(dir, { ...fake, planner }, { plan: fast });
+    expect(r).toMatchObject({ status: "aborted", code: "trial-timeout", failed: 2, decided: 0 });
+    expect(cancelled).toBe(2);
+    expect(fake.released).toHaveLength(2);
+    expect(existsSync(join(dir, "rows", `sim-hcu-shell-${TASKS[0]?.taskId}.json`))).toBe(false);
+  }, 10_000);
+  it("live-status.json and progress.json are refreshed by a timer during a long trial", async () => {
+    const dir = tmp();
+    const fake = fakeRun();
+    const seen: string[] = [];
+    const env: TrialEnvironment = {
+      simulated: true,
+      async prepare(task, key) {
+        const read = () =>
+          `${JSON.parse(readFileSync(join(dir, LIVE_STATUS_FILE), "utf8")).updatedAt}|${progress(dir).updatedAt}`;
+        seen.push(read());
+        await new Promise((r) => setTimeout(r, 120));
+        seen.push(read());
+        return fake.env.prepare(task, key);
+      },
+    };
+    await run(dir, { ...fake, env }, { maxTrials: 1, heartbeatMs: 20 });
+    expect(seen[1]).not.toBe(seen[0]);
+    const status = JSON.parse(readFileSync(join(dir, LIVE_STATUS_FILE), "utf8"));
+    expect(status).toMatchObject({
+      schema: "myco.hcu-shell.live-status/1",
+      runner: "hcu-shell",
+      state: "finished",
+      costBasis: "token-derived estimate at frozen rates; not billed USD",
+    });
+  });
+});
+
+describe("exit codes match #598's", () => {
+  it.each([
+    [{ status: "complete", code: null }, 0],
+    [{ status: "incomplete", code: null }, 4],
+    [{ status: "paused", code: "rate-limit-repeat" }, 4],
+    [{ status: "halted", code: "boot-class-not-cold" }, 4],
+    [{ status: "halted", code: "planner-auth" }, 5],
+    [{ status: "halted", code: "planner-billing" }, 5],
+    [{ status: "halted", code: "planner-api-key-path" }, 5],
+    [{ status: "aborted", code: "reset-failed" }, 6],
+    [{ status: "halted", code: "planner-usage-limit" }, 7],
+  ] as const)("%j exits %d", (r, code) => {
+    expect(exitCodeFor(r)).toBe(code);
+  });
+});
+
+describe("host-capture provenance (round 2, D6)", () => {
+  it("every captured document has a provenance record the pack re-checks", async () => {
+    const dir = tmp();
+    await run(dir, fakeRun(), { maxTrials: 1 });
+    const key = `sim-hcu-shell-${TASKS[0]?.taskId}`;
+    const cap = JSON.parse(readFileSync(join(dir, "captures", `${key}.json`), "utf8"));
+    const doc = readFileSync(join(dir, "docs", `${key}.xlsx`));
+    expect(cap).toMatchObject({
+      schema: "myco.hcu-shell.host-capture/1",
+      trialKey: key,
+      persistedSha256: sha(doc),
+      persistedBytes: doc.length,
+      resetBootClass: "cold",
+    });
+    expect(exportHcuPack(dir, ROOT, TASKS).armRows).toBe(1);
+    writeFileSync(join(dir, "captures", `${key}.json`), JSON.stringify({ ...cap, guestPath: "x" }));
+    expect(() => exportHcuPack(dir, ROOT, TASKS)).toThrow(/capture-provenance-mismatch/);
+    rmSync(join(dir, "captures", `${key}.json`));
+    expect(() => exportHcuPack(dir, ROOT, TASKS)).toThrow(/capture-provenance-mismatch/);
+  });
+  it("a duplicated decided line never duplicates a pack row", async () => {
+    const dir = tmp();
+    await run(dir, fakeRun(), { maxTrials: 2 });
+    const path = join(dir, LEDGER_FILE);
+    const decided = readFileSync(path, "utf8")
+      .split("\n")
+      .find((l) => l.includes('"decided"'));
+    writeFileSync(path, `${readFileSync(path, "utf8")}${decided}\n`);
+    expect(exportHcuPack(dir, ROOT, TASKS).armRows).toBe(2);
   });
 });
