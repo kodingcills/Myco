@@ -18,12 +18,14 @@
  *    or that had no done claim, is reported as "correct, not verified" and never counted.
  *  - `checkRecoveryPack` refuses a pack whose attempt count is not the harness's, whose arm
  *    config is not the arm's, whose contrast is not K-vs-nothing, whose rows disagree with
- *    themselves (accepted vs verdict vs harness codes), whose planner, step budget or task
- *    set is mixed, or (evidence) any row that is simulated or whose planner is not one of
- *    `RECOVERY_EVIDENCE_PLANNERS`.
+ *    themselves (accepted vs verdict vs harness codes, a grade outside pass/fail/ungradable,
+ *    a fault kind that does not match the fault flag), whose planner, step budget or task
+ *    set is mixed, or (evidence, the default) any row that is simulated or whose planner is
+ *    not one of `RECOVERY_EVIDENCE_PLANNERS`.
  *  - `recoveryBar`: exact one-sided McNemar, K better than no-recovery, p <= 0.05 with at
  *    least 5 discordant tasks, on verified tasks. It refuses arms that differ in planner,
- *    step budget, task set, or a task's instruction or fixture hash (spec §1.3 parity).
+ *    step budget, task set, or a task's fault kind, instruction or fixture hash (spec §1.3
+ *    parity).
  *    Secondary (reported, not the bar): the same split by faulted / unfaulted, and steps and
  *    cost per verified task (null cost is unknown, never 0).
  */
@@ -58,7 +60,12 @@ export const RECOVERY_EVIDENCE_PLANNERS: ReadonlySet<string> = new Set([
 /** The final attempt's claim, as the repo's gated rows record it. */
 export type RecoveryClaim = "done" | "not-done" | "no-claim";
 const CLAIMS: readonly string[] = ["done", "not-done", "no-claim"];
+const GRADES: readonly string[] = ["pass", "fail", "ungradable"];
 const SHA256 = /^[0-9a-f]{64}$/;
+
+/** The seeded mid-task faults of `ms-long-v1` (spec, "K. Recovery", task set). */
+export const FAULT_KINDS = ["kill-app", "delayed-save", "focus-change"] as const;
+export type FaultKind = (typeof FAULT_KINDS)[number];
 
 export interface RecoveryRow {
   readonly schema: typeof RECOVERY_ROW_SCHEMA;
@@ -69,6 +76,8 @@ export interface RecoveryRow {
   readonly trialKey: string;
   readonly taskId: string;
   readonly faulted: boolean;
+  /** Which seeded fault the task carries; null exactly when `faulted` is false (#601 F6). */
+  readonly faultKind: FaultKind | null;
   readonly simulated: boolean;
   readonly plannerModelId: string;
   readonly instructionSha256: string;
@@ -120,6 +129,8 @@ export interface BatchTrial {
   readonly trialKey: string;
   readonly taskId: string;
   readonly faulted: boolean;
+  /** The task's seeded fault, or null when it has none. */
+  readonly faultKind: FaultKind | null;
   readonly simulated: boolean;
   readonly plannerModelId: string;
   /** sha256 of the instruction text the agent got (parity across arms, spec §1.3). */
@@ -198,6 +209,7 @@ export async function runRecoveryBatch(
       trialKey: trial.trialKey,
       taskId: trial.taskId,
       faulted: trial.faulted,
+      faultKind: trial.faultKind,
       simulated: trial.simulated,
       plannerModelId: trial.plannerModelId,
       instructionSha256: trial.instructionSha256,
@@ -219,11 +231,15 @@ export async function runRecoveryBatch(
   return { status: "complete", rows, harnessAttempts };
 }
 
-/** Errors with a recovery pack; empty means it passes. */
+/**
+ * Errors with a recovery pack; empty means it passes. Evidence mode is the default (#601 N6):
+ * a caller must pass `evidence: false` explicitly to accept simulated or non-model rows.
+ */
 export function checkRecoveryPack(
   rows: readonly RecoveryRow[],
   opts: { readonly harnessAttempts: number; readonly evidence?: boolean },
 ): string[] {
+  const evidence = opts.evidence !== false;
   const errors: string[] = [];
   const counted = rows.reduce((s, r) => s + r.attempts, 0);
   if (counted !== opts.harnessAttempts)
@@ -272,9 +288,17 @@ export function checkRecoveryPack(
     if (codesOk && codes.length > 0 && r.gate?.verdict !== "uncertain")
       errors.push(`${r.trialKey}: failed closed, but the verdict is not uncertain`);
     if (!CLAIMS.includes(r.claim)) errors.push(`${r.trialKey}: unknown claim`);
+    // #601 N5: a grade outside the grader's three verdicts (e.g. "PASS") is refused.
+    if (!GRADES.includes(r.grade)) errors.push(`${r.trialKey}: unknown grade`);
+    // #601 F6: the fault kind is recorded, and agrees with the fault flag.
+    const kindOk =
+      r.faulted === true
+        ? (FAULT_KINDS as readonly unknown[]).includes(r.faultKind)
+        : r.faulted === false && r.faultKind === null;
+    if (!kindOk) errors.push(`${r.trialKey}: fault kind does not match the fault flag`);
     if (!SHA256.test(String(r.instructionSha256)) || !SHA256.test(String(r.fixtureSha256)))
       errors.push(`${r.trialKey}: instruction and fixture hashes must be sha256 hex`);
-    if (opts.evidence) {
+    if (evidence) {
       if (r.simulated !== false) errors.push(`${r.trialKey}: simulated rows are never evidence`);
       if (!RECOVERY_EVIDENCE_PLANNERS.has(r.plannerModelId))
         errors.push(
@@ -401,7 +425,8 @@ export function recoveryBar(
       throw new Error("parity: the arms ran different task sets");
   }
   for (const p of pairs) {
-    if (p.k.faulted !== p.none.faulted) throw new Error(`task ${p.k.taskId}: fault labels differ`);
+    if (p.k.faulted !== p.none.faulted || p.k.faultKind !== p.none.faultKind)
+      throw new Error(`task ${p.k.taskId}: fault labels differ`);
     if (p.k.instructionSha256 !== p.none.instructionSha256)
       throw new Error(`parity: task ${p.k.taskId}: instructions differ`);
     if (p.k.fixtureSha256 !== p.none.fixtureSha256)
