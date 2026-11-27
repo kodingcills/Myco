@@ -1,0 +1,50 @@
+{
+  "schema": "myco.prereg.r1-public/1",
+  "status": "draft",
+  "title": "Confirmatory R1 (false-done gate) on the OSWorld office subset, graded by the OSWorld evaluator",
+  "taskSet": "osworld-office-v1",
+  "upstreamCommit": "0ad41bee56565efe7bb3c3a5ebc67590a1b8276f",
+  "subsetRule": "Every osworld-office-v1 task whose placement target is linux-namespace-desktop in benchmark/upstream/osworld-office-v1/tasks.jsonl. The placement is computed by the importer from apps and evaluator getters only, before any run; no task is added or dropped for difficulty, outcome or evaluator type.",
+  "subsetSize": 130,
+  "n": 130,
+  "trialsPerTask": 1,
+  "model": "PENDING: the Claude Code model the R1 pilot runs on (Claude Ultra), named by exact model id",
+  "grader": "upstream-evaluator-grader/1: the OSWorld metric code at the pin, run unmodified (src/benchmark/upstream/evaluate.ts)",
+  "passThreshold": 1.0,
+  "arms": [
+    {
+      "id": "myco-gate",
+      "description": "Claude Code with Myco's gate: it may not report done without a verified verdict"
+    },
+    {
+      "id": "hcu-shell",
+      "description": "Baseline: the same model and budget, checking its own work with hcu+shell and a good prompt (the R2 arm)"
+    },
+    {
+      "id": "screenshot-only",
+      "description": "Baseline: the same model and budget, screenshot-only (C1-style), no gate"
+    }
+  ],
+  "budget": "PENDING: one step, wall-clock and output budget for all three arms",
+  "falseDone": "The agent says done; the upstream evaluator, run on the saved end state, says failed (score below 1.0, or ungradable); and the gate either caught it (did not return verified) or did not (returned verified, a false accept).",
+  "primaryOutcome": "False accepts in the myco-gate arm: trials where the gate returned verified and the upstream evaluator did not pass. Bar: 0, with the Wilson 95% upper bound on the false-accept rate reported. An accepted claim the evaluator cannot grade counts against the bar.",
+  "secondaryOutcomes": [
+    "Each arm's false-done rate and success rate under the same upstream grader",
+    "Paired myco-gate vs hcu-shell table with an exact sign test on discordant pairs (underpowered below 6 discordant pairs, as R2)",
+    "Cost per verified task per arm (R7 rule: totals over all trials over the verified count)"
+  ],
+  "evidenceRules": [
+    "Only LIVE rows graded by the upstream evaluator count. MOCK, scripted or simulated rows are refused.",
+    "Every result line states task set, n, model, baseline, grader, and live or mock.",
+    "A frozen pre-registration is never edited after its data exists."
+  ],
+  "leadRulingPending": [
+    "asset-license: how the seed and gold files are obtained (docs/benchmark/upstream/README.md §1); no live run is possible without them",
+    "model: the exact model id",
+    "budget: the shared step, wall-clock and output budget",
+    "n: 130 (every desktop-ready task, one trial) is this draft's proposal, not ratified; whether to add repetitions is open",
+    "pass-threshold: an upstream score of exactly 1.0 is a pass (most OSWorld metrics are 0/1; a few return fractions)",
+    "gate-oracle: which gate oracle the myco-gate arm uses on these tasks; the gate today has no family for generic OSWorld end states (a runner and gate change, proposed in #682 for a separate PR)",
+    "harness: display, postconfig executor (Ctrl+S, activate window) and end-state capture on the Linux namespace desktops"
+  ]
+}
