@@ -13,7 +13,7 @@
  * Everything is stubbed: vm.sh, vssh, scp, the egress/reset/gate scripts. The
  * session wrapper is the real scripts/vm-session.sh on a private lock path.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,6 +34,8 @@ interface Opts {
   existing?: string[];
   checkFails?: boolean;
   probeReachable?: boolean;
+  /** TIF-734: stubbed guest answers for the optional HCU stage. */
+  hcu?: { installFails?: boolean; verifyFails?: boolean; noGui?: boolean; noImage?: boolean };
 }
 
 function install(opts: Opts = {}): Record<string, string> {
@@ -59,11 +61,27 @@ exit 0`,
 case "$*" in
   *"-Stage state"*) echo '{"state":"recorded"}' ;;
   *"-Stage check"*) ${opts.checkFails ? 'echo "check: FAIL"; exit 1' : 'echo "check: ok"'} ;;
+  *"myco-hcu.ps1 -Stage install"*) ${opts.hcu?.installFails ? 'echo "install: FAIL computer-use.exe sha256"; exit 1' : 'echo "install: MycoHCU task registered"'} ;;
+  *"myco-hcu.ps1 -Stage verify"*) ${opts.hcu?.verifyFails ? 'echo "verify: FAIL no computer-use.exe in an interactive session"; exit 1' : 'echo "verify: computer-use.exe pid 7 session 1"; echo "socket=C:\\Users\\myco\\AppData\\Local\\Temp\\hcu--1\\desktop-default.sock"'} ;;
   *) echo ok ;;
 esac
 exit 0`,
   );
   stub(join(bin, "scp"), `echo "scp $*" >> "${log}"\nexit 0`);
+  // TIF-734: the MCP probe over ssh (computer-use.exe mcp --attach); answers by request id.
+  const tools = opts.hcu?.noGui ? '[{"name":"AX"}]' : '[{"name":"AX"},{"name":"GUI"}]';
+  const content = opts.hcu?.noImage
+    ? '[{"type":"text","text":"{}"}]'
+    : '[{"type":"text","text":"{}"},{"type":"image","mimeType":"image/png","data":"iVBORw0KGgo="}]';
+  stub(
+    join(bin, "ssh"),
+    `echo "ssh $*" >> "${log}"
+cat > /dev/null
+echo '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"computer-use","version":"1.0.1"}}}'
+echo '{"jsonrpc":"2.0","id":2,"result":{"tools":${tools}}}'
+echo '{"jsonrpc":"2.0","id":3,"result":{"isError":false,"content":${content}}}'
+exit 0`,
+  );
   const egress = join(dir, "egress.sh");
   stub(
     egress,
@@ -443,4 +461,93 @@ describe("guest-maintenance.ps1 error mode and idle loop (exact)", () => {
       "$counted = @($running | Where-Object { $notCounted -notcontains $_ })",
     ]);
   });
+});
+
+/** A host HCU directory as build-trial-base.sh expects it, with a matching SHA256SUMS. */
+function hcuDir(tamper = false): string {
+  const d = join(dir, "hcu");
+  mkdirSync(d);
+  const files = [
+    "computer-use.exe",
+    "computer-use-windows-provider.exe",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+  ];
+  for (const f of files) writeFileSync(join(d, f), `bytes of ${f}`);
+  const sums = spawnSync("shasum", ["-a", "256", ...files], { cwd: d, encoding: "utf8" }).stdout;
+  writeFileSync(join(d, "SHA256SUMS"), sums);
+  if (tamper) writeFileSync(join(d, "computer-use.exe"), "tampered");
+  return d;
+}
+
+describe("build-trial-base.sh with HCU (TIF-734)", () => {
+  const hcuEnv = (opts: Opts = {}, tamper = false) => ({
+    ...install({ ...opts, hcu: opts.hcu ?? {} }),
+    MYCO_TRIAL_BASE_NAME: "trial-base-v4",
+    MYCO_TRIAL_BASE_HCU_DIR: hcuDir(tamper),
+    MYCO_HCU_PROBE_WAIT_S: "0",
+  });
+
+  it("without MYCO_TRIAL_BASE_HCU_DIR nothing HCU runs or is copied", {
+    timeout: SLOW,
+  }, async () => {
+    const r = await run(install());
+    expect(r.status).toBe(0);
+    expect(r.calls.filter((c) => /myco-hcu|computer-use|hcu-staging/.test(c))).toEqual([]);
+    expect(r.calls.filter((c) => c.startsWith("ssh "))).toEqual([]);
+  });
+
+  it("installs in the maintenance window, proves HCU on the cold boot in place with egress denied, then snapshots", {
+    timeout: SLOW,
+  }, async () => {
+    const r = await run(hcuEnv());
+    expect(r.status).toBe(0);
+    const install_ = at(r.calls, "myco-hcu.ps1 -Stage install");
+    const verify = at(r.calls, "myco-hcu.ps1 -Stage verify");
+    const mcp = at(r.calls, "mcp --attach");
+    // Install: after the Defender check, before the tidy-up shutdown and the deny.
+    expect(install_).toBeGreaterThan(at(r.calls, "-Stage check"));
+    expect(install_).toBeLessThan(at(r.calls, "egress deny"));
+    // Verify and the MCP probe: after deny, the boot in place and the denied probe; before the snapshot.
+    expect(verify).toBeGreaterThan(at(r.calls, "egress probe"));
+    expect(mcp).toBeGreaterThan(verify);
+    expect(mcp).toBeLessThan(at(r.calls, "vm.sh snapshot trial-base-v4"));
+    expect(r.calls[mcp]).toContain(
+      "C:\\myco\\bin\\computer-use.exe mcp --attach C:\\Users\\myco\\AppData\\Local\\Temp\\hcu--1\\desktop-default.sock",
+    );
+    // Exactly the pinned files and the guest script are copied in for HCU.
+    const scps = r.calls.filter((c) => c.startsWith("scp ") && /hcu|myco-hcu/.test(c));
+    expect(scps.join(" ")).toContain("computer-use.exe");
+    expect(scps.join(" ")).toContain("computer-use-windows-provider.exe");
+    expect(scps.join(" ")).toContain("SHA256SUMS");
+    expect(scps.join(" ")).toContain("myco-win11:C:/myco/bin/myco-hcu.ps1");
+    const probe = JSON.parse(readFileSync(join(dir, "evidence", "14c-hcu-mcp-probe.json"), "utf8"));
+    expect(probe.tools).toContain("GUI");
+    expect(probe.screenshot_images).toEqual([{ mimeType: "image/png", base64Length: 12 }]);
+    expect(existsSync(join(dir, "evidence", "14c-hcu-mcp.raw"))).toBe(false);
+    expect(existsSync(join(dir, "evidence", "10b-hcu-sha256sums.txt"))).toBe(true);
+  });
+
+  it("refuses an HCU directory that does not match its SHA256SUMS before touching the VM", {
+    timeout: SLOW,
+  }, async () => {
+    const r = await run(hcuEnv({}, true));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("does not match its SHA256SUMS");
+    expect(r.calls.filter((c) => c.startsWith("egress") || c.startsWith("reset"))).toEqual([]);
+  });
+
+  for (const [name, hcu, msg] of [
+    ["the guest install fails", { installFails: true }, "HCU install failed"],
+    ["HCU is not in an interactive session", { verifyFails: true }, "HCU verify failed"],
+    ["the MCP server lists no GUI tool", { noGui: true }, "HCU MCP probe failed"],
+    ["the screenshot returns no image", { noImage: true }, "HCU MCP probe failed"],
+  ] as const)
+    it(`${name}: no snapshot, egress denied`, { timeout: SLOW }, async () => {
+      const r = await run(hcuEnv({ hcu }));
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain(msg);
+      expect(r.calls.filter((c) => c.startsWith("vm.sh snapshot "))).toEqual([]);
+      expect(r.calls.filter((c) => c === "egress deny").length).toBeGreaterThan(0);
+    });
 });
