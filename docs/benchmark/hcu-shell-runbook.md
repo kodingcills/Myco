@@ -91,9 +91,15 @@ names them:
 - a harness failure re-runs the trial in place, up to 3 attempts. After that the trial is
   `exhausted` for this run directory and the run ends `incomplete`;
 - a transient 429, 529 or overload backs off 300 s, doubling to at most 3600 s, and re-runs
-  the trial. It never spends an attempt. A second transient limit on the same trial in one
-  invocation pauses the run (`rate-limit-repeat`), so a limit spell costs at most one extra
-  cold reset per trial. Four in a row pause it (`rate-limit-pause`);
+  the trial. It never spends an attempt. Each transient limit is a `failed … transient` line
+  in the ledger, and the cap is counted from the whole ledger, so `--resume` cannot reset it:
+  a trial re-runs after at most one transient limit in total in that run directory. A second
+  transient limit on the same trial pauses the run (`rate-limit-repeat`), and later
+  invocations never start that trial again in that run directory. They run the other trials,
+  then pause `rate-limit-capped`, naming the capped trial (`transientCapped` in the result).
+  So a limit spell costs at most one extra cold reset per trial, across every `--resume`.
+  Take a capped trial to the lead; the only way to run it again is a new run directory. Four
+  limits in a row pause the run (`rate-limit-pause`);
 - a `PAUSE` file in the run directory pauses the run before the next attempt.
 
 Simulated runs (`dry-run`) skip the spacing and the load gate.
@@ -129,14 +135,15 @@ resume that hits the same failure again aborts after that one attempt.
 |---|---|---|---|
 | `planner-auth` | 5 | The CLI reported an authentication fault (a lost or refused login). | Log in again (`/login`, subscription account), run the probe, then `--resume`. |
 | `planner-billing` | 5 | Credit, billing or quota (`billing_error`, HTTP 402, "Credit balance is too low", "out of extra usage", "Payment required"). | Fix the subscription account. Do not switch to an API key. Then `--resume`. |
-| `planner-usage-limit` | 7 | The subscription's own usage quota ("usage limit reached", "5-hour limit", "Weekly limit reached", "resets at ..."). No retry, no attempt spent. | **Report it to the lead.** Do not resume until the lead decides when the run continues. |
+| `planner-usage-limit` | 7 | The subscription's own usage quota ("usage limit reached", "5-hour limit", "Weekly limit reached", "resets at ..."), on stderr, on plain (non-JSON) stdout, in an error result, or as a clean result with no parseable decision. A clean result that carries a valid decision is never reclassified. No retry, no attempt spent, no row; the report below goes to stderr, the log and `live-status.json` `lastLog`. | **Report it to the lead.** Do not resume until the lead decides when the run continues. |
 | `planner-api-key-path` | 5 | The CLI authenticated with an API credential (any message's `apiKeySource` is not `none`), for example from a settings file or an `apiKeyHelper`. | Remove that credential so that `claude` uses the subscription. The planner already runs with `--setting-sources ""`; check the host's managed settings. |
 | `planner-auth-source-unknown` | 5 | The CLI did not report how it authenticated. | Fail-closed. A CLI upgrade that changed its init event needs a reviewed code change, not a workaround. |
 | `planner-model-mismatch` | 5 | The CLI ran a model other than the plan's. | Check the CLI version and plan access. |
 | `planner-fault-unknown` | 5 | A fault class this planner does not know. Every class halts unless it is on the explicit per-trial list. | Needs a reviewed code change. |
 | `api-key-path-configured` | 3 | An API-path variable is set (refused before any call). | Unset it. Names are checked, values are never read. |
 | `boot-class-not-cold` | 4 | A trial's reset was not a recorded cold boot (#546). | As in the eval runbook §3.5. Then `--resume`. |
-| `rate-limit-repeat`, `rate-limit-pause`, `host-load-high`, `pause-file` | 4 | A pause (see Pacing). | Wait, or remove `PAUSE`, then `--resume`. |
+| `rate-limit-repeat`, `rate-limit-capped` | 4 | A trial had its one transient re-run and hit a transient limit again (see Pacing). It is not started again in this run directory. | Take the named trial to the lead. `--resume` runs the other trials only. |
+| `rate-limit-pause`, `host-load-high`, `pause-file` | 4 | A pause (see Pacing). | Wait, or remove `PAUSE`, then `--resume`. |
 | abort: `<code>` | 6 | Two failed attempts in a row with the same code (for example `reset-failed`, `agent-unreachable`, `hcu-unreachable`, `trial-timeout`, `planner-timeout`). | Diagnose the code, then `--resume`. |
 
 ## 3. What the rows are, and are not
@@ -163,8 +170,8 @@ resume that hits the same failure again aborts after that one attempt.
 
 ## 4. Fairness: what matches the myco-gate arm and what does not
 
-Compared with the myco-gate arm's live driver, #598 at head `13fccd96` (open, not merged when
-this was written). `plannerDifferences` in the plan lists every remaining difference, so the
+Compared with the myco-gate arm's live driver, #598 at head `fc01e69a` (its round 3; open, not
+merged when this was written). `plannerDifferences` in the plan lists every remaining difference, so the
 lead's GO approves them by naming the plan hash.
 
 **The same in both arms:**
@@ -176,12 +183,19 @@ lead's GO approves them by naming the plan hash.
 - the subscription only: the env-name preflight, plus a halt on any `apiKeySource` other than
   `none`, on any message and whatever the call's outcome;
 - the fault classes and their stops: auth, billing (402 included) and the usage limit each halt
-  with their own code, and only a transient limit backs off. The vocabulary is #598 round 2's,
-  matched exactly in `src/baseline/hcu-shell-live/subscription-faults.ts`. A test compares
-  the two directly once #598 merges;
+  with their own code, and only a transient limit backs off. Quota wording on plain stdout is
+  classified like stderr, and a clean result with no claim (here: no parseable decision) that
+  names the quota stops the run with exit 7; a result with a claim (here: a valid decision) is
+  never reclassified. The vocabulary and behaviour are #598 round 3's (`fc01e69a`), copied in
+  `src/baseline/hcu-shell-live/subscription-faults.ts` and `planner.ts`.
+  `subscription-faults.test.ts` runs #598's `interpretResult` vectors through this arm's
+  `readPlannerCall`; once #598 merges it also runs them through #598's own `interpretResult`
+  and compares the expressions;
 - exit codes 5, 6 and 7, and the usage-limit report for the lead;
 - pacing (`DEFAULT_PACING`): concurrency 1, 90 s between starts, an 1800 s trial deadline, the
-  back-off, 3 attempts per trial re-run in place, and at most one transient re-run per trial;
+  back-off, 3 attempts per trial re-run in place, and at most one transient re-run per trial
+  in total, counted from the ledger across `--resume` (a capped trial is never started again
+  in that run directory);
 - the repeat-failure rule, persisted in the ledger and restored on `--resume`;
 - the `live-status.json` heartbeat every 60 s, and the `PAUSE` file;
 - seed read-back before the agent runs, host-side capture, and host-capture provenance;
