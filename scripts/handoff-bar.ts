@@ -4,10 +4,13 @@
  *   npx tsx scripts/handoff-bar.ts --prereg docs/product/capability-prereg/n-v1/prereg.json \
  *     --trials <run>/handoff-bar.jsonl [--json]
  *
- * Refuses (exit 2) a pre-registration whose pinned analysis files differ from the ones on disk,
- * and any run that is incomplete or inconsistent. Exit 0 only when the bar is shown on evidence
- * rows; a simulated run that would pass exits 1, because simulated rows are never evidence.
- * Exit codes: 0 shown (evidence), 1 not shown or simulated, 2 incomplete or refused, 3 usage.
+ * Refuses (exit 2) a pre-registration whose pinned spec or analysis files differ from the ones on
+ * disk, and any run that is incomplete or inconsistent. Exit 0 only when the bar is shown on
+ * evidence rows; a simulated run that would pass exits 1, because simulated rows are never
+ * evidence, and so does a run that meets the bar while a lead ruling is pending
+ * (`LEAD_RULING_PENDING`).
+ * Exit codes: 0 shown (evidence), 1 not shown, simulated or lead ruling pending, 2 incomplete or
+ * refused, 3 usage.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -71,7 +74,9 @@ if (refusals.length > 0) {
 const result = analyzeHandoffBar(prereg, trials);
 if (asJson) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 else {
-  process.stdout.write(`track N bar: ${result.decision}${result.evidence ? "" : " (SIMULATED)"}\n`);
+  // Tag only rows that are simulated; an incomplete evidence run is not "SIMULATED".
+  const simulated = result.provenance === "simulated" || result.provenance === "mixed";
+  process.stdout.write(`track N bar: ${result.decision}${simulated ? " (SIMULATED)" : ""}\n`);
   for (const r of result.reasons) process.stdout.write(`  ${r}\n`);
   for (const e of result.errors.slice(0, 20)) process.stdout.write(`  error: ${e}\n`);
 }
