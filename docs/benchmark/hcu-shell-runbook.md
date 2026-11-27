@@ -171,8 +171,9 @@ resume that hits the same failure again aborts after that one attempt.
 ## 4. Fairness: what matches the myco-gate arm and what does not
 
 Compared with the myco-gate arm's live driver, #598 at head `fc01e69a` (its round 3; open, not
-merged when this was written). `plannerDifferences` in the plan lists every remaining difference, so the
-lead's GO approves them by naming the plan hash.
+merged when this was written; the fault classifier is now the merged #598 + #607 one, see
+below). `plannerDifferences` in the plan lists every remaining difference, so the lead's GO
+approves them by naming the plan hash.
 
 **The same in both arms:**
 
@@ -184,13 +185,18 @@ lead's GO approves them by naming the plan hash.
   `none`, on any message and whatever the call's outcome;
 - the fault classes and their stops: auth, billing (402 included) and the usage limit each halt
   with their own code, and only a transient limit backs off. Quota wording on plain stdout is
-  classified like stderr, and a clean result with no claim (here: no parseable decision) that
-  names the quota stops the run with exit 7; a result with a claim (here: a valid decision) is
-  never reclassified. The vocabulary and behaviour are #598 round 3's (`fc01e69a`), copied in
-  `src/baseline/hcu-shell-live/subscription-faults.ts` and `planner.ts`.
-  `subscription-faults.test.ts` runs #598's `interpretResult` vectors through this arm's
-  `readPlannerCall`; once #598 merges it also runs them through #598's own `interpretResult`
-  and compares the expressions;
+  classified like stderr, and a clean result with no claim (here: no parseable decision) whose
+  text or stderr names the quota stops the run with exit 7; so do the narrow, numberless
+  billing and auth phrases ("Credit balance is too low", "Not logged in", ...), with exit 5. A
+  result with a claim (here: a valid decision) is never reclassified. Unicode whitespace
+  (NBSP, U+2009, tabs), format characters and hyphen variants are folded before matching, and
+  "You've hit your limit" is in the vocabulary. An unmapped structured error falls back to the
+  text. There is ONE classifier (round 4): the arm imports the myco-gate arm's merged #598 +
+  #607 classifier (`classOfUncleanRun`, `classOfClaimlessCleanResult`) from
+  `src/pilot/claude-cli.ts`, which `src/pilot/claude-transport.ts` re-exports, and holds no
+  copy (`src/baseline/hcu-shell-live/subscription-faults.ts` only maps the classes to the
+  arm's codes). `subscription-faults.test.ts` runs the myco-gate arm's #607 vectors through
+  this arm's `readPlannerCall` and through `interpretResult`;
 - exit codes 5, 6 and 7, and the usage-limit report for the lead;
 - pacing (`DEFAULT_PACING`): concurrency 1, 90 s between starts, an 1800 s trial deadline, the
   back-off, 3 attempts per trial re-run in place, and at most one transient re-run per trial
