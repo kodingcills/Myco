@@ -378,8 +378,9 @@ the stored value is exactly the value the text denotes:
 | number, General or `@` format | shortest round-trip decimal: `451` |
 | number, fixed format (`0`, `0.00`, `#,##0.00`, optionally `$`) | `$` if the format carries it, then the value at the format's decimals: `$45678.90`, `4242.00`; only if the value is exact at those decimals. Thousands grouping is display only |
 | number, date format (any day order) | the ISO day `YYYY-MM-DD`, in the workbook's 1900 or 1904 date system |
-| a date serial no real day has (below 1 in either date system, so 1904 serial 0 too; serial 60 = the phantom 1900-02-29; past 9999-12-31) | the impossible-date marker: equals no expected cell, so `refuted` (R1's impossible-date rule; on the CSV path an impossible date is text that equals nothing) |
+| a date serial no real day has (below 1 in the 1900 system, below 0 in the 1904 system; serial 60 = the phantom 1900-02-29; past 9999-12-31) | the impossible-date marker: equals no expected cell, so `refuted` (R1's impossible-date rule; on the CSV path an impossible date is text that equals nothing) |
 | date with a time of day; boolean; error value; percent, scientific, fraction, time, literal-text or non-dollar currency format; a value not exact at its format's decimals | a marker that equals no expected cell: `refuted` |
+| 1904 serial 0, date-styled: 1904-01-01 in Excel and LibreOffice, a real day the independent grader denies (its bound is serial `>= 1` in both systems) | the ISO day `1904-01-01`, but a real day the gate does not judge: a document that would otherwise verify is `uncertain` `XLSX_DATE_DOMAIN` instead, never refuted as no day (round-1 verdict 7206609374, D1). A document the text comparison refutes stays refuted; with a time of day, the date-with-time marker |
 | a number in a column whose type does not accept it (a text or key column; in an integer column, not digits or date-styled; in a date column, not a date-styled real day; in a currency column, not a `$` amount) | the rendered text as above, but a document that would otherwise verify is `uncertain` `XLSX_NUMBER_DOMAIN` instead: the independent grader compares a stored number by column type and fails it. A document the text comparison refutes stays refuted |
 | a formula (any cell) | a formula marker carrying the formula and its cached value: it equals no literal, so a formula where the pristine fixture holds a literal is `refuted` (`TARGET_MISMATCH` in the target, `DOCUMENT_COLLATERAL` elsewhere), whatever its cached value; a sealed xlsx fixture's own formula cell saved unchanged equals itself. Formulas are never evaluated. With no cached value: `uncertain` `XLSX_FORMULA_UNCACHED` |
 
@@ -407,8 +408,10 @@ code's first section, an empty `<v></v>`). The element-tree and attribute pins, 
 byte-coverage rule, the format-code agreement rule and the empty-`<v>` refusal below close
 them. #550's round 3 found two more, in value semantics: a stored number whose rendered text
 equals the expected text in a column whose type does not accept a number (the grader
-compares by column type), and 1904 serial 0, which the gate read as 1904-01-01. The
-`XLSX_NUMBER_DOMAIN` refusal and the serial `>= 1` bound in both systems close them.
+compares by column type), and 1904 serial 0, which the gate verified as 1904-01-01 while the
+grader's `serial >= 1` bound denies it. The `XLSX_NUMBER_DOMAIN` and `XLSX_DATE_DOMAIN`
+refusals close them: 1904 serial 0 is a real day, so the gate refuses it rather than refuting
+it.
 
 *Raw-byte pre-scan and fixed part names (replaces #503, round 3 D8).* Before any XML is
 parsed, every entry must be one of LibreOffice's fixed part names and every part's bytes must
@@ -543,6 +546,7 @@ fails if a code is added to `XlsxErrorCode` without one):
 | a cell style index that is not a canonical number (`s="00"`) or is past `cellXfs`, a `numFmt` without a code or an integer id, an `xf` whose `numFmtId` is not a number | `XLSX_STYLE_MALFORMED` |
 | an unknown built-in number format; a style whose date-ness depends on the section read (round 3, T2: `General;d`, `0;[Red]yyyy`: a day or year token outside the first section, or a first-section date the whole code does not carry) | `XLSX_NUMFMT_UNSUPPORTED` |
 | calc-record-edit only, on a document whose every cell's text matches: a stored number in a column whose type does not accept it (#550 round 3, D3: `name := 4242` stored as a number; `qty := 4242.5`; `salary := 36965.5` in General; `joined := 45000` not date-styled). Raised by the family (`numberDomainRefusal`), not the reader | `XLSX_NUMBER_DOMAIN` |
+| calc-record-edit only, on a document whose every cell's text matches: a date-styled 1904 serial 0 (1904-01-01, a real day the grader's `serial >= 1` bound denies; round-1 verdict 7206609374, D1). Raised by the family from the reader's `ungradedDates` | `XLSX_DATE_DOMAIN` |
 
 **Independence.** The gate's xlsx reader shares no code with the independent grader's
 (`src/benchmark/grade/zip.ts`, `sheet.ts`): its own zip walk, XML tokenizer and date

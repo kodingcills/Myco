@@ -311,9 +311,15 @@ export const calcRecordEditFamily: OracleFamily = {
       // it fails the grader whatever text it renders to (verdict 7205644970, D3 VA-VD):
       // refused, never verified (fail closed). Only the verify path changes: a document the
       // text comparison already refutes stays refuted (R1's evidence rules are unchanged).
+      // A date the gate does not judge (1904 serial 0: a real day the grader denies) is
+      // refused the same way, never refuted as no day (round-1 verdict 7206609374, D1).
+      if ((doc.ungradedDates ?? []).length > 0)
+        throw new StateCorruptError(
+          "persisted document holds a date the gate does not judge (XLSX_DATE_DOMAIN)",
+        );
       if (numberDomainRefusal(doc, expected))
         throw new StateCorruptError(
-          "persisted document is not a readable xlsx document (XLSX_NUMBER_DOMAIN)",
+          "persisted document holds a value the gate does not judge (XLSX_NUMBER_DOMAIN)",
         );
       return {
         status: "verified",

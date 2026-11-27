@@ -78,6 +78,11 @@ export interface SavedDocument extends ParsedDocument {
    * (`numberDomain`, xlsx-document.ts). CSV has no stored kind: every cell is text.
    */
   readonly numbers?: Readonly<Record<string, readonly NumberColumnType[]>>;
+  /**
+   * xlsx only: literal number cells holding a date the gate does not judge, by A1 ref
+   * (`isUngradedDate`, xlsx-document.ts: 1904 serial 0, a real day the grader denies).
+   */
+  readonly ungradedDates?: readonly string[];
 }
 
 /**

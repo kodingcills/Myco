@@ -5,13 +5,15 @@
  * integer and no date style, a date column needs a date-styled serial of that ISO day, a
  * currency column needs the `$` amount and no date style, and a text or key column never
  * matches a number. So a number whose text equals the expected text could still fail the
- * grader, and the gate verified it (VA-VD). Separately, the gate read 1904-system serial 0
- * as 1904-01-01, a day the grader's `serial >= 1` bound denies (VE).
+ * grader, and the gate verified it (VA-VD). Separately, the gate verified 1904-system serial
+ * 0 as 1904-01-01, a day the grader's `serial >= 1` bound denies (VE).
  *
  * The fix: the reader returns each literal number cell's stored kind as the column types it
  * can stand for (`numberDomain`), calc-record-edit refuses a document it would otherwise
- * verify when any number sits outside its column's set (XLSX_NUMBER_DOMAIN), and
- * `serialDay` requires serial >= 1 in both systems.
+ * verify when any number sits outside its column's set (XLSX_NUMBER_DOMAIN), and a
+ * date-styled 1904 serial 0 (1904-01-01 in Excel and LibreOffice: a real day the grader
+ * denies) is refused the same way (XLSX_DATE_DOMAIN; round-1 verdict 7206609374, D1), never
+ * refuted as no day. `serialDay` follows the grader: serial >= 1 in both systems.
  *
  * Here: VA-VE verbatim (each from the real `pristine.lo.xlsx`, run through the real read
  * path and the grader), the controls, a column-domain differential family (column x
@@ -21,7 +23,13 @@
  */
 import { describe, expect, it } from "vitest";
 import { serialToIsoDate } from "../../src/benchmark/grade/sheet.ts";
-import { numberDomain, serialDay } from "../../src/gate/xlsx-document.ts";
+import {
+  isUngradedDate,
+  MARKERS,
+  numberDomain,
+  renderNumber,
+  serialDay,
+} from "../../src/gate/xlsx-document.ts";
 import { writeZip } from "../../src/tasks/writer-docgen.ts";
 import {
   gateOn,
@@ -168,14 +176,33 @@ describe("D3 VA-VD: a stored number outside its column's domain (verbatim)", () 
   });
 });
 
-describe("D3 VE: serial 0 in the 1904 date system is no day (verbatim)", () => {
-  it("VE: joined := 1904-01-01, date1904, D4 = serial 0 date-styled: grader fails, gate never verifies", async () => {
+describe("D3 VE: serial 0 in the 1904 date system is a real day the gate refuses (verbatim)", () => {
+  it("VE: joined := 1904-01-01, date1904, D4 = serial 0 date-styled: grader fails, gate refuses", async () => {
+    // 1904-01-01 in Excel and LibreOffice, denied by the grader's serial >= 1 bound: the
+    // gate refuses it (uncertain with a code), never refutes it as no day (round-1 verdict
+    // 7206609374, D1; mutant M-VE-REFUTE turns it back into the impossible-date marker).
     const bytes = variant("D4", '<c r="D4" s="1" t="n"><v>0</v></c>', 1904);
     expect(graderOn(bytes, EDIT("joined", "1904-01-01"))).toBe("fail");
-    const gate = await gateOn(bytes, EDIT("joined", "1904-01-01"));
-    // Serial 0 renders as the impossible-date marker (R1): a text mismatch, refuted.
-    expect(gate.verdict).toBe("refuted");
-    expect(gate.reasonCodes).toContain("ORACLE_FAIL");
+    await expectRefused(bytes, EDIT("joined", "1904-01-01"), "XLSX_DATE_DOMAIN");
+  });
+
+  it("the same cell under another target value is a real mismatch: refuted, as R1 has it", async () => {
+    // D4 holds 1904-01-01 while the edit asks for 2024-01-01: not done in the apps either.
+    const bytes = variant("D4", '<c r="D4" s="1" t="n"><v>0</v></c>', 1904);
+    expect(graderOn(bytes, EDIT("joined", "2024-01-01"))).toBe("fail");
+    expect((await gateOn(bytes, EDIT("joined", "2024-01-01"))).verdict).toBe("refuted");
+  });
+
+  it("1904 serial 0 renders as the day 1904-01-01 and is flagged; 1900 serial 0 stays no day", () => {
+    const date = { kind: "date" } as const;
+    expect(renderNumber(0, date, 1904)).toBe("1904-01-01");
+    expect(renderNumber(0.5, date, 1904)).toBe(MARKERS.dateTime);
+    expect(renderNumber(-1, date, 1904)).toBe(MARKERS.impossibleDate);
+    expect(renderNumber(0, date, 1900)).toBe(MARKERS.impossibleDate);
+    expect(isUngradedDate(0, date, 1904)).toBe(true);
+    expect(isUngradedDate(0, date, 1900)).toBe(false);
+    expect(isUngradedDate(1, date, 1904)).toBe(false);
+    expect(isUngradedDate(0, { kind: "general" }, 1904)).toBe(false);
   });
 
   it("serial 1 in the 1904 system is 1904-01-02 on both sides: verified, grader passes", async () => {
@@ -184,7 +211,7 @@ describe("D3 VE: serial 0 in the 1904 date system is no day (verbatim)", () => {
     expect((await gateOn(bytes, EDIT("joined", "1904-01-02"))).verdict).toBe("verified");
   });
 
-  it("serialDay(0, 1904) is null; 1 is 1904-01-02", () => {
+  it("serialDay follows the grader: serialDay(0, 1904) is null; 1 is 1904-01-02", () => {
     expect(serialDay(0, 1904)).toBeNull();
     expect(serialDay(1, 1904)).toBe("1904-01-02");
   });
@@ -255,7 +282,10 @@ const NEW_VALUES = [
   "$-5.25",
   "45447",
 ] as const;
-/** number in style 0 (General), 1 (date), 2 (text @), 3 (a "$"#,##0.00 style added here); a shared or inline string. */
+/**
+ * number in style 0 (General), 1 (date), 2 (text @), 3 (a "$"#,##0.00 style, numFmt 167,
+ * added by `withCurrencyStyle`); a shared or inline string.
+ */
 const REPRESENTATIONS = ["n0", "n1", "n2", "n3", "shared", "inline"] as const;
 
 /** The stored number a writer would put for `v`: the number, a day's serial, an amount. */
@@ -271,15 +301,25 @@ function storedNumber(v: string, system: 1900 | 1904): number | undefined {
   return amount ? Number(amount[1]) : undefined;
 }
 
+/**
+ * Function replacements throughout: the code holds `$&`, which a replacement STRING reads as
+ * "the matched text" (round-1 verdict 7206609374, D3: every n3 variant was pre-scan refused).
+ */
 function withCurrencyStyle(styles: string): string {
-  return styles
-    .replace('<numFmts count="3">', '<numFmts count="4">')
-    .replace("</numFmts>", '<numFmt numFmtId="167" formatCode="&quot;$&quot;#,##0.00"/></numFmts>')
-    .replace('<cellXfs count="3">', '<cellXfs count="4">')
+  const out = styles
+    .replace('<numFmts count="3">', () => '<numFmts count="4">')
+    .replace(
+      "</numFmts>",
+      () => '<numFmt numFmtId="167" formatCode="&quot;$&quot;#,##0.00"/></numFmts>',
+    )
+    .replace('<cellXfs count="3">', () => '<cellXfs count="4">')
     .replace(
       "</cellXfs>",
-      '<xf numFmtId="167" fontId="0" fillId="0" borderId="0" xfId="0" applyFont="false" applyBorder="false" applyAlignment="false" applyProtection="false"><alignment horizontal="general" vertical="bottom" textRotation="0" wrapText="false" indent="0" shrinkToFit="false"/><protection locked="true" hidden="false"/></xf></cellXfs>',
+      () =>
+        '<xf numFmtId="167" fontId="0" fillId="0" borderId="0" xfId="0" applyFont="false" applyBorder="false" applyAlignment="false" applyProtection="false"><alignment horizontal="general" vertical="bottom" textRotation="0" wrapText="false" indent="0" shrinkToFit="false"/><protection locked="true" hidden="false"/></xf></cellXfs>',
     );
+  if (!out.includes('formatCode="&quot;$&quot;#,##0.00"')) throw new Error("no currency style");
+  return out;
 }
 
 interface Variant {
@@ -336,17 +376,41 @@ describe("column-domain differential family: gate VERIFIED implies grader PASS",
   it("752 variants (column x newValue x representation x date system), 0 violations", async () => {
     const variants = domainVariants();
     expect(variants.length).toBe(752);
-    const tally = { verified: 0, refuted: 0, uncertain: 0, domain: 0, graderPass: 0 };
+    const tally = {
+      verified: 0,
+      refuted: 0,
+      uncertain: 0,
+      domain: 0,
+      dateDomain: 0,
+      graderPass: 0,
+      n3: 0,
+      n3Verified: 0,
+    };
     const violations: string[] = [];
+    const n3ReadErrors: string[] = [];
     for (const v of variants) {
       const gate = await gateOn(v.bytes, v.edit);
       const grader = graderOn(v.bytes, v.edit);
       tally[gate.verdict as "verified" | "refuted" | "uncertain"] += 1;
-      if (gate.reasons.join(" ").includes("XLSX_NUMBER_DOMAIN")) tally.domain += 1;
+      const reasons = gate.reasons.join(" ");
+      if (reasons.includes("XLSX_NUMBER_DOMAIN")) tally.domain += 1;
+      if (reasons.includes("XLSX_DATE_DOMAIN")) tally.dateDomain += 1;
+      if (v.label.endsWith(" as n3")) {
+        tally.n3 += 1;
+        if (gate.verdict === "verified") tally.n3Verified += 1;
+        // The "$" style reaches the reader: no n3 variant fails to read (D3).
+        if (/not a readable xlsx document \(XLSX_/.test(reasons)) n3ReadErrors.push(v.label);
+      }
       if (grader === "pass") tally.graderPass += 1;
       if (gate.verdict === "verified" && grader !== "pass") violations.push(v.label);
     }
     expect(violations).toEqual([]);
+    expect(n3ReadErrors).toEqual([]);
+    expect(tally.n3).toBeGreaterThan(50);
+    // "$4242.00" in the "$" style verifies in the salary column, in both systems.
+    expect(tally.n3Verified).toBeGreaterThan(0);
+    // 1904 joined := 1904-01-01 date-styled (serial 0) is refused with its own code.
+    expect(tally.dateDomain).toBeGreaterThan(0);
     // Live: the family reaches every outcome, and the new refusal fires on the D3 shapes.
     expect(tally.verified).toBeGreaterThan(100);
     expect(tally.refuted).toBeGreaterThan(100);
@@ -370,8 +434,10 @@ describe("serial sweep: serialDay agrees with the grader on every serial, both s
     expect(disagreements).toEqual([]);
   }, 120_000);
 
-  it("boundary serials through the gate: verified only where the grader passes", async () => {
+  it("boundary serials through the gate: gate and grader agree wherever the gate does not refuse", async () => {
     const violations: string[] = [];
+    const disagreements: string[] = [];
+    const refused: string[] = [];
     for (const system of [1900, 1904] as const)
       for (const serial of [
         -1, 0, 1, 2, 59, 60, 61, 1462, 2_957_003, 2_957_004, 2_958_465, 2_958_466,
@@ -383,9 +449,16 @@ describe("serial sweep: serialDay agrees with the grader on every serial, both s
         const bytes = variant("D4", `<c r="D4" s="1" t="n"><v>${serial}</v></c>`, system);
         const edit = EDIT("joined", day);
         const gate = await gateOn(bytes, edit);
-        if (gate.verdict === "verified" && graderOn(bytes, edit) !== "pass")
+        const grader = graderOn(bytes, edit);
+        if (gate.verdict === "verified" && grader !== "pass")
           violations.push(`${system}:${serial}`);
+        if (gate.verdict === "uncertain") refused.push(`${system}:${serial}`);
+        else if ((gate.verdict === "verified") !== (grader === "pass"))
+          disagreements.push(`${system}:${serial}`);
       }
     expect(violations).toEqual([]);
+    expect(disagreements).toEqual([]);
+    // The only refusal is the real day the grader denies: 1904 serial 0 (D1).
+    expect(refused).toEqual(["1904:0"]);
   });
 });

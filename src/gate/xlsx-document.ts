@@ -76,6 +76,9 @@
  * rendered text can stand for (`numberDomain`, `XlsxDocument.numbers`); the family refuses a
  * number cell in any other column (XLSX_NUMBER_DOMAIN, `numberDomainRefusal` in
  * calc-document.ts). Re-derived here from the grader's documented semantics, never imported.
+ * A date-styled 1904 serial 0 is the real day 1904-01-01, which the grader denies: the
+ * reader lists it (`isUngradedDate`, `XlsxDocument.ungradedDates`) and the family refuses
+ * it (XLSX_DATE_DOMAIN), never refutes it as no day.
  *
  * Sheets: the reader returns the first worksheet's cells and the number of sheets in the
  * workbook. The fixture is one sheet; the family refutes any other sheet set
@@ -850,8 +853,9 @@ export function serialDay(serial: number, system: 1900 | 1904): string | null {
   if (!Number.isInteger(serial) || serial > MAX_SERIAL[system]) return null;
   let epoch: number;
   if (system === 1904) {
-    // Serial 0 (1904-01-01 by a plain count) is no day here: the grader's bound is serial
-    // >= 1 in both systems (verdict 7205644970, D3 VE), so 0 is the impossible-date marker.
+    // Serial 0 is 1904-01-01 in Excel and LibreOffice, a real day, but the grader's bound
+    // is serial >= 1 in both systems (verdict 7205644970, D3 VE): this function follows the
+    // grader, and `renderNumber` / `isUngradedDate` render and refuse that day instead.
     if (serial < 1) return null;
     epoch = Date.UTC(1904, 0, 1);
   } else {
@@ -862,6 +866,19 @@ export function serialDay(serial: number, system: 1900 | 1904): string | null {
   const y = day.getUTCFullYear();
   if (y < 1900 || y > 9999) return null;
   return `${String(y).padStart(4, "0")}-${String(day.getUTCMonth() + 1).padStart(2, "0")}-${String(day.getUTCDate()).padStart(2, "0")}`;
+}
+
+/** The day of serial 0 in the 1904 date system (Excel and LibreOffice). */
+const EPOCH_1904 = "1904-01-01";
+
+/**
+ * True for a date-styled whole serial 0 in the 1904 system: a real day (1904-01-01) that
+ * the grader's `serial >= 1` bound denies. The gate does not judge it: a document that
+ * would otherwise verify with such a cell is refused (`XLSX_DATE_DOMAIN`), never verified
+ * and never refuted as no day (lead ruling on #576; round-1 verdict 7206609374, D1).
+ */
+export function isUngradedDate(value: number, cls: NumberClass, system: 1900 | 1904): boolean {
+  return cls.kind === "date" && system === 1904 && value === 0;
 }
 
 /** Render a stored number as the CSV path's cell text (see the module comment). */
@@ -875,6 +892,11 @@ export function renderNumber(value: number, cls: NumberClass, system: 1900 | 190
       return `${cls.currency ? "$" : ""}${text}`;
     }
     case "date": {
+      // 1904 serial 0 (and its times of day) is the real day 1904-01-01, not an impossible
+      // date: rendered as that day, then refused on the verify path (`isUngradedDate`,
+      // round-1 verdict 7206609374, D1), never refuted as no day.
+      if (system === 1904 && Math.floor(value) === 0)
+        return Number.isInteger(value) ? EPOCH_1904 : MARKERS.dateTime;
       if (!Number.isInteger(value)) {
         return serialDay(Math.floor(value), system) === null
           ? MARKERS.impossibleDate
@@ -1169,12 +1191,14 @@ function readSheetCells(
 ): {
   cells: Record<string, string>;
   numbers: Record<string, readonly NumberColumnType[]>;
+  ungradedDates: string[];
 } {
   const sheetDataList = elements(sheet, "sheetData");
   if (sheetDataList.length !== 1) fail("XLSX_NOT_WORKBOOK");
   const sheetData = sheetDataList[0] as XmlElement;
   const cells: Record<string, string> = {};
   const numbers: Record<string, readonly NumberColumnType[]> = {};
+  const ungradedDates: string[] = [];
   const seen = new Set<string>();
   let [minR, minC, maxR, maxC] = [Infinity, Infinity, -1, -1];
   // sheetData -> row* -> c*: every element below sheetData is checked against the cell
@@ -1204,6 +1228,7 @@ function readSheetCells(
       const value = cellValue(c, shared, styles, system, sink);
       if (value !== "") cells[key] = value;
       if (sink.domain !== undefined) numbers[key] = sink.domain;
+      if (sink.ungradedDate === true) ungradedDates.push(key);
     }
   }
   // <dimension> must be the range LibreOffice writes for these cells ("A1" when there are
@@ -1219,12 +1244,14 @@ function readSheetCells(
           : `${cellRef(minR, minC)}:${cellRef(maxR, maxC)}`;
     if ((dims[0] as XmlElement).attrs.get("ref") !== want) fail("XLSX_CELL_MALFORMED");
   }
-  return { cells, numbers };
+  return { cells, numbers, ungradedDates };
 }
 
 /** Set by `literalValue` for a literal (not formula) number cell: see `numberDomain`. */
 interface NumberSink {
   domain?: readonly NumberColumnType[];
+  /** Set for a date the gate does not judge: see `isUngradedDate`. */
+  ungradedDate?: true;
 }
 
 /**
@@ -1302,7 +1329,10 @@ function literalValue(
       if (String(value) !== v) fail("XLSX_CELL_MALFORMED");
       const cls = style ?? { kind: "general" };
       const text = renderNumber(value, cls, system);
-      sink.domain = numberDomain(text, value, cls);
+      if (isUngradedDate(value, cls, system)) {
+        sink.ungradedDate = true;
+        sink.domain = [];
+      } else sink.domain = numberDomain(text, value, cls);
       return text;
     }
     default:
@@ -1323,6 +1353,8 @@ export interface XlsxDocument {
    * rendered text can stand for (`numberDomain`; empty: none, so any column refuses it).
    */
   readonly numbers: Readonly<Record<string, readonly NumberColumnType[]>>;
+  /** Literal number cells of the first worksheet the gate does not judge (`isUngradedDate`). */
+  readonly ungradedDates: readonly string[];
   /** Sheets in the workbook (worksheets, chart sheets, dialog sheets). */
   readonly sheetCount: number;
 }
@@ -1442,12 +1474,12 @@ export function readXlsxDocument(bytes: Uint8Array): XlsxDocument {
   const styles = readStyles(part(stylesRel[0], "styleSheet"));
 
   const sheetXml = part(first, "worksheet") as XmlElement;
-  const { cells, numbers } = readSheetCells(sheetXml, shared, styles, system);
+  const { cells, numbers, ungradedDates } = readSheetCells(sheetXml, shared, styles, system);
   // The element tree of every part, pinned (see xlsx-tree.ts). The readers above walk down
   // from each root and see only the paths they read; the independent grader regex-scans the
   // whole text of a part. Without this pin, a decoy nested inside an element the readers
   // skip would be read by the grader and never by the gate (round 1, D1 V1-V5). It runs
   // last so the readers' own, more specific codes win where both refuse.
   pinTrees(parts);
-  return { cells, numbers, sheetCount: sheets.length };
+  return { cells, numbers, ungradedDates, sheetCount: sheets.length };
 }
