@@ -6,9 +6,9 @@ pre-registration, and no result is claimed.**
 | | |
 |---|---|
 | Pre-registration | `prereg.json` (this directory) |
-| Pre-registration hash (SHA-256 over canonical JSON) | `140e929c5fc94d8cfa22cef833028344c369d7b04a484f9ed3a9c19986b6cbb8` |
+| Pre-registration hash (SHA-256 over canonical JSON) | `832354f63c4e78b962872d9d77fc4068aba1e55666751751b52fed0e2f98ec70` |
 | Analysis script | `src/actions/j-v1-analysis.ts`, entry `analyzeJV1` |
-| Analysis script SHA-256 | `f85ab65f7acf909085e8128854805be298cfe3425f9be535a30d8bf94ceb413f` |
+| Analysis script SHA-256 | `898456aa5020b5847f29c772e2a0cb15731a6545d0021245706706546c2162f3` |
 | Harness side (loader, schedule, J row adapter) | `src/actions/j-v1-harness.ts` |
 | Tests | `test/actions/j-v1-prereg.test.ts`, `test/actions/j-v1-analysis.test.ts`, `test/actions/j-v1-harness.test.ts` |
 
@@ -93,8 +93,18 @@ can change any of them before the first run. After it, only a `j-v2` can.
   (`PARITY_MISMATCH`), with the numbers still computed.
 - **The frozen-in commit (spec §3 item 2).** A pack records the pre-registration hash and the
   commit on `main` that froze this pre-registration. The analysis refuses a pack without a
-  40-hex commit (`PACK_FROZEN_COMMIT`). The script imports only `node:crypto`, so checking that
-  the commit really holds this `prereg.json` is the pack tooling's job (it has git).
+  40-hex commit (`PACK_FROZEN_COMMIT`). The script does no I/O (it imports `node:crypto` and
+  the shared guard below), so checking that the commit really holds this `prereg.json` is the
+  pack tooling's job (it has git).
+- **The shared capability-analysis guard (GitHub #652, lead ruling 2026-11-27 06:21Z).**
+  Before any decision the script calls `guardCapabilityAnalysis` from
+  `src/capability/analysis-guard.ts`, which imports nothing and is pinned by its own SHA-256
+  under `analysis.modules` (the loader checks both hashes). It refuses a pack whose
+  pre-registration hash does not match (`PREREG_HASH_MISMATCH`), and the verdict is never
+  "shown" while `leadRulingPending` is non-empty (`LEAD_RULING_PENDING`, `exitCode` 3) or any
+  row's `simulated` is anything but absent or `false` (`SIMULATED`). Adopting it changed the
+  analysis script and so this pre-registration's hash; no run had used j-v1, so this is an
+  edit before the first run (spec §3 item 3), not a new version.
 - **No gate.** The J row adapter refuses a fast-path row that carries a gate verdict: j-v1 is
   gate-absent in both arms, and only the independent grader's grade is read.
 - **Model id.** `claude-sonnet-5-5`, the R1 pilot's model, so the J pair shares its planner

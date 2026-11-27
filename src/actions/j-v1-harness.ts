@@ -5,7 +5,8 @@
  * none of which runs a model or touches the VM:
  *
  * - `loadJV1Prereg` reads the committed pre-registration, refuses it unless the analysis
- *   script's bytes still hash to the SHA-256 it names, and returns the pre-registration hash
+ *   script's bytes, and the shared analysis guard's (`analysis.modules`), still hash to the
+ *   SHA-256s it names, and returns the pre-registration hash
  *   every pack must record (capability spec §3 items 1-2);
  * - `jV1Schedule` (from the frozen analysis script) is the seeded order the harness runs the
  *   (task, arm) trials in; the analysis refuses a pack that ran in any other order;
@@ -37,6 +38,8 @@ export { jV1Schedule };
 
 export const J_V1_PREREG_PATH = "docs/product/capability-prereg/j-v1/prereg.json";
 export const J_V1_ANALYSIS_PATH = "src/actions/j-v1-analysis.ts";
+/** The shared capability-analysis guard (#652) the analysis script imports; pinned by SHA-256. */
+export const J_V1_GUARD_PATH = "src/capability/analysis-guard.ts";
 
 export interface LoadedJV1Prereg {
   readonly prereg: JV1Prereg;
@@ -57,6 +60,18 @@ export function loadJV1Prereg(repoRoot: string): LoadedJV1Prereg {
     .digest("hex");
   if (analysis.sha256 !== actual)
     throw new Error("j-v1 pre-registration: the analysis script does not match its SHA-256");
+  // The shared capability-analysis guard (#652) the script imports is pinned beside it.
+  const modules = (raw as { analysis?: { modules?: unknown } }).analysis?.modules;
+  const pinned = Array.isArray(modules)
+    ? modules.find((m) => (m as { path?: unknown })?.path === J_V1_GUARD_PATH)
+    : undefined;
+  if (pinned === undefined)
+    throw new Error("j-v1 pre-registration: analysis.modules does not pin the analysis guard");
+  const guardSha = createHash("sha256")
+    .update(readFileSync(join(repoRoot, J_V1_GUARD_PATH)))
+    .digest("hex");
+  if ((pinned as { sha256?: unknown }).sha256 !== guardSha)
+    throw new Error("j-v1 pre-registration: the analysis guard does not match its SHA-256");
   return { prereg: raw as JV1Prereg, hash: preregHash(raw) };
 }
 

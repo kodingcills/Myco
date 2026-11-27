@@ -265,6 +265,7 @@ describe("j-v1 analysis: refusals", () => {
     expect(r.verdict).toBe("not-shown");
     expect(r.reasons[0]).toMatch(/^PREREG_HASH_MISMATCH/);
     expect(statusOf(r)).toEqual(["not-tested", "not-tested", "not-tested"]);
+    expect(r.exitCode).toBe(1);
   });
 
   it("refuses a pack whose pre-registration was edited after the hash was taken", () => {
@@ -481,6 +482,9 @@ describe("j-v1 analysis: the bar (k = 2)", () => {
     expect(statusOf(r)).toEqual(["shown", "shown", "shown"]);
     expect(r.verdict).toBe("not-shown");
     expect(r.reasons).toEqual(["LEAD_RULING_PENDING: x"]);
+    // The shared guard (#652): a pending ruling exits non-zero (3); shown exits 0.
+    expect(r.exitCode).toBe(3);
+    expect(run(committed(), rows(committed())).exitCode).toBe(0);
   });
 
   it("is never shown on simulated rows, though the numbers are computed (plumbing)", () => {

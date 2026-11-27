@@ -9,6 +9,8 @@
  * committed spec and code, checks each pack's recorded hash against the pre-registration as
  * committed at the pack's recorded commit (`git show <commit>:<prereg path>`), and prints
  * the result as JSON. Exit 0: analyzed or halted (reported). Exit 1: refused. Exit 2: usage.
+ * Exit 3: analyzed while the pre-registration still lists pending items (LEAD_RULING_PENDING,
+ * from the shared capability-analysis guard, #652): computed, never "shown".
  * `--plumbing` allows simulated rows and a draft pre-registration; its output is never
  * evidence (`evidence: false`). No network, no model, no VM.
  */
@@ -16,7 +18,11 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { analyzeRecoveryPacks, type RecoveryPack } from "../src/recovery/analysis.ts";
+import {
+  analysisExitCode,
+  analyzeRecoveryPacks,
+  type RecoveryPack,
+} from "../src/recovery/analysis.ts";
 import { K_PREREG_PATH, preregHash } from "../src/recovery/prereg.ts";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -83,6 +89,7 @@ try {
     plumbing: args.plumbing,
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.exitCode = analysisExitCode(result);
 } catch (error) {
   process.stderr.write(`refused: ${(error as Error).message}\n`);
   process.exit(1);

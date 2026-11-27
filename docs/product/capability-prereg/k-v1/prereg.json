@@ -96,12 +96,12 @@
   "analysis": {
     "script": {
       "path": "scripts/k-recovery-analysis.ts",
-      "sha256": "e571d5888e372340c4b3f656bcefd08df6fab828e3b46447e5e2f68f502647ee"
+      "sha256": "7c08b9a75037ac853084f03abe9e7cbe0099e00ac2e2298d1fcb632f0deb57b3"
     },
     "modules": [
       {
         "path": "src/recovery/analysis.ts",
-        "sha256": "21d1e402d81a4ae6bdc909bd4133ad28d1431d1d52c378fe5847b2ad836edbac"
+        "sha256": "8931b9e5411388d4e35e561f671d027a03a9cbeb54698a2e6b0d3c04e2e8fdee"
       },
       {
         "path": "src/recovery/batch.ts",
@@ -109,11 +109,15 @@
       },
       {
         "path": "src/recovery/prereg.ts",
-        "sha256": "2f5c93fa8d84fe7b824ffaf00034411288fae758aa4aa3432f1f7d81c46ce802"
+        "sha256": "eb5089e3cc96f1afc8fe38a09eaade4edbeef794d181f159b000dccedef01552"
+      },
+      {
+        "path": "src/capability/analysis-guard.ts",
+        "sha256": "1fc162197222414bda5dd0a65fce4eb11901489383b7de9f72330d083e96fc3d"
       }
     ],
     "command": "npx tsx scripts/k-recovery-analysis.ts --prereg docs/product/capability-prereg/k-v1/prereg.json --k <k-pack.json> --none <none-pack.json>"
   },
   "evidence": "experiment rows, never R1 evidence unless the lead rules otherwise (spec §3.4); simulated rows never count (§3.5)",
-  "preregistrationHash": "6dffb42ca654a4f5492660c0554ad52a7f686babbbd8cc8c3e9d8d627d3187d8"
+  "preregistrationHash": "23d1830ca589b25e7f9f4b5b1b5f69d922fdc02f6a3e9bd10866f656d43f321c"
 }
