@@ -315,6 +315,17 @@ describe("analyzeIPack: the task facts must split 90 / 10", () => {
     expect(a.refusals.join(";")).toMatch(/task facts do not split 90 satisfiable \/ 10/);
     expect(a.barShown).toBe(false);
   });
+  it("refuses 91 satisfiable with 10 invalid-target (each half of the split is checked)", () => {
+    const extra = { taskId: "fc-v1-extra", satisfiable: true, faultClass: "none" };
+    const a = analyzeIPack(winning(10), { ...ctx, tasks: [...tasks, extra] });
+    expect(a.refusals.join(";")).toMatch(/task facts do not split/);
+  });
+  it("refuses 90 satisfiable with 9 invalid-target", () => {
+    const firstInvalid = tasks.findIndex((t) => !t.satisfiable);
+    const fewer = tasks.filter((_, i) => i !== firstInvalid);
+    const a = analyzeIPack(winning(10), { ...ctx, tasks: fewer });
+    expect(a.refusals.join(";")).toMatch(/task facts do not split/);
+  });
 });
 
 describe("rowShapeProblem", () => {
