@@ -614,10 +614,13 @@ function endLine(trialKey: string, extra: Record<string, unknown> = {}) {
 describe("watch --pilot: closed-vocabulary and strict-pattern fields (round 1 B1)", () => {
   it("free text planted in every closed or pattern-checked field is shown as null and never served", async () => {
     const dir = tempDir("myco-watch-closed-");
-    // Timestamps that are not strict ISO: free text, and an ISO prefix with free text after it.
+    // Timestamps that are not strict ISO: free text alone (live startedAt), free text before an
+    // ISO value (start at: needs the pattern's ^ anchor), and an ISO value with free text after
+    // it (end at, live updatedAt: need the $ anchor). The attempt number is free text too: it is
+    // shown only as a bounded integer.
     writeProgress(dir, [
       { schema: "myco.pilot.header/1", simulated: false },
-      startLine("r1p-t1-a1", { at: MARKER }),
+      startLine("r1p-t1-a1", { at: `${MARKER} ${AT}`, attempt: MARKER }),
       endLine("r1p-t1-a1", {
         at: `${AT} ${MARKER}`,
         armRow: {
@@ -651,6 +654,7 @@ describe("watch --pilot: closed-vocabulary and strict-pattern fields (round 1 B1
     expect(v.trials[0]).toMatchObject({
       trialKey: "r1p-t1-a1",
       state: "decided",
+      attempt: 0,
       startedAt: null,
       endedAt: null,
       says: null,
@@ -675,6 +679,9 @@ describe("watch --pilot: closed-vocabulary and strict-pattern fields (round 1 B1
     await new Promise((r) => setTimeout(r, 80));
     expect(s.state().pilotRefused).toBe(false);
     expect(s.state().pilot?.trials).toHaveLength(1);
+    const served = (await raw(s.port, "/api/state")).body.toString("utf8");
+    expect(served).toContain('"attempt":0');
+    expect(served).not.toContain(MARKER);
     expectNoLeak(await allBodies(s.port), [dir]);
   });
 
@@ -710,6 +717,7 @@ describe("watch --pilot: closed-vocabulary and strict-pattern fields (round 1 B1
     );
     const v = pilotRunSource(dir).poll();
     expect(v.trials[0]).toMatchObject({
+      attempt: 1,
       startedAt: AT,
       endedAt: "2026-11-27T10:01:00Z",
       says: "not-done",
@@ -888,17 +896,20 @@ describe("watch --pilot: never opens the oracle's inputs or the vault", () => {
     }
     // Give the trial a transcript so the reader does open files in that directory.
     writeFileSync(join(trial, "transcript.json"), plantedTranscript("refuted"));
-    const r = spawnSync("npx", ["tsx", join(ROOT, "test", "watch", "poll-run-dir.ts"), root], {
+    // node --import tsx, not npx: no npx start-up, which under full-suite load could pass the
+    // child timeout (round 2 N6).
+    const script = join(ROOT, "test", "watch", "poll-run-dir.ts");
+    const r = spawnSync(process.execPath, ["--import", "tsx", script, root], {
       cwd: ROOT,
       encoding: "utf8",
       // The child takes well under a second; a reader that opened a FIFO blocks until killed.
-      timeout: 15_000,
+      timeout: 25_000,
     });
     expect(r.signal, r.stderr).toBeNull();
     expect(r.status, r.stderr).toBe(0);
     const v = JSON.parse(r.stdout) as PilotView;
     expect(v.trials[0]?.actions?.gateCalls[0]?.verdict).toBe("refuted");
-  }, 30_000);
+  }, 40_000);
 });
 
 describe("watch --pilot: server backstop and CLI", () => {
