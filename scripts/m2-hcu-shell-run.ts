@@ -7,14 +7,19 @@
  *   npx tsx scripts/m2-hcu-shell-run.ts status   --out DIR
  *   npx tsx scripts/m2-hcu-shell-run.ts export   --out DIR
  *   npx tsx scripts/m2-hcu-shell-run.ts probe-planner --call-claude                      one subscription call, no VM
- *   scripts/vm-session.sh -- npx tsx scripts/m2-hcu-shell-run.ts launch --out DIR \
+ *   scripts/vm-session.sh -- node --import tsx scripts/m2-hcu-shell-run.ts launch --out DIR \
  *       --launch-real-trials --plan-sha256 SHA [--resume] [--max-trials N] [--hcu-command CMD]
  *
  * `launch` prints the plan, then refuses unless every real-run precondition holds
  * (`src/baseline/hcu-shell-live/refusals.ts`: the flag, the printed plan hash, the lead's GO,
  * the subscription preflight, #546's cold-boot guard, the VM lock held by vm-session.sh). It
- * never reads, requires or falls back to an Anthropic API key.
- * Exit: 0 complete / ok, 1 failed, 2 usage, 3 refused, 4 halted / aborted / incomplete.
+ * never reads, requires or falls back to an Anthropic API key. Start `launch` with
+ * `node --import tsx`, never `npx tsx`: a Node launcher replaces FD 9, so the VM lock that
+ * `vm-session.sh` holds would never reach this process or the reset (round-2 verifier D4).
+ * Exit (the myco-gate arm's codes, #598): 0 complete / ok, 1 failed, 2 usage, 3 refused,
+ * 4 paused / halted / incomplete, 5 fail-closed stop on the subscription (auth, billing,
+ * API-key path, auth source unknown, model mismatch), 6 two identical failures in a row,
+ * 7 the subscription's usage limit (no retry, no attempt spent; take it to the lead).
  */
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
@@ -33,6 +38,8 @@ import {
 import { liveRefusals } from "../src/baseline/hcu-shell-live/refusals.ts";
 import {
   demoTasks,
+  EXIT,
+  exitCodeFor,
   exportHcuPack,
   HcuRunRefusal,
   type HcuRunResult,
@@ -42,6 +49,7 @@ import {
   planSha256,
   runHcuShell,
   SIMULATED_PLANNER,
+  USAGE_LIMIT_REPORT,
 } from "../src/baseline/hcu-shell-live/runner.ts";
 import {
   simulatedEnvironment,
@@ -66,7 +74,11 @@ const need = (name: string) => {
 const out = (s: string) => process.stdout.write(s);
 const err = (s: string) => process.stderr.write(s);
 const json = (v: unknown) => out(`${JSON.stringify(v, null, 2)}\n`);
-const exitFor = (r: HcuRunResult) => (r.status === "complete" ? 0 : 4);
+const exitFor = (r: HcuRunResult) => {
+  const code = exitCodeFor(r);
+  if (code === EXIT.usageLimit) err(`${USAGE_LIMIT_REPORT}\n`);
+  return code;
+};
 const maxTrials = () => {
   const m = flag("--max-trials");
   if (m === undefined) return undefined;
@@ -189,6 +201,10 @@ try {
   if (error instanceof UsageError) {
     err(`m2-hcu-shell-run: ${error.message}\n`);
     process.exitCode = 2;
+  } else if (error instanceof PlannerHalt && error.code !== "api-key-path-configured") {
+    // A halt outside a run (probe-planner): the same codes a run would exit with.
+    err(`m2-hcu-shell-run: stopped: ${error.message}\n`);
+    process.exitCode = exitFor({ status: "halted", code: error.code } as HcuRunResult);
   } else if (error instanceof HcuRunRefusal || error instanceof PlannerHalt) {
     err(`m2-hcu-shell-run: refused: ${error.message}\n`);
     process.exitCode = 3;
