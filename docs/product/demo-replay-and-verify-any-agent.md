@@ -1,7 +1,7 @@
 # Demo track: replay and share in `myco watch`, and verify any agent's run
 
-**Status: spec, pre-registered, nothing built. Version 2** (round-2 fixes of PR #567's round-1
-verdict). TIF-265 (replay + share) and TIF-270 (verify any agent's run). Linear is at its
+**Status: spec, pre-registered, nothing built. Version 3** (round-3 fixes of PR #567's round-2
+verdict; version 2 fixed the round-1 verdict). TIF-265 (replay + share) and TIF-270 (verify any agent's run). Linear is at its
 free-tier limit, so this spec's tracking issue and its follow-ups go through the GitHub Issues
 fallback: issues on this repository labelled `from-linear-overflow` plus `tier-1` or `tier-2`,
 cross-linked to the parent TIF issue, filed by the coordinator. This page is binding on the build PRs listed in [§5](#5-build-prs). Each acceptance criterion
@@ -55,6 +55,11 @@ The spec builds on these and changes none of their guarantees.
 | Track R | `src/recording/derived-oracle.ts`, `src/recording/replay.ts`, `docs/product/task-recording.md` | Derived oracle, R5 certification, per-trial capture |
 | R5 self-test | `src/oracle-selftest/run.ts` | Oracle mutation self-test |
 | Secret loading | `src/baseline/secret-file.ts` | Load a key at the point of use from a file path |
+| Vault key today | `src/pilot/runner.ts`, `src/schedule/executor.ts`, `src/benchmark/r1-dryrun.ts` | Each seals with `newVaultKey()` (32 random bytes) held in memory and never written. [§1.3](#13-the-vault-key-file-for-real-runs) is how a real run gets a key file |
+| Proof bundles (#562, merged) | `src/proof/bundle.ts` | `assembleProofBundle`, `verifyProofBundle`, the `h-<60hex>` id form |
+| Episode export allowlist (#566, merged) | `src/episode/closed.ts`, `src/episode/export.ts` | Closed export of episodes, `HASHED = /^h-[0-9a-f]{60}$/` |
+| Unprivileged backend (#561, merged) | `src/parallel/backend.ts`, `src/parallel/linux-backend.ts` | `PLAIN_ISOLATION.backend` is `"linux-plain"`, with `hostDirsHidden: false` |
+| Strict namespace backend (#551, merged) | `src/isolation/strict-linux-ns.ts` | `STRICT_BACKEND_ID = "strict-linux-ns"`; not a gated-trial transport and no display ([§2.6](#26-mock-runs-watermarked-never-evidence)) |
 | MCP client examples | `examples/mcp-clients/README.md`, `examples/mcp-clients/codex-transcript.md`, `examples/mcp-clients/stdio-requests.jsonl` | The clients and recorded calls the pre-registered proofs use |
 | Gate integrity tests | `test/integrity/isolation.test.ts`, `test/integrity/surface.test.ts`, `test/gate/caller-isolation.test.ts`, `test/gate/input-fuzz.test.ts` | Suites [§3.5](#35-test-suites-the-new-entry-point-must-join) extends |
 | R5 and track R tests | `test/oracle-selftest/selftest.test.ts`, `test/recording/derived-oracle.test.ts`, `test/recording/e2e.test.ts` | Suites [§3.5](#35-test-suites-the-new-entry-point-must-join) extends |
@@ -97,8 +102,13 @@ the timeline join ([§2.2](#22-the-frame--decision-join)) and the clip digest
    (`src/baseline/secret-file.ts` pattern). The key never goes through argv, an environment
    variable, a log or an output. The key file's path is printed nowhere. **The watch server
    never loads a key, never opens the vault's sealed files and never serves an evidence clip**
-   ([§2.8](#28-security-model-what-holds-and-what-changes)). No other module, route or command
-   in either feature takes a key.
+   ([§2.8](#28-security-model-what-holds-and-what-changes)). With `--sealed-capture` it
+   reads PNG frames and the timeline under `captured/` as plain read-only files, as it does
+   today; it never reads the seal, the capture manifest or the sealed ground truth and never
+   checks a MAC, so nothing it shows is sealed evidence. No other module, route or command in
+   either feature reads a key. The one module that **writes** a key file is the trial
+   runner's trial-records writer of [§1.3](#13-the-vault-key-file-for-real-runs), which
+   writes the key it generated itself and never reads one.
 
 ### 1.1 The closed code enums
 
@@ -108,8 +118,8 @@ a code only by a new version of this page.
 | Enum | Members |
 |---|---|
 | `TIMELINE_CODES` (watch: join and pair) | `TL_SCHEMA`, `TL_RUN`, `TL_GAP`, `TL_DUPLICATE`, `TL_FRAME_DIGEST`, `TL_ORDER`, `TL_LOG_AHEAD`, `TL_LOG_PREFIX`, `TL_LOG_BINDING`, `TL_MALFORMED`, `TL_CLOCK_SKEW`, `TL_NO_TIMELINE`, `TL_NO_FRAME_BEFORE`, `PAIR_MISMATCH` |
-| `CLIP_CODES` (export and `myco clip verify`) | `CLIP_NO_SIDECAR`, `CLIP_SCHEMA`, `CLIP_DIGEST`, `CLIP_FILE`, `CLIP_FRAMES`, `CLIP_BAND`, `CLIP_LOG_LINE`, `CLIP_LOG_PREFIX`, `CLIP_LOG_BINDING`, `CLIP_DECISION`, `CLIP_LOG_ONLY`, `CLIP_SEAL`, `CLIP_MOCK`, `CLIP_EVIDENCE`, `CLIP_TIMELINE`, `CLIP_RUN_RECORD`, `CLIP_RECOMPUTE`, `CLIP_SOURCE`, `CLIP_OCR_HIT`, `CLIP_OCR_UNAVAILABLE`, `CLIP_BUDGET`, `CLIP_FRAME_REFUSED` |
-| `VERIFY_CODES` (`myco verify`) | `VERIFY_LOG_DISAGREES`, `VERIFY_LOG_BINDING`, `VERIFY_RECORDING_MISMATCH`, `VERIFY_R5_FAILED`, `VERIFY_BUNDLE_REFUSED`, `VERIFY_TRANSCRIPT_REFUSED`, `VERIFY_EPISODE_REFUSED`, `VERIFY_LEDGER_REFUSED`, plus `integrity:<code>` (the vault's own codes, passed through) |
+| `CLIP_CODES` (export and `myco clip verify`) | `CLIP_NO_SIDECAR`, `CLIP_SCHEMA`, `CLIP_DIGEST`, `CLIP_FILE`, `CLIP_FRAMES`, `CLIP_BAND`, `CLIP_LOG_LINE`, `CLIP_LOG_PREFIX`, `CLIP_LOG_BINDING`, `CLIP_DECISION`, `CLIP_LOG_ONLY`, `CLIP_SEAL`, `CLIP_MOCK`, `CLIP_EVIDENCE`, `CLIP_TIMELINE`, `CLIP_CLAIM`, `CLIP_RUN_RECORD`, `CLIP_RECOMPUTE`, `CLIP_SOURCE`, `CLIP_OCR_HIT`, `CLIP_OCR_UNAVAILABLE`, `CLIP_BUDGET`, `CLIP_FRAME_REFUSED` |
+| `VERIFY_CODES` (`myco verify`) | `VERIFY_LOG_DISAGREES`, `VERIFY_LOG_BINDING`, `VERIFY_KEY_REFUSED`, `VERIFY_RECORDING_MISMATCH`, `VERIFY_R5_FAILED`, `VERIFY_BUNDLE_REFUSED`, `VERIFY_TRANSCRIPT_REFUSED`, `VERIFY_EPISODE_REFUSED`, `VERIFY_LEDGER_REFUSED`, plus `integrity:<code>` (the vault's own codes, passed through) |
 
 ### 1.2 Attribution: a decision belongs to the trial its gate is bound to
 
@@ -143,6 +153,63 @@ features attribute a decision by the gate that made it, never by what the agent 
   `docs/gate/watch.md`, Limits). That view pins nothing and exports nothing. Only the joined
   views of this spec, which use per-trial logs, pin, clip or recompute.
 
+### 1.3 The vault key file for real runs
+
+On `main` no real run can satisfy `--vault-key-file`: every runner seals with `newVaultKey()`,
+held in memory and never written (`src/pilot/runner.ts`, `src/schedule/executor.ts`,
+`src/benchmark/r1-dryrun.ts`). So V1 adds the one place a key file is written, and every
+`--vault-key-file` on a real run names a file written there. **This persists the vault MAC
+key, a security decision the lead ratifies ([§8](#8-open-questions-for-the-lead) question 2).
+Until it is ratified, V1 does not merge.**
+
+- **Who writes it.** Only the live trial runner (`src/pilot/runner.ts`), through one new
+  module, the trial-records writer (`src/verify-run/trial-records.ts`). It writes the key the
+  runner generated itself with `newVaultKey()`; it never reads a key back. The scripted and
+  dry-run paths (`src/schedule/executor.ts`, `src/benchmark/r1-dryrun.ts`) are simulated, keep
+  their in-memory key and write no key file.
+- **Opt-in by path.** The operator gives the runner `--trial-records <dir>`: a path, never a
+  key, in argv. Without it the runner behaves exactly as today, and its trials are reported as
+  not verifiable with `--vault` (never audited without a receipt or key).
+- **Where.** `<dir>/<runId>/vault.key` and, beside it, `<dir>/<runId>/seal-receipt.json`
+  ([§3.2](#32-what-it-does)). Before the first trial starts, the runner checks `<dir>`: it
+  exists, is a real directory (not a symlink), is owned by the runner's uid, has mode 0700,
+  and is neither inside nor containing any agent root or the vault root (the same
+  reachability rule `VerdictVault` applies to its own root, including the case-insensitive
+  comparison). Any failure refuses the batch before any trial runs. Each `<dir>/<runId>/` is
+  created with mode 0700 and no `recursive` creation of parents.
+- **When.** The receipt is written at seal time. The key file is written **after** that
+  trial's agent has stopped and its post-capture check has returned (`runGatedTrial`
+  resolved), never while that trial's agent runs. A runner that dies before that leaves no key
+  file for the trial, and the trial is not verifiable (fail closed). A resumed runner
+  generates a new key, as today; each trial's key file is the key that sealed that trial.
+- **Only for isolated transports.** The key file is written only when the trial's transport
+  constant is in the isolated set of [§2.6](#26-mock-runs-watermarked-never-evidence) (`vm`
+  today), where the agent runs in a guest that cannot reach host files. On any other
+  transport (`mock`, `linux-plain`, where the agent runs as the runner's uid and could read a
+  0600 file) no key file is written, and such trials are never evidence anyway. V1 adds the
+  transport's readonly constant (`transportKind`) to `GatedTrialTransport`; B6's provenance
+  record reuses it.
+- **How.** `open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)`, the content
+  `MYCO_VAULT_KEY=<64 lowercase hex>` and a newline, then `fsync` of the file and its
+  directory. An existing file is refused (the trial's records are then incomplete and the
+  trial is not verifiable; nothing is overwritten). The key is never logged, never in the
+  ledger, the episode, the receipt or any output, and the file's path is printed nowhere.
+- **How it is read.** The three CLIs of rule 6 load it with `readSecretFromFile(path,
+  "MYCO_VAULT_KEY")` (`src/baseline/secret-file.ts`) at the point of use, after an `lstat`
+  check: a regular file, not a symlink, owned by the caller's uid, no group or other
+  permission bits, at most 128 bytes, and exactly 32 bytes once hex-decoded. A file that fails
+  this gives `uncertain` `VERIFY_KEY_REFUSED` (verify) or `CLIP_SEAL` (clip export and clip
+  verify), never a guess. A well-formed key that is not the vault's gives the vault's own
+  `integrity:seal-signature`.
+- **Agent reach.** `src/integrity/surface.ts` classifies the trial-records directory as
+  operator-only: no agent-reachable tool or root reaches it (`test/integrity/surface.test.ts`,
+  VA-14).
+
+So a real run satisfies every `--vault-key-file` and `--seal-receipt` on this page with
+`<dir>/<runId>/vault.key` and `<dir>/<runId>/seal-receipt.json`, and only a run whose runner
+was given `--trial-records` on an isolated transport can be verified with `--vault` or
+exported as an evidence clip.
+
 ---
 
 ## 2. Feature 1: replay and share in `myco watch`
@@ -154,7 +221,9 @@ features attribute a decision by the gate that made it, never by what the agent 
   frame and the decisions pinned to it or earlier. The viewer can step frame by frame, or jump to
   the next or previous decision. The page shows the moment the agent claimed done
   (`CLAIM_RECORDED`, and the episode's `agentClaim: "done"` when an episode is given), then the
-  gate's `refuted` on the frame it was made on.
+  gate's `refuted` on the frame it was made on. In the live page the episode's claim is a
+  label only. An evidence clip never takes the claim from an episode: its "agent claimed done"
+  banner comes only from the sealed claim record ([§2.5](#25-the-clip-digest-and-myco-clip-verify)).
 - **Side by side.** Two runs of one head-to-head pair (the `hcu+shell` arm and the `myco-gate`
   arm on the same task), each with its own scrubber ([§2.4](#24-side-by-side-head-to-head-replay)).
 - **One-click clip.** A short GIF of a frame range with the verdict burned in.
@@ -272,7 +341,9 @@ must not imply otherwise.
   both runs. Each side's log is that run's own bound-trial log, and each side's decisions are
   attributed by that binding
   ([§1.2](#12-attribution-a-decision-belongs-to-the-trial-its-gate-is-bound-to)), never by
-  `request.runId`: a call in A's log that names B is shown on A's side, never on B's. Two
+  `request.runId`: a call in A's log that names B (logged `ASSIGNMENT_MISMATCH`) is shown on
+  A's side, never on B's. A line in A's log naming B without `ASSIGNMENT_MISMATCH` breaks A's
+  binding check, and A's side is unjoined with `TL_LOG_BINDING`. Two
   identical log paths are refused (`PAIR_MISMATCH`, field `decisionLog`).
 - **The pair is checked, not assumed.** Both episodes must pass `validateEpisode`, and must
   have: the same `task.id`, the same non-null `task.fixtureSha256` and `task.instructionSha256`,
@@ -307,13 +378,39 @@ lines:
 
 1. `RUN <runId display>  TASK <taskId display>  FRAME <i>/<n>`
 2. The latest decision pinned at or before this frame: `CALL <k> <VERDICT> <REASON_CODES…>`,
-   or `NO DECISION YET`, and `AGENT CLAIMED DONE` when the episode's `agentClaim` is `done`
+   or `NO DECISION YET`, and `AGENT CLAIMED DONE` on exactly the frames the claim rule below
+   selects (evidence clip: from the sidecar's `claim`, which sealed mode checks against the
+   sealed claim record; mock preview: from the demo's in-memory claim)
 3. Evidence clip: `GATE myco.gate/v1  ORACLE <family>/<version>  CLIP <headerDigest[0:16]>  VERIFY: myco clip verify`.
    Mock preview: `GATE myco.gate/v1  MOCK · NOT EVIDENCE` (no oracle, no digest).
 
 Here "display" is the id as written when it is a closed id (below), otherwise `h-` followed
 by the first 12 hex characters of its `h-<60hex>` form. The final frame holds an end card for
 at least 2 s: the decision's verdict in large type, plus line 3.
+
+**The sealed claim record and the claim rule.** The agent's claim is anchored the way the
+provenance is: the gated harness writes it into the sealed capture, so the vault's capture
+hashes and MAC cover it. At capture, after the agent has stopped, the harness writes
+`captured/agent-claim.json` (`myco.agent-claim/1`):
+
+```jsonc
+{
+  "schema": "myco.agent-claim/1",
+  "runId": "run-42",
+  "agentClaim": "done",        // "done" | "not-done" | "no-claim": the episode writer's closed vocabulary
+  "framesBefore": 31           // frames of this run the harness had captured when it recorded the claim
+}
+```
+
+`agentClaim` is classified by the harness from the agent's final output with the same closed
+vocabulary the episode writer uses (`docs/data/episode-format.md`); the free-text claim and the
+log's `request.claim` never reach the record or the band. `framesBefore` uses the harness's own
+frame ordinal as its clock, so no wall clock is involved. **The claim rule:** when the record's
+`agentClaim` is `done`, the banner `AGENT CLAIMED DONE` is drawn on every clip frame whose
+ordinal is at least `framesBefore − 1` (the last frame captured before the claim; every frame
+when `framesBefore` is 0), and on no other frame. When it is `not-done` or `no-claim`, or the
+run has no claim record, no frame carries the banner. The sidecar's `claim` is `null` exactly
+when the sealed run has no claim record.
 
 **The sidecar (`myco.clip/1`)** is serialized only through the shared allowlist export helper
 ([§2.7](#27-export-privacy)):
@@ -322,7 +419,7 @@ at least 2 s: the decision's verdict in large type, plus line 3.
 {
   "schema": "myco.clip/1",
   "evidence": true,                        // const; the mock preview has no sidecar (§2.6)
-  "runId": "run-42", "taskId": "calc-ms-demo", "arm": "myco-gate",   // closed id, or h-<60hex>
+  "runId": "run-42", "taskId": "calc-ms-demo",   // closed id, or h-<60hex> (no arm: nothing sealed anchors it)
   "decision": {
     "ordinal": 9,                          // the decision the clip is about (the verdict shown)
     "call": 2,
@@ -331,7 +428,7 @@ at least 2 s: the decision's verdict in large type, plus line 3.
   },
   "verdict": "refuted", "accepted": false,
   "reasonCodes": ["ORACLE_FAIL", "TARGET_MISMATCH", "CLAIM_RECORDED"],  // REASON_CODES members, log order
-  "agentClaim": "done",                    // "done" | "not-done" | "no-claim" | null (no episode)
+  "claim": { "agentClaim": "done", "framesBefore": 31 },  // copied from the sealed claim record, or null when it has none
   "gate": { "apiVersion": "myco.gate/v1",
             "oracle": { "family": "calc-multi-step", "version": "1", "specSha256": "…" } }, // or null
   "provenance": { "transport": "vm", "simulated": false },  // copied from the sealed run record
@@ -360,6 +457,8 @@ at least 2 s: the decision's verdict in large type, plus line 3.
     manifest, sorted by path (the run's evidence ids);
   - `decision`: `ordinal`, `lineSha256` and `logPrefixSha256` of the clip's decision in the
     run's own log;
+  - `claim`: `[agentClaim, framesBefore]` from the sealed `captured/agent-claim.json`, or
+    `null` when the sealed capture has none;
   - `pairs`: for each frame `f` of the clip's range, in ascending order,
     `[f, frameSha256(f), pinned(f), lineSha256 of each pinned line]`, where `frameSha256` comes
     from the sealed timeline and `pinned(f)` from the [§2.2](#22-the-frame--decision-join) join
@@ -408,19 +507,20 @@ It checks, in order, and refuses with the first failing code:
 | `CLIP_DIGEST` | both | `headerDigest` and `digest` recompute to the sidecar's values |
 | `CLIP_FILE` | both | the GIF's sha256 is `clip.fileSha256`; the GIF parses under the structural rules of [§2.7](#27-export-privacy) |
 | `CLIP_FRAMES` | both | the GIF's frame count, size and delays equal the sidecar's; each decoded frame's RGBA sha256 equals `clip.rgbaSha256[i]` **in order** |
-| `CLIP_BAND` | both | each frame's band region equals the band re-rendered from the sidecar's closed fields and that frame's sidecar `pinned` list, pixel for pixel |
+| `CLIP_BAND` | both | each frame's band region equals the band re-rendered from the sidecar's closed fields, that frame's sidecar `pinned` list and the claim rule applied to the sidecar's `claim`, pixel for pixel (so a banner on a frame the sidecar's `claim` does not select, or missing from one it selects, fails here) |
 | `CLIP_LOG_LINE` | both | line `decision.ordinal` of the decision log hashes to `decision.lineSha256` |
 | `CLIP_LOG_PREFIX` | both | the log's first `decision.ordinal` lines hash to `decision.logPrefixSha256`; with `--expect-log-sha256`, the whole log's sha256 is the expected one |
-| `CLIP_LOG_BINDING` | both | every line up to `decision.ordinal` passes the binding check of [§1.2](#12-attribution-a-decision-belongs-to-the-trial-its-gate-is-bound-to) for the clip's run (h-form compared when the id is hashed) |
-| `CLIP_DECISION` | both | that line, parsed, has `verdict`, `accepted`, `reasonCodes` and `apiVersion` equal to the sidecar's, and its ordinal-order `call` number in the run's log is `decision.call` |
+| `CLIP_LOG_BINDING` | both | every line up to `decision.ordinal` passes the binding check of [§1.2](#12-attribution-a-decision-belongs-to-the-trial-its-gate-is-bound-to) for the trial (`t`, `r`): the sidecar's (`taskId`, `runId`) in log-only mode, and (`--task`, the sealed run) in sealed mode (h-form compared when the sidecar's id is hashed) |
+| `CLIP_DECISION` | both | that line, parsed, has `verdict`, `accepted`, `reasonCodes` and `apiVersion` equal to the sidecar's; its `oracle` (`family`, `version`, `specSha256`) equals the sidecar's `gate.oracle` (both absent, or all three equal, ids compared in the sidecar's treatment); and its ordinal-order `call` number in the run's log is `decision.call`. In sealed mode also: the sidecar's `taskId` equals `--task` and its `runId` equals the sealed run's (h-form compared when the sidecar's id is hashed). This is a second check behind `CLIP_LOG_BINDING`, for a log whose lines carry no `request.taskId` |
 | `CLIP_LOG_ONLY` | log-only | not a refusal: every log-only check passed; exit 2, never 0 |
-| `CLIP_SEAL` | sealed | the run opens through the vault with the operator's receipt and key, as the sealed reader opens it (`openForTrial`): any integrity violation, a run absent from the vault, or a receipt for another seal |
+| `CLIP_SEAL` | sealed | the run opens through the vault with the operator's receipt and key, as the sealed reader opens it (`openForTrial`): any integrity violation, a run absent from the vault, a receipt for another seal, or a key file refused by the checks of [§1.3](#13-the-vault-key-file-for-real-runs) |
 | `CLIP_MOCK` | sealed | the sealed run record says the run is not evidence: `captured/run-provenance.json` missing, `transport` not an isolated one ([§2.6](#26-mock-runs-watermarked-never-evidence)), `simulated: true`, or the sidecar's `provenance` differs from it |
 | `CLIP_EVIDENCE` | sealed | the decision line's `evidenceRefs` are empty, or their `sha256` and `bytes` are not the sealed capture's persisted files |
 | `CLIP_TIMELINE` | sealed | the sealed timeline does not join with the log (any `TL_*` code), or some clip frame's sidecar `sourceSha256` is not the timeline's `frameSha256` for that ordinal, or its sidecar `pinned` list is not the join's |
+| `CLIP_CLAIM` | sealed | the sidecar's `claim` is not the sealed `captured/agent-claim.json` (`agentClaim` and `framesBefore` equal, or both `null` when the sealed capture has no claim record); a claim record whose `runId` is not the sealed run, that fails its closed schema, or whose `framesBefore` exceeds the sealed timeline's frame count, also refuses here. The record itself is covered by the capture hashes, so editing it inside the vault fails `CLIP_SEAL` first |
 | `CLIP_RUN_RECORD` | sealed | `recordDigest` recomputed from the vault and the log differs from the sidecar's |
-| `CLIP_RECOMPUTE` | sealed | the gate bound to (`--task`, the run) with the operator's registry, over the sealed capture (the `myco verify --vault` core, [§3.2](#32-what-it-does)), does not give the sidecar's `verdict` and `reasonCodes` |
-| `CLIP_SOURCE` | sealed | re-rendering the sealed frames of the range, with band fields recomputed from the vault and the log, through the pinned renderer does not reproduce `clip.fileSha256` byte for byte |
+| `CLIP_RECOMPUTE` | sealed | the gate bound to (`--task`, the run) with the operator's registry, over the sealed capture (the `myco verify --vault` core, [§3.2](#32-what-it-does)), does not give the sidecar's `verdict`, `reasonCodes` and `gate.oracle` (the operator registry's `family`, `version` and `specSha256`) |
+| `CLIP_SOURCE` | sealed | re-rendering the sealed frames of the range, with every band field (decision, pins and claim banner) recomputed from the vault and the log, through the pinned renderer does not reproduce `clip.fileSha256` byte for byte |
 
 **Why sealed mode catches reordering, re-pinning and a forged MOCK clip.** Every sealed check
 compares the clip with a value the verifier computes from the vault and the log alone, so no
@@ -440,6 +540,13 @@ re-forged sidecar field, redrawn band or re-encoded GIF can supply it:
   sidecar and band re-forged to match (`CLIP_RECOMPUTE`: the bound gate over the sealed capture
   says `refuted`). Lines up to the last frame's `logAfter.lines` are also anchored by the
   sealed timeline's prefix hashes (`CLIP_TIMELINE`).
+- **A forged or moved claim banner.** `AGENT CLAIMED DONE` drawn on a clip whose run never
+  claimed done, or moved to an earlier frame, with the sidecar's `claim` re-forged to match and
+  every hash re-forged (`CLIP_CLAIM`: the sealed claim record says otherwise). A banner drawn
+  without changing the sidecar's `claim` fails `CLIP_BAND` in both modes.
+- **A content pixel edited.** One pixel of a frame's content changed, the band untouched,
+  every hash including `digest` re-forged (`CLIP_SOURCE`: the re-render of the sealed frame
+  differs; nothing earlier covers content pixels).
 - And the final backstop: only one GIF passes `CLIP_SOURCE` for a given (run, range, decision).
 
 **Required tamper cases.** Each is a fixture in `test/watch/clip-verify.test.ts`. The test
@@ -452,6 +559,7 @@ rewrote the named sidecar fields, and recomputed every digest, to match their ch
 |---|---|---|
 | one content pixel of one frame changed; sidecar untouched | `CLIP_FILE` | `CLIP_FILE` |
 | the same, with `clip.fileSha256` and `clip.rgbaSha256` re-forged, `digest` not | `CLIP_DIGEST` | `CLIP_DIGEST` |
+| the same single-pixel content edit, band untouched, `clip.fileSha256`, `clip.rgbaSha256` and `digest` all re-forged | `CLIP_LOG_ONLY` (exit 2) | `CLIP_SOURCE` |
 | the burned-in verdict redrawn (`REFUTED` → `VERIFIED`), every sidecar hash including `digest` re-forged | `CLIP_BAND` (the band re-rendered from the sidecar's `refuted` differs) | `CLIP_BAND` |
 | the sidecar's `verdict`, `accepted` and `reasonCodes` changed and the band redrawn to match, every hash re-forged | `CLIP_DECISION` (the decision-log line still says `refuted`) | `CLIP_DECISION` |
 | the sidecar's `verdict` changed, digests re-forged, band not redrawn | `CLIP_BAND` | `CLIP_BAND` |
@@ -467,6 +575,12 @@ rewrote the named sidecar fields, and recomputed every digest, to match their ch
 | the same content swap with each label's `sourceSha256` left as captured, every other hash re-forged | `CLIP_LOG_ONLY` (exit 2) | `CLIP_SOURCE` |
 | a pin moved to another frame (a frame's `pinned` list edited), bands redrawn, every hash re-forged | `CLIP_LOG_ONLY` (exit 2) | `CLIP_TIMELINE` |
 | `recordDigest` replaced, band redrawn, every hash re-forged | `CLIP_LOG_ONLY` (exit 2) | `CLIP_RUN_RECORD` |
+| `AGENT CLAIMED DONE` drawn on a run whose sealed claim record says `no-claim`: the sidecar's `claim` set to `done`, bands redrawn, every hash re-forged | `CLIP_LOG_ONLY` (exit 2) | `CLIP_CLAIM` |
+| the same banner forged on a run with no sealed claim record (sidecar `claim` changed from `null`), bands redrawn, every hash re-forged | `CLIP_LOG_ONLY` (exit 2) | `CLIP_CLAIM` |
+| the claim banner moved to earlier frames: the sidecar's `framesBefore` lowered, bands redrawn, every hash re-forged | `CLIP_LOG_ONLY` (exit 2) | `CLIP_CLAIM` |
+| the claim banner drawn on extra frames, or erased from frames, with the sidecar's `claim` untouched and every hash including `digest` re-forged | `CLIP_BAND` | `CLIP_BAND` |
+| the sidecar's `gate.oracle.specSha256` replaced, band redrawn, every hash re-forged | `CLIP_DECISION` (the decision line's `oracle.specSha256` differs) | `CLIP_DECISION` |
+| the sidecar's `taskId` replaced by another closed task id, band redrawn, every hash re-forged (the log's lines carry `request.taskId`, as every harness and agent call does) | `CLIP_LOG_BINDING` (the lines name the original task without `ASSIGNMENT_MISMATCH`) | `CLIP_LOG_BINDING` |
 | a frame dropped or duplicated; sidecar untouched | `CLIP_FILE` | `CLIP_FILE` |
 | the same, with `clip.fileSha256` re-forged, `digest` recomputed | `CLIP_FRAMES` (the count or an `rgbaSha256` entry no longer matches) | `CLIP_FRAMES` |
 | a mock preview GIF given with a forged, internally consistent sidecar, band not redrawn | `CLIP_BAND` (the band says `MOCK · NOT EVIDENCE`) | `CLIP_BAND` |
@@ -478,7 +592,9 @@ rewrote the named sidecar fields, and recomputed every digest, to match their ch
 #518. The digests are unkeyed. Log-only mode trusts the decision log and checks only that the
 clip agrees with one line of it; it never says "verified". Sealed mode is as strong as the
 gate's own sealed reader: it trusts the vault key and the operator-held seal receipt, and
-whoever holds both can forge a sealed run, exactly as they could fool the gate. Lines after the
+whoever holds both can forge a sealed run, exactly as they could fool the gate. With
+[§1.3](#13-the-vault-key-file-for-real-runs) both live in the operator's trial-records
+directory, so that directory is as sensitive as the vault key itself. Lines after the
 last frame are anchored only by the recompute and by an out-of-band log hash
 (`--expect-log-sha256`). A clip proves "this is what the gate logged and decides for this run,
 on these frames". It does not prove the gate was right; that is the independent grader's call.
@@ -502,8 +618,14 @@ The end card says so in one line: `GATE VERDICT · NOT A GRADE`.
   ```
   myco clip export --run <runId> --task <taskId> --from <i> --to <j> --decision-log <file>
                    --vault <vaultRoot> --seal-receipt <file> --vault-key-file <path>
-                   [--episode <file>] [--identity-file <file>] [--user-file <file>] --out <path.gif>
+                   [--identity-file <file>] [--user-file <file>] --out <path.gif>
   ```
+
+  There is no `--episode` flag: the clip's claim comes only from the sealed claim record
+  ([§2.5](#25-the-clip-digest-and-myco-clip-verify)), never from an operator-given file. On a
+  real run, `--seal-receipt` and `--vault-key-file` are `<dir>/<runId>/seal-receipt.json` and
+  `<dir>/<runId>/vault.key` from the runner's trial records
+  ([§1.3](#13-the-vault-key-file-for-real-runs)).
 
   It writes `<path.gif>` and `<path>.myco.json` and nothing else
   ([§2.8](#28-security-model-what-holds-and-what-changes)). `--decision-log` is the run's own
@@ -517,17 +639,28 @@ The end card says so in one line: `GATE VERDICT · NOT A GRADE`.
     CLI-only part, and it has no public constructor. The function opens the run through the
     vault with the operator's receipt (`openForTrial`, exactly as the sealed reader opens it;
     never `AUDIT_WITHOUT_RECEIPT`), and checks the seal, the capture hashes, the frames under
-    `captured/frames/`, the timeline under `captured/frames/timeline.jsonl`, and a sealed
+    `captured/frames/`, the timeline under `captured/frames/timeline.jsonl`, a sealed
     `captured/run-provenance.json` (`myco.run-provenance/1`: `runId`, `transport`,
-    `simulated`).
-  - The harness writes the provenance file at capture. `transport` comes from the transport
-    object's own constant (the mock transport's is `mock`), never from a caller option. The
-    values are `vm` and `mock` on `main` today. If #561 merges, its unprivileged backend's
-    constant (`linux-plain`) is added. On `linux-plain` the agent runs as the harness's uid and
-    every trial is marked `shared-host-dirs` and never counted, so the agent could have
-    written the timeline or the frames. An isolated transport is one that is counted: `vm`
-    only, until a strict isolation backend (track L's strict `linux-ns`, closed PR #551) lands
-    and a new version of this page adds it.
+    `simulated`), and, when present, the sealed claim record `captured/agent-claim.json`
+    ([§2.5](#25-the-clip-digest-and-myco-clip-verify)).
+  - The harness writes the provenance file and the claim record at capture, after the agent
+    has stopped. `transport` comes from the transport object's own `transportKind` constant
+    (added in V1, [§1.3](#13-the-vault-key-file-for-real-runs); the mock transport's is
+    `mock`), never from a caller option. The values are `vm`, `mock` and `linux-plain`: #561
+    merged, and its unprivileged backend's id is `PLAIN_ISOLATION.backend`, `"linux-plain"`
+    (`src/parallel/linux-backend.ts`, described in `src/parallel/backend.ts`). On
+    `linux-plain` the agent runs as the harness's uid (`hostDirsHidden: false`) and every
+    trial is marked `shared-host-dirs` and never counted, so the agent could have written the
+    timeline, the frames or the claim record. An isolated transport is one that is counted:
+    `vm` only.
+  - **Why `strict-linux-ns` is not in the isolated set.** #551 merged as
+    `src/isolation/strict-linux-ns.ts` (`STRICT_BACKEND_ID = "strict-linux-ns"`, with
+    `hostDirsHidden: true`). It is not added, for two reasons that hold on `main` today: it is
+    not a `GatedTrialTransport` (no gated trial runs on it, so no trial on it is sealed with
+    run provenance), and its desktop has no display (`display.kind: "none"`; Xvfb is refused
+    until in-namespace Xvfb lands), so it captures no frames and has no timeline to clip. A
+    new version of this page adds it once a gated-trial transport with frame capture runs on
+    it.
   - The exporter refuses `transport: "mock"`, any transport that is not isolated,
     `simulated: true`, a missing provenance file and any `rendered` frame (`CLIP_MOCK`).
     `myco clip verify` refuses the same cases in sealed mode, from the sealed run record, not
@@ -594,9 +727,20 @@ identity.
 ### 2.8 Security model: what holds and what changes
 
 The security model table in `docs/gate/watch.md` has 11 rows. Each row's **property** keeps
-holding. Five rows' **text** changes, because the server gains two GET routes and new imports,
-and each of those changes lands in the build PR that adds the route, with its test, in the same
-PR (B2 or B5). No row is weakened.
+holding. Six rows' **text** changes, because the server gains two GET routes, per-run log
+paths and new imports. Each change lands in the build PR that causes it, with its test, in
+the same PR:
+
+- **B2** (`GET /timeline`, per-run `--decision-log <runId>=<file>`, the server importing B1's
+  joiner) amends: Read-only, No handle on the gate, No path traversal, Bounded memory and
+  Redaction by allowlist.
+- **B5** (`GET /clip`, the pure clip modules) amends: Read-only, No handle on the gate, No path
+  traversal, Bounded memory and Redaction by allowlist.
+
+No row is weakened, and no existing test assertion is relaxed. The static import allowlist in
+`test/watch/server-security.test.ts` is **extended, never relaxed**: B2 adds exactly
+`./timeline.ts` and `node:crypto`, B5 adds exactly the pure clip modules; no entry is removed
+and no other assertion changes.
 
 | `docs/gate/watch.md` row | Status | What changes, and why it is still safe |
 |---|---|---|
@@ -604,11 +748,11 @@ PR (B2 or B5). No row is weakened.
 | No DNS rebinding | holds unchanged | The `Host` check runs before routing, so it covers the new routes |
 | No CORS | holds unchanged | The new routes set no `Access-Control-Allow-*`; a foreign `Origin` is still 403 |
 | Read-only | text amended (B2, B5) | The route list in the test column gains `/timeline/…` and `/clip/…`. Every non-GET method still gets 405 before routing, and the new routes read no body. The "every non-GET method × every route" matrix covers them |
-| No handle on the gate | text amended (B5) | The server may also import the pure clip modules: the bitmap font, the band renderer, the GIF encoder and `exportMockPreview`. None has a write call, a process spawn, a network call, a vault import or a key parameter. The vault-reading part (`openSealedTimeline`, `exportEvidenceClip`, sealed `myco clip verify`) is CLI-only, and the static import scan proves it is outside the server's import graph. So the server still holds no handle on the gate, the vault, an oracle, the agent or a key |
+| No handle on the gate | text amended (B2, B5) | **B2:** the row's "only inputs are a log path and a frame source" becomes "one log path per listed run (`--decision-log <file>`, or `--decision-log <runId>=<file>` with several runs), a frame source, and the timeline manifest beside the frames". The server imports B1's joiner, `src/watch/timeline.ts`, which hashes frames and log prefixes with `node:crypto`'s `createHash` only (no key, no HMAC, no random) and reads with the same `node:fs` read calls. The joiner has no write call, no process spawn, no network call and no vault or secret-file import. Safe because hashing is a pure function of bytes the server already reads read-only, and each log is still opened `O_RDONLY \| O_NOFOLLOW` by the existing tail. **B5:** the server may also import the pure clip modules: the bitmap font, the band renderer, the GIF encoder and `exportMockPreview`. None has a write call, a process spawn, a network call, a vault import or a key parameter. The vault-reading part (`openSealedTimeline`, `exportEvidenceClip`, sealed `myco clip verify`) is CLI-only, and the static import scan proves it is outside the server's import graph. So after both, the server still holds no handle on the gate, the vault, an oracle, the agent or a key |
 | Passive | holds unchanged | Serving `/timeline` and `/clip` renders in memory and writes nothing. The tree snapshot covers them |
 | No path traversal | text amended (B2, B5) | The new routes take a listed run id and decimal frame ordinals checked against the server's own listing, never a name or path. `%`, `?`, `\` and dot segments still get 400. The 23-form traversal corpus runs against both routes |
 | Frame redaction | holds unchanged | Every frame in a mock preview passes `servableFrame` / `sanitizePng` (or is a frame this process rendered) before it is drawn into the GIF |
-| Bounded memory | text amended (B5) | Adds: at most one clip render at a time (the next gets 503), the [§2.9](#29-postable-budget) budget, and a 30 s render cap. The render buffer is bounded by the budget (≤ 5 MiB output) |
+| Bounded memory | text amended (B2, B5) | **B2** adds: the timeline manifest is read line by line with at most 4 KiB per line and at most one record per listed frame (an over-long line gives `TL_SCHEMA`; an extra record gives `TL_GAP` or `TL_DUPLICATE`); the joiner hashes each log prefix incrementally (one running sha256 per log, no copy of the log held); a `TimelineView` holds at most the existing 2000-event cap of decisions. **B5** adds: at most one clip render at a time (the next gets 503), the [§2.9](#29-postable-budget) budget, and a 30 s render cap. The render buffer is bounded by the budget (≤ 5 MiB output) |
 | Redaction by allowlist | text amended (B2, B5) | Adds two closed response types. `/timeline/<run>` carries only a `TimelineView`: frame ordinals, straddle flags, pinned decision ordinals, call numbers, verdicts, `REASON_CODES` members, the "named another trial" flag and `TIMELINE_CODES` members. No `frameSha256`, no `prefixSha256`, no digest. `/clip/…` serves only a mock-preview GIF, whose pixels are drawn from the same closed fields; its band has no oracle and no digest. No sidecar is ever served. **The row's guarantee holds as written:** the claim, reasons, evidence paths and digests, and the oracle family and version are never sent over HTTP. They appear only in evidence clips, which only the operator CLI writes to a path the operator chose |
 | Page hardening | holds unchanged | The page CSP stays as it is (`PAGE_CSP` in `src/watch/server.ts`). The "Export evidence clip" control copies a command built with `textContent` from closed fields and fetches nothing |
 
@@ -704,12 +848,19 @@ myco verify <runId> --task <taskId> --mock-evidence <evidenceRoot> [same optiona
      with `AUDIT_WITHOUT_RECEIPT`. The receipt (`myco.seal-receipt/1`: `runId`, `sealDigest`)
      is the one `vault.seal` returned to the gated harness (`GatedTrialOutcome.receipt` in
      `src/gate/gated-trial.ts`). The operator's trial runner writes it at seal time, `O_EXCL`,
-     mode 0600, into an operator directory outside every agent root and outside the vault. It
-     is not a secret (a digest of the seal), but the agent must not be able to rewrite it.
-     The gate code is unchanged: the runner only persists the receipt it already receives.
-     `--seal-receipt` names that file. It is read once and checked by `readReceipt` (`src/integrity/gate.ts`); a
-     malformed, symlinked or oversized file gives `integrity:receipt-malformed`. The MAC key is
-     loaded at the point of use from `--vault-key-file`. The gate is then built exactly as the
+     mode 0600, as `<dir>/<runId>/seal-receipt.json` in its trial-records directory
+     ([§1.3](#13-the-vault-key-file-for-real-runs)), outside every agent root and outside the
+     vault. It is not a secret (a digest of the seal), but the agent must not be able to
+     rewrite it. The gate code is unchanged: the runner only persists the receipt it already
+     receives. `--seal-receipt` names that file. **The file checks are the verify module's:**
+     it `lstat`s the path and opens it `O_RDONLY | O_NOFOLLOW` once, and refuses a symlink, a
+     non-regular file, a file over 4 KiB, non-UTF-8 bytes or text that is not one JSON object;
+     each of those maps onto `integrity:receipt-malformed`. The parsed object then goes to
+     `readReceipt` (`src/integrity/gate.ts`), which takes an object, not a file: it reads each
+     field once into a frozen snapshot and reports a missing or ill-typed field as
+     `receipt-malformed`, passed through as `integrity:receipt-malformed`. The MAC
+     key is loaded at the point of use from `--vault-key-file`, with the checks of
+     [§1.3](#13-the-vault-key-file-for-real-runs). The gate is then built exactly as the
      gated harness builds it, `createSealedGate({ binding: { runId, receipt }, taskId })`, so
      the seal, the receipt binding, the capture hashes and the sealed ground truth are checked
      by the sealed reader itself (`openForTrial`). Any integrity violation gives `uncertain`
@@ -772,6 +923,7 @@ myco verify <runId> --task <taskId> --mock-evidence <evidenceRoot> [same optiona
 |---|---|
 | `VERIFY_LOG_DISAGREES` | a compared logged decision differs from the recompute (step 4) |
 | `VERIFY_LOG_BINDING` | the decision log fails the binding check (step 3) |
+| `VERIFY_KEY_REFUSED` | the `--vault-key-file` fails the checks of [§1.3](#13-the-vault-key-file-for-real-runs) (a symlink, not a regular file, not owned by the caller, group or other permission bits, over 128 bytes, or not exactly 32 bytes of hex key); no vault open is attempted (step 1) |
 | `VERIFY_RECORDING_MISMATCH` | a recording field or workflow copy differs from the operator's pinned spec, or carries a closed constant or field it must not ([§3.4](#34-a-recording-cannot-smuggle-evidence)) |
 | `VERIFY_R5_FAILED` | `certifyDerivedOracle` fails for a recording (step 2) |
 | `VERIFY_BUNDLE_REFUSED` | the bundle would not pass `verifyProofBundle`, or `--out` cannot be written (step 6) |
@@ -853,7 +1005,7 @@ after the trial run.
 | P2 | **Claude Code MCP path** (`examples/mcp-clients/claude-code.mcp.json`'s launch line, driven as Claude Code drives it, `test/gate/mcp-server.test.ts`) | Two `myco-gate mcp` servers over the same mock demo evidence, one bound to `df-s01`/`demo-df-s01` and one to `df-s02`/`demo-df-s02`, each with its own `--audit` log; the test sends each the calls of P1 | `demo-df-s01`: `verified`. `demo-df-s02`: `refuted`. Logged and recomputed verdicts agree on every call. This is a protocol-level stand-in: no Claude Code transcript is committed today. The real Claude Code transcript is P5 |
 | P3 | **Raw JSON-RPC client** (`examples/mcp-clients/stdio-requests.jsonl`, `--client mcp-jsonrpc`). The file holds 4 requests and no responses | The test serves the committed requests through `serveStdio` with a gate bound to `df-s01`/`run-42` (`--audit` to a fresh log) over an evidence root whose `run-42/.myco-todo.json` is a byte copy of the mock demo's `demo-df-s01/.myco-todo.json`, and records the server's response lines. Verify `run-42 --task df-s01 --mock-evidence <root> --decision-log <that log>`, (a) with `--transcript` = the committed requests only, and (b) with `--transcript` = the requests interleaved with the recorded responses | Both: `verified`, exit 0, 1 call, logged and recomputed agree. (a) `agentReported: []` (a request stream reports no verdict). (b) `agentReported` has 1 entry, `verified`, `agrees: true` |
 | P4 | **Track R recording** (`pnpm myco-record demo`) | The demo's two replays; `--recording` | honest: `verified`, `trust: "derived"`, `simulated: true`, exit 0. skip-save: `refuted`, exit 1 |
-| P5 | **Live, after the trial run (VM):** Claude Code and Codex on the `myco-gate` arm, sealed vault | Every trial of the first live batch run on `trial-base-v3` (#564) whose runner persisted seal receipts (V1 merged first): `--vault --seal-receipt`, each trial's own decision log | For 100% of those trials, verify's verdict equals the trial's post-capture gate decision, the last line of its own log (`loggedVerdictAgrees: true`), and every bundle verifies. Any disagreement is a defect, not a result. A batch without receipts is reported as not verifiable, never audited without them |
+| P5 | **Live, after the trial run (VM):** Claude Code and Codex on the `myco-gate` arm, sealed vault | Every trial of the first live batch run on `trial-base-v3` (#564) whose runner was given `--trial-records <dir>` (V1 merged first, [§1.3](#13-the-vault-key-file-for-real-runs)): `--vault --seal-receipt <dir>/<runId>/seal-receipt.json --vault-key-file <dir>/<runId>/vault.key`, each trial's own decision log | For 100% of those trials, verify's verdict equals the trial's post-capture gate decision, the last line of its own log (`loggedVerdictAgrees: true`), and every bundle verifies. Any disagreement is a defect, not a result. A batch without trial records (receipts and key files) is reported as not verifiable, never audited without them |
 
 Cursor and custom agents are covered through the decision log (step 3), which is the same for
 every client. A `--client cursor` adapter is added only when a Cursor transcript fixture exists.
@@ -874,13 +1026,19 @@ means. Test file names are the ones the build PRs must create or extend.
 - **Probe:** `test/watch/timeline.test.ts` › "join rule": table cases for one decision per frame,
   several decisions between two frames, a straddling frame, a decision before the first frame
   (`TL_NO_FRAME_BEFORE`) and a decision after the last frame. A property test over random
-  interleavings checks the rule against a brute-force reference. Attribution: a line in run
-  `r`'s own log whose request names another listed run `s` (logged `ASSIGNMENT_MISMATCH`) pins
-  on `r`'s timeline, marked "named another trial", and appears nowhere on `s`'s; rewriting
-  every line's `request.runId` to another listed run changes no pin.
-- **Refuted by:** any decision pinned to a different frame than the reference, any pinning
-  that changes when `checkedAt` values, frame mtimes or `request.runId` values are permuted,
-  or any line pinned on a run other than the one whose log holds it.
+  interleavings checks the rule against a brute-force reference. Attribution (by the gate's
+  own trial binding, [§1.2](#12-attribution-a-decision-belongs-to-the-trial-its-gate-is-bound-to),
+  never by the agent-supplied `request.runId`): a line in run `r`'s own log whose request
+  names another listed run `s` (logged `ASSIGNMENT_MISMATCH`) pins on `r`'s timeline, marked
+  "named another trial", and appears nowhere on `s`'s. On lines that carry
+  `ASSIGNMENT_MISMATCH`, rewriting `request.runId` to any other listed run changes no pin. On
+  a line without `ASSIGNMENT_MISMATCH`, the same rewrite breaks the binding check and the join
+  is invalid with `TL_LOG_BINDING` (RS-02's fixture), so no decision of the run is pinned.
+- **Refuted by:** any decision pinned to a different frame than the reference; any pinning
+  that changes when `checkedAt` values or frame mtimes are permuted, or when `request.runId`
+  is rewritten on `ASSIGNMENT_MISMATCH` lines; a `request.runId` rewrite on a line without
+  `ASSIGNMENT_MISMATCH` that does not give `TL_LOG_BINDING`; or any line pinned on a run other
+  than the one whose log holds it.
 
 #### RS-02. Gaps, duplicates, reorders and log edits invalidate the join (fail closed)
 
@@ -930,7 +1088,8 @@ means. Test file names are the ones the build PRs must create or extend.
 - **Probe:** `test/watch/clip-verify.test.ts` › "round trip". (a) B4: a clip rendered in
   memory from a test timeline and log: log-only `myco clip verify` exits **2** with
   `CLIP_LOG_ONLY`, never 0. (b) B6: export from a test-built sealed vault run
-  (`simulated: false`, `transport: "vm"` fixture, receipt written by the test harness), then
+  (`simulated: false`, `transport: "vm"` fixture, receipt and key file written through the
+  trial-records writer of [§1.3](#13-the-vault-key-file-for-real-runs)), then
   sealed-mode `myco clip verify` exits 0, and log-only mode on the same clip exits 2. In both,
   the sidecar's `runId`, `verdict`, `gate.apiVersion`, `recordDigest` and `digest` are
   present, and `headerDigest[0:16]` is read back from the band by re-rendering.
@@ -960,7 +1119,10 @@ means. Test file names are the ones the build PRs must create or extend.
 
 - **Probe:** `test/watch/clip-evidence-gate.test.ts`. `exportEvidenceClip` refuses each of
   these with `CLIP_MOCK`: a vault run whose provenance is `transport: "mock"`, one whose
-  transport is not isolated (a `linux-plain` fixture), one with `simulated: true`, one with no
+  transport is not isolated (`linux-plain`, taken from the real constant
+  `PLAIN_ISOLATION.backend` in `src/parallel/linux-backend.ts`, not a hand-written string), one
+  whose provenance names `strict-linux-ns` (`STRICT_BACKEND_ID`, not in the isolated set,
+  [§2.6](#26-mock-runs-watermarked-never-evidence)), one with `simulated: true`, one with no
   provenance file, and a `rendered` frame. A decision line with no `evidenceRefs` is refused
   with `CLIP_EVIDENCE`. A type test
   (`expectTypeOf`) shows `exportEvidenceClip` accepts only `SealedTimeline`, which has no
@@ -1007,7 +1169,10 @@ means. Test file names are the ones the build PRs must create or extend.
 #### RS-13. Every watch security property keeps holding, and the amended rows say so
 
 - **Probe:** every existing case in `test/watch/server-security.test.ts`,
-  `test/watch/round2.test.ts` and `test/watch/round3.test.ts` passes unchanged. The
+  `test/watch/round2.test.ts` and `test/watch/round3.test.ts` passes, unchanged except for
+  one extension: the static import allowlist gains exactly `./timeline.ts` and `node:crypto`
+  in B2 and exactly the pure clip modules in B5, with no entry removed (extended, never
+  relaxed). The
   "every non-GET method × every route" matrix and the traversal corpus are extended to
   `/timeline/…` and `/clip/…`. The static import/write scan covers the new modules and shows
   no module the server imports reaches `src/integrity/vault.ts`, `src/baseline/secret-file.ts`
@@ -1016,9 +1181,11 @@ means. Test file names are the ones the build PRs must create or extend.
   oracle family or version. `GET /clip/…` on a run that is not mock is 404. The tree snapshot
   before and after shows no file changed by serving, polling or clip download. One listening
   socket only (`server.address()` count, and no other `listen` in `src/watch/`). A doc test
-  shows `docs/gate/watch.md` carries the five amended rows of
-  [§2.8](#28-security-model-what-holds-and-what-changes) and the Limits addition.
-- **Refuted by:** any existing case changed or failing, any non-GET accepted on a new route, a
+  shows `docs/gate/watch.md` carries the amended rows of
+  [§2.8](#28-security-model-what-holds-and-what-changes) that each PR owns (B2: its five rows
+  and the Limits addition; B5: its five rows) in that PR.
+- **Refuted by:** any existing case failing or changed other than by that allowlist
+  extension, an allowlist entry removed, any non-GET accepted on a new route, a
   file written by the server, a second listener, a digest or oracle field in any HTTP
   response, an evidence clip served, or `docs/gate/watch.md` not amended in the same PR as
   its route.
@@ -1041,10 +1208,12 @@ means. Test file names are the ones the build PRs must create or extend.
 
 #### RS-16. A real run's evidence clip is one command, and the watch server never holds a key
 
-- **Probe:** `test/watch/clip-evidence-cli.test.ts`. On a test-built sealed vault run of a
-  caught false done (`transport: "vm"`, receipt and key files written by the test harness), one
-  `myco clip export --vault … --seal-receipt … --vault-key-file … --out <tmp>/c.gif`
-  invocation writes exactly `c.gif` and `c.myco.json`, and sealed-mode `myco clip verify` on
+- **Probe:** `test/watch/clip-evidence-cli.test.ts`. On a sealed vault run of a caught false
+  done made by the live trial runner with `--trial-records <dir>` and a test transport whose
+  `transportKind` is `vm` (so the receipt and key files are the ones the trial-records writer
+  of [§1.3](#13-the-vault-key-file-for-real-runs) wrote, not files the test wrote), one
+  `myco clip export --vault … --seal-receipt <dir>/<runId>/seal-receipt.json --vault-key-file
+  <dir>/<runId>/vault.key --out <tmp>/c.gif` invocation writes exactly `c.gif` and `c.myco.json`, and sealed-mode `myco clip verify` on
   them exits 0. The page for that run, served with the run listed, has an "Export evidence
   clip" control whose text is that command with the run id and frame ordinals filled in and
   every path a placeholder (no path, key, or receipt byte in any response). A type and static
@@ -1062,9 +1231,14 @@ means. Test file names are the ones the build PRs must create or extend.
   test-built sealed vault run, each asserting exit 1 and its sealed column. The reorder rows
   (content swapped with labels kept ascending, with and without swapped `sourceSha256`), the
   moved pin, the `recordDigest` replacement, the regenerated post-capture line, the never-sealed
-  mock demo clip and the mock-provenance vault run are each present. A static test shows the
-  sealed checks read `R`, the timeline and the provenance only from `openSealedTimeline` and
-  the log, never from the sidecar.
+  mock demo clip, the mock-provenance vault run, the single-pixel content edit with every hash
+  including `digest` re-forged (`CLIP_SOURCE`), the three forged or moved claim-banner rows
+  (`CLIP_CLAIM`) and the replaced `gate.oracle.specSha256` (`CLIP_DECISION`) are each present.
+  The test vault run of a caught false done has a sealed claim record with `agentClaim: "done"`,
+  and the honest export shows `AGENT CLAIMED DONE` on exactly the frames the claim rule selects.
+  A static test shows the sealed checks read `R`, the timeline, the provenance and the claim
+  record only from `openSealedTimeline` and the log, never from the sidecar, and that the clip
+  export takes no `--episode`.
 - **Refuted by:** any row exiting 0 or 2 in sealed mode, a code other than its sealed column,
   or a sealed check that reads a value it compares against from the clip.
 
@@ -1097,7 +1271,9 @@ means. Test file names are the ones the build PRs must create or extend.
 
 #### VA-04. Every failure path is `uncertain` with codes only
 
-- **Probe:** `test/verify-run/fail-closed.test.ts`: a missing vault, a wrong key file, a broken
+- **Probe:** `test/verify-run/fail-closed.test.ts`: a missing vault, a well-formed key file
+  holding another key (`integrity:seal-signature`), a refused key file (`VERIFY_KEY_REFUSED`:
+  a symlink, mode 0644, and a 31-byte key, one fixture each), a broken
   seal, a missing capture, a missing state file, an unreadable file, a logged decision that
   disagrees with the recompute (`VERIFY_LOG_DISAGREES`), and an unwritable bundle path each
   exit 2. A planted marker in every input appears in no output byte.
@@ -1111,7 +1287,7 @@ means. Test file names are the ones the build PRs must create or extend.
   from the suite's own route table. In `isolation.test.ts`, every route of the tampering block
   (except the two construction-time cases §3.5 names) runs `myco verify --vault` with that
   trial's receipt written as a `--seal-receipt` file and the suite's key written as a
-  `--vault-key-file` file. For each route, verify's verdict is the gate's verdict for that
+  `--vault-key-file` file (in the [§1.3](#13-the-vault-key-file-for-real-runs) format, mode 0600). For each route, verify's verdict is the gate's verdict for that
   route (`uncertain` or `refuted`, never `verified`), and for each route the suite asserts with
   `expectIntegrity(…, code)`, verify's `verifyCodes` contain an entry starting with
   `integrity:<code>`. The leaked-key re-signed seal, another run's receipt, and a malformed
@@ -1172,7 +1348,9 @@ means. Test file names are the ones the build PRs must create or extend.
   contains the key or the key file's path. A static test shows the module reads no
   `process.env` key and has no `--vault-key` (value) flag, and that the only modules in the
   repo importing the secret-file loader for the vault key are the three CLIs of
-  [§1](#1-ground-rules-shared-by-both-features) rule 6 (the clip CLIs from B6 on).
+  [§1](#1-ground-rules-shared-by-both-features) rule 6 (the clip CLIs from B6 on). The
+  trial-records writer of [§1.3](#13-the-vault-key-file-for-real-runs) writes the key and
+  does not import the loader.
 - **Refuted by:** any key or key-path byte in any output, a key accepted by value, or a fourth
   importer.
 
@@ -1183,10 +1361,36 @@ means. Test file names are the ones the build PRs must create or extend.
   `demo-df-s01`) recomputes as `ASSIGNMENT_MISMATCH` and agrees with its logged line. The same
   log given for `demo-df-s01` gives `uncertain` `VERIFY_LOG_BINDING` (line 1 names
   `demo-df-s02` without `ASSIGNMENT_MISMATCH`). The mock demo's shared `gate-decisions.jsonl`
-  given for `demo-df-s01` or for `demo-df-s02` gives `VERIFY_LOG_BINDING`. Rewriting every line's `request.runId` to
-  another run while keeping `ASSIGNMENT_MISMATCH` changes no call's attribution.
+  given for `demo-df-s01` or for `demo-df-s02` gives `VERIFY_LOG_BINDING`. On lines that carry
+  `ASSIGNMENT_MISMATCH` (call 2 of `refuted.audit.jsonl`), rewriting `request.runId` to any
+  other run changes no call's attribution or recompute. On a line without it (call 1), the
+  same rewrite gives `VERIFY_LOG_BINDING`, exactly as RS-01 gives `TL_LOG_BINDING`.
 - **Refuted by:** any line attributed to the run its request names rather than the run whose
-  log holds it, P1's call 2 recomputed against `demo-df-s01`, or a shared log accepted.
+  log holds it, P1's call 2 recomputed against `demo-df-s01`, a shared log accepted, or a
+  `request.runId` rewrite on a line without `ASSIGNMENT_MISMATCH` accepted.
+
+#### VA-14. A real run writes a vault key file the three CLIs can use, and nothing else can reach it
+
+- **Probe:** `test/verify-run/trial-records.test.ts`. The live trial runner
+  (`src/pilot/runner.ts`) runs a two-trial batch with `--trial-records <dir>` and a test
+  transport whose `transportKind` is `vm`. Afterwards each `<dir>/<runId>/vault.key` exists
+  with mode 0600, owned by the runner's uid, content `MYCO_VAULT_KEY=<64 hex>`, and
+  `myco verify <runId> --vault … --seal-receipt <dir>/<runId>/seal-receipt.json
+  --vault-key-file <dir>/<runId>/vault.key` verifies the honest trial and refutes the false
+  done. Timing: a transport hook that runs while the agent runs observes no `vault.key` for
+  that trial. Refusals before any trial starts: `<dir>` a symlink, mode 0755, owned by another
+  uid (where the test can arrange it), inside an agent root, containing an agent root, or
+  inside the vault root, each refusing the batch with no trial run. An existing
+  `vault.key` is never overwritten (`O_EXCL`). With a `mock` and a `linux-plain` transport
+  no `vault.key` is written. Without `--trial-records`, no file is written and `myco verify
+  --vault` on those trials has no receipt or key to use. With a planted key, no runner log,
+  ledger line, episode, receipt or stdout/stderr byte contains the key or the key file's
+  path. The `test/integrity/surface.test.ts` extension shows the trial-records directory is
+  classified operator-only and no agent-reachable tool or root reaches it.
+- **Refuted by:** a real (`vm`) trial with no usable key file, a key file with group or other
+  permission bits, written while that trial's agent ran, written for a non-isolated transport,
+  overwriting an existing file, or accepted in a directory an agent root can reach; or any key
+  or key-path byte in any output.
 
 ---
 
@@ -1205,20 +1409,20 @@ it is fixed. Then restore the head and confirm the probes pass.
 | PR | Scope | Covers | Tier | VM | Depends on | Revert check |
 |---|---|---|---|---|---|---|
 | B1 | Timeline manifest (`myco.watch-timeline/1`), the shared line-count and prefix function, the binding check, the joiner (`src/watch/timeline.ts`), and the mock demo keeping one in-memory log and timeline per gate | RS-01, RS-02, RS-03 | 2 | No VM | none | Revert `src/watch/timeline.ts` and the demo change: `test/watch/timeline.test.ts` fails |
-| B2 | Scrubber: `GET /timeline/<run>`, page slider, decision jumps, per-run `--decision-log <runId>=<file>`; security matrix extended; the `docs/gate/watch.md` row amendments for `/timeline` and the Limits addition | RS-04, RS-13 | 2 | No VM | B1 | Revert the route and page: `test/watch/scrubber-e2e.test.ts` and the extended matrix fail |
+| B2 | Scrubber: `GET /timeline/<run>`, page slider, decision jumps, per-run `--decision-log <runId>=<file>`; security matrix extended; the static import allowlist extended by exactly `./timeline.ts` and `node:crypto`; the B2 text of five `docs/gate/watch.md` rows (Read-only, No handle on the gate, No path traversal, Bounded memory, Redaction by allowlist) and the Limits addition, [§2.8](#28-security-model-what-holds-and-what-changes) | RS-04, RS-13 | 2 | No VM | B1 | Revert the route and page: `test/watch/scrubber-e2e.test.ts` and the extended matrix fail |
 | B3 | Side by side: `--pair`, pair checks against episodes and ledger, align by decision | RS-05 | 2 | No VM | B2 | Revert the pair code: `test/watch/pair.test.ts` fails |
 | B4 | Clip core: bitmap font, band renderer from `BandFields`, deterministic GIF encoder with reserved palette, sidecar, digests, log-only `myco clip verify` (in-memory export only; nothing written) | RS-06, RS-07, RS-12 | 2 | No VM | B1 | Revert `src/watch/clip/`: `test/watch/clip-verify.test.ts` and `test/watch/clip-band.test.ts` fail |
-| B5 | Mock preview export: the watermark on live and exported frames, `exportMockPreview`, `GET /clip/...` for mock runs only, `myco clip export` writing one path, budget; the `docs/gate/watch.md` row amendments for `/clip` | RS-08, RS-13, RS-14, RS-15 | 2 | No VM | B2, B4 | Revert the export code: `test/watch/mock-watermark.test.ts`, `test/watch/clip-cli.test.ts`, `test/watch/clip-budget.test.ts` and the `/clip` rows of the extended matrix fail |
-| B6 | Evidence export and sealed verify: `myco.run-provenance/1` written by the gated harness at capture, `openSealedTimeline` with the receipt, `exportEvidenceClip`, `myco clip export --vault`, sealed-mode `myco clip verify` (run record, timeline, recompute, re-render), the "Export evidence clip" command control, sidecar through #560's helper, leak guard, OCR backstop, GIF/PNG structure scrub | RS-06, RS-09, RS-10, RS-11, RS-16, RS-17 | 2 | No VM | B5, V1, #560, #562, #559, the TIF-98 PNG redactor follow-up issue | Revert the evidence export, sealed verify and provenance writer: `test/watch/clip-evidence-gate.test.ts`, `test/watch/clip-evidence-cli.test.ts`, `test/watch/clip-privacy.test.ts`, `test/watch/clip-redactor.fuzz.test.ts` and the sealed cases of `test/watch/clip-verify.test.ts` fail |
-| V1 | `myco verify` core: CLI, the three sources, `--seal-receipt` and the runner persisting `GatedTrialOutcome.receipt`, a bound sealed gate over host evidence, binding check and decision-log call recompute, `myco.verify/1`, key at point of use; suite extensions for integrity, R5 and faults | VA-01, VA-02, VA-03, VA-04, VA-05, VA-06, VA-07, VA-09, VA-12, VA-13 | 2 | No VM | none | Revert `src/verify-run/`, the receipt writer and the `bin/myco` entry: every `test/verify-run/*` probe and every suite extension fails |
+| B5 | Mock preview export: the watermark on live and exported frames, `exportMockPreview`, `GET /clip/...` for mock runs only, `myco clip export` writing one path, budget; the static import allowlist extended by exactly the pure clip modules; the B5 text of the same five `docs/gate/watch.md` rows, [§2.8](#28-security-model-what-holds-and-what-changes) | RS-08, RS-13, RS-14, RS-15 | 2 | No VM | B2, B4 | Revert the export code: `test/watch/mock-watermark.test.ts`, `test/watch/clip-cli.test.ts`, `test/watch/clip-budget.test.ts` and the `/clip` rows of the extended matrix fail |
+| B6 | Evidence export and sealed verify: `myco.run-provenance/1` and the sealed claim record `myco.agent-claim/1` written by the gated harness at capture, `openSealedTimeline` with the receipt, `exportEvidenceClip`, `myco clip export --vault`, sealed-mode `myco clip verify` (run record, timeline, recompute, re-render), the "Export evidence clip" command control, sidecar through #560's helper, leak guard, OCR backstop, GIF/PNG structure scrub | RS-06, RS-09, RS-10, RS-11, RS-16, RS-17 | 2 | No VM | B5, V1, #560, #584, the TIF-98 PNG redactor follow-up issue | Revert the evidence export, sealed verify, and the provenance and claim-record writers: `test/watch/clip-evidence-gate.test.ts`, `test/watch/clip-evidence-cli.test.ts`, `test/watch/clip-privacy.test.ts`, `test/watch/clip-redactor.fuzz.test.ts` and the sealed cases of `test/watch/clip-verify.test.ts` fail |
+| V1 | `myco verify` core: CLI, the three sources, `--seal-receipt`, the trial-records writer and the live runner's `--trial-records` (receipt and vault key file, [§1.3](#13-the-vault-key-file-for-real-runs)), `GatedTrialTransport.transportKind`, a bound sealed gate over host evidence, binding check and decision-log call recompute, `myco.verify/1`, key at point of use; suite extensions for integrity, surface, R5 and faults. Merges only after the lead ratifies §1.3 | VA-01, VA-02, VA-03, VA-04, VA-05, VA-06, VA-07, VA-09, VA-12, VA-13, VA-14 | 2 | No VM | none | Revert `src/verify-run/`, the trial-records writer, the runner's `--trial-records` and the `bin/myco` entry: every `test/verify-run/*` probe and every suite extension fails |
 | V2 | Transcript adapters (`codex`, `mcp-jsonrpc`) and the Codex fixtures, `agentReported` | VA-03, VA-10 (P1, P3) | 2 | No VM | V1 | Revert the adapters: `test/verify-run/proofs.test.ts` P1 and P3 and the transcript cases of `test/verify-run/independence.test.ts` fail |
 | V3 | Recording source (track R): pinned workflow, R5 before verify, derived trust | VA-08, VA-10 (P4) | 2 | No VM | V1 | Revert the recording source: `test/verify-run/recording-tamper.test.ts` and P4 fail |
-| V4 | Proof bundle emission through #562 | VA-11, VA-10 (P2) | 2 | No VM | V1, #562 | Revert the bundle code: `test/verify-run/bundle.test.ts` fails |
-| L1 | Live proof after the trial run: P5 on the first live batch with receipts, and the first real caught false-done clip exported and verified in sealed mode | VA-10 (P5), RS-06 (on a real run), RS-16 (on a real run) | 2 | VM | the trial run, #564, B6, V4 | Not a code PR: the verifier re-runs `myco verify` and `myco clip verify` on the committed batch and checks every row |
+| V4 | Proof bundle emission through #562's merged `src/proof/bundle.ts` | VA-11, VA-10 (P2) | 2 | No VM | V1 | Revert the bundle code: `test/verify-run/bundle.test.ts` fails |
+| L1 | Live proof after the trial run: P5 on the first live batch run with `--trial-records` (receipts and vault key files, [§1.3](#13-the-vault-key-file-for-real-runs)), and the first real caught false-done clip exported and verified in sealed mode | VA-10 (P5), RS-06 (on a real run), RS-16 (on a real run) | 2 | VM | the trial run, #563, #564, B6, V4 | Not a code PR: the verifier re-runs `myco verify` and `myco clip verify` on the committed batch and checks every row |
 
 **Order and parallelism.** B1 and V1 can start at once, without a VM: they share nothing. B2, B4
 and V2, V3 follow their parents. B6 waits for V1 (its recompute is V1's core) and for the PRs
-and issue in [§6](#6-dependencies-on-unmerged-prs); V4 waits for #562. L1 is last, after the
+and issue in [§6](#6-dependencies-on-unmerged-prs); V4 needs only V1 now that #562 has merged. L1 is last, after the
 trial run on `trial-base-v3`, and never takes VM time the trial run or the integrity fixes
 need.
 
@@ -1226,18 +1430,37 @@ need.
 
 ## 6. Dependencies on unmerged PRs
 
-State as of 2026-11-27. Closed PRs this spec cited before (#550, #553, #556, #541) are replaced
-by their successors below and are no longer dependencies.
+State checked against the GitHub API at 2026-11-27T00:34Z, just before this version's commit.
+Closed PRs this spec cited before (#550, #553, #556, #541, #559) are replaced by their
+successors and are no longer dependencies.
 
 | PR | State today | What depends on it | Criteria that wait on it | Until it merges |
 |---|---|---|---|---|
 | #560 (TIF-98: shared leak guard, allowlist serialization helper) | open, draft | B6: the sidecar must be written through its helper and pass its routing test | RS-10, RS-11, RS-16, RS-17 (B6) | B6 does not start. B1–B5 write no evidence export; the mock preview has no sidecar |
-| #562 (Q3 proof bundles, identity-safe; supersedes #553) | open | V4: the bundle format, `verifyProofBundle`, the identity guard; B6: `h-<60hex>` parity with the Q-bundle surface | VA-11, VA-10 (P2); RS-10 | V1–V3 emit no bundle (`bundle: null`). The Q-bundle publication hold applies to verify bundles too: none is published, committed as data or attached anywhere until the hold lifts |
-| #566 (episode export allowlist + identity + F1; supersedes #556) | open | B3 and V1 read episodes; an *exported* episode is accepted as input only after #566 | RS-05 and VA-11 with an exported episode only | Inputs are episodes from the store (`src/episode/store.ts`), validated by `validateEpisode` |
-| #559 (track U dataset export, allowlist) | open | The `h-<60hex>` format is accepted on condition that #559's round-2 verifier confirms it is a truncated SHA-256 carrying no input text (23:06Z) | RS-10 (B6) | B6 does not ship before that confirmation |
-| #561 (track L safe parallelism, unprivileged backends; supersedes #541) | open | B6's provenance transport set: #561's `linux-plain` constant is added, and refused as not isolated | RS-09's `linux-plain` fixture | Does not block. The transport set is `vm` and `mock`; RS-09 uses a hand-built `linux-plain` provenance file until #561 merges |
+| #584 (track U container export, final hygiene; supersedes #559, which closed unmerged) | open | The `h-<60hex>` format was accepted on condition that track U's verifier confirms it is a truncated SHA-256 carrying no input text (23:06Z). #559's final-round verdict confirmed the identity work, and #584 carries it with test hygiene and two format pins | RS-10 (B6) | B6 does not ship before #584 merges |
 | #564 (TIF-98: switch trials to `trial-base-v3`) | open | L1: P5 and the first real clip run on the first live batch, which runs on `trial-base-v3` | VA-10 (P5), RS-06 and RS-16 on a real run (L1) | L1 does not start. No B or V PR waits on it |
-| #576 (xlsx gate, value-domain sound; supersedes #550) | open, draft | Verify supports exactly the gate's families; xlsx-backed Calc tasks need #576 | VA-02 for the xlsx family only | `myco verify` on an xlsx task is `uncertain` (the family is not in the registry), never guessed |
+| #563 (TIF-274: A/B run gates, sticky boot-class halt, pinned pre-registration) | open | L1: the lead ruled that both halves gate the trial run, and L1 runs only after the trial run | VA-10 (P5), RS-06 and RS-16 on a real run (L1) | L1 does not start. No B or V PR waits on it |
+| #576 (xlsx gate, value-domain sound; supersedes #550) | open | Verify supports exactly the gate's families; xlsx-backed Calc tasks need #576 | VA-02 for the xlsx family only | `myco verify` on an xlsx task is `uncertain` (the family is not in the registry), never guessed |
+
+**Merged since version 2, so no criterion waits on them any more:**
+
+- **#566** (episode export allowlist + identity + F1), merged as `53b50374`. B3 and V1 accept
+  an exported episode as input now (`src/episode/closed.ts`, `src/episode/export.ts`), validated
+  by `validateEpisode`. RS-05 and VA-11 no longer wait.
+- **#561** (track L, unprivileged backends), merged as `922030cf`. `linux-plain` is on `main`
+  (`PLAIN_ISOLATION.backend`, `src/parallel/linux-backend.ts`; the interface is
+  `src/parallel/backend.ts`). It is in the provenance transport set and refused as not
+  isolated. RS-09 uses the real constant.
+- **#562** (Q3 proof bundles, identity-safe), merged as `651975d3`. V4 builds on
+  `src/proof/bundle.ts` on `main`; VA-11, VA-10 (P2) and RS-10's `h-<60hex>` parity no longer
+  wait. #562's publication hold on Q bundles applies to verify bundles too: none is published,
+  committed as data or attached anywhere until the lead lifts it.
+- **#565** (macOS D3 watcher flake), merged as `086c348b`. No criterion depended on it; it only
+  removes a known flake from CI.
+- **#551** (track L strict namespace isolation), merged as `8f4352e3`, as `strict-linux-ns`
+  (`src/isolation/strict-linux-ns.ts`). It is not in the isolated transport set, for the
+  reasons in [§2.6](#26-mock-runs-watermarked-never-evidence): it is not a gated-trial
+  transport and has no display. RS-09 refuses it.
 
 The TIF-98 PNG redactor follow-up is a dependency of B6 as well (RS-11's fuzz is its probe).
 It is not yet a PR or an issue: the coordinator files it as a GitHub Issue under the fallback,
@@ -1265,14 +1488,19 @@ and B6 cites its number. Until that issue exists and is resolved, B6 does not st
    (for example `tesseract`) and refuse evidence export without it (`CLIP_OCR_UNAVAILABLE`).
    The alternative is OCR in the verifier fuzz only, which gives a weaker guarantee for real
    frames.
-2. **Who holds the vault key and the seal receipt.** Proposal: the three operator CLIs of
-   [§1](#1-ground-rules-shared-by-both-features) rule 6 run on the operator host, load the key
-   from a file path at the point of use (VA-12), and read the receipt the trial runner
-   persisted (V1). The alternative, an offline audit with no receipt (`AUDIT_WITHOUT_RECEIPT`),
-   is not proposed: a re-signed seal made with a leaked key would pass it (VA-05). A second
-   alternative, recording `sealDigest` in #518's attempt ledger start event, would let the
-   ledger replace the receipt file, but it changes the ledger schema and is left for a later
-   version.
+2. **Persisting the vault key for live batches (blocks V1's merge).** Proposal: the live trial
+   runner writes each isolated trial's vault key file and seal receipt into an operator-only
+   trial-records directory, exactly as [§1.3](#13-the-vault-key-file-for-real-runs) states
+   (opt-in `--trial-records <dir>`, mode 0700/0600, `O_EXCL | O_NOFOLLOW`, written only after
+   that trial's agent stopped, only for isolated transports, outside every agent root and the
+   vault, never printed). The three operator CLIs of
+   [§1](#1-ground-rules-shared-by-both-features) rule 6 load the key from that file path at the
+   point of use (VA-12, VA-14). Without this no real run can be verified with `--vault` or
+   exported as an evidence clip. Alternatives, not proposed: an offline audit with no receipt
+   (`AUDIT_WITHOUT_RECEIPT`), which a re-signed seal made with a leaked key would pass (VA-05);
+   keeping the key in memory only, which makes P5, L1 and every real evidence clip impossible;
+   recording `sealDigest` in #518's attempt ledger start event in place of the receipt file,
+   which changes the ledger schema and still needs the key.
 3. **Oracle family and version on the evidence band.** They are operator strings that the live
    page leaves out today, and this spec keeps them out of every HTTP response
    ([§2.8](#28-security-model-what-holds-and-what-changes)). Proposal: show them on the

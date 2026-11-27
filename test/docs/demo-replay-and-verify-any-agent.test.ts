@@ -133,7 +133,9 @@ describe("demo replay + verify-any-agent spec: build PRs", () => {
   });
 });
 
-const PENDING = ["#559", "#560", "#561", "#562", "#564", "#566", "#576"];
+const PENDING = ["#560", "#563", "#564", "#576", "#584"];
+/** Merged PRs (state checked 2026-11-27T00:34Z): never listed as open, never waited on. */
+const MERGED = ["#551", "#561", "#562", "#565", "#566"];
 
 describe("demo replay + verify-any-agent spec: grounding and dependencies", () => {
   it("every path in the grounding table exists on main", () => {
@@ -160,6 +162,26 @@ describe("demo replay + verify-any-agent spec: grounding and dependencies", () =
       (r) => /^#\d+/.exec(r[0] ?? "")?.[0],
     );
     expect(deps.sort()).toEqual([...PENDING].sort());
+  });
+
+  it("no merged PR is a build dependency or a waiting criterion", () => {
+    for (const r of buildRows)
+      for (const pr of MERGED) expect(r[5] ?? "", `${r[0]} → ${pr}`).not.toContain(pr);
+    const merged = section("## 6. Dependencies on unmerged PRs");
+    for (const pr of MERGED) expect(merged, pr).toContain(`**${pr}**`);
+    expect(DOC).not.toMatch(/If #561 merges|closed PR #551|RS-09 uses a hand-built/);
+  });
+
+  it("RS-09 uses the real linux-plain constant and refuses strict-linux-ns", () => {
+    const text = flat(criterionText("RS-09"));
+    expect(text).toContain("`PLAIN_ISOLATION.backend` in `src/parallel/linux-backend.ts`");
+    expect(text).toContain("`STRICT_BACKEND_ID`");
+    expect(readFileSync(join(ROOT, "src/parallel/linux-backend.ts"), "utf8")).toContain(
+      'backend: "linux-plain"',
+    );
+    expect(readFileSync(join(ROOT, "src/isolation/strict-linux-ns.ts"), "utf8")).toContain(
+      'STRICT_BACKEND_ID = "strict-linux-ns"',
+    );
   });
 });
 
@@ -204,6 +226,7 @@ describe("demo replay + verify-any-agent spec: codes and tables agree", () => {
     }
     // The D2 rows: reorder with ascending labels, a moved pin and a forged MOCK clip.
     for (const sealed of [
+      "CLIP_CLAIM",
       "CLIP_TIMELINE",
       "CLIP_SOURCE",
       "CLIP_SEAL",
@@ -214,6 +237,19 @@ describe("demo replay + verify-any-agent spec: codes and tables agree", () => {
         tamper.some((r) => (r[2] ?? "").startsWith(`\`${sealed}\``)),
         sealed,
       ).toBe(true);
+  });
+
+  it("pins the single-pixel frame tamper and the claim-banner tampers (N1, round-2 D2)", () => {
+    const text = section("### 2.5 The clip digest and `myco clip verify`");
+    const tamper = rows(text.split("\n\n").filter((b) => b.trim().startsWith("|"))[1] ?? "");
+    const pixel = tamper.find((r) => (r[0] ?? "").startsWith("the same single-pixel content edit"));
+    expect(pixel?.[1]).toMatch(/^`CLIP_LOG_ONLY`/);
+    expect(pixel?.[2]).toBe("`CLIP_SOURCE`");
+    const claim = tamper.filter((r) => (r[0] ?? "").includes("claim"));
+    expect(claim.filter((r) => r[2] === "`CLIP_CLAIM`").length).toBe(3);
+    const rs17 = flat(criterionText("RS-17"));
+    expect(rs17).toContain("the single-pixel content edit");
+    expect(rs17).toContain("claim-banner rows");
   });
 
   it("the recording tamper table has the 11 cases VA-08 names", () => {
@@ -295,6 +331,13 @@ describe("demo replay + verify-any-agent spec: binding lines", () => {
     "`request.runId` and `request.taskId` are never used to attribute a line.",
     "**The watch server never loads a key, never opens the vault's sealed files and never serves an evidence clip**",
     "`--vault` requires both `--seal-receipt` and `--vault-key-file`; without either it is a usage error (exit 3), never an offline audit.",
+    "On lines that carry `ASSIGNMENT_MISMATCH`, rewriting `request.runId` to any other listed run changes no pin.",
+    "On a line without `ASSIGNMENT_MISMATCH`, the same rewrite breaks the binding check and the join is invalid with `TL_LOG_BINDING`",
+    "The key file is written **after** that trial's agent has stopped and its post-capture check has returned",
+    "`open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)`",
+    "Until it is ratified, V1 does not merge.",
+    "There is no `--episode` flag: the clip's claim comes only from the sealed claim record",
+    "The static import allowlist in `test/watch/server-security.test.ts` is **extended, never relaxed**",
   ])("keeps: %s", (line) => {
     expect(DOC).toContain(flat(line));
   });
