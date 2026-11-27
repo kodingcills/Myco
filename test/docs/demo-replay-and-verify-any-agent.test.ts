@@ -15,7 +15,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const RAW = readFileSync(join(ROOT, "docs/product/demo-replay-and-verify-any-agent.md"), "utf8");
@@ -61,7 +61,7 @@ function criterionText(id: string): string {
   return next < 0 ? rest : rest.slice(0, next + 5);
 }
 
-const buildRows = rows(section("## 5. Build PRs")).filter((r) => /^[BVL]\d$/.test(r[0] ?? ""));
+const buildRows = rows(section("## 5. Build PRs")).filter((r) => /^[BCVL]\d$/.test(r[0] ?? ""));
 
 describe("demo replay + verify-any-agent spec: criteria", () => {
   it("has both families, with ids unique and numbered from 01 without gaps", () => {
@@ -116,7 +116,7 @@ describe("demo replay + verify-any-agent spec: build PRs", () => {
     const names = new Set(buildRows.map((r) => r[0]));
     for (const r of buildRows)
       for (const dep of (r[5] ?? "").split(",").map((d) => d.trim())) {
-        const ref = /^([BVL]\d)$/.exec(dep)?.[1] ?? /^(#\d+)/.exec(dep)?.[1];
+        const ref = /^([BCVL]\d)$/.exec(dep)?.[1] ?? /^(#\d+)/.exec(dep)?.[1];
         if (ref?.startsWith("#")) expect(PENDING, `${r[0]} → ${dep}`).toContain(ref);
         else if (ref !== undefined) expect(names.has(ref), `${r[0]} → ${dep}`).toBe(true);
         else
@@ -133,9 +133,9 @@ describe("demo replay + verify-any-agent spec: build PRs", () => {
   });
 });
 
-const PENDING = ["#560", "#564", "#576"];
-/** Merged PRs (state checked 2026-11-27T01:06Z): never listed as open, never waited on. */
-const MERGED = ["#551", "#561", "#562", "#563", "#565", "#566", "#584"];
+const PENDING = ["#560"];
+/** Merged PRs (state checked 2026-11-27T05:19Z, v5): never listed as open, never waited on. */
+const MERGED = ["#551", "#561", "#562", "#563", "#564", "#565", "#566", "#576", "#584", "#592"];
 
 describe("demo replay + verify-any-agent spec: grounding and dependencies", () => {
   it("every path in the grounding table exists on main", () => {
@@ -259,10 +259,12 @@ describe("demo replay + verify-any-agent spec: codes and tables agree", () => {
     for (const r of table) expect(r[2] ?? "", `case ${r[0]}`).not.toMatch(/^`?verified/);
   });
 
-  it("pre-registers P1-P5, with P5 after the trial run only", () => {
+  it("pre-registers P1-P6, with P5 after the trial run only and P6 with no VM", () => {
     const table = rows(section("### 3.6 Pre-registered proofs"));
-    expect(table.map((r) => r[0])).toEqual(["P1", "P2", "P3", "P4", "P5"]);
+    expect(table.map((r) => r[0])).toEqual(["P1", "P2", "P3", "P4", "P5", "P6"]);
     expect(table[4]?.[1]).toContain("after the trial run (VM)");
+    expect(table[5]?.[1]).toContain("no VM");
+    expect(table[5]?.[1]).toContain("mock transport");
     expect(DOC).toContain("The table is not edited to match a result.");
   });
 });
@@ -382,6 +384,146 @@ describe("demo replay + verify-any-agent spec: the binding check follows the gat
     expect(flat(criterionText("VA-14"))).toContain(
       "the two trials' key files hold identical bytes",
     );
+  });
+});
+
+describe("demo replay + verify-any-agent spec: checkpointed capture, #596 nits, export guard (v5)", () => {
+  const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
+  // Computed per test run, not at collection, so an older spec fails these tests one by one.
+  let cp = "";
+  let step4 = "";
+  beforeEach(() => {
+    const at = RAW.indexOf("\n### 1.4 Checkpointed mid-run capture");
+    cp = at < 0 ? "" : flat(section("### 1.4 Checkpointed mid-run capture"));
+    step4 = flat(
+      RAW.slice(
+        RAW.indexOf("4. **Compare, never adopt.**"),
+        RAW.indexOf("5. **What the agent told"),
+      ),
+    );
+  });
+
+  it("is version 5 and cites the issues it closes", () => {
+    expect(DOC).toContain("**Status: spec, pre-registered, nothing built. Version 5**");
+    for (const ref of ["#588", "#596"]) expect(DOC.slice(0, 1200), ref).toContain(ref);
+  });
+
+  it("C1 waits for the trial run and names the held gate files; C1, V5 and B7 need no VM", () => {
+    const row = (id: string) => buildRows.find((r) => r[0] === id);
+    const c1 = row("C1");
+    expect(c1?.[5]).toBe("V1, the trial run");
+    for (const p of ["src/gate/sealed.ts", "src/gate/gated-trial.ts", "src/integrity/vault.ts"]) {
+      expect(c1?.[6], p).toContain(`\`${p}\``);
+      expect(existsSync(join(ROOT, p)), p).toBe(true);
+    }
+    expect(row("V5")?.[5]).toBe("C1");
+    expect(row("B7")?.[5]).toBe("B2, C1");
+    for (const id of ["C1", "V5", "B7"]) expect(row(id)?.[4], id).toBe("No VM");
+    expect(cp).toContain("`src/gate/*` is held for the R1 pilot and PR #607");
+  });
+
+  it("describes main as it is: one capture after the stop, and nothing of §1.4 built yet", () => {
+    const trial = read("src/gate/gated-trial.ts");
+    expect(trial).toContain("opts.vault.markAgentStopped(opts.runId);");
+    expect(trial.indexOf("markAgentStopped(opts.runId)")).toBeLessThan(
+      trial.indexOf("await opts.transport.captureAfterStop()"),
+    );
+    expect(trial).not.toMatch(/captureCheckpoint|captureCheckpoints/);
+    expect(read("src/gate/sealed.ts")).toContain('"integrity:agent-not-stopped"');
+    expect(read("src/integrity/vault.ts")).not.toMatch(/checkpoint\(|openCheckpointForTrial/);
+  });
+
+  it("the option name does not collide with the oracle's per-step checkpoints result field", () => {
+    expect(read("src/gate/api.ts")).toMatch(/readonly checkpoints\b/);
+    expect(RAW).not.toMatch(/`checkpoints: (\{|"on")/);
+    expect(cp).toContain("`captureCheckpoints: { max: <n> }`");
+  });
+
+  it("adds no gate reason code: every reason code §1.4 names is already in REASON_CODES", () => {
+    const api = read("src/gate/api.ts");
+    const list = api.slice(
+      api.indexOf("REASON_CODES"),
+      api.indexOf("] as const", api.indexOf("REASON_CODES")),
+    );
+    // Constants §1.4 names that are not reason codes (a vault symbol and a size limit).
+    const notReasonCodes = new Set(["AUDIT_WITHOUT_RECEIPT", "STATE_FILE_LIMIT"]);
+    const codes = [...cp.matchAll(/`([A-Z][A-Z_]{3,})`/g)]
+      .map((m) => m[1] ?? "")
+      .filter((c) => !notReasonCodes.has(c));
+    expect(codes).toEqual(
+      expect.arrayContaining(["STATE_UNREADABLE", "ORACLE_FAIL", "ORACLE_PASS"]),
+    );
+    for (const code of codes) expect(list, code).toContain(`"${code}"`);
+    expect(cp).toContain("No new reason code");
+  });
+
+  it("only an S3 call can trigger a checkpoint, the trial's verdict never moves, and on is never evidence", () => {
+    expect(cp).toContain(
+      "A parse rejection (S1) or an assignment rejection (S2) reads nothing and triggers nothing",
+    );
+    expect(cp).toContain("A checkpoint decision is never the trial's verdict");
+    expect(cp).toContain("every R1 and A/B evidence path refuses a trial recorded `on`");
+    expect(cp).toContain("never with `AUDIT_WITHOUT_RECEIPT`");
+    expect(cp).toContain("A checkpoint is refused after `markAgentStopped`");
+  });
+
+  it("N1: step 4 compares only lines that read the recompute's bytes", () => {
+    expect(step4).not.toContain("that is every S2 and S3 line");
+    expect(step4).toContain("every S3 line whose `evidenceRefs` equal the recompute's refs");
+    expect(step4).toContain("A disagreement on **any compared line**");
+    expect(step4).toContain("`VERIFY_CHECKPOINT_MISMATCH`");
+    const va03 = flat(criterionText("VA-03"));
+    for (const s of [
+      "`STATE_MISSING`",
+      "`ms-slip-then-repair-retry`",
+      "`loggedVerdictAgrees: null`",
+    ])
+      expect(va03, s).toContain(s);
+  });
+
+  it("N2: §6 no longer says #567 is open", () => {
+    const deps = flat(section("## 6. Dependencies on unmerged PRs"));
+    expect(deps).not.toMatch(/#567[^.]*is open/);
+    expect(deps).toContain(
+      "#567, this spec's versions 1 to 3, closed unmerged; version 4 merged as #589.",
+    );
+  });
+
+  it("exports reuse src/export-guard and its provenance rule, never a local copy", () => {
+    const privacy = flat(section("### 2.7 Export privacy"));
+    const exportsOf: Record<string, string[]> = {
+      "src/export-guard/identity-words.ts": [
+        "identityFold",
+        "identityNeedles",
+        "IDENTITY_WORD_MIN_CHARS",
+      ],
+      "src/export-guard/provenance.ts": ["HashLedger", "HASHED_FORM"],
+      "src/export-guard/fold.ts": ["stripAccents"],
+    };
+    for (const [path, names] of Object.entries(exportsOf)) {
+      expect(privacy, path).toContain(`\`${path}\``);
+      const src = read(path);
+      for (const name of names) {
+        expect(src, `${path} ${name}`).toMatch(
+          new RegExp(`export (const|function|class) ${name}\\b`),
+        );
+        if (name !== "stripAccents") expect(privacy, name).toContain(`\`${name}\``);
+      }
+    }
+    expect(privacy).toContain(
+      "define no fold, needle rule, hashed-form pattern or ledger of their own",
+    );
+    expect(privacy).not.toContain("Issue #579 proposes");
+    const rs10 = flat(criterionText("RS-10"));
+    expect(rs10).toContain("an agent-supplied `h-<60hex>` in any id field");
+    expect(rs10).not.toContain("an existing `h-<60hex>` value is kept, while");
+  });
+
+  it("P6 cites the demo's real task and scenario", () => {
+    const demo = read("src/gate/multistep-demo.ts");
+    expect(demo).toContain('MS_TASK_ID = "calc-ms-demo"');
+    expect(demo).toContain('name: "slip-then-repair"');
+    expect(read("docs/product/demo-storyboard.md")).toContain("ms-slip-then-repair-retry");
   });
 });
 
