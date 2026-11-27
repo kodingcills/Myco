@@ -26,7 +26,24 @@ import { virtualClock } from "../../src/pilot/dry-run.ts";
 import { trialLaunchPlan } from "../../src/pilot/launch.ts";
 import { loadLedger, PROGRESS_FILE } from "../../src/pilot/ledger.ts";
 import { HarnessFault, runPilot } from "../../src/pilot/runner.ts";
-import { config, PUBLISHED, ROOT, SOURCES, tmp, USAGE_LIMIT_PHRASES } from "./helpers.ts";
+import {
+  CLEAN_RESULT_FAULT_PHRASES,
+  CLEAN_RESULT_TASK_DATA,
+  config,
+  FAULT_WORDING,
+  FOLDED_USAGE_PHRASES,
+  NBSP,
+  PUBLISHED,
+  ROOT,
+  SOURCES,
+  spaced,
+  THIN_SPACE,
+  tmp,
+  UNICODE_SPACES,
+  UNMAPPED_STRUCTURED,
+  USAGE_LIMIT_PHRASES,
+  ZWSP,
+} from "./helpers.ts";
 
 interface Call {
   command: string;
@@ -156,12 +173,10 @@ describe("headless Claude Code transport (fake spawn)", () => {
       // And as bare stderr with no JSON result at all.
       expect(faultOf(() => interpretResult("", text, 1))).toBe(cls);
       // A CLEAN, completed result WITH a claim line is the agent's outcome even with this
-      // text; without one, quota wording is usage-limit (round 3, R2-D3b) and login wording
-      // stays the agent's (no-claim) outcome.
+      // text; without one, quota wording is usage-limit (round 3, R2-D3b) and the exact CLI
+      // login wording is auth (#607 round 3, L1).
       expect(interpretResult(result(`${text}\nNOT DONE`), "", 0).claim).toBe("not-done");
-      expect(faultOf(() => interpretResult(result(text), "", 0))).toBe(
-        cls === "usage-limit" ? "usage-limit" : "none",
-      );
+      expect(faultOf(() => interpretResult(result(text), "", 0))).toBe(cls);
     }
   });
 
@@ -176,7 +191,9 @@ describe("headless Claude Code transport (fake spawn)", () => {
       "I looked at EMP-0055: its qty is 429. I could not save the file.",
       "Row EMP-0127 has qty 401; I left it unchanged.",
       "EMP-0090 qty 403 is now 430.",
-      "Invalid API key · Please run /login",
+      // #607 round 3, L1: the broad words alone ("API key", "login", "OAuth", "credit") stay
+      // the agent's; only the exact CLI phrases stop (next test).
+      "I renamed the API key column and the OAuth login field; credit was unchanged.",
     ];
     for (const text of probes) {
       expect([text, faultOf(() => interpretResult(result(text), "", 0))]).toEqual([text, "none"]);
@@ -428,6 +445,54 @@ describe("headless Claude Code transport (fake spawn)", () => {
     }
   });
 
+  it("#606 S1: quota wording on stderr only, with a claimless clean result, is usage-limit; a claim line keeps the agent's outcome", () => {
+    for (const t of USAGE_LIMIT_PHRASES) {
+      for (const code of [0, 1])
+        expect([t, code, faultOf(() => interpretResult(result("Edited."), t, code))]).toEqual([
+          t,
+          code,
+          "usage-limit",
+        ]);
+      expect(interpretResult(result("Edited.\nDONE"), t, 0).claim).toBe("done");
+      expect(interpretResult(result("Edited.\nNOT DONE"), t, 0).claim).toBe("not-done");
+    }
+    // Stderr with only the broad vocabulary (no usage wording) never touches a clean result.
+    for (const e of ["API Error: 429 Too Many Requests", "401 Unauthorized", "billing; quota"])
+      expect([e, interpretResult(result("Edited."), e, 0).claim]).toEqual([e, "no-claim"]);
+  });
+
+  it("#606 S2: every Unicode whitespace in the quota wording is folded on every path; a claim line is unchanged", () => {
+    for (const t0 of USAGE_LIMIT_PHRASES)
+      for (const [name, sp] of UNICODE_SPACES) {
+        const t = spaced(t0, sp);
+        const probe = (stdout: string, stderr: string, code: number) =>
+          faultOf(() => interpretResult(stdout, stderr, code));
+        expect([
+          t0,
+          name,
+          probe("", t, 1), // stderr, no result
+          probe(t, "", 1), // plain stdout
+          probe(t, "", 0),
+          probe(result(t, { is_error: true }), "", 1), // error result
+          probe(result("API Error", { is_error: true, errors: [t] }), "", 1), // errors[]
+          probe(JSON.stringify({ error: "rate_limit" }), t, 1), // structured limit, refined
+          probe(result(t), "", 0), // clean claimless result
+          probe(result("Edited."), t, 0), // clean claimless result, stderr
+        ]).toEqual([t0, name, ...Array(8).fill("usage-limit")]);
+        expect(interpretResult(result(`${t}\nDONE`), t, 0).claim).toBe("done");
+        expect(interpretResult(result(`${t}\nNOT DONE`), t, 0).claim).toBe("not-done");
+      }
+    // Task data with 401 / 403 / 429 and NBSP is still the agent's outcome.
+    for (const text of [
+      "qty 429 on EMP-0055",
+      "EMP-0127 401, EMP-0090 403",
+      "status 429 401 403",
+    ]) {
+      const t = spaced(text, NBSP);
+      expect(interpretResult(result(t), t, 0).claim).toBe("no-claim");
+    }
+  });
+
   // Round-1 verdict N3: the text-fallback order is auth, billing, usage-limit, rate-limit.
   it("pins the classification order: auth before billing before usage-limit before rate-limit", () => {
     expect(classOfText("Credit balance is too low · Please run /login")).toBe("auth");
@@ -439,6 +504,206 @@ describe("headless Claude Code transport (fake spawn)", () => {
       JSON.parse(result("x", { is_error: true })),
     ]);
     expect(faultOf(() => interpretResult(both, "", 1))).toBe("auth");
+  });
+
+  // #607 round 2, B1: "You've hit your limit" (each apostrophe, spacing and case) is the quota.
+  it('round 2 B1: "You\'ve hit your limit" is usage-limit; "your rate limit" is not', () => {
+    for (const t of [
+      "You've hit your limit",
+      "You\u2019ve hit your limit",
+      "You\u2018ve hit your limit",
+      "You\u02bcve hit your limit",
+      "Youve hit your limit",
+      "YOU HAVE HIT YOUR LIMIT",
+      "You have reached your usage limit",
+      "you've reached your limit",
+      spaced("You've hit your limit", NBSP),
+      spaced("You've hit your limit", THIN_SPACE),
+      spaced("You've hit your limit", "\t"),
+    ]) {
+      expect([t, classOfText(t)]).toEqual([t, "usage-limit"]);
+      expect([t, faultOf(() => interpretResult(result(t), "", 0))]).toEqual([t, "usage-limit"]);
+      expect(interpretResult(result(`${t}\nDONE`), t, 0).claim).toBe("done");
+    }
+    for (const t of ["You've hit your rate limit", "You've hit the cell limit", "your limit"])
+      expect([t, interpretResult(result(t), t, 0).claim]).toEqual([t, "no-claim"]);
+  });
+
+  // #607 round 2, F-A: format characters and hyphen variants are folded before every match.
+  it("round 2 F-A: a format character or hyphen variant inside quota wording is usage-limit on every path", () => {
+    for (const [name, t] of FOLDED_USAGE_PHRASES) {
+      const probe = (stdout: string, stderr: string, code: number) =>
+        faultOf(() => interpretResult(stdout, stderr, code));
+      expect([
+        name,
+        classOfText(t),
+        probe("", t, 1),
+        probe(t, "", 1),
+        probe(t, "", 0),
+        probe(result(t, { is_error: true }), "", 1),
+        probe(JSON.stringify({ error: "rate_limit" }), t, 1),
+        probe(result(t), "", 0),
+        probe(result("Edited."), t, 0),
+      ]).toEqual([name, ...Array(8).fill("usage-limit")]);
+      expect(interpretResult(result(`${t}\nNOT DONE`), t, 0).claim).toBe("not-done");
+    }
+    // A transient limit with a format character stays transient, and never touches a clean result.
+    for (const t of [`rate${ZWSP}limit reached`, `rate${ZWSP} limit reached`]) {
+      expect([t, classOfText(t)]).toEqual([t, "rate-limit"]);
+      expect([t, interpretResult(result(t), t, 0).claim]).toEqual([t, "no-claim"]);
+    }
+  });
+
+  // #607 round 2, F-B: auth, billing and rate wording is folded as the usage wording is.
+  it("round 2 F-B: auth, billing and rate wording with NBSP, a thin space or ZWSP is classified on plain stdout and stderr", () => {
+    for (const [t0, cls] of [
+      ["Not logged in", "auth"],
+      ["OAuth token has expired", "auth"],
+      ["Invalid API key", "auth"],
+      ["Credit balance is too low", "billing"],
+      ["You're out of extra usage", "billing"],
+      ["Insufficient credit to continue", "billing"],
+      ["Too many requests", "rate-limit"],
+      ["Rate limit exceeded", "rate-limit"],
+    ] as const)
+      for (const sp of [NBSP, THIN_SPACE, ZWSP, "\t"]) {
+        const t = spaced(t0, sp);
+        expect([t0, sp.charCodeAt(0), classOfText(t)]).toEqual([t0, sp.charCodeAt(0), cls]);
+        for (const code of [1, 0])
+          expect([t0, sp.charCodeAt(0), code, faultOf(() => interpretResult(t, "", code))]).toEqual(
+            [t0, sp.charCodeAt(0), code, cls],
+          );
+        expect([t0, sp.charCodeAt(0), faultOf(() => interpretResult("", t, 1))]).toEqual([
+          t0,
+          sp.charCodeAt(0),
+          cls,
+        ]);
+        // The broad vocabulary is never applied to a clean result (D4). A claimless clean
+        // result stops only on the narrow exact CLI phrases (#607 round 3, L1); with a claim
+        // line the claim always stands.
+        const narrow = ![
+          "Insufficient credit to continue",
+          "Too many requests",
+          "Rate limit exceeded",
+        ].includes(t0);
+        expect([t0, faultOf(() => interpretResult(result(t), t, 0))]).toEqual([
+          t0,
+          narrow ? cls : "none",
+        ]);
+        expect(interpretResult(result(`${t}\nDONE`), t, 0).claim).toBe("done");
+      }
+  });
+
+  // #607 round 3, B2: an unmapped structured class (`error-result`) falls back to the text.
+  it("round 3 B2: an unmapped structured error with quota, billing, auth or transient wording is classified by its text on every errored path", () => {
+    const withAssistant = (s: Record<string, unknown>, res: string | null) =>
+      JSON.stringify([
+        { type: "assistant", message: { content: [] }, ...s },
+        ...(res === null ? [] : [JSON.parse(res)]),
+      ]);
+    for (const [sname, s] of UNMAPPED_STRUCTURED) {
+      for (const [t, cls] of FAULT_WORDING) {
+        const errRes = (text: string, extra: Record<string, unknown> = {}) =>
+          result(text, { is_error: true, subtype: "error_during_execution", ...extra });
+        expect([
+          sname,
+          t,
+          // The error result's own text.
+          faultOf(() => interpretResult(withAssistant(s, errRes(t)), "", 1)),
+          // Its errors[] list.
+          faultOf(() =>
+            interpretResult(withAssistant(s, errRes("API Error", { errors: [t] })), "", 1),
+          ),
+          // stderr only.
+          faultOf(() => interpretResult(withAssistant(s, errRes("API Error")), t, 1)),
+          // No result event: the structured field and the wording on stderr.
+          faultOf(() => interpretResult(withAssistant(s, null), t, 1)),
+          // A clean-looking result with a claim line, exit 0: the structured error makes it
+          // errored, so the claim is never counted.
+          faultOf(() => interpretResult(withAssistant(s, result("x\nDONE")), t, 0)),
+          // The structured field on the result message itself.
+          faultOf(() => interpretResult(errRes(t, s), "", 1)),
+        ]).toEqual([sname, t, cls, cls, cls, cls, cls, cls]);
+      }
+      // With no vocabulary the structured class stands: a status 500 alone is error-result.
+      expect([
+        sname,
+        faultOf(() =>
+          interpretResult(
+            withAssistant(s, result("Something went wrong.", { is_error: true })),
+            "",
+            1,
+          ),
+        ),
+        faultOf(() => interpretResult(withAssistant(s, null), "boom", 1)),
+      ]).toEqual([sname, "error-result", "error-result"]);
+    }
+    // A mapped structured class still wins over the text.
+    const mapped = (e: Record<string, unknown>) =>
+      withAssistant(e, result("Credit balance is too low", { is_error: true }));
+    expect(faultOf(() => interpretResult(mapped({ error: "authentication_failed" }), "", 1))).toBe(
+      "auth",
+    );
+    expect(faultOf(() => interpretResult(mapped({ error: "rate_limit" }), "", 1))).toBe(
+      "rate-limit",
+    );
+  });
+
+  // #607 round 3, L1: the narrow billing and auth phrases stop a claimless clean result.
+  it("round 3 L1: a claimless clean result with a narrow billing or auth phrase (text or stderr) stops with its class; a claim line is never reclassified", () => {
+    for (const [t0, cls] of CLEAN_RESULT_FAULT_PHRASES)
+      for (const t of [
+        t0,
+        t0.toUpperCase(),
+        spaced(t0, NBSP),
+        spaced(t0, ZWSP),
+        spaced(t0, "\t"),
+      ]) {
+        expect([
+          t,
+          faultOf(() => interpretResult(result(t), "", 0)),
+          faultOf(() => interpretResult(result("Edited."), t, 0)),
+          faultOf(() => interpretResult(result(`I tried.\n${t}`), "", 0)),
+        ]).toEqual([t, cls, cls, cls]);
+        for (const [line, claim] of [
+          ["DONE", "done"],
+          ["NOT DONE", "not-done"],
+        ] as const)
+          expect([t, interpretResult(result(`${t}\n${line}`), t, 0).claim]).toEqual([t, claim]);
+      }
+    // Auth before billing before usage, as in classOfText.
+    expect(
+      faultOf(() => interpretResult(result("Credit balance is too low; not logged in"), "", 0)),
+    ).toBe("auth");
+    expect(
+      faultOf(() => interpretResult(result("Out of extra usage; usage limit reached"), "", 0)),
+    ).toBe("billing");
+    // Task data sharing the broad vocabulary stays the agent's no-claim, in the text or on stderr.
+    for (const t of CLEAN_RESULT_TASK_DATA) {
+      expect([t, faultOf(() => interpretResult(result(t), "", 0))]).toEqual([t, "none"]);
+      expect([t, interpretResult(result("Edited."), spaced(t, NBSP), 0).claim]).toEqual([
+        t,
+        "no-claim",
+      ]);
+    }
+  });
+
+  // #607 round 3, F-E: "log-in again" (hyphenated, or a folded hyphen variant) is auth.
+  it("round 3 F-E: 'please log-in again' is auth on a failed run, with an ASCII or folded hyphen", () => {
+    for (const t of [
+      "Session expired: please log-in again",
+      // Without "please", only the `log[ -]?in again` alternative can match.
+      "Session expired; log-in again to continue",
+      `Session expired; log${String.fromCharCode(0x2011)}in again`,
+      `Please sign${String.fromCharCode(0x2010)}in`,
+      `please log${String.fromCharCode(0x2011)}in again`,
+      `Please log${String.fromCharCode(0x2010)}in again`,
+      "please log in again",
+      "please login again",
+    ]) {
+      expect([t, classOfText(t)]).toEqual([t, "auth"]);
+      expect([t, faultOf(() => interpretResult("", t, 1))]).toEqual([t, "auth"]);
+    }
   });
 
   it("classifies rate limits, unreadable output and spawn failures as harness faults", async () => {
