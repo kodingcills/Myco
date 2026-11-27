@@ -506,9 +506,9 @@ describe("headless Claude Code transport (fake spawn)", () => {
   it('round 2 B1: "You\'ve hit your limit" is usage-limit; "your rate limit" is not', () => {
     for (const t of [
       "You've hit your limit",
-      "You’ve hit your limit",
-      "You‘ve hit your limit",
-      "Youʼve hit your limit",
+      "You\u2019ve hit your limit",
+      "You\u2018ve hit your limit",
+      "You\u02bcve hit your limit",
       "Youve hit your limit",
       "YOU HAVE HIT YOUR LIMIT",
       "You have reached your usage limit",

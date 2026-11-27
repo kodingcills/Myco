@@ -32,7 +32,7 @@ export const USAGE_LIMIT_PHRASES = [
   "usage_limit_reached",
   // #607 round 2, B1: none of these matched before the phrase was added.
   "You've hit your limit",
-  "You’ve hit your limit",
+  "You\u2019ve hit your limit",
   "YOU'VE HIT YOUR LIMIT",
   "You have reached your limit",
 ] as const;

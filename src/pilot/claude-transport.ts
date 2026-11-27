@@ -117,10 +117,10 @@ export function classOfStatus(status: number): PilotHarnessClass {
  * `test/pilot/claude-transport.test.ts` pins it.
  */
 export const USAGE_LIMIT_TEXT =
-  /usage[ _-]?limit|(?<!rate[ _-]?)limit (?:reached|exceeded|hit)|limit (?:will )?resets?|\bresets? (?:at |on |in )?(?:\d|mon|tue|wed|thu|fri|sat|sun|tomorrow)|(?:weekly|daily|monthly|hourly|session|\d+[ -]?hour|five[ -]hour|opus|sonnet|haiku|fable) limit|(?:you['‘’ʼ]?ve|you have) (?:hit|reached) your (?:usage )?limit/i;
+  /usage[ _-]?limit|(?<!rate[ _-]?)limit (?:reached|exceeded|hit)|limit (?:will )?resets?|\bresets? (?:at |on |in )?(?:\d|mon|tue|wed|thu|fri|sat|sun|tomorrow)|(?:weekly|daily|monthly|hourly|session|\d+[ -]?hour|five[ -]hour|opus|sonnet|haiku|fable) limit|(?:you['\u2018\u2019\u02bc]?ve|you have) (?:hit|reached) your (?:usage )?limit/i;
 
-const FORMAT_CHARS = /[\p{Cf}᠎]/gu;
-const HYPHENS = /[‐-―]/g;
+const FORMAT_CHARS = /[\p{Cf}\u180e]/gu;
+const HYPHENS = /[\u2010-\u2015]/g;
 
 /**
  * The forms of `text` every vocabulary is matched against (#606 S2, round 2 F-A). Hyphen
