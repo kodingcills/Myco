@@ -542,7 +542,7 @@ describe("demo replay + verify-any-agent spec: checkpointed capture, #596 nits, 
     expect(gate).toContain(
       '`detail` of a failed outcome reaches the agent (as "could not look: <detail>")',
     );
-    expect(gate).toContain("reasons: [`could not look: ${read.detail}`],");
+    expect(gate).toMatch(/reasons: \[`could not look: \$\{read\.detail\}`\],/);
     const sealed = read("src/gate/sealed.ts");
     expect(sealed).toContain("The full violations go to the operator through `onIntegrity`.");
     expect(sealed).not.toContain("onCheckpoint");
