@@ -614,13 +614,13 @@ describe("two identical harness failures in a row abort the run", () => {
 
   it("two DIFFERENT failures do not abort; a decided trial resets the count", async () => {
     const vm = fakeVm();
-    // trial 1: transport-error, then error-result (different), then decided; trial 2: one
-    // transport-error (not a repeat: a decided trial came between), then decided.
+    // trial 1: transport-error, then error-result (different), then decided; trial 2: the SAME
+    // error-result as trial 1's last fault, which is not a repeat: a decided trial came between.
     const outputs = [
       { stdout: "not json", code: 1 },
       { stdout: resultJson("x", { is_error: true, subtype: "error_max_turns" }), code: 0 },
       { stdout: resultJson("x\nDONE") },
-      { stdout: "not json", code: 1 },
+      { stdout: resultJson("x", { is_error: true, subtype: "error_max_turns" }), code: 0 },
       { stdout: resultJson("x\nDONE") },
     ];
     const claude = fakeClaude((n) => outputs[n - 1] as (typeof outputs)[0]);
