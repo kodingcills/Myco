@@ -41,7 +41,7 @@ describe("K5. a recovered run is re-verified by the gate on fresh host-captured 
   });
 
   it("without the restore, the same agent is refuted (the restore really mattered)", async () => {
-    const agent: Agent = async (ctx, w) => {
+    const agent: Agent = async (_ctx, w) => {
       w.setGuest([...STEPS, COLLATERAL]);
       return { claim: "done" };
     };
