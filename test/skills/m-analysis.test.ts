@@ -642,6 +642,29 @@ describe("not shown: guardrails, schedule, coverage, parity, base surface", () =
     expect(analyze({ ...p, gateAuditText: "" }).notShown).toEqual(["GUARDRAIL_GATE_AUDIT: 2"]);
   });
 
+  it("gate audit log: row and log agreeing on a non-verified decision is still a breach", () => {
+    const p = strong();
+    const lines = (p.gateAuditText as string).split("\n").filter((l) => l.length > 0);
+    const src = learnRows.find((r) => r.admittedSkillId === skillId) as RepRow;
+    for (const forged of [
+      { verdict: "uncertain" as const, accepted: true },
+      { verdict: "verified" as const, accepted: false },
+    ]) {
+      const text = `${lines
+        .map((l) => {
+          const d = JSON.parse(l);
+          return JSON.stringify(d.request?.runId === src.runId ? { ...d, ...forged } : d);
+        })
+        .join("\n")}\n`;
+      const rows = p.rows.map((r) =>
+        r.runId === src.runId && r.gate !== null ? { ...r, gate: { ...r.gate, ...forged } } : r,
+      );
+      const res = analyze({ ...p, rows, gateAuditText: text });
+      expect(res.guardrails?.storedNotVerifiedInGateAudit, JSON.stringify(forged)).toBe(1);
+      expect(res.notShown).toContain("GUARDRAIL_GATE_AUDIT: 1");
+    }
+  });
+
   it("gate audit log: the row's gate field must agree with the logged decision", () => {
     const p = strong();
     const lines = (p.gateAuditText as string).split("\n").filter((l) => l.length > 0);
