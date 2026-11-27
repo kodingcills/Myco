@@ -1,0 +1,136 @@
+// Attribution guard (GitHub issue #685): fail a pull request whose commit messages,
+// title or body carry a co-author trailer naming Claude or Anthropic, or the
+// "Generated with Claude Code" line. Run by .github/workflows/attribution-guard.yml.
+//
+//   node .github/scripts/attribution-guard.ts
+//
+// Inputs come only from the environment, set by the workflow from the event payload:
+//   PR_TITLE, PR_BODY   the pull request's title and body (may be empty)
+//   BASE_SHA, HEAD_SHA  the commit range; messages are read with `git log BASE..HEAD`
+//                       in the current directory (the checkout at the PR head)
+//   BASE_REF            optional base branch name; commits reachable from
+//                       refs/remotes/origin/BASE_REF are excluded too, so main commits
+//                       brought in by a sync merge are not blamed on the PR even if
+//                       the payload's BASE_SHA predates that merge
+//
+// Exit 0 when clean, 1 when any finding, 2 when the input cannot be read (missing
+// range, git failure). It reads nothing but git history and these variables, and
+// writes nothing but its report on stdout/stderr.
+
+import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
+
+export type FindingCode = "co-author-trailer" | "generated-with-line";
+
+export interface Finding {
+  source: string;
+  line: number;
+  code: FindingCode;
+}
+
+export interface Message {
+  source: string;
+  text: string;
+}
+
+// A `Co-authored-by:` line (any case, any position on the line, anywhere in the
+// message) whose remainder names Claude or Anthropic. A human co-author passes, and
+// so does the word Claude in ordinary prose: it needs the trailer key on the same line.
+const TRAILER = /co-authored-by\s*:(.*)$/i;
+const NAMES = /claude|anthropic/i;
+// "Generated with Claude Code" in any case and spacing, also when the product name is
+// wrapped in markdown (a link `[Claude Code](...)`, emphasis or code span).
+const GENERATED = /generated\s+with\s+[[*_`\s]*claude[*_`\s]+code/i;
+
+export function scanText(source: string, text: string): Finding[] {
+  const findings: Finding[] = [];
+  const lines = text.split(/\r\n|\r|\n/);
+  for (const [i, raw] of lines.entries()) {
+    const trailer = TRAILER.exec(raw);
+    if (trailer && NAMES.test(trailer[1] ?? "")) {
+      findings.push({ source, line: i + 1, code: "co-author-trailer" });
+    }
+    if (GENERATED.test(raw)) {
+      findings.push({ source, line: i + 1, code: "generated-with-line" });
+    }
+  }
+  return findings;
+}
+
+export function scanMessages(messages: readonly Message[]): Finding[] {
+  return messages.flatMap((m) => scanText(m.source, m.text));
+}
+
+const SHA = /^[0-9a-f]{40}$/;
+const RECORD = "\x1e";
+const FIELD = "\x1f";
+
+const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+
+// Each commit in base..head (merge commits included) as `commit <sha8>`, minus any
+// commit reachable from origin/<baseRef> when baseRef is given.
+export function readCommits(base: string, head: string, cwd: string, baseRef = ""): Message[] {
+  if (!SHA.test(base) || !SHA.test(head)) {
+    throw new Error("BASE_SHA and HEAD_SHA must be 40-hex commit ids");
+  }
+  if (baseRef !== "" && (!BRANCH.test(baseRef) || baseRef.includes(".."))) {
+    throw new Error("BASE_REF is not a plain branch name");
+  }
+  const exclude = baseRef === "" ? [base] : [base, `refs/remotes/origin/${baseRef}`];
+  const res = spawnSync(
+    "git",
+    ["log", `--format=%H${FIELD}%B${RECORD}`, head, "--not", ...exclude, "--"],
+    { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  if (res.error || res.status !== 0) {
+    throw new Error(`git log ${base.slice(0, 8)}..${head.slice(0, 8)} failed`);
+  }
+  const messages: Message[] = [];
+  for (const record of res.stdout.split(RECORD)) {
+    const trimmed = record.replace(/^\n/, "");
+    if (trimmed === "") continue;
+    const sep = trimmed.indexOf(FIELD);
+    if (sep < 0) throw new Error("unexpected git log output");
+    const sha = trimmed.slice(0, sep);
+    messages.push({ source: `commit ${sha.slice(0, 8)}`, text: trimmed.slice(sep + 1) });
+  }
+  return messages;
+}
+
+const DESCRIBE: Record<FindingCode, string> = {
+  "co-author-trailer": "Co-authored-by line naming Claude or Anthropic",
+  "generated-with-line": '"Generated with Claude Code" line',
+};
+
+export function main(env: NodeJS.ProcessEnv, cwd: string): number {
+  let commits: Message[];
+  try {
+    commits = readCommits(env.BASE_SHA ?? "", env.HEAD_SHA ?? "", cwd, env.BASE_REF ?? "");
+  } catch (err) {
+    process.stderr.write(`ATTRIBUTION GUARD ERROR: ${(err as Error).message}\n`);
+    return 2;
+  }
+  const findings = scanMessages([
+    { source: "PR title", text: env.PR_TITLE ?? "" },
+    { source: "PR body", text: env.PR_BODY ?? "" },
+    ...commits,
+  ]);
+  for (const f of findings) {
+    process.stdout.write(`FOUND ${f.source} line ${f.line}: ${DESCRIBE[f.code]}\n`);
+  }
+  if (findings.length > 0) {
+    process.stdout.write(
+      `ATTRIBUTION GUARD FAILED: ${findings.length} finding(s); remove the attribution ` +
+        "from the commit messages, the PR title and the PR body\n",
+    );
+    return 1;
+  }
+  process.stdout.write(
+    `ATTRIBUTION GUARD OK: title, body and ${commits.length} commit message(s) are clean\n`,
+  );
+  return 0;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exitCode = main(process.env, process.cwd());
+}

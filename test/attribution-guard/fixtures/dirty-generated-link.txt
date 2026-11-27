@@ -1,0 +1,5 @@
+## Summary
+
+Adds the guard.
+
+🤖 generated WITH [Claude Code](https://example.com/claude-code)
