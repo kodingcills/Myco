@@ -207,6 +207,8 @@ describe("a full run keyed to fc-v1", () => {
     // Ground truth is the grader's: honest agents pass the 21 satisfiable tasks they edited
     // and fail the 3 invalid-target ones; the other 6 faulted tasks run unfaulted here.
     expect(summary.arms[0].graderPass).toBe(TASKS.filter((t) => t.satisfiable).length);
+    // R1 is the myco-gate arm's rule; hcu+shell rows never feed it (rules unchanged).
+    expect(summary.r1).toBeNull();
   }, 120_000);
 
   it("simulated rows never pass --evidence", async () => {

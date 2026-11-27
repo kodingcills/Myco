@@ -82,11 +82,17 @@ export const result = (text: string, extra: Record<string, unknown> = {}) => ({
   subtype: "success",
   is_error: false,
   result: text,
-  usage: { input_tokens: 1000, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+  usage: {
+    input_tokens: 1000,
+    output_tokens: 20,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+  },
   ...extra,
 });
 
-export const stream = (...events: unknown[]) => events.map((e) => `${JSON.stringify(e)}\n`).join("");
+export const stream = (...events: unknown[]) =>
+  events.map((e) => `${JSON.stringify(e)}\n`).join("");
 
 export const okReply = (text: string) => ({ stdout: stream(init(), result(text)) });
 

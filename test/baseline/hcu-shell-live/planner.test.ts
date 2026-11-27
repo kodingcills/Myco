@@ -3,21 +3,29 @@
  * trap binary is first on PATH), no network (fetch is trapped), no VM.
  */
 import { describe, expect, it } from "vitest";
+import { HCU_SHELL_PROMPT } from "../../../src/baseline/hcu-shell/decision.ts";
 import {
   createSubscriptionPlanner,
   HCU_PLANNER_MODEL,
   PLANNER_ARGV,
   PLANNER_FIXED_ENV,
   PlannerHalt,
-  plannerInput,
   PROBE_SCREENSHOT,
+  plannerInput,
   readPlannerCall,
   SubscriptionPlannerFailure,
 } from "../../../src/baseline/hcu-shell-live/planner.ts";
-import { HCU_SHELL_PROMPT } from "../../../src/baseline/hcu-shell/decision.ts";
 import { API_CREDENTIAL_NAMES } from "../../../src/pilot/claude-cli.ts";
 import { ARGV_TEMPLATE, CHILD_ENV_ALLOWLIST, PILOT_MODEL } from "../../../src/pilot/config.ts";
-import { fakeClaude, init, okReply, result, stream, useClaudeTrap, useFetchTrap } from "./helpers.ts";
+import {
+  fakeClaude,
+  init,
+  okReply,
+  result,
+  stream,
+  useClaudeTrap,
+  useFetchTrap,
+} from "./helpers.ts";
 
 useClaudeTrap();
 useFetchTrap();
@@ -30,8 +38,19 @@ const turn = {
   screenshot: PROBE_SCREENSHOT,
   shellHistory: [],
 };
-const planner = (spawn: ReturnType<typeof fakeClaude>["spawn"], env: Record<string, string> = ENV) =>
-  createSubscriptionPlanner({ spawn, command: "claude", env, cwd: "/tmp", price, callTimeoutMs: 2_000, killGraceMs: 50 });
+const planner = (
+  spawn: ReturnType<typeof fakeClaude>["spawn"],
+  env: Record<string, string> = ENV,
+) =>
+  createSubscriptionPlanner({
+    spawn,
+    command: "claude",
+    env,
+    cwd: "/tmp",
+    price,
+    callTimeoutMs: 2_000,
+    killGraceMs: 50,
+  });
 
 async function haltOf(stdout: string, stderr = "", code: number | null = 0): Promise<unknown> {
   try {
@@ -99,7 +118,9 @@ describe("no API-key path", () => {
   it("halts when the CLI does not say how it authenticated", async () => {
     const e = await haltOf(stream(result('{"claim":"done"}')));
     expect((e as PlannerHalt).code).toBe("planner-auth-source-unknown");
-    const e2 = await haltOf(stream({ type: "system", subtype: "init", model: HCU_PLANNER_MODEL }, result("x")));
+    const e2 = await haltOf(
+      stream({ type: "system", subtype: "init", model: HCU_PLANNER_MODEL }, result("x")),
+    );
     expect((e2 as PlannerHalt).code).toBe("planner-auth-source-unknown");
   });
   it("halts when the CLI ran another model", async () => {
@@ -117,7 +138,11 @@ describe("auth, credit, billing and quota faults fail closed", () => {
     ["billing_error", "planner-quota"],
     ["rate_limit", "planner-quota"],
   ])("structured error %s halts with %s", async (cls, code) => {
-    const e = await haltOf(stream(init(), { type: "assistant", error: cls, message: {} }, result("")), "", 1);
+    const e = await haltOf(
+      stream(init(), { type: "assistant", error: cls, message: {} }, result("")),
+      "",
+      1,
+    );
     expect(e).toBeInstanceOf(PlannerHalt);
     expect((e as PlannerHalt).code).toBe(code);
   });
@@ -160,7 +185,14 @@ describe("a clean call", () => {
     const r = await planner(fake.spawn).act(turn);
     expect(r.decision).toEqual({ tool: "click", arguments: { x: 5, y: 7 } });
     expect(r.calls).toEqual([
-      { model: HCU_PLANNER_MODEL, usage: { prompt: 1000, completion: 20, cost: price({ inputTokens: 1000, outputTokens: 20 }) } },
+      {
+        model: HCU_PLANNER_MODEL,
+        usage: {
+          prompt: 1000,
+          completion: 20,
+          cost: price({ inputTokens: 1000, outputTokens: 20 }),
+        },
+      },
     ]);
     const sent = JSON.parse(fake.calls[0]?.stdin ?? "{}");
     expect(sent.type).toBe("user");
