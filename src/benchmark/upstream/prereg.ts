@@ -2,7 +2,7 @@
  * Shape check and analysis gate for the confirmatory R1 on the public OSWorld subset (draft
  * pre-registration docs/benchmark/upstream/r1-public-prereg.json), under the lead's
  * 2026-11-27 rulings: 13:55Z harness (#700 comment 7220110528), 14:05Z retarget to the Myco
- * Linux fleet, 14:37Z scope, 15:21Z UTM parity reference and 15:26Z N3 self-check arm (#741).
+ * Linux fleet, 14:37Z scope, 15:21Z UTM parity reference and 15:26Z N3 and 18:11Z self-check arm (#741).
  *
  * `preregProblems` checks the record states what the rulings require: OSWorld's own harness
  * at the pinned commit on the `myco-fleet` provider (adapter, image, image digest field), its
@@ -10,7 +10,7 @@
  * where DONE is intercepted, exactly the three arms on the shared runner, action layer,
  * provider and budget, the upstream evaluate path as grader, the WAA phase-2 entry, a parity
  * section (parity before any live run, the committed sample by hash, the UTM reference as a
- * stated deviation), and the four ruling citations.
+ * stated deviation), the self-check arm and its labelled ablations (18:11Z), and the six ruling citations.
  *
  * `analyzePublicR1` refuses "shown" (the #652 rule) while:
  *  - the record has any shape problem, is not a committed pre-registration (by hash), is not
@@ -37,25 +37,27 @@ export const PARITY_RULE_PHRASE = "Parity must pass before any live run";
 export const PARITY_SAMPLE_PATH = "docs/benchmark/upstream/r1-parity-sample.json";
 export const PARITY_HARNESS_PATH = "src/benchmark/upstream/fleet/osworld_parity.py";
 export const PARITY_REFERENCE_HYPERVISOR = "UTM (QEMU with HVF)";
-/** The lead rulings the record must cite, by time (#700 13:55Z; #741 14:05Z, 14:37Z, 15:21Z, 15:26Z). */
+/** The lead rulings the record must cite, by time (#700 13:55Z; #741 14:05Z, 14:37Z, 15:21Z, 15:26Z, 18:11Z). */
 export const REQUIRED_RULINGS = [
   "2026-11-27T13:55Z",
   "2026-11-27T14:05Z",
   "2026-11-27T14:37Z",
   "2026-11-27T15:21Z",
   "2026-11-27T15:26Z",
+  "2026-11-27T18:11Z",
 ] as const;
 
-/** N3 (lead ruling 15:26Z): the self-check arm is a structural re-check on DONE, not a prompt. */
+/**
+ * The primary self-check arm (lead rulings 15:26Z and 18:11Z): on the first DONE a fixed shell
+ * dump of the saved content through the same controller, handed back on the WAIT turn with a
+ * fixed re-verify message; the model judges. Its only code is the fail-closed one.
+ */
 export const SELF_CHECK_ARM = "self-check";
-export const SELF_CHECK_FORM = "structural-recheck";
-export const SELF_CHECK_RULING = "2026-11-27T15:26Z";
-export const SELF_CHECK_CODES = [
-  "SAVED_FILE_MISSING",
-  "SAVED_FILE_FORMAT_MISMATCH",
-  "NOTHING_SAVED",
-  "RECHECK_UNAVAILABLE",
-] as const;
+export const SELF_CHECK_FORM = "model-reverify-dump";
+export const SELF_CHECK_RULING = "2026-11-27T18:11Z";
+export const SELF_CHECK_CODES = ["DUMP_UNAVAILABLE"] as const;
+/** 18:11Z: the fixed-probe rules and the prompt suffix, as labelled ablations only. */
+export const SELF_CHECK_ABLATIONS = ["self-check-rules", "self-check-prompt-suffix"] as const;
 /** What the self-check must never read; each must be named in `selfCheck.mayNotRead`. */
 export const SELF_CHECK_MAY_NOT_READ = [
   "oracle",
@@ -126,8 +128,8 @@ const obj = (v: unknown): Record<string, unknown> =>
 
 /**
  * Codes for every way the record misses what the rulings require (13:55Z harness, 14:05Z
- * retarget to the fleet, 14:37Z scope, 15:21Z UTM reference, 15:26Z self-check arm: no arm
- * changes the prompt, and arm (c) is the pre-registered structural re-check). `paritySampleSha256` is the hash
+ * retarget to the fleet, 14:37Z scope, 15:21Z UTM reference, 15:26Z and 18:11Z self-check arm: no arm
+ * changes the prompt, and arm (c) is the pre-registered dump and model re-verify, the probe rules and suffix only labelled ablations). `paritySampleSha256` is the hash
  * of the committed parity sample (docs/benchmark/upstream/r1-parity-sample.json).
  */
 export function preregProblems(
@@ -180,16 +182,35 @@ export function preregProblems(
   if (
     selfCheck.form !== SELF_CHECK_FORM ||
     selfCheck.ruling !== SELF_CHECK_RULING ||
-    !/^[0-9a-f]{64}$/.test(String(selfCheck.probeSha256)) ||
+    selfCheck.primary !== true ||
+    !/^[0-9a-f]{64}$/.test(String(selfCheck.dumpSha256)) ||
     canonicalJson(selfCheck.codes) !== canonicalJson(SELF_CHECK_CODES) ||
     typeof selfCheck.budgetParity !== "string" ||
-    typeof selfCheck.onProblem !== "string" ||
+    typeof selfCheck.message !== "string" ||
+    typeof selfCheck.onDone !== "string" ||
+    typeof selfCheck.nothingSaved !== "string" ||
+    !selfCheck.nothingSaved.startsWith("Never a refusal") ||
     !Array.isArray(selfCheck.mayRead) ||
     !SELF_CHECK_MAY_NOT_READ.every((k) => mayNotRead.some((m) => m.includes(k)))
   )
     out.push("SELF_CHECK_NOT_RULED");
   if (prereg.leadRulingPending.some((p) => /^self-check-form\b/.test(p)))
     out.push("STALE_SELF_CHECK_PENDING");
+  // 18:11Z: the fixed-probe rules and the prompt suffix are labelled ablations, never a headline
+  // arm, each with the extra trials it would cost stated.
+  const ablations = Array.isArray(prereg.ablations) ? prereg.ablations.map(obj) : [];
+  if (
+    canonicalJson(ablations.map((a) => a.id)) !== canonicalJson(SELF_CHECK_ABLATIONS) ||
+    ablations.some(
+      (a) =>
+        a.headline !== false ||
+        !String(a.label).startsWith("ABLATION, never the headline baseline") ||
+        typeof a.extraTrials !== "number" ||
+        !(a.extraTrials > 0) ||
+        (R1_ARMS as readonly string[]).includes(String(a.id)),
+    )
+  )
+    out.push("ABLATIONS_NOT_LABELLED");
   const gi = obj(prereg.gateInterception);
   if (
     canonicalJson(gi.request) !== canonicalJson(["taskId", "runId", "claim"]) ||

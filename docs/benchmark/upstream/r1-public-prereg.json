@@ -2,7 +2,7 @@
   "schema": "myco.prereg.r1-public/3",
   "status": "draft",
   "title": "Confirmatory R1 (false-done gate) on the OSWorld LibreOffice subset, OSWorld's own task configs, controller, evaluator and Claude runner on the Myco Linux fleet, graded by OSWorld's own evaluate path",
-  "ruling": "Lead rulings 2026-11-27: 13:55Z (#700 comment 7220110528, approved 14:00Z: each benchmark's own task configs, action server and evaluators, unmodified; Claude via the benchmark's standard computer-use runner; Myco adds only the completion gate before DONE); 14:05Z (#741 comment 7220313158: RETARGET to the Myco Linux fleet with a DesktopEnv provider adapter used by every arm, parity against OSWorld's reference before any live run, measurements; supersedes the environment part of 13:55Z); 14:37Z (#741 comment 7220987945: the accessibility tree and pyautogui/python-xlib in the fleet image and provider; re-measure, also actively driven; keep the parity harness, do not run it); 15:21Z (#741 comment 7221935698: UTM approved as the parity reference hypervisor, a stated deviation; never a Broadcom/VMware account); 15:26Z (#741 comment 7222035806: N3, the self-check arm is the stronger honest baseline, a shell-based re-verification of the end state through the same controller on DONE, a found problem turns DONE into a continue on the same budget; the prompt-suffix variant only as a free secondary ablation).",
+  "ruling": "Lead rulings 2026-11-27: 13:55Z (#700 comment 7220110528, approved 14:00Z: each benchmark's own task configs, action server and evaluators, unmodified; Claude via the benchmark's standard computer-use runner; Myco adds only the completion gate before DONE); 14:05Z (#741 comment 7220313158: RETARGET to the Myco Linux fleet with a DesktopEnv provider adapter used by every arm, parity against OSWorld's reference before any live run, measurements; supersedes the environment part of 13:55Z); 14:37Z (#741 comment 7220987945: the accessibility tree and pyautogui/python-xlib in the fleet image and provider; re-measure, also actively driven; keep the parity harness, do not run it); 15:21Z (#741 comment 7221935698: UTM approved as the parity reference hypervisor, a stated deviation; never a Broadcom/VMware account); 15:26Z (#741 comment 7222035806: N3, the self-check arm is the stronger honest baseline, a shell-based re-verification of the end state through the same controller on DONE, a found problem turns DONE into a continue on the same budget; the prompt-suffix variant only as a free secondary ablation); 18:11Z (#741, relayed in the round-3 builder brief: B1, the primary self-check arm dumps the real saved content with one fixed shell command through the same OSWorld controller on DONE, the WAIT turn hands the dump back with a fixed, oracle-free re-verify message, and the model judges on the same turn, token and time budget; nothing saved is not a refusal; the fixed-probe rules and the prompt-suffix variant only as labelled ablations; B2, the hook gets a narrow controller handle with no path to the environment, the evaluator, the task configuration or the cache directory).",
   "rulings": [
     {
       "at": "2026-11-27T13:55Z",
@@ -28,6 +28,11 @@
       "at": "2026-11-27T15:26Z",
       "ref": "https://github.com/kodingcills/Myco/pull/741#issuecomment-7222035806",
       "summary": "N3 (settles self-check-form): the primary self-check arm is the stronger honest baseline. On DONE it runs its own shell-based re-verification of the end state through the same OSWorld controller and action layer, with no gate, oracle or Myco verdict; a found problem turns DONE into a continue (WAIT plus a fixed, oracle-free message) on the same turn, token and time budget. Pre-registered with what it may and may not read; never the oracle, gold, evaluator output or ground truth. The prompt-suffix variant only as a secondary ablation that costs nothing extra."
+    },
+    {
+      "at": "2026-11-27T18:11Z",
+      "ref": "https://github.com/kodingcills/Myco/pull/741 (lead ruling relayed in the round-3 builder brief; not posted as a separate comment)",
+      "summary": "B1: the primary self-check arm. On DONE a fixed shell command run through the same OSWorld controller (run_bash_script) dumps the real saved content (cells or text of the files changed during the episode, or 'not saved'); the WAIT turn hands the dump back with a fixed, oracle-free 're-verify your work against the task using this dump' message; the model judges on the same turn, token and time budget as the gate arm, probe calls counted against it (retries stated). Where OSWorld's postconfig saves, nothing saved is not a refusal; ef9d12bd and the config-graded tasks must be able to pass a correct DONE. The fixed-probe rules and the prompt-suffix variant only as labelled ablations, extra trials stated. Never the oracle, fixtures, gold, evaluator code or output, result.txt or any ground truth. B2: no closure over env in the runner patch; a narrow controller handle; tripwires on the environment; a guest-side check that does not rely on the probe hash; W2c2 and W2b2 as regression tests."
     }
   ],
   "taskSet": "osworld-office-v1",
@@ -53,7 +58,7 @@
     "commit": "0ad41bee56565efe7bb3c3a5ebc67590a1b8276f",
     "taskLoop": "lib_run_single.py#run_single_example",
     "agent": "mm_agents/anthropic/main.py#AnthropicAgent",
-    "modifications": "None except the DONE gate hook (src/gate-hooks/osworld/myco_done_gate.py), wired by the documented patch surface in docs/benchmark/upstream/gate-hook.md. Arms no-gate and self-check run the same wrapper with the gate bypassed by configuration; arm self-check alone keeps the controller getter the patch passes (controller=lambda: env.controller) and uses only its run_bash_script for the pre-registered re-check."
+    "modifications": "None except the DONE gate hook (src/gate-hooks/osworld/myco_done_gate.py), wired by the documented patch surface in docs/benchmark/upstream/gate-hook.md. Arms no-gate and self-check run the same wrapper with the gate bypassed by configuration. The patch passes every arm the same narrow handle, ControllerHandle(env.provider.get_ip_address, env.path_to_vm, PythonController), built without closing over env; arm self-check alone keeps it and uses only its run_bash_script for the pre-registered dump (lead ruling 18:11Z)."
   },
   "model": "PENDING: the exact Claude model id passed as --model; it must be one the pinned runner accepts (mm_agents/anthropic/utils.py)",
   "actionLayer": {
@@ -63,7 +68,7 @@
     "executor": "desktop_env/controllers/python.py#PythonController",
     "path": "AnthropicAgent.predict -> lib_run_single.run_single_example -> DesktopEnv.step -> PythonController.execute_python_command / execute_action; observations from DesktopEnv._get_obs",
     "identicalAcrossArms": true,
-    "assertion": "Identical across arms: the same runner, environment, provider (myco-fleet, one image digest), controller, action space, observation type and budget in all three arms. The hook takes the agent, never the environment, and returns the agent's actions unchanged except a refused DONE, which becomes upstream's own WAIT special action (a no-op in the guest), in the gate arm on a non-accepting gate verdict and in the self-check arm on a found problem. Only the self-check arm gets the controller (a getter), and it calls only run_bash_script for its read-only re-check, never an action. Tested with fakes in test/benchmark/osworld-gate-hook.test.ts."
+    "assertion": "Identical across arms: the same runner, environment, provider (myco-fleet, one image digest), controller, action space, observation type and budget in all three arms. The hook takes the agent, never the environment, and returns the agent's actions unchanged except a refused DONE, which becomes upstream's own WAIT special action (a no-op in the guest), in the gate arm on a non-accepting gate verdict and in the self-check arm on the episode's first DONE (its re-verify turn). Only the self-check arm gets a controller handle (ControllerHandle: run_bash_script only, built from the provider's address getter, the image reference and upstream's PythonController class, so it reaches the same desktop_env/server as env.controller), and it calls run_bash_script once per episode for its read-only dump, never an action. Tested with fakes in test/benchmark/osworld-gate-hook.test.ts."
   },
   "gateInterception": {
     "api": "myco.gate/v1",
@@ -96,7 +101,7 @@
     },
     {
       "id": "self-check",
-      "description": "(c) The stronger honest baseline (lead ruling 15:26Z, N3): the same runner, prompt and budget; on DONE the arm runs its own shell-based re-verification of the saved end state through the same OSWorld controller, with no gate, no oracle and no Myco verdict. A found problem turns DONE into a continue (upstream's WAIT plus a fixed, oracle-free re-check result message), exactly mirroring the gate arm's structural second chance.",
+      "description": "(c) The primary self-check arm, the stronger honest baseline (lead rulings 15:26Z and 18:11Z): the same runner, prompt and budget, no gate, no oracle and no Myco verdict. On the episode's first DONE one fixed shell command, run through the same OSWorld controller, dumps the real saved content; that DONE becomes upstream's WAIT and the next turn hands the dump back with a fixed, oracle-free re-verify message. The model judges: its next DONE goes through. This mirrors the gate arm's structural second chance with the model's own judgement in place of the oracle's.",
       "agentRunner": "shared",
       "actionLayer": "shared",
       "budget": "shared",
@@ -104,14 +109,48 @@
       "gate": false,
       "promptSuffix": null,
       "selfCheck": {
-        "form": "structural-recheck",
-        "ruling": "2026-11-27T15:26Z",
-        "probe": "src/gate-hooks/osworld/myco_done_gate.py#SELF_CHECK_PROBE",
-        "probeSha256": "e12a3208fb5c40cd691e6c6b58be4a70abbf80365433cad7c0146d20193e6dcb",
-        "transport": "desktop_env/controllers/python.py#PythonController.run_bash_script (the controller's /run_bash_script endpoint, run by OSWorld's own desktop_env/server in the fleet desktop as the guest user); the controller is the one every arm's actions go through, reached through a getter the runner patch passes (controller=lambda: env.controller); no other controller method and no environment attribute is used",
-        "when": "On every DONE the agent emits, exactly where the gate arm calls the gate.",
-        "inputs": "Two only: the whole seconds since the episode started (measured by the hook from the agent's reset, so no guest clock is trusted), and up to 10 file names with a document extension that the task instruction (the text the agent was given) mentions.",
-        "rules": [
+        "form": "model-reverify-dump",
+        "ruling": "2026-11-27T18:11Z",
+        "primary": true,
+        "dump": "src/gate-hooks/osworld/myco_done_gate.py#SELF_CHECK_DUMP",
+        "dumpSha256": "e9df2a76bf967c56eecc7a6374e926ef20cb280eebd63dcaf62dca156f7d327e",
+        "transport": "desktop_env/controllers/python.py#PythonController.run_bash_script (the /run_bash_script endpoint of OSWorld's own desktop_env/server in the fleet desktop, run as the guest user), reached only through src/gate-hooks/osworld/myco_done_gate.py#ControllerHandle. The runner patch builds the handle from the provider's address getter (env.provider.get_ip_address), the image reference (env.path_to_vm) and upstream's PythonController class; each call builds that controller from the address the provider reports, as DesktopEnv._start_emulator builds env.controller, so it reaches the same server every arm's actions go through. The handle exposes run_bash_script only; nothing in it closes over env.",
+        "when": "On the episode's first DONE, exactly where the gate arm calls the gate. Later DONEs are not checked.",
+        "inputs": "One only: the whole seconds since the episode started (measured by the hook from the agent's reset, so no guest clock is trusted).",
+        "dumpContent": "The document files (xlsx, xls, csv, ods, docx, doc, odt, rtf, txt, pptx, ppt, odp, pdf) under the guest user's home directory modified during the episode (at most 4 levels deep; never a hidden directory, a hidden file, a link or another mount; at most 20 files), each with its path, size and save time, then its content: spreadsheet cells by reference with their formulas, document paragraphs, slide text, the leading text of csv, txt and rtf; binary formats (xls, doc, ppt, pdf) are named, not dumped. At most 2,000 characters per file and 6,000 in all. When no document changed: 'NOT SAVED: no document file under the home directory was saved during this episode.'",
+        "message": "Self-check: before your DONE is accepted, re-verify your work against the task using this dump of the saved state. It lists the document files under your home directory that were saved during this episode, with their cell values or text, or says that none were saved. Check every requirement of the task against it and against the screen. If anything is wrong or missing, fix it. When you are satisfied the task is complete, finish again. This re-check happens once per task.",
+        "onDone": "The first DONE becomes upstream's own WAIT special action (a no-op in the guest); the next turn starts with one user message: the fixed message, then the dump between <dump> markers (or '(the dump is unavailable: DUMP_UNAVAILABLE)'). Actions after that DONE in the same batch are dropped. The model judges: its next DONE goes through unchanged. The hook decides nothing from the dump's content.",
+        "nothingSaved": "Never a refusal. On 107 of the 117 tasks OSWorld's own postconfig saves the open document after the episode, and ef9d12bd and the tasks graded from ~/.config/libreoffice have no document at all: a correct DONE passes after the one re-verify turn (test/benchmark/osworld-gate-hook.test.ts, the config-graded case, in the local and the real upstream loop).",
+        "failClosed": "If the controller raises or returns nothing, the command exits non-zero, or its output lacks the final END record, the re-verify turn still happens with the dump marked unavailable (DUMP_UNAVAILABLE): a first DONE never passes unchecked.",
+        "codes": ["DUMP_UNAVAILABLE"],
+        "budgetParity": "The same --max_steps, token, thinking, trajectory and wall-clock budget as the other arms. Steps: the re-verify turn is the turn of the first DONE, which becomes WAIT and uses that step, as a refused DONE uses its step in the gate arm; the model's next turn is an ordinary turn out of the same --max_steps. The self-check takes it once per episode; the gate arm takes one on each refusal. Model tokens: the dump makes no model call; the message and the dump (at most 6,000 characters) enter the next turn's input, as the gate's codes-only feedback does, under the same --max_tokens and --max_trajectory_length. Probe calls: exactly one run_bash_script call per episode, on the first DONE, none on later DONEs or other turns (tested). Time: the call runs inside the turn of the DONE and counts against the shared wall-clock cap. Its script timeout is 20 s and upstream's controller adds a fixed 100 s HTTP margin, so one attempt is allowed 120 s, the gate client's subprocess timeout for its one call per checked DONE. Upstream's run_bash_script retries a non-200 reply or a connection error (retry_times 3, retry_interval 5 s, a pause after every failed attempt): an unreachable desktop can hold the call for at most 375 s (3 x (120 + 5)) before it fails closed to DUMP_UNAVAILABLE; a read timeout returns at once without a retry. That extra time can fall only on the self-check arm, and only when the desktop is unreachable.",
+        "mayRead": [
+          "the guest user's home directory in the fleet desktop under test, through the handle's run_bash_script, excluding hidden directories, hidden files, links and other mounts: file names, sizes, modification times and the content of document files modified during the episode",
+          "the hook's own elapsed-time measurement"
+        ],
+        "mayNotRead": [
+          "the gate or any Myco oracle or verdict",
+          "OSWorld's task configuration (the example JSON: its evaluator, expected values, setup or postconfig)",
+          "gold files and expected assets (cloud_file, the DesktopEnv cache directory)",
+          "fixtures and any other ground truth",
+          "upstream evaluator code (desktop_env evaluators, metrics, getters, DesktopEnv.evaluate) or its output (result.txt, scores)",
+          "the environment object (DesktopEnv) or anything reached through it, the provider beyond its address getter, the setup controller, or any controller method other than run_bash_script"
+        ],
+        "enforcedBy": "test/benchmark/independence.test.ts (static: the hook imports only json, re, shlex, subprocess and time; its code names no environment, evaluator, task configuration, gold, oracle or score file and no introspection route (__closure__, cell_contents, __globals__, __self__, __dict__, gc, sys, inspect, ctypes); it calls only run_bash_script on its handle; the guest command names no ground truth and starts from $HOME) and test/benchmark/osworld-gate-hook.test.ts (runtime: the handle the patch builds, by evaluating the patch's own expression, reaches no environment, task configuration or cache directory and exposes only run_bash_script; a host audit hook; attribute tripwires on the environment, the provider and the controller; an inotify tripwire on every ground-truth directory and the homes' parent while the guest command runs, independent of its text or hash; the verifier's W2c2, W2b2 and W3 as regression cases)"
+      }
+    }
+  ],
+  "ablations": [
+    {
+      "id": "self-check-rules",
+      "label": "ABLATION, never the headline baseline (lead ruling 18:11Z)",
+      "headline": false,
+      "description": "The round-2 fixed probe: on every DONE one fixed bash script through the same ControllerHandle refuses the DONE (WAIT plus a fixed codes-only message) on a rule below; the hook, not the model, decides.",
+      "implemented": "arm self-check-rules in src/gate-hooks/osworld/myco_done_gate.py (SELF_CHECK_PROBE; one run_bash_script call per DONE, the same 120 s allowance)",
+      "probe": "src/gate-hooks/osworld/myco_done_gate.py#SELF_CHECK_PROBE",
+      "probeSha256": "e12a3208fb5c40cd691e6c6b58be4a70abbf80365433cad7c0146d20193e6dcb",
+      "inputs": "The whole seconds since the episode started, and up to 10 file names with a document extension that the task instruction mentions.",
+      "rules": [
           "SAVED_FILE_MISSING: a file named in the instruction is not found under the guest user's home directory (at most 4 levels deep, never inside a hidden directory)",
           "SAVED_FILE_FORMAT_MISMATCH: a named file found, or a document saved during the episode, whose bytes do not match its extension (.xlsx/.docx/.pptx must be an Office Open XML container, .ods/.odt/.odp an OpenDocument container, .pdf must start with %PDF-; other document extensions must be readable)",
           "NOTHING_SAVED: no document (xlsx, xls, csv, ods, docx, doc, odt, rtf, txt, pptx, ppt, odp, pdf) under the home directory was modified during the episode",
@@ -123,27 +162,21 @@
           "NOTHING_SAVED",
           "RECHECK_UNAVAILABLE"
         ],
-        "onProblem": "DONE becomes upstream's own WAIT special action (a no-op in the guest); the next turn starts with one fixed user message: 'Self-check: your DONE was not accepted. A re-check of the saved files in your home directory found a problem (codes <codes>). Continue working; when you believe the task is done, finish again.' Actions after the refused DONE in the same batch are dropped. A DONE with no problem passes through unchanged.",
-        "budgetParity": "The same --max_steps, token, thinking, trajectory and wall-clock budget as the other arms. The re-verification is counted exactly as the gate arm's check is counted: it runs inside the turn of the DONE it checks, a refused DONE uses that turn (one step), the probe itself costs no step and no model tokens, the continue message's tokens count in the next turn as the gate's feedback does, and the probe's time counts against the shared wall-clock cap. One check's time allowance equals the gate's: the probe's 20 s script timeout plus the controller's fixed 100 s HTTP margin is 120 s, the gate client's timeout.",
-        "mayRead": [
-          "the task instruction text as given to the agent (file names only)",
-          "the guest user's home directory in the fleet desktop under test, through the controller's run_bash_script, excluding hidden directories: file names, modification times and the leading bytes and container listing of document files",
-          "the hook's own elapsed-time measurement"
-        ],
-        "mayNotRead": [
-          "the gate or any Myco oracle or verdict",
-          "OSWorld's task configuration (the example JSON: its evaluator, expected values, setup or postconfig)",
-          "gold files and expected assets (cloud_file, the DesktopEnv cache directory)",
-          "fixtures and any other ground truth",
-          "upstream evaluator code (desktop_env evaluators, metrics, getters, DesktopEnv.evaluate) or its output (result.txt, scores)",
-          "the environment object, the setup controller or any controller method other than run_bash_script"
-        ],
-        "enforcedBy": "test/benchmark/independence.test.ts (static: imports and names in the hook) and test/benchmark/osworld-gate-hook.test.ts (runtime: a host audit hook records any file open, listing, process launch or connect during a self-check turn, tripwires on the agent's env and every controller attribute but run_bash_script, the sent script must equal the pinned probe, the probe reads only $HOME)",
-        "ablation": "None. The earlier prompt-suffix variant (system_prompt_suffix) would need its own arm, 117 more trials at n = 117, so under the 15:26Z ruling ('only if it costs nothing extra') it is dropped, not kept as a secondary ablation."
-      }
+      "knownBias": "NOTHING_SAVED refuses a correct DONE wherever OSWorld's own postconfig saves the document (107 of 117 tasks), and on ef9d12bd and the tasks graded from ~/.config/libreoffice no DONE can pass (tested). This is why it is not the headline baseline.",
+      "extraTrials": 117,
+      "cost": "117 extra trials (one per task at n = 117) if run; not run unless separately approved. Its rows are never part of the pre-registered analysis: analyzePublicR1 refuses rows from any arm but the three."
+    },
+    {
+      "id": "self-check-prompt-suffix",
+      "label": "ABLATION, never the headline baseline (lead ruling 18:11Z)",
+      "headline": false,
+      "description": "The round-1 prompt-paragraph variant: one paragraph appended through AnthropicAgent's system_prompt_suffix asking the model to verify its saved work before finishing; no structural re-check, no dump.",
+      "implemented": "No. Removed in round 2 (last at commit e28aef98); running it needs that arm restored and re-tested first.",
+      "extraTrials": 117,
+      "cost": "117 extra trials (one per task at n = 117) if run; not run unless separately approved. Its rows are never part of the pre-registered analysis."
     }
   ],
-  "budget": "PENDING: one budget for all three arms: --max_steps (the runner default is 15; the Claude example in OSWorld's SETUP_GUIDELINE.md uses 50), --max_tokens, --thinking, --max_trajectory_length, and a wall-clock cap. A refused DONE uses its turn in the gate and self-check arms alike; the gate call and the self-check probe run inside that turn, cost no step or model tokens, and count against the wall-clock cap (arms[2].selfCheck.budgetParity)",
+  "budget": "PENDING: one budget for all three arms: --max_steps (the runner default is 15; the Claude example in OSWorld's SETUP_GUIDELINE.md uses 50), --max_tokens, --thinking, --max_trajectory_length, and a wall-clock cap. A refused DONE uses its turn in the gate and self-check arms alike (the self-check's re-verify turn once per episode); the gate call and the self-check dump run inside that turn, cost no step and no model call, and count against the wall-clock cap (arms[2].selfCheck.budgetParity)",
   "subsetRule": "Every task id listed in OSWorld's evaluation_examples/test_all.json at the pinned commit under libreoffice_calc, libreoffice_writer and libreoffice_impress, run in OSWorld's own DesktopEnv on the myco-fleet provider. No Myco placement filter; the apps a task needs and the getters its evaluator uses are not exclusions. No task is added or dropped for difficulty, outcome or evaluator type.",
   "subsetSize": 117,
   "exclusions": [],

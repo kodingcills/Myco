@@ -4,42 +4,57 @@ Lead ruling 2026-11-27 ~13:55Z: the public R1 runs in OSWorld's OWN environment,
 server (the in-VM controller) and evaluator, with Claude via OSWorld's standard runner
 (``scripts/python/run_multienv_claude.py`` at the pinned commit). Myco adds only the
 completion gate before "done" is accepted. This module is that addition, plus the
-self-check baseline arm the lead ruled at 15:26Z (#741 comment 7222035806, N3).
+self-check baseline arm (lead rulings 15:26Z and 18:11Z, #741).
 
 How it hooks in: ``DoneGate`` wraps the runner's agent object (``AnthropicAgent``). The
 runner's loop (``lib_run_single.run_single_example``) calls ``agent.predict(instruction,
 obs)`` and passes each returned action to ``env.step``. ``DoneGate.predict`` returns the
-inner agent's actions unchanged, object for object, except when an action is upstream's
-``DONE`` special action in arm ``gate-before-done`` or ``self-check``:
+inner agent's actions unchanged, object for object, except upstream's ``DONE`` special
+action in the arms that check it:
 
 * arm ``gate-before-done`` calls ``myco.gate/v1`` (tool ``myco_gate_check``) with
   ``taskId``, ``runId`` and ``claim`` only; on ``verified`` with ``accepted: true`` the DONE
   goes through unchanged; anything else (refuted, uncertain, malformed reply, gate
   unreachable: fail closed) is a refused DONE;
-* arm ``self-check`` (the stronger honest baseline, 15:26Z) has no gate, no oracle and no
-  Myco verdict. It runs one fixed, task-agnostic shell probe of the saved end state
-  (``SELF_CHECK_PROBE``) through upstream's own controller (``PythonController.
-  run_bash_script``, the controller every arm's actions go through). The probe reads only
-  the user's home directory in the guest and the task instruction the agent itself was
-  given. If the probe finds a problem, or cannot run (fail closed, as the gate), the DONE is
-  refused exactly as the gate arm refuses one;
+* arm ``self-check`` (the primary self-check arm, lead ruling 18:11Z) has no gate, no oracle
+  and no Myco verdict, and the hook judges nothing. On the episode's first DONE it runs one
+  fixed shell command (``SELF_CHECK_DUMP``) through the controller handle the runner patch
+  passes (``ControllerHandle``: upstream's ``PythonController.run_bash_script``, the
+  ``/run_bash_script`` endpoint of the desktop's own server). The command dumps the real
+  saved content: the cells or text of the document files under the guest home that changed
+  during the episode, or "not saved". That DONE becomes upstream's ``WAIT`` and the next
+  turn hands the dump back with one fixed, oracle-free "re-verify your work against the task
+  using this dump" message. The MODEL judges: its next DONE goes through unchanged. "Nothing
+  saved" is never a refusal (OSWorld's own postconfig saves the open document after the
+  episode on most tasks, and some tasks are graded from the application's settings, not a
+  document);
+* arm ``self-check-rules`` is a labelled ABLATION, never the headline baseline: the round-2
+  fixed probe (``SELF_CHECK_PROBE``) whose rules refuse DONE on a missing named file, a
+  container that does not match its extension, or nothing saved, on every DONE;
 * a refused DONE is replaced by upstream's own ``WAIT`` special action, which the
   controller treats as a no-op in the guest, and the next ``predict`` first appends one
-  user message to the agent with the verdict and reason CODES only (never the gate's prose,
-  never corrections; for the self-check, a fixed message with the probe's codes). Actions
-  after a refused DONE in the same batch are dropped (upstream ends the episode at DONE, so
-  none would have run).
+  user message to the agent: for the gate, the verdict and reason CODES only (never the
+  gate's prose, never corrections); for the self-check, the fixed message and the dump; for
+  the ablation, a fixed message with the probe's codes. Actions after a refused DONE in the
+  same batch are dropped (upstream ends the episode at DONE, so none would have run).
 
 Budget parity: the step budget is the runner's ``--max_steps`` in every arm. A refused DONE
-uses the turn it was emitted in, in both arms, and the check itself (gate call or probe)
-runs inside that turn: it costs no step and no model tokens, and its time counts against
-the shared wall-clock cap. One check is allowed ``CHECK_TIMEOUT_S`` in both arms: the gate
-client's subprocess timeout, and for the probe its script timeout plus the controller's own
-fixed HTTP margin. Arm ``no-gate`` checks nothing.
+uses the turn it was emitted in, and the check (gate call, dump or probe) runs inside that
+turn: it costs no step and no model tokens, and its time counts against the shared
+wall-clock cap. The gate client makes one call per checked DONE, with ``CHECK_TIMEOUT_S``.
+The self-check makes exactly one ``run_bash_script`` call per episode (on the first DONE,
+none on later DONEs or other turns); its script timeout plus the controller's fixed HTTP
+margin is ``CHECK_TIMEOUT_S``. Upstream's controller retries a non-200 reply or a
+connection error (``retry_times`` 3, ``retry_interval`` 5 s, a pause after every failed
+attempt), so an unreachable desktop can hold the call for at most 3 x (120 + 5) = 375 s
+before it fails closed; a read timeout returns at once. Arm ``no-gate`` checks nothing.
 
-The hook never sees the environment or the evaluator. Arm ``gate-before-done`` takes no
-controller; arm ``self-check`` takes a zero-argument callable returning the environment's
-controller and calls only its ``run_bash_script``. Arms are chosen by configuration only.
+Integrity (lead ruling 18:11Z, B2): the hook never gets the environment. The runner patch
+passes ``ControllerHandle``, built from the provider's address getter (``env.provider.
+get_ip_address``), the image reference and upstream's ``PythonController`` class; nothing
+in it closes over ``env``, so it has no path to DesktopEnv, the evaluator, the task
+configuration or the cache directory. It exposes exactly one call, ``run_bash_script``.
+Arms ``no-gate`` and ``gate-before-done`` take no handle. Arms are chosen by configuration.
 
 Independence: this file imports only the Python standard library. It never imports
 ``desktop_env`` (the evaluator, getters, metrics), never reads evaluator output, gold
@@ -60,29 +75,244 @@ import time
 
 GATE_API_VERSION = "myco.gate/v1"
 GATE_TOOL = "myco_gate_check"
+# The three pre-registered arms.
 ARMS = ("no-gate", "gate-before-done", "self-check")
+# Labelled ablations: never a headline arm, never in the pre-registered analysis.
+ABLATION_ARMS = ("self-check-rules",)
+RUNNER_ARMS = ARMS + ABLATION_ARMS
+SELF_CHECK_ARMS = ("self-check", "self-check-rules")
 CLAIM_LIMIT = 4000
 
-# One DONE check's time allowance, the same in both checking arms.
+# One DONE check's time allowance, the same in every checking arm.
 CHECK_TIMEOUT_S = 120
 # PythonController.run_bash_script adds this fixed margin to the script timeout for its HTTP
-# request (desktop_env/controllers/python.py at the pin), so a probe's allowance is
+# request (desktop_env/controllers/python.py at the pin), so a self-check call's allowance is
 # PROBE_SCRIPT_TIMEOUT_S + CONTROLLER_HTTP_MARGIN_S = CHECK_TIMEOUT_S.
 CONTROLLER_HTTP_MARGIN_S = 100
 PROBE_SCRIPT_TIMEOUT_S = CHECK_TIMEOUT_S - CONTROLLER_HTTP_MARGIN_S
+# Upstream's controller retry behaviour at the pin (PythonController.__init__).
+CONTROLLER_RETRY_TIMES = 3
+CONTROLLER_RETRY_INTERVAL_S = 5
+# DesktopEnv's default controller port when a provider reports no ports.
+DEFAULT_SERVER_PORT = 5000
 
-# Document extensions the self-check recognises in the instruction and in the home directory.
+# The most dump text one re-verify message carries (the dump itself caps at the same size).
+DUMP_LIMIT = 6000
+
+# The primary self-check (18:11Z): a fixed command, the same for every task. Its only input is
+# the whole seconds since the episode started. It reads the guest user's home directory (never
+# a hidden directory, at most 4 levels deep, no links, no other mount) and prints the content
+# of every document file modified during the episode, or that nothing was saved, then END.
+# Its SHA-256 is pinned in the pre-registration (arms[2].selfCheck.dumpSha256).
+SELF_CHECK_DUMP = r"""#!/bin/bash
+elapsed=__ELAPSED__
+exec python3 -I - "${HOME:?}" "$elapsed" <<'DUMP'
+import os, sys, time, zipfile
+import xml.etree.ElementTree as ET
+
+home, elapsed = sys.argv[1], int(sys.argv[2])
+start = time.time() - elapsed
+DOCS = (".xlsx", ".xls", ".csv", ".ods", ".docx", ".doc", ".odt", ".rtf", ".txt",
+        ".pptx", ".ppt", ".odp", ".pdf")
+PER_FILE, TOTAL, MAX_FILES = 2000, 6000, 20
+
+
+def changed():
+    found = []
+    for d, dirs, names in os.walk(home):
+        depth = d[len(home):].count(os.sep)
+        dirs[:] = sorted(x for x in dirs if not x.startswith(".")
+                         and not os.path.islink(os.path.join(d, x))
+                         and not os.path.ismount(os.path.join(d, x))) if depth < 3 else []
+        for n in sorted(names):
+            p = os.path.join(d, n)
+            if n.startswith(".") or not n.lower().endswith(DOCS) or os.path.islink(p):
+                continue
+            try:
+                if os.path.isfile(p) and os.path.getmtime(p) >= start:
+                    found.append(p)
+            except OSError:
+                pass
+    return found
+
+
+def local(tag):
+    return tag.rsplit("}", 1)[-1]
+
+
+def attr(el, name):
+    for k, v in el.attrib.items():
+        if local(k) == name:
+            return v
+    return None
+
+
+def text(el):
+    return "".join(el.itertext())
+
+
+def col(n):
+    s = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def xlsx(z, members):
+    shared = []
+    if "xl/sharedStrings.xml" in members:
+        for si in ET.fromstring(z.read("xl/sharedStrings.xml")):
+            shared.append("".join(t.text or "" for t in si.iter() if local(t.tag) == "t"))
+    rels = {}
+    if "xl/_rels/workbook.xml.rels" in members:
+        for r in ET.fromstring(z.read("xl/_rels/workbook.xml.rels")):
+            rels[r.get("Id")] = r.get("Target") or ""
+    out = []
+    for s in ET.fromstring(z.read("xl/workbook.xml")).iter():
+        if local(s.tag) != "sheet":
+            continue
+        target = rels.get(attr(s, "id"), "")
+        part = target.lstrip(os.sep) if target.startswith(os.sep) else "xl" + os.sep + target
+        out.append("[sheet %s]" % s.get("name"))
+        if part not in members:
+            continue
+        for c in ET.fromstring(z.read(part)).iter():
+            if local(c.tag) != "c":
+                continue
+            v = f = None
+            for ch in c:
+                if local(ch.tag) == "v":
+                    v = ch.text
+                elif local(ch.tag) == "f":
+                    f = ch.text
+                elif local(ch.tag) == "is":
+                    v = text(ch)
+            if c.get("t") == "s" and v is not None and v.isdigit() and int(v) < len(shared):
+                v = shared[int(v)]
+            if v is None and f is None:
+                continue
+            out.append("%s=%s%s" % (c.get("r"), v if v is not None else "",
+                                    " (formula =%s)" % f if f else ""))
+    return out
+
+
+def ods(z):
+    out = []
+    for t in ET.fromstring(z.read("content.xml")).iter():
+        if local(t.tag) != "table":
+            continue
+        out.append("[sheet %s]" % attr(t, "name"))
+        r = 0
+        for row in t.iter():
+            if local(row.tag) != "table-row":
+                continue
+            r += 1
+            c = 0
+            for cell in row:
+                if local(cell.tag) not in ("table-cell", "covered-table-cell"):
+                    continue
+                c += 1
+                value = None
+                for k in ("value", "date-value", "time-value", "boolean-value", "string-value"):
+                    value = value if value is not None else attr(cell, k)
+                shown = text(cell)
+                f = attr(cell, "formula")
+                if value is not None or shown or f:
+                    out.append("%s%d=%s%s" % (col(c), r, shown if shown else value,
+                                              " (formula %s)" % f if f else ""))
+                c += int(attr(cell, "number-columns-repeated") or 1) - 1
+            r += int(attr(row, "number-rows-repeated") or 1) - 1
+    return out
+
+
+def paragraphs(root, kinds=("p", "h")):
+    return [text(p) for p in root.iter() if local(p.tag) in kinds and text(p).strip()]
+
+
+def pptx(z, members):
+    out = []
+    slides = sorted((m for m in members if m.startswith("ppt/slides/slide") and m.endswith(".xml")),
+                    key=lambda m: int("".join(ch for ch in m if ch.isdigit()) or 0))
+    for i, m in enumerate(slides, 1):
+        out.append("[slide %d]" % i)
+        out.extend(paragraphs(ET.fromstring(z.read(m)), ("p",)))
+    return out
+
+
+def odp(z):
+    out = []
+    for page in ET.fromstring(z.read("content.xml")).iter():
+        if local(page.tag) == "page":
+            out.append("[slide %s]" % attr(page, "name"))
+            out.extend(paragraphs(page))
+    return out
+
+
+def content(p):
+    ext = os.path.splitext(p)[1].lower()
+    if ext in (".csv", ".txt", ".rtf"):
+        with open(p, "rb") as fh:
+            return fh.read(PER_FILE + 1).decode("utf-8", "replace").splitlines()
+    if ext in (".xls", ".doc", ".ppt", ".pdf"):
+        return ["(binary %s file, content not dumped)" % ext]
+    with zipfile.ZipFile(p) as z:
+        members = set(z.namelist())
+        if ext == ".xlsx":
+            return xlsx(z, members)
+        if ext == ".docx":
+            return paragraphs(ET.fromstring(z.read("word/document.xml")), ("p",))
+        if ext == ".pptx":
+            return pptx(z, members)
+        if ext == ".ods":
+            return ods(z)
+        if ext == ".odp":
+            return odp(z)
+        return paragraphs(ET.fromstring(z.read("content.xml")))
+
+
+files = changed()
+budget = TOTAL
+if not files:
+    print("NOT SAVED: no document file under the home directory was saved during this episode.")
+for p in files[:MAX_FILES]:
+    rel = "~" + p[len(home):]
+    print("=== %s (%d bytes, saved %d s after the episode started) ==="
+          % (rel, os.path.getsize(p), max(0, int(os.path.getmtime(p) - start))))
+    try:
+        body = "\n".join(content(p)) or "(no cells or text)"
+    except Exception as exc:
+        body = "(could not read: %s)" % type(exc).__name__
+    if len(body) > min(PER_FILE, budget):
+        body = body[:min(PER_FILE, budget)] + "\n[truncated]"
+    budget = max(0, budget - len(body))
+    print(body)
+if len(files) > MAX_FILES:
+    print("[%d more files not shown]" % (len(files) - MAX_FILES))
+print("END")
+DUMP
+"""
+
+# The fixed, oracle-free re-verify message (18:11Z). The dump follows it.
+SELF_CHECK_REVERIFY = (
+    "Self-check: before your DONE is accepted, re-verify your work against the task using "
+    "this dump of the saved state. It lists the document files under your home directory "
+    "that were saved during this episode, with their cell values or text, or says that none "
+    "were saved. Check every requirement of the task against it and against the screen. If "
+    "anything is wrong or missing, fix it. When you are satisfied the task is complete, "
+    "finish again. This re-check happens once per task."
+)
+DUMP_UNAVAILABLE = "DUMP_UNAVAILABLE"
+
+# ABLATION only (self-check-rules): the round-2 fixed probe. Only the two lines it is given
+# differ: the seconds since the episode started and the file names the instruction mentions.
+# Its SHA-256 is pinned in the pre-registration (ablations[0].probeSha256).
 DOC_EXTENSIONS = ("xlsx", "xls", "csv", "ods", "docx", "doc", "odt", "rtf", "txt",
                   "pptx", "ppt", "odp", "pdf")
 NAMED_FILE = re.compile(
     r"(?<![\w.\-])([\w\-.]+\.(?:%s))(?!\w)" % "|".join(DOC_EXTENSIONS), re.IGNORECASE)
 NAMED_FILE_LIMIT = 10
 
-# The self-check probe: a fixed bash script, the same for every task. Only the two lines it
-# is given differ: the seconds since the episode started and the file names the instruction
-# mentions. It reads the user's home directory in the guest (never a hidden directory), and
-# prints one record per finding; ``assess_probe`` turns the records into codes. Its SHA-256
-# is pinned in the pre-registration (arms[2].selfCheck.probeSha256).
 SELF_CHECK_PROBE = r"""#!/bin/bash
 elapsed=__ELAPSED__
 names=(__NAMES__)
@@ -112,13 +342,50 @@ printf 'SAVED\t%d\n' "$saved"
 printf 'END\n'
 """
 
-# The self-check's codes, in the order they are reported.
+# The ablation's codes, in the order they are reported.
 SELF_CHECK_CODES = ("SAVED_FILE_MISSING", "SAVED_FILE_FORMAT_MISMATCH", "NOTHING_SAVED",
                     "RECHECK_UNAVAILABLE")
 
 
 class GateError(Exception):
     """The gate could not be asked or did not answer well-formed. Never an acceptance."""
+
+
+class ControllerHandle:
+    """The self-check's only route to the desktop (lead ruling 18:11Z, B2).
+
+    Built by the runner patch from three things, none of which closes over the environment:
+    the provider's address getter (``env.provider.get_ip_address``, a bound method of the
+    provider, which holds no reference to DesktopEnv, its task configuration, its evaluator
+    or its cache directory), the image reference it takes, and upstream's ``PythonController``
+    class. Each call builds that controller from the address the provider reports, exactly as
+    ``DesktopEnv._start_emulator`` builds ``env.controller`` (so it talks to the same
+    ``desktop_env/server`` in the same desktop), and calls its ``run_bash_script``. That is the
+    one call this handle exposes.
+    """
+
+    __slots__ = ("_address", "_vm_path", "_controller_class")
+
+    def __init__(self, address, vm_path, controller_class):
+        if not callable(address) or not isinstance(controller_class, type):
+            raise ValueError("a controller handle needs the provider's address getter and "
+                             "the controller class")
+        self._address = address
+        self._vm_path = vm_path
+        self._controller_class = controller_class
+
+    def run_bash_script(self, script, timeout):
+        host, port = parse_address(self._address(self._vm_path))
+        controller = self._controller_class(vm_ip=host, server_port=port)
+        return controller.run_bash_script(script, timeout=timeout)
+
+
+def parse_address(text):
+    """DesktopEnv._start_emulator's parse: "<host>:<server>:<chromium>:<vnc>:<vlc>" or "<host>"."""
+    parts = str(text).rsplit(":", 4)
+    if len(parts) == 5:
+        return parts[0], int(parts[1])
+    return parts[0], DEFAULT_SERVER_PORT
 
 
 def is_done(action):
@@ -159,8 +426,39 @@ def feedback_text(verdict, codes):
     )
 
 
+def dump_script(elapsed):
+    """The dump as sent: SELF_CHECK_DUMP with its one input filled in."""
+    return SELF_CHECK_DUMP.replace("__ELAPSED__", str(int(elapsed)))
+
+
+def assess_dump(result):
+    """The dump text from the controller's run_bash_script result, or None if it is unusable.
+
+    Unusable (fail closed: the re-verify turn still happens, with no dump): no result, a
+    non-zero exit, output that does not end with the END record, or nothing before it.
+    """
+    if not isinstance(result, dict) or result.get("returncode") != 0:
+        return None
+    output = result.get("output")
+    if not isinstance(output, str):
+        return None
+    lines = output.splitlines()
+    if not lines or lines[-1] != "END":
+        return None
+    body = "\n".join(lines[:-1]).strip()
+    if not body:
+        return None
+    return body[:DUMP_LIMIT]
+
+
+def reverify_text(dump):
+    """The re-verify message: the fixed text, then the dump (or that it is unavailable)."""
+    shown = dump if dump is not None else "(the dump is unavailable: %s)" % DUMP_UNAVAILABLE
+    return "%s\n\n<dump>\n%s\n</dump>" % (SELF_CHECK_REVERIFY, shown)
+
+
 def self_check_feedback_text(codes):
-    """The fixed, oracle-free re-check result message: the probe's codes and nothing else."""
+    """ABLATION: the fixed re-check result message, the probe's codes and nothing else."""
     return (
         "Self-check: your DONE was not accepted. A re-check of the saved files in your home "
         "directory found a problem (codes %s). Continue working; when you believe the task "
@@ -169,7 +467,7 @@ def self_check_feedback_text(codes):
 
 
 def named_files(instruction):
-    """File names (with a document extension) the instruction mentions, in order, deduplicated."""
+    """ABLATION: file names (with a document extension) the instruction mentions."""
     out = []
     for name in NAMED_FILE.findall(instruction if isinstance(instruction, str) else ""):
         if name.lower() not in [n.lower() for n in out]:
@@ -178,13 +476,13 @@ def named_files(instruction):
 
 
 def probe_script(names, elapsed):
-    """The probe as sent: SELF_CHECK_PROBE with its two inputs filled in, shell-quoted."""
+    """ABLATION: SELF_CHECK_PROBE with its two inputs filled in, shell-quoted."""
     return SELF_CHECK_PROBE.replace("__ELAPSED__", str(int(elapsed))).replace(
         "__NAMES__", " ".join(shlex.quote(n) for n in names))
 
 
 def assess_probe(result):
-    """Map the controller's run_bash_script result to self-check codes; [] means no problem.
+    """ABLATION: map the probe's run_bash_script result to codes; [] means no problem.
 
     Fails closed: no result, a non-zero exit, or output without the final END and SAVED
     records is RECHECK_UNAVAILABLE.
@@ -220,16 +518,16 @@ class DoneGate:
 
     def __init__(self, agent, arm, gate=None, task_id=None, run_id=None, feedback=None,
                  controller=None, clock=time.monotonic):
-        if arm not in ARMS:
+        if arm not in RUNNER_ARMS:
             raise ValueError("unknown arm: %r" % (arm,))
         if arm == "gate-before-done":
             if gate is None or not task_id or not run_id:
                 raise ValueError("arm gate-before-done needs a gate, a task id and a run id")
         elif gate is not None:
             raise ValueError("arm %s takes no gate" % arm)
-        if arm == "self-check":
-            if not callable(controller):
-                raise ValueError("arm self-check needs the controller")
+        if arm in SELF_CHECK_ARMS:
+            if not isinstance(controller, ControllerHandle):
+                raise ValueError("arm %s needs a ControllerHandle" % arm)
         elif controller is not None:
             raise ValueError("arm %s takes no controller" % arm)
         self.agent = agent
@@ -243,6 +541,7 @@ class DoneGate:
         self.started = clock()
         self.decisions = []
         self._pending = None
+        self._reverified = False
 
     def __getattr__(self, name):
         return getattr(self.agent, name)
@@ -250,6 +549,7 @@ class DoneGate:
     def reset(self, *args, **kwargs):
         self.decisions = []
         self._pending = None
+        self._reverified = False
         self.started = self.clock()
         return self.agent.reset(*args, **kwargs)
 
@@ -270,8 +570,10 @@ class DoneGate:
                 self.decisions.append(
                     {"verdict": verdict, "accepted": accepted, "reasonCodes": codes})
                 pending = feedback_text(verdict, codes)
+            elif self.arm == "self-check":
+                accepted, pending = self._reverify()
             else:
-                codes = self._self_check(instruction)
+                codes = self._rules_check(instruction)
                 accepted = not codes
                 self.decisions.append({"selfCheck": "ok" if accepted else "problem",
                                        "accepted": accepted, "reasonCodes": codes})
@@ -291,12 +593,34 @@ class DoneGate:
             return False, "uncertain", ["GATE_UNAVAILABLE"]
         return decide(reply)
 
-    def _self_check(self, instruction):
-        """Run the probe through the controller; any failure fails closed."""
+    def _reverify(self):
+        """Primary self-check: the first DONE gets the dump and a re-verify turn; the model judges."""
+        if self._reverified:
+            self.decisions.append({"selfCheck": "model-finished", "accepted": True,
+                                   "reasonCodes": []})
+            return True, None
+        self._reverified = True
+        dump = self._dump()
+        self.decisions.append({"selfCheck": "reverify", "accepted": False,
+                               "reasonCodes": [] if dump is not None else [DUMP_UNAVAILABLE]})
+        return False, reverify_text(dump)
+
+    def _dump(self):
+        """One run_bash_script call through the handle; any failure is no dump (fail closed)."""
+        try:
+            elapsed = int(self.clock() - self.started) + 1
+            result = self.controller.run_bash_script(dump_script(elapsed),
+                                                     timeout=PROBE_SCRIPT_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 - any controller failure fails closed
+            return None
+        return assess_dump(result)
+
+    def _rules_check(self, instruction):
+        """ABLATION: run the fixed probe through the handle; any failure fails closed."""
         try:
             elapsed = int(self.clock() - self.started) + 1
             script = probe_script(named_files(instruction), elapsed)
-            result = self.controller().run_bash_script(script, timeout=PROBE_SCRIPT_TIMEOUT_S)
+            result = self.controller.run_bash_script(script, timeout=PROBE_SCRIPT_TIMEOUT_S)
         except Exception:  # noqa: BLE001 - any controller failure fails closed
             return ["RECHECK_UNAVAILABLE"]
         return assess_probe(result)
@@ -346,9 +670,9 @@ def wrap_agent(agent, arm, gate_argv=None, task_id=None, run_id=None, controller
     """Entry point for the runner patch, called once per task (the gate is bound to one trial).
 
     ``gate_argv`` is the operator's server command; ``{taskId}`` and ``{runId}`` in it are
-    replaced with this trial's ids. ``controller`` is a zero-argument callable returning the
-    environment's controller; only arm self-check receives it. Arms no-gate and self-check
-    build no gate client.
+    replaced with this trial's ids. ``controller`` is the ``ControllerHandle`` the patch
+    builds; only the self-check arms keep it. Arms other than gate-before-done build no gate
+    client.
     """
     gate = None
     if arm == "gate-before-done":
@@ -357,6 +681,6 @@ def wrap_agent(agent, arm, gate_argv=None, task_id=None, run_id=None, controller
         gate = StdioGateClient(
             [a.replace("{taskId}", task_id or "").replace("{runId}", run_id or "") for a in gate_argv]
         )
-    if arm != "self-check":
+    if arm not in SELF_CHECK_ARMS:
         controller = None
     return DoneGate(agent, arm, gate=gate, task_id=task_id, run_id=run_id, controller=controller)

@@ -4,7 +4,7 @@
 > pending ruling below is settled **and parity has passed**. The canonical record is
 > [`r1-public-prereg.json`](r1-public-prereg.json). Its hash, the SHA-256 of its canonical
 > JSON (keys sorted, no whitespace; `preregSha256` in `src/benchmark/upstream/prereg.ts`), is
-> `b25cdff0de8015f74220090c45342db0ce17addeba1a9a0b7430cc9498ba1a4c`.
+> `c80f4e4f4cce7170d3ec947a02b614581b0bb428f34a29fb1d3354b64f24abf2`.
 > The parity sample [`r1-parity-sample.json`](r1-parity-sample.json) is pinned in the record by
 > its hash, `b1329c467cf3a07f1e12ff7ece5cb6e76ad0d57a4441b56cc9e51a3ece692e35`.
 > `test/benchmark/upstream-prereg.test.ts` recomputes both; `npx tsx
@@ -13,7 +13,8 @@
 > `src/benchmark/upstream/prereg.ts` refuses "shown" if any of these holds (#652 rule):
 > - the record misses a field the rulings require (the fleet provider, the parity section, a
 >   provider that differs between arms, an arm with a changed prompt, a self-check arm not
->   pre-registered as the 15:26Z structural re-check, the five ruling citations, and the rest);
+>   pre-registered as the 18:11Z dump and model re-verify, ablations that are not labelled or
+>   do not state their extra trials, the six ruling citations, and the rest);
 > - the record's hash is not one of a committed pre-registration;
 > - the status is draft, any lead ruling is pending, or any field still says PENDING;
 > - the image is not pinned by digest;
@@ -41,7 +42,18 @@
   its own shell-based re-verification of the end state through the same OSWorld controller,
   with no gate, no oracle and no Myco verdict. A found problem turns DONE into a continue on the
   same budget, mirroring the gate arm's second chance. The prompt-suffix variant may stay only as
-  a secondary ablation that costs nothing extra; it would cost a fourth arm, so it is dropped.
+  a secondary ablation that costs nothing extra.
+- **18:11Z** (#741, relayed in the round-3 builder brief; not posted as its own comment):
+  B1 fixes the self-check's form. On DONE a fixed shell command, run through the same OSWorld
+  controller (`run_bash_script`), dumps the real saved content: cells or text of the files
+  changed during the episode, or "not saved". The WAIT turn hands that dump back with a fixed,
+  oracle-free "re-verify your work against the task using this dump" message, and the model
+  judges, on the same turn, token and time budget as the gate arm. Nothing saved is not a
+  refusal; ef9d12bd and the config-graded tasks must be able to pass a correct DONE. The
+  round-2 fixed-probe rules and the prompt-suffix variant become labelled ablations only, with
+  their extra trials stated. B2: the runner patch must not close over `env`; the hook gets a
+  narrow controller handle, with tripwires on the environment and a guest-side check that does
+  not rely on the probe hash.
 
 ## What this draft fixes (before any results)
 
@@ -54,8 +66,9 @@
 | **Model** | PENDING: the exact Claude model id passed as `--model`. |
 | **Action layer** | **OSWorld controller, identical across arms.** Action space `claude_computer_use`, observation `screenshot`, executed by `PythonController`. The same runner, environment, provider, image digest, controller, action space, observation type and budget in every arm. The hook never touches the environment. It changes one thing only: a refused DONE becomes upstream's own `WAIT` (a no-op in the guest). |
 | **Gate interception** | In `run_single_example`'s loop, between `agent.predict` and `env.step`. On DONE, the hook calls `myco.gate/v1` (`myco_gate_check`) with `taskId`, `runId` and `claim` only. A `verified` verdict with `accepted: true` lets DONE through. Anything else replaces DONE with WAIT and sends the agent the verdict and reason codes only. A gate that cannot be reached, or a malformed reply, counts as not accepted (fail closed). |
-| **Arms** | (a) `no-gate`: the standard runner, no gate. (b) `gate-before-done`: DONE is accepted only on a verified gate verdict. (c) `self-check` (15:26Z): on DONE, a fixed shell probe of the saved end state runs through the same controller (below); a found problem turns DONE into WAIT plus a fixed message, as a refused DONE does in (b). No gate, no oracle. All three use the same runner, prompt, provider, controller, action space and budget. There is no prompt-suffix arm or ablation (it would need 117 more trials). |
-| **Self-check arm (15:26Z)** | **What it runs:** `SELF_CHECK_PROBE` in `src/gate-hooks/osworld/myco_done_gate.py` (SHA-256 pinned in `arms[2].selfCheck.probeSha256`), sent through upstream's `PythonController.run_bash_script`. It is the one controller every arm's actions go through, reached through a getter the runner patch passes. **Inputs:** the seconds since the episode started, and the file names the instruction mentions (3 of the 117 instructions name one). **Codes:** `SAVED_FILE_MISSING` (a named file is not under the home directory), `SAVED_FILE_FORMAT_MISMATCH` (a named or newly saved document's bytes do not match its extension), `NOTHING_SAVED` (no document under home modified during the episode), `RECHECK_UNAVAILABLE` (fail closed). **May read:** the instruction's file names; the guest home directory, outside hidden directories (names, mtimes, leading bytes, container listings). **May never read:** the gate or any oracle, OSWorld's task configuration, gold files or the cache, fixtures or any ground truth, the evaluator's code or output (`result.txt`, scores), the environment object, or any controller method but `run_bash_script`. Enforced statically and at runtime (`test/benchmark/independence.test.ts`, `test/benchmark/osworld-gate-hook.test.ts`). **Budget parity:** the check runs inside the DONE's turn, exactly as the gate call does. A refused DONE uses that turn. The probe costs no step and no model tokens, and its time counts against the shared wall-clock cap. One check is allowed 120 s in both arms (a 20 s script timeout plus the controller's fixed 100 s HTTP margin, against the gate client's 120 s). |
+| **Arms** | (a) `no-gate`: the standard runner, no gate. (b) `gate-before-done`: DONE is accepted only on a verified gate verdict. (c) `self-check`, the primary self-check arm (18:11Z, below): on the first DONE, a fixed dump of the saved content through the same controller, handed back on the WAIT turn for the model to re-verify; its next DONE goes through. No gate, no oracle, no Myco verdict. All three use the same runner, prompt, provider, controller, action space and budget. |
+| **Self-check arm (18:11Z)** | **What it runs:** `SELF_CHECK_DUMP` in `src/gate-hooks/osworld/myco_done_gate.py` (SHA-256 pinned in `arms[2].selfCheck.dumpSha256`), sent once per episode, on the first DONE, through `ControllerHandle.run_bash_script`. The runner patch builds the handle from the provider's address getter, the image reference and upstream's `PythonController` class; each call builds that controller from the address the provider reports, as `DesktopEnv` builds `env.controller`, so it reaches the same `desktop_env/server`. Nothing in the handle closes over `env`. **Input:** the seconds since the episode started. **The dump:** each document file under the guest home modified during the episode (no hidden directory or file, no link, no other mount, at most 4 levels deep, at most 20 files), with path, size and save time, then its content: cells by reference with formulas, paragraphs, slide text, leading text of csv/txt/rtf; binary formats named only. At most 2,000 characters per file, 6,000 in all. Or "NOT SAVED". **On the first DONE:** WAIT, then one user message: the fixed re-verify text and the dump. **The model judges:** its next DONE goes through. **Nothing saved** is never a refusal, so ef9d12bd and the tasks graded from `~/.config/libreoffice` pass a correct DONE (tested). **Fail closed:** if the dump cannot be produced, the re-verify turn still happens with the dump marked `DUMP_UNAVAILABLE`. **May read:** the guest home directory as above, and the hook's own clock. **May never read:** the gate or any oracle, OSWorld's task configuration, gold files or the cache, fixtures or any ground truth, the evaluator's code or output (`result.txt`, scores), the environment object or anything reached through it, the provider beyond its address getter, or any controller method but `run_bash_script`. Enforced statically and at runtime (`test/benchmark/independence.test.ts`, `test/benchmark/osworld-gate-hook.test.ts`). **Budget parity:** the re-verify turn is the first DONE's own turn (WAIT, one step), as a refused DONE in (b); taken once per episode. The dump makes no model call; its text (at most 6,000 characters) enters the next turn's input, as the gate's feedback does. Exactly one `run_bash_script` call per episode. One attempt is allowed 120 s (a 20 s script timeout plus the controller's fixed 100 s HTTP margin), the gate client's timeout. Upstream retries a non-200 reply or a connection error 3 times with 5 s pauses, so an unreachable desktop can hold the call for at most 375 s before it fails closed; that time counts against the shared wall clock and can fall only on (c). |
+| **Ablations (18:11Z)** | Labelled ablations, never the headline baseline, never in the analysis (rows from them are refused): `self-check-rules`, the round-2 fixed probe (probe SHA-256 `e12a3208…`, implemented as a runner arm; its `NOTHING_SAVED` rule refuses correct DONEs where OSWorld's postconfig saves, and no DONE can pass on ef9d12bd), and `self-check-prompt-suffix`, the round-1 prompt paragraph (not implemented at this head). **Each costs 117 extra trials if run**; neither runs unless separately approved. |
 | **Budget** | PENDING: one budget shared by all arms. It covers `--max_steps`, `--max_tokens`, `--thinking`, `--max_trajectory_length` and a wall-clock cap. A refused DONE uses the step it was emitted in, in arms (b) and (c) alike. |
 | **Subset rule** | Every task id that OSWorld's `evaluation_examples/test_all.json` lists at the pin under `libreoffice_calc`, `libreoffice_writer` and `libreoffice_impress`, run in OSWorld's own DesktopEnv on the `myco-fleet` provider. There is no Myco placement filter. No task is added or dropped for difficulty, outcome or evaluator type. |
 | **Subset size, n** | 117 (calc 47, writer 23, impress 47; 2 of them `infeasible`). Exclusions: none. One trial per task, per arm. |
@@ -85,8 +98,8 @@
    a key. M2's rule is $0 API spend, on the Claude Ultra plan.
 
 The `host` item is settled by the 14:05Z ruling: the Myco fleet is the R1 host. The
-`self-check-form` item is settled by the 15:26Z ruling (N3). The namespace-desktop `harness`
-item from the #700 draft is gone.
+`self-check-form` item is settled by the 15:26Z ruling (N3), and its form by the 18:11Z
+ruling. The namespace-desktop `harness` item from the #700 draft is gone.
 
 ## Known property of the ground truth (a finding, not a fix)
 

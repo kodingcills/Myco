@@ -400,34 +400,53 @@ describe("the gate and its OSWorld DONE hook are independent of the upstream eva
   });
 
   /**
-   * N3 (lead ruling 15:26Z): the self-check arm reads nothing but the instruction and the guest
-   * home directory through the controller's run_bash_script. The hook's code (comments and
-   * docstrings stripped, the probe text included) names no environment, evaluator, task
-   * configuration, gold, fixture, oracle or score-file access, and calls no controller method
-   * but run_bash_script. The runtime half is test/benchmark/osworld-gate-hook.test.ts.
+   * N3 and lead ruling 18:11Z (B1, B2): the self-check arms read nothing but the guest home
+   * directory, through the ControllerHandle's run_bash_script. Two halves, checked separately:
+   *  - the hook's host code (comments, docstrings and the guest scripts stripped) names no
+   *    environment, evaluator, task configuration, gold, fixture, oracle or score-file access,
+   *    no host file or network access, and no introspection route that could climb from the
+   *    handle or the agent to the environment (`__closure__`, `cell_contents`, `__globals__`,
+   *    `__self__`, `__dict__`, `gc`, `sys`, `inspect`, `ctypes`, ...); every call on a
+   *    controller is run_bash_script;
+   *  - the guest scripts (the primary dump and the ablation's probe) name no ground truth, no
+   *    parent hop and no network, and start from $HOME.
+   * The runtime half is test/benchmark/osworld-gate-hook.test.ts.
    */
   const SELF_CHECK_FORBIDDEN =
-    /\.env\b|\bevaluat|get_file|setup_controller|cache_dir|task_config|\bexample\b|\bgold\b|expected|fixture|oracle|result\.txt|evaluation_examples|\bopen\(|os\.|glob|urllib|requests|socket/;
+    /\.env\b|\bevaluat|get_file|setup_controller|cache_dir|task_config|\bexample\b|\bgold\b|expected|fixture|oracle|result\.txt|evaluation_examples|\bopen\(|os\.|glob|urllib|requests|socket|__closure__|cell_contents|__globals__|__self__|__dict__|__func__|__code__|__getattribute__|__import__|\bgc\b|\bsys\b|inspect|ctypes|importlib|\bvars\(|\bglobals\(|\blocals\(|\beval\(|\bexec\(/;
+  const GUEST_FORBIDDEN =
+    /result|gold|cache|evaluation_examples|desktop_env|cloud|expected|oracle|fixture|score|task_config|\bexample|evaluat|urllib|requests|socket|curl|wget|https?:|environ|\.\.|dirname|pardir/i;
+  const GUEST_SCRIPTS = ["SELF_CHECK_DUMP", "SELF_CHECK_PROBE"] as const;
   const selfCheckProblems = (file: string) => {
     const raw = readFileSync(file, "utf8");
-    const probe = raw.match(/SELF_CHECK_PROBE = r"""([\s\S]*?)"""/)?.[1] ?? "";
-    const code = `${stripComments(raw)}\n${probe}`;
+    const rel = relative(ROOT, file);
+    const code = stripComments(raw);
     const out: string[] = [];
     const hit = code.match(SELF_CHECK_FORBIDDEN);
-    if (hit) out.push(`${relative(ROOT, file)} names ${hit[0]}`);
-    for (const m of code.matchAll(/controller\(\)\.(\w+)/g))
-      if (m[1] !== "run_bash_script")
-        out.push(`${relative(ROOT, file)} calls controller().${m[1]}`);
-    if (!/self\.controller\(\)\.run_bash_script\(/.test(code)) out.push("no run_bash_script call");
-    if (!probe) out.push("no probe");
+    if (hit) out.push(`${rel} names ${hit[0]}`);
+    for (const m of code.matchAll(/controller\.(\w+)/g))
+      if (m[1] !== "run_bash_script") out.push(`${rel} calls controller.${m[1]}`);
+    if (!/self\.controller\.run_bash_script\(/.test(code)) out.push("no run_bash_script call");
+    for (const name of GUEST_SCRIPTS) {
+      const body = raw.match(new RegExp(`${name} = r"""([\\s\\S]*?)"""`))?.[1];
+      if (!body) {
+        out.push(`no ${name}`);
+        continue;
+      }
+      const text = body.replace(/^#!\/bin\/bash\n/, "").replaceAll("2>/dev/null", "");
+      const g = text.match(GUEST_FORBIDDEN);
+      if (g) out.push(`${rel} ${name} names ${g[0]}`);
+      if (/(^|[\s"'=(<])\//m.test(text)) out.push(`${rel} ${name} has an absolute path`);
+      if (!text.includes('"${HOME:?}"')) out.push(`${rel} ${name} does not start from $HOME`);
+    }
     return out;
   };
 
-  it("N3: the self-check names no environment, evaluator, task config, gold, fixture, oracle or score file, and calls only run_bash_script on the controller", () => {
+  it("N3 and 18:11Z: the self-check names no environment, evaluator, task config, gold, fixture, oracle or score file and no introspection route, calls only run_bash_script on its controller, and its guest scripts start from $HOME and name no ground truth", () => {
     expect(hookPy.flatMap(selfCheckProblems)).toEqual([]);
   });
 
-  it("N3: the self-check checks bite: a planted gold read, evaluator call and other controller call are reported", () => {
+  it("N3 and 18:11Z: the self-check checks bite: a planted gold read, evaluator call, other controller call, closure or provider climb, gc walk, and a guest read of ground truth are reported", () => {
     const dir = mkdtempSync(join(tmpdir(), "self-check-bite-"));
     try {
       const base = readFileSync(hookPy[0] as string, "utf8");
@@ -437,18 +456,32 @@ describe("the gate and its OSWorld DONE hook are independent of the upstream eva
         writeFileSync(f, base.replace(from, to));
         return selfCheckProblems(f);
       };
-      const call = "            result = self.controller().run_bash_script(";
+      const call = "            result = self.controller.run_bash_script(dump_script(elapsed),";
       expect(plant(call, `            open(self.task_id + "/gold.xlsx").close()\n${call}`)).toEqual(
         [expect.stringMatching(/ names (open\(|gold)$/)],
       );
       expect(plant(call, `            self.agent.env.evaluate()\n${call}`)).toEqual([
         expect.stringContaining("names .env"),
       ]);
+      expect(plant(call, `            self.controller.get_file("/home/user/x")\n${call}`)).toEqual(
+        expect.arrayContaining([expect.stringContaining("calls controller.get_file")]),
+      );
+      // W2c2 / W2b2 routes: the round-2 closure climb, and a climb from the handle to the provider.
       expect(
-        plant(call, `            self.controller().get_file("/home/user/x")\n${call}`),
-      ).toEqual(expect.arrayContaining([expect.stringContaining("calls controller().get_file")]));
-      expect(plant("printf 'END\\n'", "cat ~/../../tmp/result.txt\nprintf 'END\\n'")).toEqual([
-        expect.stringContaining("names result.txt"),
+        plant(call, `            cfg = self.controller.__closure__[0].cell_contents\n${call}`),
+      ).toEqual(expect.arrayContaining([expect.stringContaining("names __closure__")]));
+      expect(
+        plant(call, `            prov = self.controller._address.__self__\n${call}`),
+      ).toEqual(expect.arrayContaining([expect.stringContaining("calls controller._address")]));
+      expect(plant("import json\n", "import json\nimport gc\n")).toEqual([
+        expect.stringContaining("names gc"),
+      ]);
+      expect(plant('print("END")', 'print(open(home + "/../ground/result.txt").read())\nprint("END")')).toEqual([
+        expect.stringMatching(/SELF_CHECK_DUMP names (result|\.\.)/),
+        expect.stringContaining("SELF_CHECK_DUMP has an absolute path"),
+      ]);
+      expect(plant("printf 'END\\n'", "cat /tmp/x\nprintf 'END\\n'")).toEqual([
+        expect.stringContaining("SELF_CHECK_PROBE has an absolute path"),
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });

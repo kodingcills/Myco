@@ -175,30 +175,37 @@ describe("draft public-R1 pre-registration: the rulings' fields", () => {
     );
   });
 
-  it("N3 (15:26Z): arm (c) is the structural re-check, with its probe pin, budget parity and what it may never read; no prompt-suffix arm or ablation", () => {
+  it("18:11Z: arm (c) is the primary self-check, a fixed dump of the saved content through the same controller handed back for the model to re-verify, with its dump pin, budget parity (retries stated) and what it may never read", () => {
     const arms = PREREG.arms as Obj[];
     expect(arms.map((a) => a.promptSuffix)).toEqual([null, null, null]);
     const sc = at(PREREG, "arms", 2, "selfCheck") as Record<string, unknown>;
     expect(sc).toMatchObject({
-      form: "structural-recheck",
-      ruling: "2026-11-27T15:26Z",
-      codes: [
-        "SAVED_FILE_MISSING",
-        "SAVED_FILE_FORMAT_MISMATCH",
-        "NOTHING_SAVED",
-        "RECHECK_UNAVAILABLE",
-      ],
+      form: "model-reverify-dump",
+      ruling: "2026-11-27T18:11Z",
+      primary: true,
+      codes: ["DUMP_UNAVAILABLE"],
     });
+    expect(sc.dumpSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(sc).not.toHaveProperty("probeSha256");
     expect(sc.transport).toMatch(
       /^desktop_env\/controllers\/python\.py#PythonController\.run_bash_script/,
     );
-    expect(sc.onProblem).toMatch(/^DONE becomes upstream's own WAIT special action/);
+    expect(sc.transport).toMatch(/ControllerHandle/);
+    expect(sc.transport).toMatch(/nothing in it closes over env/);
+    expect(sc.when).toMatch(/^On the episode's first DONE/);
+    expect(sc.onDone).toMatch(/^The first DONE becomes upstream's own WAIT special action/);
+    expect(sc.onDone).toMatch(/The model judges: its next DONE goes through unchanged/);
+    expect(sc.nothingSaved).toMatch(/^Never a refusal\./);
+    expect(sc.nothingSaved).toMatch(/ef9d12bd and the tasks graded from ~\/\.config\/libreoffice/);
+    expect(sc.failClosed).toMatch(/a first DONE never passes unchecked/);
+    expect(sc.budgetParity).toMatch(/exactly one run_bash_script call per episode/);
     expect(sc.budgetParity).toMatch(
-      /counted exactly as the gate arm's check is counted: it runs inside the turn of the DONE it checks, a refused DONE uses that turn \(one step\), the probe itself costs no step and no model tokens/,
+      /Its script timeout is 20 s and upstream's controller adds a fixed 100 s HTTP margin, so one attempt is allowed 120 s, the gate client's subprocess timeout/,
     );
     expect(sc.budgetParity).toMatch(
-      /20 s script timeout plus the controller's fixed 100 s HTTP margin is 120 s, the gate client's timeout/,
+      /retry_times 3, retry_interval 5 s, a pause after every failed attempt\): an unreachable desktop can hold the call for at most 375 s/,
     );
+    expect(PREREG.budget as string).toMatch(/^PENDING/);
     const never = (sc.mayNotRead as string[]).join(" | ");
     for (const k of [
       "oracle",
@@ -212,10 +219,22 @@ describe("draft public-R1 pre-registration: the rulings' fields", () => {
       "run_bash_script",
     ])
       expect(never).toContain(k);
-    expect(sc.ablation).toMatch(
-      /^None\. The earlier prompt-suffix variant .* 117 more trials .* it is dropped/,
-    );
     expect(PREREG.leadRulingPending.join("\n")).not.toMatch(/self-check/);
+  });
+
+  it("18:11Z: the fixed-probe rules and the prompt-suffix variant are clearly labelled ablations, never a headline arm, each stating its 117 extra trials", () => {
+    const ab = PREREG.ablations as Obj[];
+    expect(ab.map((a) => a.id)).toEqual(["self-check-rules", "self-check-prompt-suffix"]);
+    for (const a of ab) {
+      expect(a.label).toBe("ABLATION, never the headline baseline (lead ruling 18:11Z)");
+      expect(a.headline).toBe(false);
+      expect(a.extraTrials).toBe(117);
+      expect(a.cost).toMatch(/^117 extra trials \(one per task at n = 117\) if run; not run unless separately approved/);
+      expect(R1_ARMS as readonly string[]).not.toContain(a.id);
+    }
+    expect(ab[0]?.probeSha256).toBe("e12a3208fb5c40cd691e6c6b58be4a70abbf80365433cad7c0146d20193e6dcb");
+    expect(ab[0]?.knownBias).toMatch(/NOTHING_SAVED refuses a correct DONE/);
+    expect(ab[1]?.implemented).toMatch(/^No\./);
   });
 
   it("has a parity section: parity before any live run, the committed sample by hash, the fleet against OSWorld's guest image in UTM as a stated deviation (15:21Z)", () => {
@@ -237,7 +256,7 @@ describe("draft public-R1 pre-registration: the rulings' fields", () => {
     expect(parity.status).toMatch(/^Not run\./);
   });
 
-  it("cites the 13:55Z, 14:05Z, 14:37Z, 15:21Z and 15:26Z rulings with their timestamps and comment links", () => {
+  it("cites the 13:55Z, 14:05Z, 14:37Z, 15:21Z, 15:26Z and 18:11Z rulings with their timestamps and links", () => {
     const rulings = PREREG.rulings as { at: string; ref: string }[];
     expect(rulings.map((r) => r.at)).toEqual([
       "2026-11-27T13:55Z",
@@ -245,15 +264,18 @@ describe("draft public-R1 pre-registration: the rulings' fields", () => {
       "2026-11-27T14:37Z",
       "2026-11-27T15:21Z",
       "2026-11-27T15:26Z",
+      "2026-11-27T18:11Z",
     ]);
-    expect(rulings.map((r) => r.ref.split("issuecomment-")[1])).toEqual([
+    expect(rulings.slice(0, 5).map((r) => r.ref.split("issuecomment-")[1])).toEqual([
       "7220110528",
       "7220313158",
       "7220987945",
       "7221935698",
       "7222035806",
     ]);
-    for (const t of ["13:55Z", "14:05Z", "14:37Z", "15:21Z", "15:26Z"])
+    // 18:11Z was relayed in the round-3 brief, not posted as its own comment.
+    expect(rulings[5]?.ref).toMatch(/^https:\/\/github\.com\/kodingcills\/Myco\/pull\/741 \(lead ruling relayed in the round-3 builder brief/);
+    for (const t of ["13:55Z", "14:05Z", "14:37Z", "15:21Z", "15:26Z", "18:11Z"])
       expect(PREREG.ruling as string).toContain(t);
   });
 
@@ -367,18 +389,36 @@ describe("draft public-R1 pre-registration: the rulings' fields", () => {
         "RULINGS_NOT_CITED",
         (p) => (p.rulings = (p.rulings as Obj[]).filter((r) => r.at !== "2026-11-27T15:26Z")),
       ],
-      // N3 (15:26Z): the self-check arm is the structural re-check, pre-registered in full.
+      [
+        "RULINGS_NOT_CITED",
+        (p) => (p.rulings = (p.rulings as Obj[]).filter((r) => r.at !== "2026-11-27T18:11Z")),
+      ],
+      // 18:11Z: the primary self-check arm (dump and model re-verify), pre-registered in full.
       ["SELF_CHECK_NOT_RULED", (p) => delete at(p, "arms", 2).selfCheck],
-      ["SELF_CHECK_NOT_RULED", (p) => (at(p, "arms", 2, "selfCheck").form = "prompt-suffix")],
-      ["SELF_CHECK_NOT_RULED", (p) => (at(p, "arms", 2, "selfCheck").ruling = "2026-11-27T15:21Z")],
-      ["SELF_CHECK_NOT_RULED", (p) => (at(p, "arms", 2, "selfCheck").probeSha256 = "PENDING")],
+      ["SELF_CHECK_NOT_RULED", (p) => (at(p, "arms", 2, "selfCheck").form = "structural-recheck")],
+      ["SELF_CHECK_NOT_RULED", (p) => (at(p, "arms", 2, "selfCheck").ruling = "2026-11-27T15:26Z")],
+      ["SELF_CHECK_NOT_RULED", (p) => (at(p, "arms", 2, "selfCheck").primary = false)],
+      ["SELF_CHECK_NOT_RULED", (p) => (at(p, "arms", 2, "selfCheck").dumpSha256 = "PENDING")],
       ["SELF_CHECK_NOT_RULED", (p) => delete at(p, "arms", 2, "selfCheck").budgetParity],
-      ["SELF_CHECK_NOT_RULED", (p) => delete at(p, "arms", 2, "selfCheck").onProblem],
+      ["SELF_CHECK_NOT_RULED", (p) => delete at(p, "arms", 2, "selfCheck").message],
+      ["SELF_CHECK_NOT_RULED", (p) => delete at(p, "arms", 2, "selfCheck").onDone],
+      [
+        "SELF_CHECK_NOT_RULED",
+        (p) => (at(p, "arms", 2, "selfCheck").nothingSaved = "NOTHING_SAVED refuses the DONE."),
+      ],
       ["SELF_CHECK_NOT_RULED", (p) => delete at(p, "arms", 2, "selfCheck").mayRead],
       [
         "SELF_CHECK_NOT_RULED",
         (p) => (at(p, "arms", 2, "selfCheck").codes = ["NOTHING_SAVED", "ORACLE_FAIL"]),
       ],
+      // 18:11Z: the ablations are labelled, never headline, with their extra trials stated.
+      ["ABLATIONS_NOT_LABELLED", (p) => delete p.ablations],
+      ["ABLATIONS_NOT_LABELLED", (p) => (p.ablations as Obj[]).pop()],
+      ["ABLATIONS_NOT_LABELLED", (p) => (at(p, "ablations", 0).headline = true)],
+      ["ABLATIONS_NOT_LABELLED", (p) => (at(p, "ablations", 1).label = "secondary baseline")],
+      ["ABLATIONS_NOT_LABELLED", (p) => delete at(p, "ablations", 0).extraTrials],
+      ["ABLATIONS_NOT_LABELLED", (p) => (at(p, "ablations", 1).extraTrials = 0)],
+      ["ABLATIONS_NOT_LABELLED", (p) => (at(p, "ablations", 0).id = "self-check")],
       ...["oracle", "task configuration", "gold", "fixtures", "evaluator code", "result.txt"].map(
         (k) =>
           [
@@ -571,6 +611,22 @@ describe("the public-R1 analysis refuses 'shown' while anything is pending", () 
       const doubled = [...missing, rows[k * n + 1] as PublicR1Row];
       expect(analyze(ruled(), doubled).reasons, arm).toEqual([`N_MISMATCH:${arm}`]);
     }
+    // N5 (round 2): every task covered once plus a duplicate row (n + 1 rows, n distinct tasks)
+    // is refused for each arm; the distinct-task count alone would let it through.
+    for (const [k, arm] of [
+      [0, "gate-before-done"],
+      [1, "no-gate"],
+      [2, "self-check"],
+    ] as const) {
+      const duplicated = [...rows, rows[k * n + 5] as PublicR1Row];
+      expect(new Set(duplicated.filter((r) => r.arm === arm).map((r) => r.taskId)).size).toBe(n);
+      expect(analyze(ruled(), duplicated).reasons, arm).toEqual([`N_MISMATCH:${arm}`]);
+    }
+    // 18:11Z: rows from a labelled ablation arm never enter the pre-registered analysis.
+    for (const arm of ["self-check-rules", "self-check-prompt-suffix"])
+      expect(analyze(ruled(), [...rows, row([...SUBSET][0] as string, { arm })]).reasons, arm).toEqual([
+        "ROW_ARM_NOT_REGISTERED",
+      ]);
     expect(R1_ARMS).toEqual(["no-gate", "gate-before-done", "self-check"]);
     expect(analyze(ruled(), [...rows, row("not-in-subset", { arm: "no-gate" })]).reasons).toEqual([
       "ROW_OUTSIDE_SUBSET",

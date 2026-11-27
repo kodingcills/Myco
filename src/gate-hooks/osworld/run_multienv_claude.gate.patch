@@ -1,15 +1,16 @@
 --- a/scripts/python/run_multienv_claude.py
 +++ b/scripts/python/run_multienv_claude.py
-@@ -18,6 +18,8 @@
+@@ -18,6 +18,9 @@
  from lib_results_logger import log_task_error
  from desktop_env.desktop_env import DesktopEnv
  from mm_agents.anthropic import AnthropicAgent
-+from myco_done_gate import ARMS as MYCO_ARMS, wrap_agent as myco_wrap_agent  # Myco DONE gate hook
++from desktop_env.controllers.python import PythonController as MycoPythonController
++from myco_done_gate import RUNNER_ARMS as MYCO_ARMS, ControllerHandle as MycoControllerHandle, wrap_agent as myco_wrap_agent  # Myco DONE gate hook
 +import shlex
- 
+
  # Global variables for signal handling
  active_environments = []
-@@ -50,6 +52,6 @@
+@@ -50,6 +53,6 @@
      )
      parser.add_argument(
 -        "--provider_name", type=str, default="aws", choices=["aws", "virtualbox", "vmware", "docker", "azure", "pyromind"], help="Provider name"
@@ -17,17 +18,17 @@
      )
      parser.add_argument(
          "--client_password", type=str, default="", help="Client password"
-@@ -98,6 +100,9 @@
+@@ -98,6 +101,9 @@
                          help="Step-prompt mode: full (system warning + per-turn reminder, default), system-only (warning only), none")
      parser.add_argument("--system-prompt", type=str, default=None,
                         help="Custom system prompt: inline string, or file path if it exists on disk")
 +    parser.add_argument("--myco_arm", type=str, required=True, choices=MYCO_ARMS)
 +    parser.add_argument("--myco_gate_cmd", type=str, default=None)
 +    parser.add_argument("--myco_run_prefix", type=str, required=True)
- 
+
      # example config
      parser.add_argument("--domain", type=str, default="all")
-@@ -312,7 +317,11 @@
+@@ -312,7 +318,12 @@
                  os.makedirs(example_result_dir, exist_ok=True)
                  try:
                      lib_run_single.run_single_example(
@@ -36,7 +37,8 @@
 +                            agent, args.myco_arm,
 +                            shlex.split(args.myco_gate_cmd) if args.myco_gate_cmd else None,
 +                            task_id=example_id, run_id=f"{args.myco_run_prefix}-{example_id}",
-+                            controller=lambda: env.controller),
++                            controller=MycoControllerHandle(
++                                env.provider.get_ip_address, env.path_to_vm, MycoPythonController)),
                          env,
                          example,
                          args.max_steps,
