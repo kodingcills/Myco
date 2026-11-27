@@ -433,12 +433,14 @@ describe("a live pack refuses any reset that is not a recorded cold boot", () =>
     const live = JSON.parse(readFileSync(header, "utf8"));
     const trials = join(root, "on", "ab-trials.jsonl");
     const original = readFileSync(trials, "utf8");
-    for (const [name, edit] of variants) {
+    // Pack directories are named by index: variant names differing only in case ("Cold",
+    // "COLD") would name one directory on a case-insensitive file system (macOS).
+    for (const [i, [name, edit]] of variants.entries()) {
       writeFileSync(trials, original);
       setBoot(trials, edit);
       // Simulated: the boot class is the fake's, and the pack exports as before.
       writeFileSync(header, JSON.stringify({ ...live, simulated: true }));
-      expect(() => exportAbPack(out, 0, join(out, `sim-${name}`), ROOT), name).not.toThrow();
+      expect(() => exportAbPack(out, 0, join(out, `sim-${i}`), ROOT), name).not.toThrow();
       // Live: `simulated: false`, and (#583 N2) a header with no `simulated` field at all.
       const { simulated: _drop, ...noField } = live;
       for (const [mode, h] of [
@@ -447,7 +449,7 @@ describe("a live pack refuses any reset that is not a recorded cold boot", () =>
       ] as const) {
         writeFileSync(header, JSON.stringify(h));
         expect(
-          () => exportAbPack(out, 0, join(out, `live-${mode}-${name}`), ROOT),
+          () => exportAbPack(out, 0, join(out, `live-${mode}-${i}`), ROOT),
           `${mode} ${name}`,
         ).toThrow(/a live pack needs every trial's reset to be a recorded cold boot/);
       }
