@@ -640,7 +640,7 @@ jobs:
   newcomer-path-macos:
     name: newcomer path (macos-latest)
     needs: plan
-    if: ${{ !cancelled() && (needs.plan.result != 'success' || (needs.plan.outputs.mode != 'targeted' && needs.plan.outputs.mode != 'docs') || needs.plan.outputs.linux_path != 'false') }}
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || (needs.plan.outputs.mode != 'targeted' && needs.plan.outputs.mode != 'docs' && needs.plan.outputs.mode != 'affected') || needs.plan.outputs.linux_path != 'false') }}
     runs-on: macos-latest
     timeout-minutes: 20
     env:
