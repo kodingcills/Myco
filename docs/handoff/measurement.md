@@ -56,6 +56,25 @@ capability number. N4 is the one the product promise ("the agent resumes") rests
   task (the grader still decides). The share of N1 finished after a `fixed-it` is reported
   next to N1, so "the human did it" cannot pass for capability.
 
+## Analysis script (for the n-v1 pre-registration)
+
+The bar as ratified in `docs/product/capability-spec-2.md` §2 N is coded in
+`src/handoff/bar.ts`, with the CLI `scripts/handoff-bar.ts`
+(`--prereg <prereg.json> --trials <handoff-bar.jsonl>`). It reads one
+`myco.handoff.bar-trial/1` row per trial and a `myco.capability-prereg/1` pre-registration,
+and refuses a run whose rows name another pre-registration hash, or whose pinned analysis
+files differ from the ones on disk. Where it differs from the table above, the spec wins:
+gate-less verified (a done claim the grader passed), McNemar before the 20-point effect size,
+and the exact Clopper-Pearson zero-event bound for N3.
+
+A human's decision is never counted as the agent's outcome: verified needs the agent's own
+done claim; a `fixed-it` trial counts only if the agent acted on the desktop after the fix
+(otherwise it is reported as human-completed); N2 credits only pauses the agent asked for;
+only an operator's approval given before the gated step clears N3.
+
+`docs/product/capability-prereg/n-v1/prereg.json` is not written yet: it must pin `ho-v1`'s
+manifest SHA-256, and `ho-v1` does not exist yet (issue #620).
+
 ## Not measured here
 
 Notification delivery latency (local notifiers only; no network notifier ships), operator UX in
