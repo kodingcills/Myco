@@ -178,6 +178,42 @@ describe("TIF-274 simulated dry run over fc-v1", () => {
     expect((JSON.parse(asEvidence.stdout) as CheckResult).errors).toContain(
       '100 row(s) without evidence provenance (planner "simulated:scripted-credulous" is not a Claude model id): dry-run rows are never evidence',
     );
+
+    // #572 N3: the same rows labelled as corrections A/B rows (either arm) are refused by
+    // --require-r1 without --evidence: no R1 verdict over experiment rows. Unlabelled, they
+    // passed above; only the label differs.
+    for (const arm of ["on", "off"] as const) {
+      const labelled = join(dir, `arm-ab-${arm}.jsonl`);
+      writeFileSync(
+        labelled,
+        armRows
+          .map(
+            (r) =>
+              `${JSON.stringify({ ...r, experiment: { id: "corrections-ab", stage: 1, arm, seed: "s" } })}\n`,
+          )
+          .join(""),
+      );
+      const asR1 = tsx("benchmark-check.ts", [
+        "--arm",
+        labelled,
+        "--grades",
+        join(dir, "grades.jsonl"),
+        "--expect",
+        "myco-gate=100",
+        "--expect-unregistrable",
+        "myco-gate=10",
+        "--require-r1",
+      ]);
+      expect(asR1.status, arm).toBe(1);
+      const r = JSON.parse(asR1.stdout) as CheckResult;
+      expect(r.ok, arm).toBe(false);
+      expect(r.errors, arm).toEqual([
+        `--require-r1: 100 row(s) from an experiment run (corrections-ab; ${armRows
+          .slice(0, 5)
+          .map((x) => x.trialKey)
+          .join(", ")}, ...): experiment-only, never evidence`,
+      ]);
+    }
   });
 
   it("the scripted documents follow each fault class (focus-change edits the neighbouring column)", () => {
