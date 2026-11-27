@@ -23,18 +23,28 @@ corruption classes it catches. It must declare the format of its family's docume
 2. registers it through track T with **host-owned** self-test cases, built afresh for this
    proposal (`agentCheckSelfTestCases`, from `calcCasesFor` in
    `src/oracle-selftest/subjects.ts`):
-   - the bound task's own case: its intent and its file name, exactly as a real run carries
-     them;
+   - three cases of the bound task itself: its intent and its file name, exactly as a real run
+     carries them;
    - two more cases with fresh random fixture seeds, random parameter picks and random file
-     names, drawn from host-side randomness the check cannot observe;
+     names;
    - the read corruptions the host derives from every correct document (three truncations,
      three flipped bytes and a missing file per case).
 
-   Every corruption carries its case's intent and file name, so nothing but a document's
-   content tells it from the clean copy, and nothing but content tells a self-test call from a
-   real one. The check's own `selftestCases` hook is never called, so its author cannot choose
-   the damage it happens to catch. A check that behaves only when it recognises the self-test
-   by its seed, its file name or the bound task fails it;
+   Every corruption is drawn afresh, per case, from host-side randomness (`node:crypto`) the
+   sandboxed check cannot observe or seed: the wrong value (an edit of the new value, a number
+   moved by a random amount, random digits, a random word or another cell of the sheet), the
+   cell the right value is written to instead, the 1 to 3 collateral cells and their values,
+   and the truncation and byte-flip offsets. Only the clean copy, the unedited sheet
+   (`edit-missing`) and the missing file are the same on every draw, and a check must be
+   honest on those anyway. Every corruption carries its case's intent and file name. The
+   check's own `selftestCases` hook is never called, so its author cannot choose the damage it
+   happens to catch.
+
+   So a check's author, who knows the task's intent, cannot compute the self-test documents in
+   advance. A check that is honest only on its seed, its file name, the bound task, the
+   documents the round-2 self-test would have shown it, or the target values those held fails
+   it (`test/agent-checks/predictable-selftest.test.ts`). What the self-test cannot rule out is
+   a check that lies only on documents unlike anything it draws (§5);
 3. refuses the check unless every correct document verifies and every corruption of every
    claimed class is caught. A throw or a timeout is a harness fault, never a catch.
 
@@ -52,6 +62,7 @@ column of its fixture, or changes nothing.
 | throws or hangs instead of refuting | `AGENT_CHECK_SELFTEST_HARNESS_FAULT` |
 | passes only its own easy cases | `AGENT_CHECK_SELFTEST_FAILED` |
 | honest only when it recognises the self-test (seed, file name, bound task) | `AGENT_CHECK_SELFTEST_FAILED` |
+| honest only on the bound task's precomputed self-test documents, or on the target values they hold | `AGENT_CHECK_SELFTEST_FAILED` |
 | misses a flipped byte while claiming `corrupt-byte` | `AGENT_CHECK_SELFTEST_FAILED` |
 | claims only `missing-file` | `AGENT_CHECK_NO_VALUE_CLAIM` |
 | also a reader | `AGENT_CHECK_NOT_ORACLE_ONLY` |
@@ -103,6 +114,13 @@ Its only output is a frozen `myco.agent-check-signal/1`:
   fit the sandbox budget: each self-test document is one sandboxed process.
 - No agent-facing tool proposes a check yet, and nothing displays signals. Both need their own
   reviewed change, and both must keep the signal advisory.
+- **A check can still lie on a document unlike anything the self-test draws.** The draws are
+  wide but finite: one corruption per document (a wrong value and collateral damage together
+  is never drawn), a fixed set of value shapes, `.csv` only. A check that answers honestly on
+  everything the draw can produce and says `verified` to, say, a document with two errors
+  passes R5 and lies on that real document. Content cannot be made indistinguishable from
+  every possible real document. This is why the signal is advisory and refused as evidence:
+  it never changes a gate verdict, an R1 row, a scorecard cell or a grade (§3, §4).
 - The self-test cannot be told from a real run by intent or file name, but the
   sandbox still lets a check read the clock. A check that is honest only before a date it
   chose ("time bomb") passes the self-test. The sandbox should present a fixed clock to

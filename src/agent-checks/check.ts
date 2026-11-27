@@ -12,8 +12,11 @@
  *     for this proposal from the bound task's own intent and state-file name plus cases with
  *     random seeds and names, plus the host read corruptions track T adds to every case. The
  *     check's own `selftestCases` hook is never called, so its author cannot pick the damage it
- *     happens to catch, and no fixed seed or name marks a call as a self-test: a check that
- *     behaves only while it thinks it is being tested is refused. The check is
+ *     happens to catch; no fixed seed or name marks a call as a self-test; and every
+ *     corruption (values, cells, offsets) is drawn from host-side randomness, so the author
+ *     cannot compute the self-test documents from the intent. A check that behaves only while
+ *     it recognises the self-test is refused; one that lies only on documents unlike anything
+ *     the self-test draws is not, which is why its signal stays advisory. The check is
  *     refused unless R5 passes for EVERY class it claims (an over-claim, a crash, a timeout,
  *     an always-pass or an always-refute check is refused), it claims at least one value class
  *     (a check for a task must check the edit, not only that a file exists), and it is an
@@ -69,7 +72,8 @@ export interface AgentCheckBinding {
 /**
  * The task as the check will see it on a real run: the intent the check is called with and
  * the basename of the captured state file. The self-test is built from these (D1, round 1 of
- * #590), so the check cannot tell a self-test call from a real one by anything but content.
+ * #590), so only a document's content can tell a self-test call from a real one, and the
+ * corrupted content is drawn at random (round 3).
  */
 export interface AgentCheckTask {
   readonly intent: CalcRecordEditParams;
