@@ -304,6 +304,38 @@ export function apiKeySourceProblem(messages: readonly Record<string, unknown>[]
 }
 
 /**
+ * The harness class of a run that did NOT complete normally, or null for a clean result
+ * (`type: "result"`, subtype `success`, `is_error` false, exit status 0, no structured error on
+ * any message). `messages` are the parsed messages and `result` the last result event (null when
+ * there is none). Exported so the hcu+shell arm (TIF-268) decides "completed" and classifies a
+ * failed call with this very rule; `interpretResult` is its only caller here.
+ *  - No result event: nothing here is an agent outcome, so plain (non-JSON) stdout is classified
+ *    with stderr (PR #598 round 3, R2-D3a: quota wording on stdout must stop the run, not be
+ *    re-run as a transport error that spends attempts); nothing named is `transport-error`.
+ *  - An error result: its text, `errors[]` and stderr; nothing named is `error-result`.
+ * Both go through `classOfFailure` (#607 round 3, B2).
+ */
+export function classOfUncleanRun(
+  messages: readonly Record<string, unknown>[],
+  result: Record<string, unknown> | null,
+  stdout: string,
+  stderr: string,
+  code: number | null,
+): PilotHarnessClass | null {
+  const structured = structuredClass(messages);
+  if (result === null)
+    return classOfFailure(structured, `${stdout}\n${stderr}`) ?? "transport-error";
+  const errored =
+    result.is_error !== false || result.subtype !== "success" || code !== 0 || structured !== null;
+  if (!errored) return null;
+  const text = typeof result.result === "string" ? result.result : "";
+  const errors = Array.isArray(result.errors)
+    ? result.errors.filter((e) => typeof e === "string")
+    : [];
+  return classOfFailure(structured, `${text}\n${errors.join("\n")}\n${stderr}`) ?? "error-result";
+}
+
+/**
  * Classify the process outcome; throws `HarnessFault` for every harness-side or uncertain
  * outcome. Returns the agent's report only for a clean result: `type: "result"`, subtype
  * `success`, `is_error` false, exit status 0, and no structured error on any message. A clean
@@ -325,32 +357,21 @@ export function interpretResult(stdout: string, stderr: string, code: number | n
   // An API-key run is never the agent's outcome and never retried: it stops the run first.
   const apiKey = apiKeySourceProblem(messages);
   if (apiKey !== null) throw new ApiKeyPathFault(apiKey, usage);
-  const structured = structuredClass(messages);
-  if (result === null) {
-    // No result event: nothing here is an agent outcome, so plain (non-JSON) stdout is
-    // classified with stderr (PR #598 round 3, R2-D3a: quota wording on stdout must stop the
-    // run, not be re-run as a transport error that spends attempts).
-    const noResultText = `${stdout}\n${stderr}`;
-    const cls = classOfFailure(structured, noResultText);
-    if (cls !== null)
-      fault(cls, `claude exited ${String(code)} with a ${cls} signal and no result`);
-    fault(
-      "transport-error",
-      `claude exited ${String(code)} without a JSON result (stderr ${stderr.length} bytes)`,
-    );
+  const cls = classOfUncleanRun(messages, result, stdout, stderr, code);
+  if (cls !== null && result === null) {
+    // `classOfFailure` never yields `transport-error`: it is the nothing-named fallback.
+    if (cls === "transport-error")
+      fault(
+        cls,
+        `claude exited ${String(code)} without a JSON result (stderr ${stderr.length} bytes)`,
+      );
+    fault(cls, `claude exited ${String(code)} with a ${cls} signal and no result`);
   }
-  const r = result as Record<string, unknown>;
-  const errors = Array.isArray(r.errors) ? r.errors.filter((e) => typeof e === "string") : [];
-  const errored =
-    r.is_error !== false || r.subtype !== "success" || code !== 0 || structured !== null;
-  if (errored) {
-    const failedText = `${text}\n${errors.join("\n")}\n${stderr}`;
-    const cls = classOfFailure(structured, failedText);
+  if (cls !== null)
     fault(
-      cls ?? "error-result",
-      `claude returned an error result (subtype ${String(r.subtype)}, exit ${String(code)}${cls === null || cls === "error-result" ? ", unclassified" : ""})`,
+      cls,
+      `claude returned an error result (subtype ${String(result?.subtype)}, exit ${String(code)}${cls === "error-result" ? ", unclassified" : ""})`,
     );
-  }
   // A run that completed normally is the agent's outcome. The auth / billing / transient
   // vocabulary is broad (bare 401/403/429, "billing", "quota", "credential") and matches
   // ordinary task content, so it is NEVER applied here (verifier round 2, D4).

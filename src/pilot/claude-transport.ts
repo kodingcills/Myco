@@ -60,6 +60,7 @@ export {
   classOfFailure,
   classOfStatus,
   classOfText,
+  classOfUncleanRun,
   interpretResult,
   namesUsageLimit,
   parseClaim,

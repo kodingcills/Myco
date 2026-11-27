@@ -19,10 +19,10 @@
  *    CLI found an API credential somewhere we cannot see (a settings file, a helper), and we
  *    stop rather than spend on it.
  *
- * Whether a call completed normally is decided by the myco-gate arm's transport classifier
- * (`interpretResult`, reused, not copied). A call that did not is classed by
- * `./subscription-faults.ts` (#598 round 2's vocabulary, matched exactly; round-2 verifier
- * D1), and every class halts the run except the explicit per-trial list:
+ * Whether a call completed normally, and how a call that did not is classed, is decided by
+ * the myco-gate arm's merged classifier (#598 + #607), imported, not copied (round 4:
+ * `classOfUncleanRun` and `classOfClaimlessCleanResult` from `src/pilot/claude-cli.ts`, through
+ * `./subscription-faults.ts`), and every class halts the run except the explicit per-trial list:
  *  - `auth` halts `planner-auth`; `billing` (credit, billing, quota, HTTP 402) halts
  *    `planner-billing`; the subscription's usage quota halts `planner-usage-limit` (lead
  *    ruling 02:18Z: its own exit code, no retry, no attempt spent, reported to the lead);
@@ -30,10 +30,11 @@
  *  - an unclassified error result or unreadable output is a `SubscriptionPlannerFailure` for
  *    this trial only, with a code the runner's two-identical-failures rule counts.
  * A call that DID complete normally is the agent's turn, with one fail-closed exception (round
- * 3, verifier N1, #598's R2-D3b): a clean result with no parseable decision whose text names
- * the usage quota (`USAGE_LIMIT_TEXT`) halts `planner-usage-limit`. A result with a valid
- * decision is never reclassified. With no result event, stdout and stderr are classified
- * together (N2, #598's R2-D3a).
+ * 3 N1; round 4, as #607): a clean result with no parseable decision whose text OR stderr names
+ * the usage quota (Unicode whitespace folded; "You've hit your limit" included), or one of the
+ * narrow billing / auth phrases, halts with that class. A result with a valid decision is never
+ * reclassified (the decision plays the myco-gate arm's claim line). With no result event,
+ * stdout and stderr are classified together (N2, #598's R2-D3a).
  * A halt is final for the run (no retry loop). An `apiKeySource` other than `none` on ANY
  * message halts `planner-api-key-path`, whatever the call's outcome (as #598).
  *
@@ -53,8 +54,6 @@ import type { ChildProcess } from "node:child_process";
 import {
   CHILD_ENV_ALLOWLIST,
   childEnv,
-  HarnessFault,
-  interpretResult,
   PILOT_MODEL,
   parseUsage,
   type SpawnFn,
@@ -76,7 +75,7 @@ import {
   PER_TRIAL_CLASSES,
   reportsApiKeySource,
   type SubscriptionFaultClass,
-  USAGE_LIMIT_TEXT,
+  undecidedCleanCallClass,
 } from "./subscription-faults.ts";
 
 /** The planner model: the myco-gate arm's, so the head-to-head compares one model. */
@@ -268,18 +267,13 @@ export function readPlannerCall(
       "planner-api-key-path",
       "the CLI authenticated with an API credential, not the subscription",
     );
-  // Did the call complete normally? The gate arm's own rule (it reads arrays of messages).
-  let completed = true;
-  try {
-    interpretResult(messages === null ? stdout : JSON.stringify(messages), stderr, code);
-  } catch (error) {
-    if (!(error instanceof HarnessFault)) throw error;
-    completed = false;
-  }
-  if (!completed) {
-    const results = all.filter((m) => m.type === "result");
-    // No result event: the raw stdout (even unparseable) is classified with stderr (N2).
-    const cls = failedCallClass(all, results[results.length - 1] ?? null, stderr, stdout);
+  const results = all.filter((m) => m.type === "result");
+  const last = results[results.length - 1] ?? null;
+  // Did the call complete normally? The myco-gate arm's own rule (`classOfUncleanRun`, round
+  // 4: imported, one classifier). No result event: the raw stdout (even unparseable) is
+  // classified with stderr (N2); an unmapped structured error falls back to the text (#607 B2).
+  const cls = failedCallClass(all, last, stderr, stdout, code);
+  if (cls !== null) {
     if (PER_TRIAL_CLASSES.has(cls))
       throw new SubscriptionPlannerFailure(`planner-${cls}`, `the CLI call failed (${cls})`);
     if (cls === "rate-limit")
@@ -289,21 +283,24 @@ export function readPlannerCall(
       `the CLI reported a ${cls} fault; no retry`,
     );
   }
-  const results = all.filter((m) => m.type === "result");
-  const result = results[results.length - 1] ?? {};
+  const result = last ?? {};
   const text = typeof result.result === "string" ? result.result : "";
   // The one narrow, fail-closed exception to "a clean result is the agent's" (round-3 verifier
-  // N1; lead rulings 02:18Z and 03:05Z; #598's R2-D3b at fc01e69a, where a claim line plays the
-  // part a parseable decision plays here): a clean result with NO parseable decision whose text
-  // names the subscription's usage quota is the CLI reporting the quota, not an agent turn. It
-  // halts `planner-usage-limit` (exit 7; no row, nothing counted, no further call). The usage
-  // vocabulary has no bare numbers, so task data (qty 401 / 403 / 429) cannot trigger it, and a
-  // result WITH a valid decision is never reclassified.
-  if (parseHcuShellDecision(text.trim()) === undefined && USAGE_LIMIT_TEXT.test(text))
-    throw new PlannerHalt(
-      "planner-usage-limit",
-      "the CLI returned a clean result with no decision whose text names the usage limit; no retry",
-    );
+  // N1; round 4: the myco-gate arm's #606 S1 / S2 and #607 B1 / L1 rule, imported): a clean
+  // result with NO parseable decision whose text or stderr names the subscription's usage quota,
+  // or one of the narrow numberless billing / auth phrases, is the CLI reporting a fault, not an
+  // agent turn. It halts with that class (`planner-usage-limit`: exit 7; no row, nothing
+  // counted, no further call). The broad vocabulary (bare 401 / 403 / 429, "billing", "quota")
+  // is never applied here, so task data cannot trigger it, and a result WITH a valid decision
+  // (this arm's counterpart of the myco-gate arm's claim line) is never reclassified.
+  if (parseHcuShellDecision(text.trim()) === undefined) {
+    const undecided = undecidedCleanCallClass(text, stderr);
+    if (undecided !== null)
+      throw new PlannerHalt(
+        HALT_CODE[undecided] ?? "planner-fault-unknown",
+        `the CLI returned a clean result with no decision whose text or stderr names a ${undecided} fault; no retry`,
+      );
+  }
   const init = all.find((m) => m.type === "system" && m.subtype === "init");
   if (init === undefined || typeof init.apiKeySource !== "string")
     throw new PlannerHalt(
