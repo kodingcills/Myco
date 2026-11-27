@@ -27,8 +27,9 @@
  * grade status, stop codes), a strict pattern (safe ids, ISO timestamps) or a bounded integer.
  * Free text is never carried: not the heartbeat's `lastLog` or `error`, the pid, a fault's
  * `faultMessage`, an arm row's `cause.detail`, digests, the agent's result text or claim text,
- * the gate's claim echo, corrections, evidence, or the grader's reasons and target. An id that
- * contains a host needle (home or temp directory, `/<user>`) is dropped too.
+ * the gate's claim echo, corrections, evidence, or the grader's reasons and target. A safe id
+ * has no `/` or `\`, so it cannot carry a host path; the optional `needles` check only adds
+ * caller-supplied needles on top (a bare username inside an id is not dropped by default).
  */
 import { join } from "node:path";
 import { isSafeId, REASON_CODES } from "../gate/api.ts";

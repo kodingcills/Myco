@@ -12,7 +12,7 @@
  *    never opened (FIFOs planted there would block a reader that opened them).
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -579,6 +579,245 @@ describe("watch --pilot: a fake A/B stage root", () => {
   });
 });
 
+/** A single-run progress file from JSON lines. */
+function writeProgress(dir: string, lines: readonly Record<string, unknown>[]) {
+  writeFileSync(join(dir, PROGRESS_FILE), `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+}
+const AT = "2026-11-27T10:00:00.000Z";
+function startLine(trialKey: string, extra: Record<string, unknown> = {}) {
+  return {
+    schema: "myco.pilot.attempt/1",
+    event: "start",
+    taskId: "t",
+    attempt: 1,
+    trialKey,
+    supersedes: null,
+    at: AT,
+    ...extra,
+  };
+}
+function endLine(trialKey: string, extra: Record<string, unknown> = {}) {
+  return {
+    schema: "myco.pilot.attempt/1",
+    event: "end",
+    trialKey,
+    outcome: "decided",
+    harnessClass: null,
+    recovered: false,
+    armRow: null,
+    cost: null,
+    at: AT,
+    ...extra,
+  };
+}
+
+describe("watch --pilot: closed-vocabulary and strict-pattern fields (round 1 B1)", () => {
+  it("free text planted in every closed or pattern-checked field is shown as null and never served", async () => {
+    const dir = tempDir("myco-watch-closed-");
+    // Timestamps that are not strict ISO: free text, and an ISO prefix with free text after it.
+    writeProgress(dir, [
+      { schema: "myco.pilot.header/1", simulated: false },
+      startLine("r1p-t1-a1", { at: MARKER }),
+      endLine("r1p-t1-a1", {
+        at: `${AT} ${MARKER}`,
+        armRow: {
+          claim: MARKER,
+          gate: { called: true, verdict: MARKER, corrections: MARKER },
+          accepted: true,
+          cause: { kind: MARKER, detail: MARKER },
+        },
+      }),
+    ]);
+    writeFileSync(join(dir, ATTEMPT_LEDGER_FILE), "");
+    writeFileSync(
+      join(dir, GRADES_FILE),
+      `${JSON.stringify({ schema: "myco.benchmark.grade-row/1", trialKey: "r1p-t1-a1", status: MARKER })}\n`,
+    );
+    writeFileSync(
+      join(dir, LIVE_STATUS_FILE),
+      JSON.stringify({
+        schema: "myco.pilot.live-status/1",
+        runner: MARKER,
+        state: MARKER,
+        startedAt: MARKER,
+        updatedAt: `${AT}${MARKER}`,
+        exitCode: MARKER,
+        result: { status: MARKER, stopCode: MARKER },
+      }),
+    );
+    const source = pilotRunSource(dir);
+    const v = source.poll();
+    expect(v.trials).toHaveLength(1);
+    expect(v.trials[0]).toMatchObject({
+      trialKey: "r1p-t1-a1",
+      state: "decided",
+      startedAt: null,
+      endedAt: null,
+      says: null,
+      gate: { called: true, verdict: null, corrections: null },
+      accepted: false,
+      causeKind: null,
+      grade: null,
+    });
+    expect(v.live).toEqual({
+      runner: null,
+      state: null,
+      startedAt: null,
+      updatedAt: null,
+      stale: false,
+      exitCode: null,
+      status: null,
+      stopCode: null,
+    });
+    expect(JSON.stringify(v)).not.toContain(MARKER);
+    // The server's backstop does not look for this marker: the projection alone keeps it out.
+    const s = await serve({ runs: [], pilot: source });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(s.state().pilotRefused).toBe(false);
+    expect(s.state().pilot?.trials).toHaveLength(1);
+    expectNoLeak(await allBodies(s.port), [dir]);
+  });
+
+  it("valid values of the same fields are carried (so the nulls above are the filter, not a dropped field)", () => {
+    const dir = tempDir("myco-watch-closed-ok-");
+    writeProgress(dir, [
+      startLine("r1p-t1-a1"),
+      endLine("r1p-t1-a1", {
+        at: "2026-11-27T10:01:00Z",
+        armRow: {
+          claim: "not-done",
+          gate: { called: true, verdict: "refuted", corrections: "off" },
+          accepted: false,
+          cause: { kind: "oracle" },
+        },
+      }),
+    ]);
+    writeFileSync(
+      join(dir, GRADES_FILE),
+      `${JSON.stringify({ schema: "myco.benchmark.grade-row/1", trialKey: "r1p-t1-a1", status: "ungradable" })}\n`,
+    );
+    writeFileSync(
+      join(dir, LIVE_STATUS_FILE),
+      JSON.stringify({
+        schema: "myco.pilot.live-status/1",
+        runner: "r1-pilot",
+        state: "finished",
+        startedAt: AT,
+        updatedAt: AT,
+        exitCode: 3,
+        result: { status: "halted", stopCode: "repeat-failure" },
+      }),
+    );
+    const v = pilotRunSource(dir).poll();
+    expect(v.trials[0]).toMatchObject({
+      startedAt: AT,
+      endedAt: "2026-11-27T10:01:00Z",
+      says: "not-done",
+      gate: { verdict: "refuted", corrections: "off" },
+      causeKind: "oracle",
+      grade: "ungradable",
+    });
+    expect(v.live).toMatchObject({
+      runner: "r1-pilot",
+      state: "finished",
+      startedAt: AT,
+      updatedAt: AT,
+      exitCode: 3,
+      status: "halted",
+      stopCode: "repeat-failure",
+    });
+  });
+
+  for (const [on, off] of [
+    [true, false],
+    [false, true],
+  ] as const)
+    it(`an A/B stage with on simulated=${on} and off simulated=${off} is SIMULATED as a whole`, async () => {
+      const { root } = fakeStage();
+      for (const [arm, simulated] of [
+        ["on", on],
+        ["off", off],
+      ] as const) {
+        const path = join(root, arm, PROGRESS_FILE);
+        const lines = readFileSync(path, "utf8").split("\n");
+        const header = JSON.parse(lines[0] ?? "") as Record<string, unknown>;
+        lines[0] = JSON.stringify({ ...header, simulated });
+        writeFileSync(path, lines.join("\n"));
+      }
+      const source = pilotRunSource(root);
+      expect(source.poll()).toMatchObject({ layout: "ab", simulated: true });
+      const s = await serve({ runs: [], pilot: source });
+      await new Promise((r) => setTimeout(r, 80));
+      expect((await raw(s.port, "/api/state")).body.toString("utf8")).toContain(
+        '"simulated":true',
+      );
+    });
+});
+
+describe("watch --pilot: ledger, heartbeat and progress edge cases (round 1 N1-N3)", () => {
+  it("a #518 ledger end while the progress file still says running disagrees", () => {
+    const dir = tempDir("myco-watch-ledger-");
+    writeProgress(dir, [startLine("r1p-t1-a1"), startLine("r1p-t2-a1")]);
+    const ev = (kind: string, trialKey: string, extra: Record<string, unknown> = {}) =>
+      JSON.stringify({ schema: "myco.m2.attempt-event/1", kind, trialKey, ...extra });
+    writeFileSync(
+      join(dir, ATTEMPT_LEDGER_FILE),
+      `${[ev("start", "r1p-t1-a1"), ev("end", "r1p-t1-a1", { outcome: "completed" }), ev("start", "r1p-t2-a1")].join("\n")}\n`,
+    );
+    const v = pilotRunSource(dir).poll();
+    expect(v.trials.map((t) => [t.state, t.ledger])).toEqual([
+      ["running", "disagrees"],
+      ["running", "agrees"],
+    ]);
+  });
+
+  it("a finished run's old heartbeat is not stale; a running one's is", () => {
+    const dir = tempDir("myco-watch-stale-");
+    const status = (state: string) =>
+      writeFileSync(
+        join(dir, LIVE_STATUS_FILE),
+        JSON.stringify({ schema: "myco.pilot.live-status/1", state, updatedAt: AT }),
+      );
+    const late = () => Date.parse(AT) + 10 * 180_000;
+    status("finished");
+    expect(pilotRunSource(dir, { now: late }).poll().live).toMatchObject({
+      state: "finished",
+      stale: false,
+    });
+    status("running");
+    expect(pilotRunSource(dir, { now: late }).poll().live).toMatchObject({
+      state: "running",
+      stale: true,
+    });
+  });
+
+  it("a heartbeat with another schema is not read", () => {
+    const dir = tempDir("myco-watch-schema-");
+    writeFileSync(
+      join(dir, LIVE_STATUS_FILE),
+      JSON.stringify({ schema: MARKER, runner: "r1-pilot", state: "running", updatedAt: AT }),
+    );
+    expect(pilotRunSource(dir).poll().live).toBeNull();
+    writeFileSync(
+      join(dir, LIVE_STATUS_FILE),
+      JSON.stringify({ runner: "r1-pilot", state: "running", updatedAt: AT }),
+    );
+    expect(pilotRunSource(dir).poll().live).toBeNull();
+  });
+
+  it("the first start of a trial wins; a duplicate start is skipped, not overwritten", () => {
+    const dir = tempDir("myco-watch-dup-");
+    writeProgress(dir, [
+      startLine("r1p-t1-a1", { taskId: "first", attempt: 1 }),
+      startLine("r1p-t1-a1", { taskId: "second", attempt: 2 }),
+    ]);
+    const v = pilotRunSource(dir).poll();
+    expect(v.trials).toHaveLength(1);
+    expect(v.trials[0]).toMatchObject({ taskId: "first", attempt: 1 });
+    expect(v.skipped).toBe(1);
+  });
+});
+
 describe("watch --pilot: transcript projection", () => {
   it("keeps closed counts and REASON_CODES only; a single --output-format json result gives turns", () => {
     const view = projectTranscript(Buffer.from(plantedTranscript("refuted")));
@@ -654,13 +893,14 @@ describe("watch --pilot: never opens the oracle's inputs or the vault", () => {
     const r = spawnSync("npx", ["tsx", join(ROOT, "test", "watch", "poll-run-dir.ts"), root], {
       cwd: ROOT,
       encoding: "utf8",
-      timeout: 60_000,
+      // The child takes well under a second; a reader that opened a FIFO blocks until killed.
+      timeout: 15_000,
     });
     expect(r.signal, r.stderr).toBeNull();
     expect(r.status, r.stderr).toBe(0);
     const v = JSON.parse(r.stdout) as PilotView;
     expect(v.trials[0]?.actions?.gateCalls[0]?.verdict).toBe("refuted");
-  }, 90_000);
+  }, 30_000);
 });
 
 describe("watch --pilot: server backstop and CLI", () => {

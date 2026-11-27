@@ -81,8 +81,9 @@ arm row's `cause.detail`, `faultClass` or digests, the agent's text or claim tex
 claim echo, corrections or evidence, or the grader's reasons and target. It never opens the
 oracle's inputs or the vault: `vault/`, `gate-evidence/`, `doc.csv`, `gate-tasks.json` and
 `mcp.json` (tested with FIFOs planted at those paths). A transcript is reached only through
-non-symlink components. An id that is not a safe id, or that contains the home directory, the
-temp directory or `/<user>`, is dropped. As a backstop, the server refuses the whole pilot view
+non-symlink components. An id that is not a safe id is dropped; a safe id has no `/` or `\`, so
+it cannot carry a host path such as the home or temp directory (a bare username inside an id is
+not dropped). Timestamps are shown only when they are strict ISO-8601 UTC. As a backstop, the server refuses the whole pilot view
 (`pilotRefused`) if a host needle, an absolute host path or a key-shaped string survives the
 projection. The run directory's path is never printed or served.
 
@@ -93,7 +94,8 @@ page shows the turns and the refused tool uses, and per-call gate results only f
 (message array) transcript. Pilot trials have no frames yet. `--pilot` can be combined with
 `--run` / `--decision-log` / `--frames` for a gate decision log and frames you name.
 
-Every simulated run is marked `SIMULATED · NOT EVIDENCE` on the page. The view is a viewer, not
+Every simulated run is marked `SIMULATED · NOT EVIDENCE` on the page; an A/B stage is marked if
+either arm's header says simulated. The view is a viewer, not
 a verdict: "accepted by the gate" is not graded.
 
 ## Security model
