@@ -1,6 +1,6 @@
 /**
  * #682: the committed public-benchmark manifests are self-consistent, carry the pins, record
- * assets as license-unclear only, and the generated placement report matches them. Runs in
+ * assets as license-unclear only, and the generated requirements report matches them. Runs in
  * every CI job (no checkout needed); the byte-for-byte check against the pinned upstream runs
  * in test/benchmark/upstream-evaluator.test.ts.
  */
@@ -15,7 +15,7 @@ import {
   WAA_OFFICE_V1,
 } from "../../src/benchmark/upstream/import.ts";
 import { OSWORLD_PIN, WAA_PIN } from "../../src/benchmark/upstream/pins.ts";
-import { renderPlacementReport } from "../../src/benchmark/upstream/placement-report.ts";
+import { renderRequirementsReport } from "../../src/benchmark/upstream/requirements-report.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -34,7 +34,7 @@ function load(version: string) {
 }
 
 const SETS = [
-  { spec: OSWORLD_OFFICE_V1, pin: OSWORLD_PIN, total: 173 },
+  { spec: OSWORLD_OFFICE_V1, pin: OSWORLD_PIN, total: 117 },
   { spec: WAA_OFFICE_V1, pin: WAA_PIN, total: 64 },
 ] as const;
 
@@ -54,7 +54,7 @@ describe("committed public-benchmark manifests (#682)", () => {
 
       it("has unique upstream ids, only the selected domains, and counts that add up", () => {
         expect(new Set(tasks.map((t) => t.taskId)).size).toBe(tasks.length);
-        const domains = new Set([...spec.domains, ...spec.officeFilteredDomains]);
+        const domains = new Set(spec.domains);
         for (const t of tasks) {
           expect(domains.has(t.domain), t.taskId).toBe(true);
           expect(t.taskSetVersion).toBe(spec.taskSetVersion);
@@ -84,26 +84,37 @@ describe("committed public-benchmark manifests (#682)", () => {
     });
   }
 
-  it("multi_apps rows all name a LibreOffice app (the stated selection rule)", () => {
-    for (const t of load("osworld-office-v1").tasks.filter((x) => x.domain === "multi_apps"))
-      expect(t.relatedApps.join(" ").toLowerCase(), t.taskId).toMatch(
-        /libreoffice|calc|writer|impress/,
-      );
+  it("osworld-office-v1 is exactly the three LibreOffice domains at the pin (47 + 23 + 47), none excluded, all in OSWorld's own DesktopEnv", () => {
+    const { manifest, tasks } = load("osworld-office-v1");
+    expect(manifest.counts).toEqual({
+      total: 117,
+      perDomain: { libreoffice_calc: 47, libreoffice_writer: 23, libreoffice_impress: 47 },
+      infeasible: 2,
+      excluded: 0,
+    });
+    expect(manifest.exclusions).toEqual({});
+    expect(manifest.environment).toBe("osworld-desktopenv");
+    for (const t of tasks) expect(t.requirements.environment, t.taskId).toBe("osworld-desktopenv");
+    expect(tasks.some((t) => t.domain === "multi_apps")).toBe(false);
   });
 
-  it("placement: every WAA task needs the Windows VM; no Linux-desktop task needs the network", () => {
-    for (const t of load("waa-office-v1").tasks) expect(t.placement.target).toBe("windows-vm");
-    for (const t of load("osworld-office-v1").tasks) {
-      expect(t.placement.target).not.toBe("windows-vm");
-      if (t.placement.target === "linux-namespace-desktop")
-        expect(t.placement.needs, t.taskId).not.toContain("NETWORK_PROXY");
+  it("WAA (phase 2) runs in WAA's own Windows environment", () => {
+    for (const t of load("waa-office-v1").tasks)
+      expect(t.requirements.environment).toBe("waa-windows-arena");
+  });
+
+  it("no task record carries a Myco placement (namespace desktop) any more", () => {
+    for (const v of ["osworld-office-v1", "waa-office-v1"]) {
+      const { jsonl, manifest } = load(v);
+      expect(jsonl).not.toMatch(/placement|linux-namespace-desktop|linux-needs/);
+      expect(JSON.stringify(manifest)).not.toMatch(/placement|perPlacement/);
     }
   });
 
-  it("docs/benchmark/upstream/placement.md is the generated report for exactly these manifests", () => {
+  it("docs/benchmark/upstream/requirements.md is the generated report for exactly these manifests", () => {
     const sets = [load("osworld-office-v1"), load("waa-office-v1")];
-    const doc = readFileSync(join(ROOT, "docs/benchmark/upstream/placement.md"), "utf8");
-    expect(doc).toBe(renderPlacementReport(sets));
+    const doc = readFileSync(join(ROOT, "docs/benchmark/upstream/requirements.md"), "utf8");
+    expect(doc).toBe(renderRequirementsReport(sets));
     for (const { tasks } of sets) for (const t of tasks) expect(doc).toContain(`\`${t.taskId}\``);
   });
 

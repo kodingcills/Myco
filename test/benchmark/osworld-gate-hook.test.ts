@@ -20,10 +20,10 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { GATE_API_VERSION } from "../../src/gate/api.ts";
-import { GATE_TOOL } from "../../src/gate/mcp-server.ts";
 import { OSWORLD_HARNESS, OSWORLD_PIN } from "../../src/benchmark/upstream/pins.ts";
 import { gradeR1ExampleDir, type HarnessStamp } from "../../src/benchmark/upstream/r1-grade.ts";
+import { GATE_API_VERSION } from "../../src/gate/api.ts";
+import { GATE_TOOL } from "../../src/gate/mcp-server.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 const HOOK_DIR = join(ROOT, "src/gate-hooks/osworld");
@@ -190,13 +190,17 @@ describe.runIf(hasPython)("OSWorld DONE gate hook (MOCK, fakes only)", () => {
     const calls = s.serverSaw.filter((m) => m.method === "tools/call");
     expect(calls).toHaveLength(1);
     expect(calls[0]?.params?.name).toBe(GATE_TOOL);
-    expect(calls[0]?.params?.arguments).toEqual({ taskId: "task-9", runId: "run-9", claim: "done" });
+    expect(calls[0]?.params?.arguments).toEqual({
+      taskId: "task-9",
+      runId: "run-9",
+      claim: "done",
+    });
     expect(s.reply.verdict).toBe("verified");
     expect(s.unreachable).toBe("GATE_UNAVAILABLE");
   });
 
   describe.runIf(Boolean(OSW) || REQUIRED)("through OSWorld's real loop at the pin", () => {
-    const up = report.upstream as { accept: Arms; refuse: Arms; failScore: Run } | undefined;
+    const up = (report.upstream ?? {}) as { accept: Arms; refuse: Arms; failScore: Run };
     const stamp: HarnessStamp = {
       repo: OSWORLD_HARNESS.repo,
       commit: OSWORLD_PIN.commit,
@@ -207,24 +211,24 @@ describe.runIf(hasPython)("OSWorld DONE gate hook (MOCK, fakes only)", () => {
     };
 
     it("ran (MYCO_UPSTREAM_OSWORLD points at a checkout at the pin)", () => {
-      expect(up).toBeDefined();
+      expect(report.upstream).toBeDefined();
     });
 
     it("lib_run_single.run_single_example hands env.step byte-identical actions in all three arms when the gate accepts", () => {
-      const a = up?.accept as Arms;
+      const a = up.accept;
       expect(a["gate-before-done"].envActions).toEqual(a["no-gate"].envActions);
       expect(a["self-check"].envActions).toEqual(a["no-gate"].envActions);
       expect(a["self-check"].agentObs).toEqual(a["no-gate"].agentObs);
     });
 
     it("the real loop runs the refused DONE as WAIT and continues to the accepted DONE", () => {
-      const r = up?.refuse as Arms;
+      const r = up.refuse;
       expect(r["gate-before-done"].envActions).toEqual(refuse["gate-before-done"].envActions);
       expect(r["no-gate"].envActions).toEqual(refuse["no-gate"].envActions);
     });
 
     it("env.evaluate() runs once after the loop; upstream writes its score to result.txt; Myco's R1 grader reads exactly that", () => {
-      const pass = (up?.accept as Arms)["no-gate"];
+      const pass = up.accept["no-gate"];
       expect(pass.evaluations).toBe(1);
       expect(pass.scores).toEqual([1]);
       expect(pass.resultTxt).toBe("1.0\n");
@@ -233,7 +237,7 @@ describe.runIf(hasPython)("OSWorld DONE gate hook (MOCK, fakes only)", () => {
         upstreamScore: 1,
         lastAction: "DONE",
       });
-      const fail = up?.failScore as Run;
+      const fail = up.failScore;
       expect(fail.resultTxt).toBe("0.0\n");
       expect(gradeR1ExampleDir(fail.resultDir as string, "fail-score", stamp)).toMatchObject({
         status: "fail",

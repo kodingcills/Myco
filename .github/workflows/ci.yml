@@ -756,3 +756,8 @@ jobs:
           MYCO_UPSTREAM_PYTHON: ${{ runner.temp }}/upstream-venv/bin/python
           MYCO_UPSTREAM_REQUIRED: "1"
         run: pnpm exec vitest run test/benchmark/upstream-evaluator.test.ts
+      - name: R1 harness at the pin (DesktopEnv.evaluate path, runner patch, DONE gate hook through the real loop; must not skip)
+        env:
+          MYCO_UPSTREAM_OSWORLD: ${{ runner.temp }}/osworld
+          MYCO_UPSTREAM_REQUIRED: "1"
+        run: pnpm exec vitest run test/benchmark/upstream-r1-grade.test.ts test/benchmark/osworld-gate-hook.test.ts

@@ -27,7 +27,7 @@ export const WAA_PIN: UpstreamPin = {
 /**
  * The public-benchmark R1 harness (lead ruling 2026-11-27 ~13:55Z, #700 comment 7220110528):
  * OSWorld's OWN environment, action server, evaluator and Claude runner, unmodified, at
- * OSWORLD_PIN.commit. Myco adds only the DONE gate (src/gate-hooks/osworld/). Each file is
+ * OSWORLD_PIN.commit. Myco adds only the DONE gate (see docs/benchmark/upstream). Each file is
  * pinned by SHA-256; the R1 grader (`./r1-grade.ts`) refuses a run whose recorded harness is
  * not exactly this, and the upstream CI job re-hashes the files in a fresh clone.
  */
@@ -47,13 +47,12 @@ export const OSWORLD_HARNESS = {
   controller: "desktop_env/controllers/python.py#PythonController",
   grader: "desktop_env/desktop_env.py#DesktopEnv.evaluate",
   /**
-   * SHA-256 of the runner after src/gate-hooks/osworld/run_multienv_claude.gate.patch (the
-   * documented patch surface). All three arms run this same patched runner; arms no-gate and
+   * SHA-256 of the runner after the documented gate-hook patch surface
+   * (docs/benchmark/upstream/gate-hook.md). All three arms run this same patched runner; arms no-gate and
    * self-check bypass the gate by configuration. A run stamp must carry this digest for the
    * runner file and the upstream digest for every other harness file.
    */
   patchedAgentRunnerSha256: "d08496bd4ae6b72c1c0a8d3f1b0b9100ef468512ffb58b6ca19c98a5489f8373",
-  patch: "src/gate-hooks/osworld/run_multienv_claude.gate.patch",
   /** Providers the pinned runner's --provider_name accepts. */
   providers: ["aws", "virtualbox", "vmware", "docker", "azure", "pyromind"],
   files: {

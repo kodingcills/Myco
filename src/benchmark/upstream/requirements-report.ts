@@ -47,7 +47,9 @@ export function renderRequirementsReport(
   lines.push("");
   lines.push("## Summary");
   lines.push("");
-  lines.push("| Task set | Upstream @ commit | Environment | Tasks | Per domain | Infeasible | Excluded |");
+  lines.push(
+    "| Task set | Upstream @ commit | Environment | Tasks | Per domain | Infeasible | Excluded |",
+  );
   lines.push("|---|---|---|---|---|---|---|");
   for (const { manifest } of sets) {
     const perDomain = Object.entries(manifest.counts.perDomain)

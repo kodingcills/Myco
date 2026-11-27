@@ -54,22 +54,72 @@ describe("upstream importer (#682 item 2)", () => {
     );
   });
 
-  it("selects by the stated rule only: whole office domains, multi_apps only with a LibreOffice app", () => {
+  it("selects by the stated rule only: every listed task in the three LibreOffice domains, nothing from multi_apps", () => {
     const { tasks, manifest } = fresh();
     expect(tasks.map((t) => t.taskId)).toEqual([
       "calc-0001",
       "calc-0002",
       "writer-0001",
       "impress-0001",
-      "multi-0001",
     ]);
-    expect(manifest.counts.perDomain).toEqual({
-      libreoffice_calc: 2,
-      libreoffice_writer: 1,
-      libreoffice_impress: 1,
-      multi_apps: 1,
+    expect(manifest.counts).toEqual({
+      total: 4,
+      perDomain: { libreoffice_calc: 2, libreoffice_writer: 1, libreoffice_impress: 1 },
+      infeasible: 1,
+      excluded: 0,
     });
+    expect(manifest.environment).toBe("osworld-desktopenv");
+    expect(manifest.exclusions).toEqual({});
     expect(manifest.selectionRule).toBe(OSWORLD_OFFICE_V1.selectionRule);
+    expect(OSWORLD_OFFICE_V1.domains).toEqual([
+      "libreoffice_calc",
+      "libreoffice_writer",
+      "libreoffice_impress",
+    ]);
+  });
+
+  it("needing another app, a guest-state getter or the network is never an exclusion (no Myco placement filter)", () => {
+    const extra = {
+      domain: "libreoffice_writer",
+      id: "writer-0002",
+      body: {
+        instruction: "Writer and Chrome, over the network.",
+        related_apps: ["libreoffice writer", "chrome", "gimp"],
+        proxy: true,
+        evaluator: {
+          func: "same_text",
+          result: { type: "accessibility_tree" },
+          expected: { type: "vm_command_line", command: "ls" },
+        },
+      },
+    };
+    const { tasks } = fresh([...SYN_TASKS, extra]);
+    expect(tasks.map((t) => t.taskId)).toContain("writer-0002");
+    expect(tasks.map((t) => t.taskId)).toContain("impress-0001");
+    expect(tasks.find((t) => t.taskId === "writer-0002")?.requirements).toEqual({
+      environment: "osworld-desktopenv",
+      getters: ["accessibility_tree", "vm_command_line"],
+      setup: [],
+      postconfig: [],
+      needs: ["GETTERS_SERVED_BY_UPSTREAM_CONTROLLER", "NETWORK_PROXY"],
+    });
+  });
+
+  it("drops a listed task only through the stated exclusion list, and refuses an exclusion upstream does not list", () => {
+    const root = writeSyntheticUpstream();
+    roots.push(root);
+    const spec = { ...OSWORLD_OFFICE_V1, exclusions: { "calc-0002": "ASSET_LICENSE_REFUSED" } };
+    const { tasks, manifest } = importSubset(reader(root), spec, synPin());
+    expect(tasks.map((t) => t.taskId)).not.toContain("calc-0002");
+    expect(manifest.counts).toMatchObject({ total: 3, excluded: 1, infeasible: 0 });
+    expect(manifest.exclusions).toEqual({ "calc-0002": "ASSET_LICENSE_REFUSED" });
+    expect(() =>
+      importSubset(
+        reader(root),
+        { ...OSWORLD_OFFICE_V1, exclusions: { "not-listed": "X" } },
+        synPin(),
+      ),
+    ).toThrow(/EXCLUSION_NOT_LISTED not-listed/);
   });
 
   it("pins every evaluator file a task needs, including in-package imports, and nothing else", () => {
@@ -95,24 +145,27 @@ describe("upstream importer (#682 item 2)", () => {
     ]);
   });
 
-  it("classifies placement with codes", () => {
+  it("records what each task needs from OSWorld's own harness, as codes", () => {
     const { tasks } = fresh();
-    const p = Object.fromEntries(tasks.map((t) => [t.taskId, t.placement]));
-    expect(p["calc-0001"]).toEqual({
-      target: "linux-namespace-desktop",
-      reasons: ["LIBREOFFICE_ONLY_FILE_GRADED"],
-      needs: ["POSTCONFIG_EXECUTOR", "SEED_ASSETS_LICENSE_UNCLEAR"],
+    const r = Object.fromEntries(tasks.map((t) => [t.taskId, t.requirements]));
+    expect(r["calc-0001"]).toEqual({
+      environment: "osworld-desktopenv",
+      getters: ["cloud_file", "vm_file"],
+      setup: ["download"],
+      postconfig: ["sleep"],
+      needs: [
+        "GETTERS_SERVED_BY_UPSTREAM_CONTROLLER",
+        "GOLD_ASSETS_LICENSE_UNCLEAR",
+        "POSTCONFIG_RUN_BY_UPSTREAM_EVALUATE",
+        "SEED_ASSETS_LICENSE_UNCLEAR",
+      ],
     });
-    expect(p["calc-0002"]?.reasons).toContain("INFEASIBLE_TASK_GRADED_ON_AGENT_FAIL_ACTION");
-    expect(p["impress-0001"]).toMatchObject({
-      target: "linux-needs-guest-probe",
-      reasons: ["GUEST_PROBE_GETTER:vm_command_line"],
+    expect(r["calc-0002"]?.needs).toEqual(["INFEASIBLE_TASK_GRADED_ON_AGENT_FAIL_ACTION"]);
+    expect(r["impress-0001"]).toMatchObject({
+      getters: ["cloud_file", "vm_command_line"],
+      needs: ["GETTERS_SERVED_BY_UPSTREAM_CONTROLLER", "GOLD_ASSETS_LICENSE_UNCLEAR"],
     });
-    expect(p["multi-0001"]).toMatchObject({
-      target: "linux-needs-other-app",
-      reasons: ["APP_NOT_ON_DESKTOP:chrome"],
-      needs: ["NETWORK_PROXY"],
-    });
+    expect(r["writer-0001"]?.getters).toEqual(["cloud_file", "rule", "vm_file"]);
   });
 
   it("refuses a changed license, a missing task file, an unknown evaluator function and a mismatched id", () => {

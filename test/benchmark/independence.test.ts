@@ -291,7 +291,14 @@ describe("the upstream-evaluator grader is independent of the gate, both ways (#
 
   it("has the grader modules to check", () => {
     expect(upstreamFiles.map((f) => relative(UPSTREAM, f)).sort()).toEqual(
-      expect.arrayContaining(["evaluate.ts", "import.ts", "pins.ts", "placement-report.ts"]),
+      expect.arrayContaining([
+        "evaluate.ts",
+        "import.ts",
+        "pins.ts",
+        "prereg.ts",
+        "r1-grade.ts",
+        "requirements-report.ts",
+      ]),
     );
   });
 
@@ -304,8 +311,9 @@ describe("the upstream-evaluator grader is independent of the gate, both ways (#
   });
 
   it("neither the TS grader nor the Python driver names a gate module", () => {
+    // `myco.gate/v1` is the public API name the pre-registration records, not a module path.
     const forbidden =
-      /uno-verifier|filepersist|src\/gate|gate\/|core\/verify|src\/verify|tasks\/(intent|fixture)/;
+      /uno-verifier|filepersist|src\/gate|(?<!myco\.)gate\/|gate-hooks|myco_done_gate|core\/verify|src\/verify|tasks\/(intent|fixture)/;
     for (const name of [...upstreamFiles, join(UPSTREAM, "run_upstream_metric.py")]) {
       const code = readFileSync(name, "utf8").replace(/^\s*(\/\/|\*|\/\*\*|#).*$/gm, "");
       expect(code, relative(ROOT, name)).not.toMatch(forbidden);
@@ -332,6 +340,88 @@ describe("the upstream-evaluator grader is independent of the gate, both ways (#
         expect.arrayContaining([expect.stringContaining("src/gate/gate.ts reached")]),
       );
       expect(found).toEqual(expect.arrayContaining([expect.stringContaining("imports node:net")]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Public-benchmark R1 under the lead's 13:55Z harness ruling (gap item 6): the gate's oracle
+ * must be independent of the upstream evaluator. No import of OSWorld's evaluator (its
+ * `desktop_env` package: metrics, getters, DesktopEnv), no shared code with Myco's upstream
+ * modules, no reading of evaluator output (`result.txt`, scores) or gold files. Checked for
+ * the gate (src/gate) and the DONE gate hook (src/gate-hooks), and the other way round.
+ */
+describe("the gate and its OSWorld DONE hook are independent of the upstream evaluator, both ways", () => {
+  const GATE_DIRS = [join(ROOT, "src", "gate"), join(ROOT, "src", "gate-hooks")];
+  const UPSTREAM = join(ROOT, "src", "benchmark", "upstream");
+  const filesUnder = (dir: string, ext: RegExp): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory()
+        ? filesUnder(join(dir, e.name), ext)
+        : ext.test(e.name)
+          ? [join(dir, e.name)]
+          : [],
+    );
+  const gateFiles = GATE_DIRS.flatMap((d) => filesUnder(d, /\.(ts|py)$/));
+  const hookPy = filesUnder(join(ROOT, "src", "gate-hooks"), /\.py$/);
+  const stripComments = (code: string) =>
+    code.replace(/^\s*(\/\/|\*|\/\*\*|#).*$/gm, "").replace(/"""[\s\S]*?"""/g, "");
+  /** Top-level Python imports, as module names. */
+  const pyImports = (code: string) =>
+    [...code.matchAll(/^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))/gm)].map(
+      (m) => (m[1] ?? m[2]) as string,
+    );
+  const PY_STDLIB_ALLOWED = new Set(["json", "subprocess"]);
+  /** Anything that names the upstream evaluator, its outputs, its gold files or Myco's upstream modules. */
+  const EVALUATOR =
+    /desktop_env|evaluators|\bmetrics\b|\bgetters\b|result\.txt|cloud_file|run_upstream_metric|benchmark\/upstream|r1-grade|evaluate\.ts|upstream-metric-mock|osworld-desktopenv-evaluate/;
+  const problemsIn = (file: string) => {
+    const code = stripComments(readFileSync(file, "utf8"));
+    const out: string[] = [];
+    if (file.endsWith(".py"))
+      for (const mod of pyImports(code))
+        if (!PY_STDLIB_ALLOWED.has(mod)) out.push(`${relative(ROOT, file)} imports ${mod}`);
+    const hit = code.match(EVALUATOR);
+    if (hit) out.push(`${relative(ROOT, file)} names ${hit[0]}`);
+    return out;
+  };
+
+  it("has the gate and the hook to check", () => {
+    expect(hookPy.map((f) => relative(ROOT, f))).toEqual([
+      "src/gate-hooks/osworld/myco_done_gate.py",
+    ]);
+    expect(gateFiles.length).toBeGreaterThan(20);
+  });
+
+  it("no gate or hook file imports or names the upstream evaluator, its output or gold files; the hook imports only json and subprocess", () => {
+    expect(gateFiles.flatMap(problemsIn)).toEqual([]);
+  });
+
+  it("nothing under src/benchmark/upstream names the gate, the hook or its module", () => {
+    const forbidden = /src\/gate|gate-hooks|myco_done_gate|DoneGate|myco_gate_check/;
+    for (const f of filesUnder(UPSTREAM, /\.(ts|py)$/)) {
+      const code = stripComments(readFileSync(f, "utf8"));
+      expect(code, relative(ROOT, f)).not.toMatch(forbidden);
+    }
+  });
+
+  it("the checks bite: a planted evaluator import, a planted result.txt read and a planted hook import are reported", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gate-hook-bite-"));
+    try {
+      const py = join(dir, "planted.py");
+      writeFileSync(py, "import json\nfrom desktop_env.evaluators import metrics\n");
+      expect(problemsIn(py)).toEqual(
+        expect.arrayContaining([expect.stringContaining("imports desktop_env.evaluators")]),
+      );
+      const reader = join(dir, "reader.ts");
+      writeFileSync(reader, 'const score = readFileSync(join(dir, "result.txt"), "utf8");\n');
+      expect(problemsIn(reader)).toEqual([expect.stringContaining("names result.txt")]);
+      const os = join(dir, "os_import.py");
+      writeFileSync(os, "import os\n");
+      expect(problemsIn(os)).toEqual([expect.stringContaining("imports os")]);
+      expect("import myco_done_gate").toMatch(/src\/gate|gate-hooks|myco_done_gate/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

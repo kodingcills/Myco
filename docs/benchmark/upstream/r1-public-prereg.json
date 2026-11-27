@@ -68,7 +68,7 @@
       "promptSuffix": "Before you finish, verify your own work. Take a screenshot and check every requirement of the task against what is actually on screen and in the saved file: the exact values, the cells, text or slides the task names, nothing else changed, and the document saved under the requested name, location and format. If anything is wrong or unsaved, fix it and check again. Only stop calling tools when you have checked that the task is fully complete."
     }
   ],
-  "budget": "PENDING: one budget for all three arms: --max_steps (upstream default 15; OSWorld's published Claude runs use 50 or 100), --max_tokens, --thinking, --max_trajectory_length, and a wall-clock cap",
+  "budget": "PENDING: one budget for all three arms: --max_steps (the runner default is 15; the Claude example in OSWorld's SETUP_GUIDELINE.md uses 50), --max_tokens, --thinking, --max_trajectory_length, and a wall-clock cap",
   "subsetRule": "Every task id listed in OSWorld's evaluation_examples/test_all.json at the pinned commit under libreoffice_calc, libreoffice_writer and libreoffice_impress, run in OSWorld's own DesktopEnv. No Myco placement filter; the apps a task needs and the getters its evaluator uses are not exclusions. No task is added or dropped for difficulty, outcome or evaluator type.",
   "subsetSize": 117,
   "exclusions": [],
