@@ -11,7 +11,7 @@
  * planner module is held tighter still: it reaches no ground truth.
  * Type-only imports are skipped: they are erased and share no runtime code.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
@@ -31,6 +31,10 @@ function typeOnly(node: ts.ImportDeclaration | ts.ExportDeclaration): boolean {
     named.elements.every((e) => e.isTypeOnly)
   );
 }
+
+/** `./x.js` in a TS import names `./x.ts`. */
+const onDisk = (path: string) =>
+  existsSync(path) ? path : path.endsWith(".js") ? `${path.slice(0, -3)}.ts` : `${path}.ts`;
 
 function reachable(entry: string): string[] {
   const seen = new Set<string>();
@@ -52,7 +56,7 @@ function reachable(entry: string): string[] {
         !typeOnly(node)
       ) {
         const spec = node.moduleSpecifier.text;
-        if (spec.startsWith(".")) visit(resolve(dirname(file), spec));
+        if (spec.startsWith(".")) visit(onDisk(resolve(dirname(file), spec)));
       }
       ts.forEachChild(node, walk);
     };

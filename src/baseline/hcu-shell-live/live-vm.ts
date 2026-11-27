@@ -264,14 +264,27 @@ export function defaultLiveDeps(repoRoot: string): LiveDeps {
   const sshArgs = ["-F", join(vmDir, "ssh_config"), "-o", "LogLevel=ERROR", "myco-win11"];
   return {
     async reset(snapshot) {
+      // The CLI runs under scripts/vm-session.sh, which holds the VM flock on FD 9. The reset
+      // script accepts that lock only from a process that carries the same FD 9
+      // (vm_lock_owned_by_parent, TIF-210), so FD 9 is passed through explicitly.
       const t0 = performance.now();
-      const r = await run(
-        "bash",
-        [join(repoRoot, "scripts/reset-trial-vm.sh"), snapshot],
-        1_800_000,
-      );
-      process.stderr.write(r.stderr);
-      return { code: r.code, stderr: r.stderr, ms: Math.round(performance.now() - t0) };
+      const stdio: ("ignore" | "pipe" | number)[] = ["ignore", "pipe", "pipe"];
+      for (let fd = 3; fd < 9; fd++) stdio.push("ignore");
+      stdio.push(9);
+      const child = spawn("bash", [join(repoRoot, "scripts/reset-trial-vm.sh"), snapshot], {
+        stdio,
+      });
+      let stderr = "";
+      child.stdout?.on("data", (d: Buffer) => process.stderr.write(d));
+      child.stderr?.on("data", (d: Buffer) => {
+        stderr += d.toString("utf8");
+        process.stderr.write(d);
+      });
+      const code = await new Promise<number | null>((resolve) => {
+        child.on("error", () => resolve(null));
+        child.on("close", (c) => resolve(c));
+      });
+      return { code, stderr, ms: Math.round(performance.now() - t0) };
     },
     async startAgent() {
       // As the C1 sweep: start myco-agent in the interactive session, then tunnel to it.
