@@ -24,6 +24,7 @@ nothing is skipped or fails for lack of one.
 | `ci.yml` | `newcomer path (ubuntu-latest)` | yes, when the plan says so (same condition as `linux path`) | no |
 | `ci.yml` | `safe parallelism (ubuntu-latest)` | yes (every PR; not gated by the plan) | no |
 | `ci.yml` | `m2 evidence and scorecard` | yes, when the plan says so | no |
+| `ci.yml` | `benchmark site (build and check)` | yes (every PR; not gated by the plan) | no |
 | `ci.yml` | `strict isolation (ubuntu-latest)` | yes | no |
 | `ci.yml` | `viewer verdict budget (…)` | only with the `perf` label | no |
 | `tif-170-race-diagnostics.yml` | `race x1` | only when the PR touches its paths | no |
@@ -47,6 +48,11 @@ nothing is skipped or fails for lack of one.
   a cause on every non-verified row, the guest load gate record), then
   `scripts/m2-scorecard-check.py` recomputes every number in `docs/m2-scorecard.md`
   (TIF-273). The same tests also run in `check` through `pnpm test`.
+- **Benchmark site.** Builds the static false-completion site twice with
+  `scripts/benchmark-site-build.ts`, checks the two builds are byte-identical and match
+  their `SHA256SUMS`, then runs `test/benchmark/site.test.ts`. The results table is filled
+  only from committed, digest-verified packs, and the build fails on a refused pack or a
+  leak finding. Nothing is published or deployed. See `docs/benchmark/site.md` (#667).
 - **Strict isolation.** Lifts Ubuntu 24.04's AppArmor restriction on unprivileged user
   namespaces, then runs `test/isolation` as the runner user with
   `MYCO_STRICT_NS_REQUIRED=1`, so a host that cannot start the strict backend fails the

@@ -360,6 +360,37 @@ jobs:
       - name: Checker tests (fixture packs, every failure mode)
         run: pnpm exec vitest run test/m2
 
+  # Workstream 3, track G (#667): build the static benchmark site from the package and check
+  # it. Its results table is filled only from committed, digest-verified result packs
+  # (benchmark/false-completion/results/), recomputed by the M2 evidence check; the build
+  # fails on a refused pack or a leak finding. Nothing is published or deployed: the output
+  # stays on the runner. Not required; runs on every PR. No VM, no model, no secrets.
+  benchmark-site:
+    name: benchmark site (build and check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build the site twice (local output only)
+        run: |
+          pnpm exec tsx scripts/benchmark-site-build.ts --out "$RUNNER_TEMP/site-a"
+          pnpm exec tsx scripts/benchmark-site-build.ts --out "$RUNNER_TEMP/site-b"
+      - name: Byte-identical rebuild and SHA256SUMS
+        run: |
+          diff -r "$RUNNER_TEMP/site-a" "$RUNNER_TEMP/site-b"
+          cd "$RUNNER_TEMP/site-a" && sha256sum -c SHA256SUMS
+      - name: Site tests (placeholder, refusals, fixture rendering, hygiene)
+        run: pnpm exec vitest run test/benchmark/site.test.ts
+
   # Track L2: strict per-trial isolation (strict-linux-ns). Ubuntu 24.04 restricts
   # unprivileged user namespaces through AppArmor, so the job lifts that sysctl first;
   # MYCO_STRICT_NS_REQUIRED=1 makes the namespace suite FAIL instead of skip when the
