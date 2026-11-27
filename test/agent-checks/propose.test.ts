@@ -23,7 +23,6 @@ import {
 import { registerPlugin } from "../../src/plugins/host/registry.ts";
 import {
   BINDING,
-  TASK,
   CHECK_MANIFEST,
   cleanupPlugins,
   collateralCsv,
@@ -33,6 +32,7 @@ import {
   honestSource,
   makeCheck,
   SPEC,
+  TASK,
 } from "./helpers.ts";
 
 afterAll(cleanupPlugins);

@@ -38,7 +38,6 @@
 import { randomBytes, randomInt } from "node:crypto";
 import type { OracleReport } from "../oracle-selftest/run.ts";
 import { calcCasesFor } from "../oracle-selftest/subjects.ts";
-import { type CalcRecordEditParams, generateParameterSets } from "../tasks/intent.ts";
 import {
   CORRUPTION_CLASSES,
   type CorruptionClass,
@@ -51,6 +50,7 @@ import {
   registerPlugin,
   runPluginOracle,
 } from "../plugins/host/registry.ts";
+import { type CalcRecordEditParams, generateParameterSets } from "../tasks/intent.ts";
 import {
   AGENT_CHECK_EVIDENCE_CLASS,
   AGENT_CHECK_SIGNAL_KIND,

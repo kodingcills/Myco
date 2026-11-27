@@ -35,7 +35,6 @@ import { tempRoot, writeState } from "../gate/helpers.ts";
 import { input, manifest, r1Trials } from "../m2/pack-fixture.ts";
 import {
   BINDING,
-  TASK,
   cleanupPlugins,
   collateralCsv,
   csvDoc,
@@ -44,6 +43,7 @@ import {
   makeCheck,
   SEED,
   SPEC,
+  TASK,
 } from "./helpers.ts";
 
 afterAll(cleanupPlugins);
