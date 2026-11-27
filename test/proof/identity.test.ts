@@ -290,10 +290,10 @@ describe("the identity guard (unit, synthetic names)", () => {
 
   it("the exporter's id closer digests a hit; enum closers are constants", () => {
     const a = allowlist(g);
-    expect(a.id("run-zqalice")).toBe(hashedId("run-zqalice"));
-    expect(a.id("run-1")).toBe("run-1");
-    expect(a.arm("ZQALICE")).toBe(hashedId("ZQALICE"));
-    expect(a.arm("hcu+shell")).toBe("hcu+shell");
+    expect(a.id("run-zqalice", "$.run.runId")).toBe(hashedId("run-zqalice"));
+    expect(a.id("run-1", "$.run.runId")).toBe("run-1");
+    expect(a.arm("ZQALICE", "$.run.arm")).toBe(hashedId("ZQALICE"));
+    expect(a.arm("hcu+shell", "$.run.arm")).toBe("hcu+shell");
   });
 
   it("host identity reads the account name, hostname, home and the identity file", () => {
