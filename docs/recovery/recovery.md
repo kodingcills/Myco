@@ -90,19 +90,76 @@ another combination.
   - a row's arm config, contrast or attempt budget does not fit its arm;
   - a trial appears twice;
   - a row disagrees with itself: accepted without a clean `verified`, harness codes without
-    `uncertain`, an unknown claim or harness code, or a hash that is not sha256 hex;
+    `uncertain`, an unknown claim or harness code, a `grade` other than `pass`, `fail` or
+    `ungradable` (#601 N5), a `faultKind` that does not match `faulted` (null exactly when
+    unfaulted, otherwise one of `kill-app`, `delayed-save`, `focus-change`; #601 F6), or a
+    hash that is not sha256 hex;
   - the arm mixes planners, step budgets or task sets;
   - (evidence) any row is simulated, or its planner is not one of
     `RECOVERY_EVIDENCE_PLANNERS`. That set mirrors R1's `EVIDENCE_PLANNERS`, and a test pins
     the two equal. The module cannot import it, because `check.ts` reaches the task manifests.
+    Evidence mode is the default (#601 N6): only an explicit `evidence: false` accepts
+    simulated rows.
 - **`recoveryBar`** is the pre-registered bar: exact one-sided McNemar, K better than
   no-recovery, p ≤ 0.05, with at least 5 discordant verified tasks. It runs on two complete,
   checked batches over the same tasks. It refuses arms that differ in planner, step budget or
-  task set, or a task whose fault label, instruction hash or fixture hash differs (§1.3
-  parity). It also reports the faulted and unfaulted split, and steps and cost per verified
-  task. A null cost is unknown, never 0. Its `evidence` field is false for a
+  task set, or a task whose fault flag, fault kind, instruction hash or fixture hash differs
+  (§1.3 parity). It also reports the faulted and unfaulted split, and steps and cost per
+  verified task. A null cost is unknown, never 0. Its `evidence` field is false for a
   `simulated: true` (plumbing) bar.
-- The grader is injected. `src/recovery/` never imports `src/benchmark/grade/`.
+- The grader is injected. `src/recovery/` never imports `src/benchmark/grade/`. The grader a
+  K run injects is the multi-step entry below.
+
+## Instruction renderer and grader entry (spec §5: K's measurement dependencies)
+
+- **Instruction**: `multiStepTaskText(steps)` (`src/tasks/multi-step-text.ts`,
+  `multi-step-text/1`, import-free). One line per step, `Step k: set the cell at record R,
+  column C, to "V".`, between "Make these n edits ... Change no other cell." and "Save the file
+  after the last step." It states nothing else about the document (no fixture value, cell
+  address or seed). It refuses 2-10 steps exceeded, a record or column that is not one
+  printable line without `"` or `,`, a value with a Unicode line separator, and a repeated
+  record and column. `docs/gate/api.md` (Corrections) requires the instruction to state every
+  field a `calc-multi-step` correction reveals; `test/tasks/multi-step-text.test.ts` pins it
+  against corrections the gate itself builds (`documentCorrections`), for both
+  `target_value_mismatch` and `target_unchanged`.
+- **Grader**: `gradeMultiStep(input)` (`src/benchmark/grade/multi-step.ts`,
+  `multi-step-grader/1`). Inputs: the pristine fixture bytes (SHA-256 pinned), the final
+  persisted document (CSV or xlsx), the steps and the column types. Never a claim, verdict,
+  checkpoint or correction. `pass` needs every step's target to hold its new value (typed, as
+  the false-completion grader compares) and every other cell pristine, with no content on other
+  sheets. A step naming no editable cell fails; could-not-look and ambiguous intents (two steps
+  on one cell, a duplicate key or header, a missing column type) are `ungradable`. `perStep`
+  and `stepsSatisfied` report partial completion; `status` stays strict. Tests
+  (`test/benchmark/multi-step-grade.test.ts`): it agrees with the false-completion grader on
+  one-step tasks, and with the gate's `calc-multi-step` decision (pass iff verified) on 300
+  seeded random CSV documents, while importing only `./grade.ts` and `./sheet.ts`
+  (`test/benchmark/independence.test.ts` walks it with every grader module).
+
+## Pre-registration and analysis (spec §3)
+
+- **File**: `docs/product/capability-prereg/k-v1/prereg.json`. It holds the bar (the spec's K
+  section pinned by SHA-256, plus the test, side, alpha, discordant minimum, secondaries and
+  guardrails), the arms, the task set (`ms-long-v1`, its size, edits, faulted half, fault
+  kinds, manifest path and SHA-256), three seeds (assignment, bootstrap, task build), the step
+  budget, the model id (the trial run's pilot model), the instruction renderer and grader
+  entry by SHA-256, and the analysis script and modules by SHA-256.
+- **Pre-registration hash**: SHA-256 of the file's canonical JSON (keys sorted, no
+  whitespace) without its own `preregistrationHash` member, which stores it
+  (`preregHash`, `src/recovery/prereg.ts`).
+- **Draft until the lead rules.** `status: "draft"`. Pending: the step budget (80) and the
+  `ms-long-v1` size (40) are the spec's proposals and open lead questions (§6), not ratified;
+  the manifest SHA-256 is null until `ms-long-v1` is built. `checkKPrereg` reports `frozen`
+  only with nothing pending, `status: "frozen"` and a manifest SHA-256 that matches the
+  committed manifest. Any edit to the file, a pinned file or the spec's K section fails the
+  check until the file is updated.
+- **Analysis**: `npx tsx scripts/k-recovery-analysis.ts --prereg <prereg.json> --k <pack>
+  --none <pack> [--plumbing]` on two `myco.recovery.pack/1` files (one arm's batch, the
+  pre-registration hash and the commit it was frozen in). It refuses: a pre-registration
+  failing its check; a pack whose hash is not the pre-registration's, or whose commit does not
+  hold a pre-registration with that hash (`git show`); a draft unless `--plumbing`; rows whose
+  task set or step budget differ from it, and, for evidence, whose model, task count or
+  faulted count differ. A halted batch is reported as halted. Otherwise it runs `recoveryBar`
+  unchanged. `--plumbing` output is never evidence.
 
 ## Separation from the gate (spec §1.2)
 
@@ -139,14 +196,22 @@ it equal to the gate's `STATE_FILE_LIMIT`.
 | K16 | Simulated rows are never evidence (§3.5) | `batch.test.ts` K16, K9 |
 | K17 | Parity within and between the arms (§1.3) | `batch.test.ts` K17 |
 | §1.2 | Separation rules 1, 3 (in-process) and 4 | `boundary.test.ts` |
+| K18 | Multi-step instruction states each step's number, record, column and value, and the save (api.md, Corrections) | `test/tasks/multi-step-text.test.ts` T1-T5 |
+| K19 | Multi-step grader entry, independent of the gate, on the final captured document | `test/benchmark/multi-step-grade.test.ts` G1-G7; `test/benchmark/independence.test.ts` |
+| K20 | §3 pre-registration: fields, hash over canonical JSON, draft until the lead rules | `prereg.test.ts` P1-P6 |
+| K21 | The analysis refuses a pack whose hash or commit does not match, and a draft for evidence | `analysis.test.ts` A1-A6 |
+| #601 | N5 grade check, N6 evidence default, F6 fault kind, S1, S2, `"DONE"` near-miss | `batch.test.ts` "#601 follow-ups", K15 |
 
 ## Not built here (follow-ups)
 
 - **`ms-long-v1`**: 40 long multi-step Calc tasks, 8 edits each, with a seeded mid-task fault
   (`kill-app`, `delayed-save`, `focus-change`) on half of them. It needs a deterministic build
-  script, a SHA-256 manifest and a byte-identical test, and must be frozen before measurement.
-  It has two prerequisites, also not built: a multi-step instruction renderer, and a multi-step
-  grader entry in `src/benchmark/grade/`.
+  script (seeded by the pre-registration's `seeds.taskBuild`, instructions from
+  `multiStepTaskText`), a SHA-256 manifest and a byte-identical test, and must be frozen before
+  measurement. Its manifest SHA-256 then goes into the pre-registration, which is frozen once
+  the lead rules on the step budget and size.
+- **The seeded ABBA schedule** from `seeds.assignment`, and the trial adapter that wires
+  `gradeMultiStep` in as each trial's injected grader.
 - **Serving the tools over MCP**: a stdio `myco-recovery` server bound to one trial, wired into
   the K arm's launch plan and surface audit. It must come with the server-attached form of
   §1.2.3 (the gate on the same bytes with and without the server attached), R4 with the server
