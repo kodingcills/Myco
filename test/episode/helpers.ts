@@ -7,9 +7,12 @@ import { scriptedDocument } from "../../src/benchmark/r1-dryrun.ts";
 import type { BenchmarkTask } from "../../src/benchmark/taskset.ts";
 import { type EpisodeDraft, NOT_RECORDED } from "../../src/episode/build.ts";
 import type { HostFacts } from "../../src/episode/clean.ts";
+import { hashedLeaves } from "../../src/episode/closed.ts";
 import type { EpisodeCapture } from "../../src/episode/gated.ts";
 import { gradeCalcRecordEdit } from "../../src/episode/ground-truth.ts";
 import type { EpisodeStore } from "../../src/episode/store.ts";
+import type { Episode } from "../../src/episode/types.ts";
+import { episodeScope, HashLedger } from "../../src/export-guard/provenance.ts";
 import { GATE_TOOL } from "../../src/gate/mcp-server.ts";
 import type { AgentLaunchPlan } from "../../src/integrity/launch.ts";
 import { newVaultKey, VerdictVault } from "../../src/integrity/vault.ts";
@@ -143,4 +146,16 @@ export function draft(overrides: Partial<EpisodeDraft> = {}): EpisodeDraft {
     provenance: { source: "gated-trial", runId: "run-1", trialKey: "trial-1", attemptLedger: null },
     ...overrides,
   };
+}
+
+/**
+ * The hash ledger a harness import would record for a CLOSED episode (#579 O3): every
+ * `h-<60 hex>` at a hashed field, bound to the episode's id and path (as `importDataset` does).
+ */
+export function ledgerOf(...closed: readonly Episode[]): HashLedger {
+  const ledger = new HashLedger();
+  for (const ep of closed)
+    for (const { path, value } of hashedLeaves(ep))
+      ledger.record(episodeScope(ep.episodeId, path), value);
+  return ledger;
 }
