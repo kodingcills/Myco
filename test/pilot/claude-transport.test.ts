@@ -26,7 +26,17 @@ import { virtualClock } from "../../src/pilot/dry-run.ts";
 import { trialLaunchPlan } from "../../src/pilot/launch.ts";
 import { loadLedger, PROGRESS_FILE } from "../../src/pilot/ledger.ts";
 import { HarnessFault, runPilot } from "../../src/pilot/runner.ts";
-import { config, PUBLISHED, ROOT, SOURCES, tmp, USAGE_LIMIT_PHRASES } from "./helpers.ts";
+import {
+  config,
+  NBSP,
+  PUBLISHED,
+  ROOT,
+  SOURCES,
+  spaced,
+  tmp,
+  UNICODE_SPACES,
+  USAGE_LIMIT_PHRASES,
+} from "./helpers.ts";
 
 interface Call {
   command: string;
@@ -425,6 +435,50 @@ describe("headless Claude Code transport (fake spawn)", () => {
     for (const text of ["qty 429 on EMP-0055", "EMP-0127 401, EMP-0090 403", "429\n401\n403"]) {
       expect(faultOf(() => interpretResult(result(text), "", 0))).toBe("none");
       expect(interpretResult(result(text), "", 0).claim).toBe("no-claim");
+    }
+  });
+
+  it("#606 S1: quota wording on stderr only, with a claimless clean result, is usage-limit; a claim line keeps the agent's outcome", () => {
+    for (const t of USAGE_LIMIT_PHRASES) {
+      for (const code of [0, 1])
+        expect([t, code, faultOf(() => interpretResult(result("Edited."), t, code))]).toEqual([
+          t,
+          code,
+          "usage-limit",
+        ]);
+      expect(interpretResult(result("Edited.\nDONE"), t, 0).claim).toBe("done");
+      expect(interpretResult(result("Edited.\nNOT DONE"), t, 0).claim).toBe("not-done");
+    }
+    // Stderr with only the broad vocabulary (no usage wording) never touches a clean result.
+    for (const e of ["API Error: 429 Too Many Requests", "401 Unauthorized", "billing; quota"])
+      expect([e, interpretResult(result("Edited."), e, 0).claim]).toEqual([e, "no-claim"]);
+  });
+
+  it("#606 S2: every Unicode whitespace in the quota wording is folded on every path; a claim line is unchanged", () => {
+    for (const t0 of USAGE_LIMIT_PHRASES)
+      for (const [name, sp] of UNICODE_SPACES) {
+        const t = spaced(t0, sp);
+        const probe = (stdout: string, stderr: string, code: number) =>
+          faultOf(() => interpretResult(stdout, stderr, code));
+        expect([
+          t0,
+          name,
+          probe("", t, 1), // stderr, no result
+          probe(t, "", 1), // plain stdout
+          probe(t, "", 0),
+          probe(result(t, { is_error: true }), "", 1), // error result
+          probe(result("API Error", { is_error: true, errors: [t] }), "", 1), // errors[]
+          probe(JSON.stringify({ error: "rate_limit" }), t, 1), // structured limit, refined
+          probe(result(t), "", 0), // clean claimless result
+          probe(result("Edited."), t, 0), // clean claimless result, stderr
+        ]).toEqual([t0, name, ...Array(8).fill("usage-limit")]);
+        expect(interpretResult(result(`${t}\nDONE`), t, 0).claim).toBe("done");
+        expect(interpretResult(result(`${t}\nNOT DONE`), t, 0).claim).toBe("not-done");
+      }
+    // Task data with 401 / 403 / 429 and NBSP is still the agent's outcome.
+    for (const text of ["qty 429 on EMP-0055", "EMP-0127 401, EMP-0090 403", "status 429 401 403"]) {
+      const t = spaced(text, NBSP);
+      expect(interpretResult(result(t), t, 0).claim).toBe("no-claim");
     }
   });
 

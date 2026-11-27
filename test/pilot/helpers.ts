@@ -32,6 +32,32 @@ export const USAGE_LIMIT_PHRASES = [
   "usage_limit_reached",
 ] as const;
 
+/**
+ * Whitespace the quota wording may carry in place of an ASCII space (#606 S2): NBSP, figure
+ * space, narrow NBSP, U+2000-U+200A, ideographic space, a tab, a newline, repeated spaces.
+ * Spelled by code point, so no invisible character sits in the source.
+ */
+const cp = (code: number): [string, string] => [
+  `U+${code.toString(16).toUpperCase().padStart(4, "0")}`,
+  String.fromCharCode(code),
+];
+export const UNICODE_SPACES: readonly (readonly [string, string])[] = [
+  cp(0x00a0), // NBSP
+  cp(0x2007), // figure space
+  cp(0x202f), // narrow NBSP
+  ...Array.from({ length: 11 }, (_, i) => cp(0x2000 + i)), // U+2000-U+200A
+  cp(0x3000), // ideographic space
+  ["tab", "\t"],
+  ["newline", "\n"],
+  ["repeated spaces", "   "],
+];
+
+/** NBSP (U+00A0). */
+export const NBSP = String.fromCharCode(0x00a0);
+
+/** `phrase` with every ASCII space replaced by `space`. */
+export const spaced = (phrase: string, space: string) => phrase.replaceAll(" ", space);
+
 export const tmp = (prefix = "myco-pilot-") => mkdtempSync(join(tmpdir(), prefix));
 
 export function config(pacing: Partial<PacingConfig> = {}) {
