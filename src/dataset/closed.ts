@@ -56,6 +56,11 @@ export const ARM_GRAMMAR = /^[a-z][a-z0-9+-]{1,31}(?::[a-z0-9][a-z0-9-]{0,31})?$
  * form; no other `h-` string (64 hex, 59 or 61 hex, upper case) counts as already hashed.
  */
 export const HASHED = /^h-[0-9a-f]{60}$/;
+/**
+ * Looks hashed: an id starting `h-` or `H-` that is not exactly `HASHED` is never kept verbatim
+ * (#559 round 3, S1), so a reader can never mistake another `h-` form for a hash.
+ */
+const HASH_LIKE = /^[hH]-/;
 
 export const EXPORT_TEXT_TAG = "myco.dataset.export-text/1";
 
@@ -235,6 +240,7 @@ function treat(
     case "id":
       // Idempotent (#556 round 3, S2): an already-hashed id is closed (it carries nothing).
       if (HASHED.test(value)) return value;
+      if (HASH_LIKE.test(value)) return hashed(value);
       return (CLOSED_ID.test(value) || t.also?.test(value) === true) && !holds(value, joined)
         ? value
         : hashed(value);
@@ -298,7 +304,8 @@ function accepts(t: Treatment | undefined, value: string): boolean {
     case "text":
       return HASHED.test(value);
     case "id":
-      return CLOSED_ID.test(value) || t.also?.test(value) === true || HASHED.test(value);
+      if (HASH_LIKE.test(value)) return HASHED.test(value);
+      return CLOSED_ID.test(value) || t.also?.test(value) === true;
     case "token":
       return t.vocabulary.test(value) || HASHED.test(value);
     case "closed":

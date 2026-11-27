@@ -4,8 +4,10 @@
  * one hashed form `h-<60 hex>` (lead ruling 23:06Z); and the should-pins V22 (unknown exclusion
  * code), V7 (a FIFO is NOT_REGULAR) and V2 (VALIDATOR_ERROR). Every planted value is synthetic.
  */
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -13,10 +15,13 @@ import { datasetManifestSchema } from "../../schemas/dataset-export.ts";
 import { validateSchema } from "../../schemas/validate.ts";
 import {
   closeEpisode,
+  closeRecordFields,
   HASHED,
   hashed,
   type JoinedIdentity,
   manifestIdentity,
+  openEpisodeStrings,
+  openRecordStrings,
 } from "../../src/dataset/closed.ts";
 import { EXCLUSION_CODES, exportDataset, validateContainer } from "../../src/dataset/export.ts";
 import type { HygieneOptions } from "../../src/dataset/hygiene.ts";
@@ -219,21 +224,40 @@ describe("should-pins: V22, V7, V2", () => {
     expect(echoes(ps, "NOT_A_CODE")).toBe(false);
   });
 
-  it.skipIf(process.platform === "win32")(
-    "V7: a FIFO at records.jsonl is NOT_REGULAR (never opened, so it cannot block)",
-    () => {
+  // V7 (round 3): a FIFO read blocks synchronously, so it runs in a child process with a hard
+  // timeout. A broken guard fails this test in at most 8 s instead of hanging the suite.
+  it.skipIf(process.platform === "win32").each(["records.jsonl", "manifest.json"])(
+    "V7: a FIFO at %s is NOT_REGULAR at once (never opened, so it cannot block)",
+    (name) => {
+      const started = Date.now();
+      const child = spawnSync(
+        process.execPath,
+        ["--import", "tsx", join(import.meta.dirname, "fifo-child.ts"), name],
+        { cwd: join(import.meta.dirname, "..", ".."), encoding: "utf8", timeout: 8_000 },
+      );
+      expect(child.signal, "validateContainer blocked on the FIFO and was killed").toBeNull();
+      expect(child.status).toBe(0);
+      const problems = JSON.parse(child.stdout.trim()) as string[];
+      expect(problems).toContain(`NOT_REGULAR ${name}`);
+      expect(Date.now() - started).toBeLessThan(8_000);
+    },
+    15_000,
+  );
+
+  it("V7: a directory at manifest.json or records.jsonl is NOT_REGULAR (fast, in process)", () => {
+    for (const name of ["manifest.json", "records.jsonl"]) {
       const b = tmp();
       try {
         const dir = join(b, "ds");
         exportDataset([candidate()], { outDir: dir, hygiene: NOBODY });
-        unlinkSync(join(dir, "records.jsonl"));
-        execFileSync("mkfifo", [join(dir, "records.jsonl")]);
-        expect(validateContainer(dir, NOBODY)).toContain("NOT_REGULAR records.jsonl");
+        unlinkSync(join(dir, name));
+        mkdirSync(join(dir, name));
+        expect(validateContainer(dir, NOBODY), name).toContain(`NOT_REGULAR ${name}`);
       } finally {
         rmSync(b, { recursive: true, force: true });
       }
-    },
-  );
+    }
+  });
 
   it("V2: an unreadable identity file is VALIDATOR_ERROR, with no throw and no path", () => {
     const b = tmp();
@@ -246,5 +270,83 @@ describe("should-pins: V22, V7, V2", () => {
     } finally {
       rmSync(b, { recursive: true, force: true });
     }
+  });
+});
+
+describe("S1 (round 3): an id that looks hashed but is not exactly h-<60 hex> is hashed, and refused verbatim", () => {
+  const exact = `h-${"b".repeat(60)}`;
+  const looksHashed = [
+    `h-${"a".repeat(64)}`,
+    `h-${"a".repeat(59)}`,
+    `h-${"a".repeat(61)}`,
+    `h-${"A".repeat(60)}`,
+    `H-${"a".repeat(60)}`,
+    `h-${"g".repeat(60)}`,
+    "h-task-1",
+    "H-run",
+  ];
+
+  it("task.id, provenance.runId, harness.plannerModelId, desktop.backend and desktop.image", () => {
+    const ep = candidate().episode;
+    for (const v of looksHashed) {
+      const closed = closeEpisode({
+        ...ep,
+        task: { ...ep.task, id: v },
+        harness: { ...ep.harness, plannerModelId: v },
+        provenance: { ...ep.provenance, runId: v },
+      });
+      expect(closed.task.id, v).toBe(hashed(v));
+      expect(closed.harness.plannerModelId, v).toBe(hashed(v));
+      expect(closed.provenance.runId, v).toBe(hashed(v));
+      const record = closeRecordFields({
+        desktop: { backend: v, image: v },
+        capture: { path: "doc.csv" },
+      });
+      expect(record.desktop.backend, v).toBe(hashed(v));
+      expect(record.desktop.image, v).toBe(hashed(v));
+    }
+    // An exact h-<60 hex> id is kept (idempotent); a plain closed id is kept.
+    const kept = closeEpisode({ ...ep, task: { ...ep.task, id: exact } });
+    expect(kept.task.id).toBe(exact);
+    expect(closeEpisode(ep).task.id).toBe("task-1");
+  });
+
+  it("the container's open-string check refuses such an id written verbatim", () => {
+    const closed = closeEpisode(candidate().episode);
+    for (const v of looksHashed) {
+      expect(openEpisodeStrings({ ...closed, task: { ...closed.task, id: v } }), v).toEqual([
+        "$.task.id",
+      ]);
+      expect(
+        openRecordStrings({ desktop: { backend: v, image: "img/1" }, capture: { path: exact } }),
+        v,
+      ).toEqual(["$.desktop.backend"]);
+    }
+    expect(openEpisodeStrings({ ...closed, task: { ...closed.task, id: exact } })).toEqual([]);
+  });
+});
+
+describe("S2 (round 3): the hash bits are pinned against an independent tagged sha256", () => {
+  // Computed here from the documented construction, not from the exporter's own helper.
+  const reference = (v: string) =>
+    `h-${createHash("sha256")
+      .update(`myco.dataset.export-text/1\u0000${v}`, "utf8")
+      .digest("hex")
+      .slice(0, 60)}`;
+
+  it("hashed() and every hashed field equal h- plus the first 60 hex of sha256(tag NUL value)", () => {
+    for (const v of ["Set the cell.", ["C:\\Users\\", "Jo Smith"].join(""), "jsmith", "", "ß"]) {
+      expect(hashed(v), JSON.stringify(v)).toBe(reference(v));
+    }
+    const v = "an instruction";
+    const ep = candidate().episode;
+    const closed = closeEpisode({
+      ...ep,
+      task: { ...ep.task, instruction: v, id: "h-x" },
+      actions: { ...ep.actions, items: [{ kind: "key", keys: v }] },
+    } as unknown as typeof ep);
+    expect(closed.task.instruction).toBe(reference(v));
+    expect(closed.task.id).toBe(reference("h-x"));
+    expect((closed.actions.items[0] as { keys?: string }).keys).toBe(reference(v));
   });
 });

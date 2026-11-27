@@ -216,7 +216,8 @@ set's declared fixture digest, and U's desktop facts. It writes one directory:
   hashed value is `h-` plus the first 60 hex digits (240 bits) of the sha256 under the tag
   `myco.dataset.export-text/1`. It carries no input text and fits the 64-character key and app
   cap. Closing is idempotent for exactly that form; no other `h-` string (64 hex, 59 or 61 hex,
-  upper case) counts as already hashed.
+  upper case) counts as already hashed. That holds for ids too: an id starting `h-` or `H-` that
+  is not exactly `h-<60 hex>` is hashed, and the container refuses one written verbatim.
 - **`validateContainer`** never throws. Every problem is `CODE location`, with a fixed code from
   `CONTAINER_PROBLEM_CODES`. A location never echoes foreign text: a foreign entry name appears
   only as `h-<12 hex>`, a JSON key that is not a plain identifier, or that holds an identity,
