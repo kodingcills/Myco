@@ -73,7 +73,7 @@
     },
     {
       "oracle": "calc-record-edit/gate",
-      "version": "gate-family-2",
+      "version": "gate-family-3",
       "claims": [
         "edit-missing",
         "wrong-value",
@@ -132,6 +132,81 @@
           "runs": 0,
           "caught": 0,
           "expectedStatus": 0
+        },
+        "missing-file": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
+        }
+      },
+      "pass": true,
+      "reasons": []
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "version": "gate-family-3",
+      "claims": [
+        "edit-missing",
+        "wrong-value",
+        "wrong-target",
+        "collateral",
+        "truncated",
+        "corrupt-byte",
+        "partial-save",
+        "missing-main-part",
+        "missing-file"
+      ],
+      "cases": 10,
+      "controlsVerified": 10,
+      "perClass": {
+        "edit-missing": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
+        },
+        "wrong-value": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
+        },
+        "wrong-target": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
+        },
+        "collateral": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
+        },
+        "truncated": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
+        },
+        "corrupt-byte": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
+        },
+        "partial-save": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
+        },
+        "missing-main-part": {
+          "claimed": true,
+          "runs": 10,
+          "caught": 10,
+          "expectedStatus": 10
         },
         "missing-file": {
           "claimed": true,
@@ -1616,6 +1691,1006 @@
       "claimed": true,
       "status": "uncertain",
       "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-01-xlsx",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-01-xlsx",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-01-xlsx",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-01-xlsx",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-01-xlsx",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-01-xlsx",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-01-xlsx",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-01-xlsx",
+      "cls": "corrupt-byte",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-01-xlsx",
+      "cls": "partial-save",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-01-xlsx",
+      "cls": "missing-main-part",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-02-xlsx",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-02-xlsx",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-02-xlsx",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-02-xlsx",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-02-xlsx",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-02-xlsx",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-02-xlsx",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-02-xlsx",
+      "cls": "corrupt-byte",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-02-xlsx",
+      "cls": "partial-save",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-02-xlsx",
+      "cls": "missing-main-part",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-03-xlsx",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-03-xlsx",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-03-xlsx",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-03-xlsx",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-03-xlsx",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-03-xlsx",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-03-xlsx",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-03-xlsx",
+      "cls": "corrupt-byte",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-03-xlsx",
+      "cls": "partial-save",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-03-xlsx",
+      "cls": "missing-main-part",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-04-xlsx",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-04-xlsx",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-04-xlsx",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-04-xlsx",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-04-xlsx",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-04-xlsx",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-04-xlsx",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-04-xlsx",
+      "cls": "corrupt-byte",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-04-xlsx",
+      "cls": "partial-save",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-04-xlsx",
+      "cls": "missing-main-part",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-05-xlsx",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-05-xlsx",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-05-xlsx",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-05-xlsx",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-05-xlsx",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-05-xlsx",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-05-xlsx",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-05-xlsx",
+      "cls": "corrupt-byte",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-05-xlsx",
+      "cls": "partial-save",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-05-xlsx",
+      "cls": "missing-main-part",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-06-xlsx",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-06-xlsx",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-06-xlsx",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-06-xlsx",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-06-xlsx",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-06-xlsx",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-06-xlsx",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-06-xlsx",
+      "cls": "corrupt-byte",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-06-xlsx",
+      "cls": "partial-save",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-06-xlsx",
+      "cls": "missing-main-part",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-07-xlsx",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-07-xlsx",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-07-xlsx",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-07-xlsx",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-07-xlsx",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-07-xlsx",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-07-xlsx",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-07-xlsx",
+      "cls": "corrupt-byte",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-07-xlsx",
+      "cls": "partial-save",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-07-xlsx",
+      "cls": "missing-main-part",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-08-xlsx",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-08-xlsx",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-08-xlsx",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-08-xlsx",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-08-xlsx",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-08-xlsx",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-08-xlsx",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-08-xlsx",
+      "cls": "corrupt-byte",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-08-xlsx",
+      "cls": "partial-save",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-08-xlsx",
+      "cls": "missing-main-part",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-09-xlsx",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-09-xlsx",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-09-xlsx",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-09-xlsx",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-09-xlsx",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-09-xlsx",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-09-xlsx",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-09-xlsx",
+      "cls": "corrupt-byte",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-09-xlsx",
+      "cls": "partial-save",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-09-xlsx",
+      "cls": "missing-main-part",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-10-xlsx",
+      "cls": "control",
+      "claimed": true,
+      "status": "verified",
+      "code": "postcondition-holds",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-10-xlsx",
+      "cls": "edit-missing",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-10-xlsx",
+      "cls": "wrong-value",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-10-xlsx",
+      "cls": "wrong-target",
+      "claimed": true,
+      "status": "refuted",
+      "code": "TARGET_MISMATCH+DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-10-xlsx",
+      "cls": "collateral",
+      "claimed": true,
+      "status": "refuted",
+      "code": "DOCUMENT_COLLATERAL",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-10-xlsx",
+      "cls": "truncated",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-10-xlsx",
+      "cls": "missing-file",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "state-missing",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-10-xlsx",
+      "cls": "corrupt-byte",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-10-xlsx",
+      "cls": "partial-save",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
+      "ok": true,
+      "expectedStatus": true
+    },
+    {
+      "oracle": "calc-record-edit/gate-xlsx",
+      "caseId": "calc-10-xlsx",
+      "cls": "missing-main-part",
+      "claimed": true,
+      "status": "uncertain",
+      "code": "oracle-threw",
       "ok": true,
       "expectedStatus": true
     },

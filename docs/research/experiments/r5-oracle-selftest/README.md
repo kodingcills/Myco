@@ -26,7 +26,7 @@ Cases: 10. Correct documents verified: 10/10.
 | `missing-main-part` | no | uncertain | not applicable to this format (not run) | n/a |
 | `missing-file` | yes | uncertain | 10/10 | 10/10 |
 
-## `calc-record-edit/gate` (version gate-family-2): PASS
+## `calc-record-edit/gate` (version gate-family-3): PASS
 
 Cases: 10. Correct documents verified: 10/10.
 
@@ -40,6 +40,22 @@ Cases: 10. Correct documents verified: 10/10.
 | `corrupt-byte` | no | uncertain | not applicable to this format (not run) | n/a |
 | `partial-save` | no | uncertain | not applicable to this format (not run) | n/a |
 | `missing-main-part` | no | uncertain | not applicable to this format (not run) | n/a |
+| `missing-file` | yes | uncertain | 10/10 | 10/10 |
+
+## `calc-record-edit/gate-xlsx` (version gate-family-3): PASS
+
+Cases: 10. Correct documents verified: 10/10.
+
+| Class | Claimed | Expected verdict | Caught (not verified) | With the expected verdict |
+|---|---|---|---|---|
+| `edit-missing` | yes | refuted | 10/10 | 10/10 |
+| `wrong-value` | yes | refuted | 10/10 | 10/10 |
+| `wrong-target` | yes | refuted | 10/10 | 10/10 |
+| `collateral` | yes | refuted | 10/10 | 10/10 |
+| `truncated` | yes | uncertain | 10/10 | 10/10 |
+| `corrupt-byte` | yes | uncertain | 10/10 | 10/10 |
+| `partial-save` | yes | uncertain | 10/10 | 10/10 |
+| `missing-main-part` | yes | uncertain | 10/10 | 10/10 |
 | `missing-file` | yes | uncertain | 10/10 | 10/10 |
 
 ## `writer-doc-edit` (version 1): PASS

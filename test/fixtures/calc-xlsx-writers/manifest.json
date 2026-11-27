@@ -1,0 +1,53 @@
+{
+  "seed": "probe-seed",
+  "edit": {
+    "rowKey": "EMP-0003",
+    "column": "qty",
+    "newValue": "4242"
+  },
+  "soffice": "LibreOffice 24.2.7.2 420(Build:2)",
+  "openpyxl": "3.1.5",
+  "generator": "scripts/calc-xlsx-writer-fixtures.ts",
+  "files": {
+    "exact.lo.xlsx": {
+      "sha256": "8c3dd1f23a0366e9dc98fc030f9eef0efe4d6a82b8849cc4d82049ed4c4bbb73",
+      "writer": "libreoffice",
+      "from": "exact.csv"
+    },
+    "exact.openpyxl.xlsx": {
+      "sha256": "fc4116316fd5d59db18b6c4f7fb733ed1f25b4aa14abc01a9027e126c8b9a9b4",
+      "writer": "openpyxl",
+      "from": "exact.csv"
+    },
+    "pristine.lo.xlsx": {
+      "sha256": "202069d1353ee01e60b7ecec8cc0f19160ab084bcf3761d2d4a26cd2e4f17780",
+      "writer": "libreoffice",
+      "from": "pristine.csv"
+    },
+    "pristine.openpyxl.xlsx": {
+      "sha256": "8be3bcbf38ce9ce85a2e4850af0850e42c6faf854474fcec2e52690b088a1578",
+      "writer": "openpyxl",
+      "from": "pristine.csv"
+    },
+    "collateral.lo.xlsx": {
+      "sha256": "f6de4107f16c6040e07e1e529d4dacebf04e3c0c810230f88bf2535a1fdeb605",
+      "writer": "libreoffice",
+      "from": "collateral.csv"
+    },
+    "collateral.openpyxl.xlsx": {
+      "sha256": "4b64028229e2338d5df566ce06c93270e48b95a1488fe3b82ade9a31badd1ef9",
+      "writer": "openpyxl",
+      "from": "collateral.csv"
+    },
+    "exact-text.openpyxl.xlsx": {
+      "sha256": "54a026f1a89fbe815bd55a443786e12f8a78308f9026937c5e1ce7f85c45471f",
+      "writer": "openpyxl",
+      "from": "exact.csv"
+    },
+    "roundtrip-exact.lo.xlsx": {
+      "sha256": "fda1c9b95f8db2477d4a39de13988273e9c4369b352af7ac7a361706666135cb",
+      "writer": "libreoffice",
+      "from": "xlsxFromCsv(exact)"
+    }
+  }
+}
