@@ -199,7 +199,11 @@ set's declared fixture digest, and U's desktop facts. It writes one directory:
   Matching uses full Unicode case folding (NFKC, upper then lower case, so `GROSS` matches a
   configured `Groß` and `yildiz` matches `Yıldız`). It compares letters and digits only, so a
   spaced full name matches every joined form of it (`FirstLast`, `first.last`, `first_last`,
-  `First-Last`, `xx<name>9`).
+  `First-Last`, `xx<name>9`). A configured string of several words is also matched by each
+  word of 3 or more characters alone (#580 O1, lead ruling 02:55Z): with `First Last`
+  configured, `<first>_trial`, `<Last>2`, `xx<first>` and `<first>Trial` match, as on the
+  episode export and in Q bundles (one shared rule, `src/export-guard/identity-words.ts`). A
+  word of 1 or 2 characters is not looked for alone.
 
   What happens to a match:
   - an id, token or desktop fact holding one is digested;
@@ -228,6 +232,15 @@ set's declared fixture digest, and U's desktop facts. It writes one directory:
   re-export from the source episodes instead.
 - **Accent folding** (#579 O2): identity matching also strips accents on both sides (NFD,
   combining marks removed, `ø`/`ł`/`æ` transliterated), so `JOSE` matches a configured `josé`.
+- **Known limit: unconfigured names (accepted residual risk, #580 O4).** Only configured
+  identities are caught: this host's account and host name and the identity file's lines. A
+  name nobody configured is kept verbatim when it sits in a closed id or version its grammar
+  admits. For example, another machine's host name (`<name>-MacBook-Pro.local` in a task or
+  run id) and a dotted, path-like id with an unconfigured name (`Users.<name>.Documents` in
+  `task.id` or `taskSetVersion`) are both written as is. Free text is always digested. The
+  remedy is to list every name that may appear in the identity file before exporting. A test
+  pins this (`test/dataset/identity-words.test.ts`, "O4 residual"); the README published beside
+  a dataset states it ([`docs/data/README.md`](../data/README.md)).
 - **`validateContainer`** never throws. Every problem is `CODE location`, with a fixed code from
   `CONTAINER_PROBLEM_CODES`. A location never echoes foreign text: a foreign entry name appears
   only as `h-<12 hex>`, a JSON key that is not a plain identifier, or that holds an identity,

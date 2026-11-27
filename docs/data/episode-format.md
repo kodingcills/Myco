@@ -288,7 +288,12 @@ O2: NFD, combining marks removed, `ø`/`ł`/`æ` transliterated, so `JOSE` match
 `josé` and `rena` matches `reña`), then letters and digits only, by
 substring. So joined forms are caught (`<name>_trial`, `<Name>2`, `xx<name>`, `<name>Trial`), a
 spaced full name matches `FirstLast`, `first.last`, `first_last` and `First-Last`, and `GROSS`
-matches a configured `Groß`. Enum values, digests and content-addressed blob names are exempt,
+matches a configured `Groß`. A configured string of several words is also matched by **each
+word of 3 or more characters alone** (#580 O1, lead ruling 02:55Z): with `First Last` configured,
+`<first>_trial`, `<Last>2`, `xx<first>`, `<first>Trial` and `run<First>` are digested in an id or
+token and refused in any other closed field, exactly as Q bundles and the track U container do
+(one shared rule, `src/export-guard/identity-words.ts`). Words are split on whitespace; a word of
+1 or 2 characters is not looked for alone. Enum values, digests and content-addressed blob names are exempt,
 because a match there could only be a false refusal. A harness-produced hashed id or token is kept
 as is (the hash ledger above),
 so a re-export stays byte-identical. On a CI runner the account is the generic `runner`, so CI
@@ -303,6 +308,24 @@ redactor may come later, in their own reviewed change with a fuzz over frame tex
 
 Cost: a dataset carries no agent text (typed text, commands and UI status are digests) and no
 screenshots or documents (digests and sizes only).
+
+### 5.2 Known limits of the identity check (accepted residual risk, #580 O4)
+
+The identity check catches only identities it knows: this host's account and host name, and the
+lines of the identity file. It does **not** catch a name nobody configured, when that name sits in
+a closed id or version that its grammar admits. Two examples, both kept verbatim today:
+- another machine's host name, such as `<name>-MacBook-Pro.local` in `task.id` or a run id,
+  when that machine is not this host and `<name>` is not in the identity file;
+- a dotted, path-like closed id with an unconfigured name, such as `Users.<name>.Documents` in
+  `task.id` or `task.taskSetVersion`.
+
+Free text is always digested, so this concerns only ids, tokens and closed pattern fields. The
+remedy is to put every name that may appear (other accounts, other machines, full names) in the
+identity file before exporting; once configured, each is caught in all its joined forms and by
+each word of 3 or more characters. A test pins this behaviour so this section stays true
+(`test/episode/identity-words.test.ts`, "O4 residual"). The same limit applies to the track U
+container and to Q bundles. The README published beside a dataset states it too
+([`docs/data/README.md`](README.md)).
 
 ## 6. How tracks U and Q consume it
 
