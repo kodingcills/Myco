@@ -76,6 +76,7 @@ export const POLICY_START_REFUSALS = [
   "POLICY_CONFIG_MISSING",
   "POLICY_CONFIG_NOT_HOST",
   "POLICY_SCOPE_INVALID",
+  "POLICY_SENSOR_MISSING",
 ] as const;
 export type PolicyStartRefusal = (typeof POLICY_START_REFUSALS)[number];
 
