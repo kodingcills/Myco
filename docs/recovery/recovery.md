@@ -75,18 +75,47 @@ another combination.
 - **Rows** are `myco.recovery.arm-row/1`, with `evidence: "never-r1"` and
   `contrast: "K-vs-nothing"`. K rows record `gate.corrections: "on"`, so a K row relabelled
   `myco-gate` is still refused as R1 evidence by `correctionsOnError`
-  (`src/benchmark/check.ts`). The primary metric, `grade`, is the grader's verdict on the final
-  captured document.
+  (`src/benchmark/check.ts`). Each row also records the final attempt's `claim` (`done`,
+  `not-done` or `no-claim`), `accepted`, `harnessCodes`, and the trial's `instructionSha256`
+  and `fixtureSha256`. `grade` is the grader's verdict on the final captured document.
+- **A verified task (the primary metric).** Both arms' rows are gated rows (spec §1.1). A row
+  is a verified task only when the claim is `done`, the row is accepted (the gate said
+  `verified` and the harness's checks passed), it has no harness code, and the grader said
+  `pass` (`isVerifiedRow`). Any other grader `pass` is reported as "correct, not verified"
+  (`kCorrectNotVerified`, `noneCorrectNotVerified`) and never counted. That covers an
+  uncertain, refuted, refused, fail-closed or harness-faulted attempt, and one with no done
+  claim.
 - **`checkRecoveryPack`** refuses a pack when:
   - its attempt count does not match the harness's;
   - a row's arm config, contrast or attempt budget does not fit its arm;
   - a trial appears twice;
-  - (evidence) any row is simulated.
+  - a row disagrees with itself: accepted without a clean `verified`, harness codes without
+    `uncertain`, an unknown claim or harness code, or a hash that is not sha256 hex;
+  - the arm mixes planners, step budgets or task sets;
+  - (evidence) any row is simulated, or its planner is not one of
+    `RECOVERY_EVIDENCE_PLANNERS`. That set mirrors R1's `EVIDENCE_PLANNERS`, and a test pins
+    the two equal. The module cannot import it, because `check.ts` reaches the task manifests.
 - **`recoveryBar`** is the pre-registered bar: exact one-sided McNemar, K better than
-  no-recovery, p ≤ 0.05, with at least 5 discordant tasks. It runs on two complete, checked
-  batches over the same tasks, with the same fault labels. It also reports the faulted and
-  unfaulted split, and steps and cost per verified task. A null cost is unknown, never 0.
+  no-recovery, p ≤ 0.05, with at least 5 discordant verified tasks. It runs on two complete,
+  checked batches over the same tasks. It refuses arms that differ in planner, step budget or
+  task set, or a task whose fault label, instruction hash or fixture hash differs (§1.3
+  parity). It also reports the faulted and unfaulted split, and steps and cost per verified
+  task. A null cost is unknown, never 0. Its `evidence` field is false for a
+  `simulated: true` (plumbing) bar.
 - The grader is injected. `src/recovery/` never imports `src/benchmark/grade/`.
+
+## Separation from the gate (spec §1.2)
+
+| Rule | Where it is pinned |
+|---|---|
+| 1. The gate request is unchanged | `boundary.test.ts`: `ORACLE_INPUT_FIELDS` and `GATE_REQUEST_SCHEMA` pinned by hash; a request with a recovery field is refused |
+| 2. No oracle internals reach the agent | Replies are codes only (`tools.test.ts`); the tools read and write only the guest document |
+| 3. The verdict cannot be influenced by a tool | Classified `guest` reach (`tools.test.ts` K8). `boundary.test.ts` runs the real gate on the same captured bytes with and without the tools having run, and gets identical results. The server-attached form, and R4 with the server added, wait for the MCP server (follow-up) |
+| 4. Import boundary | `boundary.test.ts`: a transitive AST walk over every `src/recovery/` module, type-only imports included. From `src/gate/`, only `api.ts` and `multistep.ts` are allowed. Nothing under `src/benchmark/`, `src/tasks/intent.ts`, `src/tasks/fixture.ts` or any manifest is allowed. Canaries cover each forbidden kind |
+| 5. Codes-only errors | `tools.test.ts`; `RECOVERY_CODES` |
+
+The document size limit (`RECOVERY_DOCUMENT_LIMIT`) is defined in `tools.ts`, and a test pins
+it equal to the gate's `STATE_FILE_LIMIT`.
 
 ## Acceptance map
 
@@ -105,7 +134,11 @@ another combination.
 | K11 | Any gate miss halts the K run | `batch.test.ts` K11 |
 | K12 | K rows record `gate.corrections: "on"`; refused as R1 evidence even relabelled; never a corrections result | `batch.test.ts` K12, K9 |
 | K13 | Exact one-sided McNemar, p ≤ 0.05, ≥ 5 discordant; secondary splits | `batch.test.ts` K13 |
-| K14 | Grader independence | `batch.test.ts` K14 |
+| K14 | Grader independence | `batch.test.ts` K14; `boundary.test.ts` |
+| K15 | Gated rows: only a done claim, gate-verified and grader `pass`, counts (§1.1) | `batch.test.ts` K15 |
+| K16 | Simulated rows are never evidence (§3.5) | `batch.test.ts` K16, K9 |
+| K17 | Parity within and between the arms (§1.3) | `batch.test.ts` K17 |
+| §1.2 | Separation rules 1, 3 (in-process) and 4 | `boundary.test.ts` |
 
 ## Not built here (follow-ups)
 
@@ -115,7 +148,11 @@ another combination.
   It has two prerequisites, also not built: a multi-step instruction renderer, and a multi-step
   grader entry in `src/benchmark/grade/`.
 - **Serving the tools over MCP**: a stdio `myco-recovery` server bound to one trial, wired into
-  the K arm's launch plan and surface audit.
+  the K arm's launch plan and surface audit. It must come with the server-attached form of
+  §1.2.3 (the gate on the same bytes with and without the server attached), R4 with the server
+  added, and a `close()` that drains in-flight tool calls.
+- **Output ceiling and pacing parity** (§1.3): the rows do not record either yet. The bar
+  checks the parity it can see (planner, step budget, task set, instruction and fixture).
 - **The VM step**: a `GuestDocument` that reads and writes the trial's guest document over the
   VM transport, plus the live K and no-recovery runs. This queues for the local VM owner, under
   the VM lock.
