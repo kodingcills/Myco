@@ -17,20 +17,32 @@ fault with a fixed, code-only message, never an agent outcome):
 2. **Cold reset.** `scripts/reset-trial-vm.sh` (default snapshot `trial-base-v3`) runs with the
    session's lock descriptor. Its `boot class=` line (#546) becomes the attempt's
    `resetBootClass`. A failed reset is `spawn-failed`.
-3. **Seed.** The host opens the SSH tunnel to the in-guest agent (the deploy's token file, or
-   `--token-file PATH`; read at the point of use, never printed). It writes the task's committed
+3. **Deploy (#691).** `trial-base-v3` holds no in-guest agent, so every reset wipes it. After
+   each reset, on every attempt (first attempts, re-runs in place and after `--resume`), the
+   driver runs the M1 sweep's verified deploy, `agent/bootstrap/deploy-to-vm.sh`. That deploy
+   copies the agent tree and checks it, installs the agent and its scheduled task, checks
+   `ping`, and writes a fresh per-deploy token to the host token file. It is bounded at 400 s,
+   as in `scripts/m1-sweep.sh`. It succeeds only on exit 0 with its `DEPLOY OK` line. A failed
+   deploy is `transport-error` ("the in-guest agent deploy failed after the reset"): the
+   attempt is kept, the channel is not opened, and the trial re-runs in place under the usual
+   rules (two identical faults in a row stop the run with exit 6).
+4. **Seed.** The host opens the SSH tunnel to the in-guest agent. It reads the token from the
+   token file the deploy just wrote: `--token-file PATH` if given, else `MYCO_TOKEN_OUT`, else
+   `~/.myco-token`. That is one path for both steps, and an exported `MYCO_AGENT_TOKEN` is not
+   used, because the deploy has just rotated the token. The token is read at the point of use
+   and never printed. The host then writes the task's committed
    fixture (sha-checked against `fixtureSha256`) to `C:\myco\pilot\<trialKey>\doc.csv`, then
    reads it back and compares. That path comes from the trial key alone, so the agent cannot
    name it. fc-v1's tasks declare `persistedFormat: "xlsx"`, but the live step seeds and
    captures `doc.csv`: that matches the pilot's CSV-only row mapping and gate state.
-4. **Agent.** Headless Claude Code on the subscription, with the audited argv and allowlisted
+5. **Agent.** Headless Claude Code on the subscription, with the audited argv and allowlisted
    environment names only (`claudeDriver`).
-5. **Capture.** After the agent stopped, the host reads the guest document back over the same
+6. **Capture.** After the agent stopped, the host reads the guest document back over the same
    channel. Those bytes are `persisted/doc.csv` in the sealed vault, with a host provenance
    record (`host-capture.json`: guest path, sha256, the seed's sha256, boot class). Nothing on
    the host that the agent can write (its trial directory, transcript or gate evidence root) is
    read. An unreadable document is a `transport-error` fault, never an empty document.
-6. The harness's own post-stop check decides on that capture, as before.
+7. The harness's own post-stop check decides on that capture, as before.
 
 ## What the pilot is
 
@@ -177,11 +189,43 @@ faulted ones included); the denominator is the graded verified count from `bench
 `costPerVerifiedTask` sums `arm.jsonl` only (it leaves out the faulted attempts in
 `faulted-attempts.jsonl`), so neither is R7 by itself.
 
+## Launch gate: the commit's required checks are green (default)
+
+Launch only from a commit on `main` whose CI run from the push to `main` passed all five
+**required** checks. This is the default launch gate (CI speed, #678):
+
+```sh
+sha=$(git rev-parse HEAD)            # the commit you are about to launch from, on main
+scripts/ci-required-green.sh "$sha"  # 0: launch; anything else: do not
+```
+
+It looks up that commit's `ci.yml` run from the push to `main` (the newest one, if there was
+a re-run) through `gh api` (read-only, your existing `gh` login; it never reads or prints a
+token). It exits 0 only when each of these jobs finished with conclusion `success`:
+`check (macos-latest)`, `check (ubuntu-latest)`, `myco-agent tests (ubuntu-latest)`,
+`runtime guest agent tests (ubuntu-latest)`, `secret scan (gitleaks)` (the list is
+`scripts/ci-required-checks.json`, the same one `docs/ci.md` and branch protection use).
+
+It ignores every non-required job. A red `viewer verdict budget (…)` timing job,
+`linux path`, the macOS agent tests and similar jobs do not block a launch. The run's overall
+conclusion is ignored for the same reason.
+
+| Exit | Meaning | What to do |
+| --- | --- | --- |
+| 0 | `REQUIRED_GREEN <sha> run <id>` | Launch. |
+| 1 | `NOT_GREEN`: no main push run for the commit (`RUN_NOT_FOUND`), or a required check is missing, failed, skipped, cancelled or still running (`MISSING <name>`, `NOT_SUCCESS <name>=<state>`) | Do not launch. Wait for a running check, or fix main. |
+| 2 | Usage: the commit must be a full 40-hex sha | Pass `git rev-parse HEAD`. |
+| 3 | Lookup failed: `gh` failed, or its answer was unreadable or truncated | Do not launch. Check `gh auth status` (it prints no token), then retry. |
+
+It prints one line per required check plus the verdict, all codes and check names. Tests:
+`test/ci-required-green.test.ts`.
+
 ## Preflight checklist (before a real launch)
 
 `launch` checks items 2, 8 and 9 itself and refuses (exit 3, every reason listed) before any VM,
 guest channel or `claude` process is touched. The other items are the operator's.
 
+0. The launch gate above exits 0 for the commit you launch from.
 1. The lead has approved the pilot launch. The R1 runner has no GO file of its own; the
    approval is the lead's word. The corrections A/B does need its committed GO file (below).
 2. No API-path credential is configured. The runner checks variable **names only** and refuses
@@ -199,15 +243,19 @@ guest channel or `claude` process is touched. The other items are the operator's
    refuses a committed config whose launch surface drifted from the code).
 5. The dry run passes: `npx vitest run test/pilot` and the dry run below.
 6. **The VM side (wired by TIF-274, the operator provides the rest).** Wired: the per-trial
-   cold reset, the seed and the host-side capture over the SSH tunnel (above), and the boot
-   class per trial. You still provide:
+   cold reset, the in-guest agent deploy after every reset (#691), the seed and the host-side
+   capture over the SSH tunnel (above), and the boot class per trial. You still provide:
    - a working trial VM: `trial-base-v3` restorable with `scripts/reset-trial-vm.sh` (run it
      once by hand under `scripts/vm-session.sh` and see `boot class=cold`), and guest egress
-     closed (the reset checks it);
-   - the in-guest agent answering `ping` through the tunnel after a reset onto that snapshot. A
-     verified deploy (`agent/bootstrap/deploy-to-vm.sh`, eval-runbook §4) writes the token
-     file, `~/.myco-token`, or pass `--token-file PATH`. The live step waits up to 2 min
-     (24 pings, 5 s apart) after each reset, then records `transport-error`;
+     closed (the reset checks it, and the deploy refuses without it);
+   - what the per-trial deploy (`agent/bootstrap/deploy-to-vm.sh`, eval-runbook §4) needs on
+     the host: the VM's ssh config, `nc`, `openssl`, the guest wheels (cached, or
+     `MYCO_GUEST_WHEELS`), and a writable directory for the token file. The token file is
+     `--token-file PATH`, else `MYCO_TOKEN_OUT`, else `~/.myco-token`. The snapshot does not
+     need to hold an agent: the driver deploys it after each reset, writes a fresh token to that
+     file, and opens the channel only after the deploy reported `DEPLOY OK`. Run one deploy by
+     hand after a reset first, to see it pass. After a good deploy, the live step still waits up
+     to 2 min (24 pings, 5 s apart), then records `transport-error`;
    - the guest load gate (no trial starts at host 1-minute load >= 10; eval-runbook §7.3).
 7. A fresh run directory outside `docs/research/experiments` (the runner refuses that path).
 8. **The VM session lock.** Run `launch` under `scripts/vm-session.sh` and start the runner
@@ -403,7 +451,8 @@ What the operator must still provide before a real A/B launch:
   name the pilot's harness classes (now also `billing`). `launch` lists them. They are fixed in
   their own changes, never by an ack or a flag.
 - **The VM side.** The same as the pilot's preflight item 6: a restorable `trial-base-v3`, and
-  the in-guest agent reachable after a reset.
+  what the per-trial agent deploy needs on the host. The A/B shares the live driver, so each of
+  its trials also deploys the in-guest agent after its reset, before the channel opens (#691).
 
 A credit, billing, quota, login or API-key error stops the stage with exit 5; two identical
 harness failures in a row stop it with exit 6. Either way the run is resumable once the cause

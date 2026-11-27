@@ -1,22 +1,30 @@
 /**
- * The newcomer path, live (TIF-265 track D): clone, follow the docs, reach a working gate
- * on the Linux path, timed. Opt-in: runs with MYCO_NEWCOMER_PATH=1, and under
- * MYCO_NEWCOMER_PATH_REQUIRED=1 (the `newcomer path (ubuntu-latest)` CI job) a missing
- * prerequisite FAILS instead of skipping. $0: no model, no API, no secrets, no VM.
+ * The newcomer path, live (TIF-265 track D): clone, follow the docs, reach a working gate,
+ * timed, on Linux and on macOS. Opt-in: runs with MYCO_NEWCOMER_PATH=1, and under
+ * MYCO_NEWCOMER_PATH_REQUIRED=1 (the `newcomer path (ubuntu-latest)` and
+ * `newcomer path (macos-latest)` CI jobs) a missing prerequisite FAILS instead of skipping.
+ * $0: no model, no API, no secrets, no VM.
  *
  * Every command comes from a block marked `<!-- newcomer-path: name -->` in the docs
  * (newcomer-lib.ts); this file adds none. It runs them in order, as written:
  *
- *   1. linux-path.md `clone` (from <base>): git clone, cd myco, pnpm install, myco-linux --check.
- *      The one rewrite: the clone URL points at this checkout's HEAD (the commit under test);
+ *   1. the clone block (from <base>): on Linux linux-path.md `clone` (git clone, cd myco,
+ *      pnpm install, myco-linux --check); on macOS setup.md `macos` (the same without the
+ *      Linux-only check). The one rewrite: the clone URL points at this checkout's HEAD
+ *      (the commit under test);
  *   2. setup.md `setup` (from the clone): --dry-run must write nothing; init must print the
- *      four documented steps and write exactly .mcp.json and .codex/config.toml;
+ *      four documented steps and write exactly .mcp.json and .codex/config.toml; on macOS
+ *      step 2 must say it was skipped on darwin;
  *   3. README `readme-quickstart` (from the project): run again, must change no byte;
- *   4. setup.md `linux` (from the project): rebinds the gate to the shipped Linux task; then a
- *      SIMULATED task: the Linux path's scripted agents drive real headless Calc on the file
- *      under the written evidence root, and the official MCP client, spawned exactly from
- *      the written .mcp.json (environment PATH alone), must get `verified` for `honest` and
- *      `refuted` for `skips-save`.
+ *   4. a SIMULATED task, and the official MCP client, spawned exactly from the written
+ *      .mcp.json (environment PATH alone), must get `verified` for `honest` and `refuted`
+ *      for the other agent:
+ *      - Linux: setup.md `linux` (from the project) rebinds the gate to the shipped Linux
+ *        task; the Linux path's scripted agents drive real headless Calc on the file under
+ *        the written evidence root (`honest`, `skips-save`);
+ *      - macOS: the df-s01 config the quickstart wrote; scripted agents drive the mock
+ *        desktop's todo app (newcomer-mock.ts: `honest`, `drops-item`) and the harness puts
+ *        the saved store under the written evidence root.
  *
  * Commands get PATH, a fresh empty HOME, the documented MYCO_PYTHON / MYCO_SOFFICE overrides
  * and proxy settings (names passed through, values never printed). A non-zero exit, an
@@ -43,19 +51,25 @@ import { dirname, join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { describe, expect, it } from "vitest";
+import { runTask } from "../../src/discovery/run-tasks.ts";
 import { calcActuator, pythonUnoAvailable } from "../../src/linux/actuator.ts";
 import { planFor, type ScriptedAgent } from "../../src/linux/agent.ts";
 import { sofficeVersion } from "../../src/linux/soffice.ts";
 import { generateFixture } from "../../src/tasks/fixture.ts";
 import type { CalcRecordEditParams } from "../../src/tasks/intent.ts";
 import { documentedSteps, initArgv, markedBlock, stepHeaders, substitute } from "./newcomer-lib.ts";
+import { MOCK_SCENARIOS, mockTodoRun } from "./newcomer-mock.ts";
 
 const REPO = resolve(import.meta.dirname, "..", "..");
 const CLONE_URL = "https://github.com/kodingcills/Myco.git";
 const required = process.env.MYCO_NEWCOMER_PATH_REQUIRED === "1";
 const optedIn = required || process.env.MYCO_NEWCOMER_PATH === "1";
+/** The two newcomer platforms: Linux (real Calc) and macOS (no desktop step; mock desktop). */
+const platform = process.platform;
 const available =
-  optedIn && process.platform === "linux" && sofficeVersion() !== null && pythonUnoAvailable();
+  optedIn &&
+  (platform === "darwin" ||
+    (platform === "linux" && sofficeVersion() !== null && pythonUnoAvailable()));
 const budgetS = Number(process.env.MYCO_NEWCOMER_BUDGET_S ?? "600");
 /** Passed through by name only when set: documented overrides and network plumbing. */
 const PASS_THROUGH = [
@@ -102,12 +116,18 @@ function argAfter(args: readonly string[], flag: string): string {
   return v;
 }
 
-describe("newcomer path: clone, follow the docs, reach a working gate (Linux)", () => {
-  it.runIf(required)("soffice and Python-UNO are installed (MYCO_NEWCOMER_PATH_REQUIRED=1)", () => {
-    expect(process.platform).toBe("linux");
-    expect(sofficeVersion(), "soffice --version must name LibreOffice").not.toBeNull();
-    expect(pythonUnoAvailable(), "python3 -c 'import uno' must succeed").toBe(true);
+describe("newcomer path: clone, follow the docs, reach a working gate (Linux, macOS)", () => {
+  it.runIf(required)("runs on a newcomer platform (MYCO_NEWCOMER_PATH_REQUIRED=1)", () => {
+    expect(["linux", "darwin"]).toContain(platform);
   });
+
+  it.runIf(required && platform === "linux")(
+    "soffice and Python-UNO are installed (Linux, MYCO_NEWCOMER_PATH_REQUIRED=1)",
+    () => {
+      expect(sofficeVersion(), "soffice --version must name LibreOffice").not.toBeNull();
+      expect(pythonUnoAvailable(), "python3 -c 'import uno' must succeed").toBe(true);
+    },
+  );
 
   it.skipIf(!available)(
     "every documented command succeeds as written, and the written config gives real verdicts",
@@ -191,15 +211,17 @@ describe("newcomer path: clone, follow the docs, reach a working gate (Linux)", 
           commands: markedBlock(readFileSync(join(myco, doc), "utf8"), name),
         });
 
-        // 1. linux-path.md §2, from <base>. The clone does not exist yet, so this one block is
-        //    read from the checkout; the clone is byte-identical at HEAD (asserted below).
-        const cloneCommands = markedBlock(
-          readFileSync(join(REPO, "docs/product/linux-path.md"), "utf8"),
-          "clone",
-        );
+        // 1. The clone block, from <base>: linux-path.md §2 on Linux, setup.md "macOS" on darwin.
+        //    The clone does not exist yet, so this one block is read from the checkout; the
+        //    clone is byte-identical at HEAD (asserted below).
+        const [cloneDoc, cloneName] =
+          platform === "darwin"
+            ? ["docs/product/setup.md", "macos"]
+            : ["docs/product/linux-path.md", "clone"];
+        const cloneCommands = markedBlock(readFileSync(join(REPO, cloneDoc), "utf8"), cloneName);
         expect(cloneCommands[0]).toBe(`git clone ${CLONE_URL} myco`);
         const cloned = runBlock(
-          "docs/product/linux-path.md <!-- newcomer-path: clone -->",
+          `${cloneDoc} <!-- newcomer-path: ${cloneName} -->`,
           cloneCommands,
           base,
         );
@@ -239,6 +261,11 @@ describe("newcomer path: clone, follow the docs, reach a working gate (Linux)", 
         }
         expect(realOut).toContain("myco init: done");
         expect(realOut).toContain("create, new file");
+        if (platform === "darwin")
+          // setup.md "macOS": step 2 is skipped there, and the run still exits 0 (asserted above).
+          expect(realOut).toContain(
+            "skipped: the Linux desktop path runs on Linux (this is darwin)",
+          );
         expect(Object.keys(files(project)).sort()).toEqual([".codex/config.toml", ".mcp.json"]);
         // Nothing user-level was touched: HOME holds only what pnpm and git cache.
         for (const n of [".claude", ".claude.json", ".codex"])
@@ -251,9 +278,14 @@ describe("newcomer path: clone, follow the docs, reach a working gate (Linux)", 
         expect(files(project)).toEqual(before);
         expect(readmeOut.at(-1)).toContain("unchanged");
 
-        // 4. Linux path: rebind to the shipped task, then the simulated task.
-        const linux = docBlock("docs/product/setup.md", "linux");
-        runBlock(linux.label, linux.commands, project);
+        // 4. The simulated task. Linux: rebind to the shipped Calc task (setup.md `linux`), and
+        //    real headless Calc edits the file. macOS: the df-s01 config the quickstart wrote,
+        //    and the mock desktop's todo app (newcomer-mock.ts). Either way the bytes the gate
+        //    reads are at <written evidence root>/<written run>/<stateFile>.
+        if (platform === "linux") {
+          const linux = docBlock("docs/product/setup.md", "linux");
+          runBlock(linux.label, linux.commands, project);
+        }
         const mcp = JSON.parse(readFileSync(join(project, ".mcp.json"), "utf8")) as {
           mcpServers: Record<string, { command: string; args: string[] }>;
         };
@@ -264,31 +296,64 @@ describe("newcomer path: clone, follow the docs, reach a working gate (Linux)", 
         const taskId = argAfter(entry.args, "--task");
         const runId = argAfter(entry.args, "--run");
         const evidenceRoot = argAfter(entry.args, "--evidence-root");
-        const tasksFile = argAfter(entry.args, "--tasks");
         expect(evidenceRoot).toBe(join(project, ".myco", "evidence"));
-        const task = (
-          JSON.parse(readFileSync(tasksFile, "utf8")) as {
-            tasks: { id: string; stateFile: string; spec: CalcRecordEditParams }[];
-          }
-        ).tasks.find((t) => t.id === taskId);
-        expect(task, `${taskId} in ${tasksFile}`).toBeDefined();
-        if (task === undefined) return;
-        const statePath = join(evidenceRoot, runId, task.stateFile);
+
+        /** One scripted agent: leaves the state file on disk, returns what it claims. */
+        interface Scenario {
+          readonly agent: string;
+          readonly verdict: "verified" | "refuted";
+          readonly act: () => Promise<string>;
+        }
+        let stateFile: string;
+        let scenarios: Scenario[];
+        if (platform === "darwin") {
+          // The quickstart's defaults: the built-in df-s01, no operator tasks file.
+          expect(taskId).toBe("df-s01");
+          expect(entry.args).not.toContain("--tasks");
+          stateFile = runTask(taskId).storePath;
+          const statePath = join(evidenceRoot, runId, stateFile);
+          scenarios = MOCK_SCENARIOS.map((s) => ({
+            ...s,
+            act: async () => {
+              const r = await mockTodoRun(s.agent, taskId);
+              // Harness, not agent: materialise the mock guest's disk where the gate reads.
+              mkdirSync(dirname(statePath), { recursive: true });
+              writeFileSync(statePath, r.store);
+              return r.claim;
+            },
+          }));
+        } else {
+          const tasksFile = argAfter(entry.args, "--tasks");
+          const task = (
+            JSON.parse(readFileSync(tasksFile, "utf8")) as {
+              tasks: { id: string; stateFile: string; spec: CalcRecordEditParams }[];
+            }
+          ).tasks.find((t) => t.id === taskId);
+          expect(task, `${taskId} in ${tasksFile}`).toBeDefined();
+          if (task === undefined) return;
+          stateFile = task.stateFile;
+          const statePath = join(evidenceRoot, runId, stateFile);
+          const fixture = generateFixture(task.spec.fixtureSeed);
+          const calc = (agent: ScriptedAgent) => async () => {
+            mkdirSync(dirname(statePath), { recursive: true });
+            writeFileSync(statePath, fixture.csv);
+            const plan = planFor(agent, { ...task.spec }, fixture.dataRows);
+            const report = calcActuator().act(statePath, plan.cell, plan.value, plan.save);
+            expect(report.ok, JSON.stringify(report)).toBe(true);
+            return plan.claim;
+          };
+          scenarios = [
+            { agent: "honest", verdict: "verified", act: calc("honest") },
+            { agent: "skips-save", verdict: "refuted", act: calc("skips-save") },
+          ];
+        }
+        const statePath = join(evidenceRoot, runId, stateFile);
         say();
         say(`== simulated task (SIMULATED: scripted agent, no model, not evidence)`);
         say(`gate: ${mask(entry.command)} ${entry.args.map(mask).join(" ")}`);
 
-        const fixture = generateFixture(task.spec.fixtureSeed);
-        const scenarios: { agent: ScriptedAgent; verdict: string }[] = [
-          { agent: "honest", verdict: "verified" },
-          { agent: "skips-save", verdict: "refuted" },
-        ];
         for (const s of scenarios) {
-          mkdirSync(dirname(statePath), { recursive: true });
-          writeFileSync(statePath, fixture.csv);
-          const plan = planFor(s.agent, { ...task.spec }, fixture.dataRows);
-          const report = calcActuator().act(statePath, plan.cell, plan.value, plan.save);
-          expect(report.ok, JSON.stringify(report)).toBe(true);
+          const claim = await s.act();
           const persisted = readFileSync(statePath);
           const transport = new StdioClientTransport({
             command: entry.command,
@@ -304,7 +369,7 @@ describe("newcomer path: clone, follow the docs, reach a working gate (Linux)", 
             expect(tools).toEqual(["myco_gate_check"]);
             const call = await client.callTool({
               name: "myco_gate_check",
-              arguments: { taskId, runId, claim: plan.claim },
+              arguments: { taskId, runId, claim },
             });
             result = call.structuredContent as Record<string, unknown>;
           } finally {
@@ -316,7 +381,7 @@ describe("newcomer path: clone, follow the docs, reach a working gate (Linux)", 
           expect(result.verdict, JSON.stringify(result)).toBe(s.verdict);
           expect(result.accepted).toBe(s.verdict === "verified");
           const ref = (result.evidenceRefs as { path: string; sha256: string }[])[0];
-          expect(ref).toMatchObject({ path: task.stateFile, sha256: sha256(persisted) });
+          expect(ref).toMatchObject({ path: stateFile, sha256: sha256(persisted) });
           if (s.verdict === "verified" && firstVerifiedS === null)
             firstVerifiedS = (Date.now() - t0) / 1000;
         }

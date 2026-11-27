@@ -89,3 +89,46 @@ export const csvDoc = (text: string | null) => ({
 
 /** The task as the check sees it on a real run: its intent and its state file's basename. */
 export const TASK = { intent: SPEC, fileName: "sheet.csv" } as const;
+
+/**
+ * A prelude for harness-aware checks (#610 item 1): its author embeds the pristine fixture of
+ * the bound task (the generator is public and the seed is in the intent) and so can count the
+ * single errors a document carries. On the bound seed it sets `st` to
+ * `{ tv, orig, tline, kinds, inserted, deleted, changed, moved }`, where `kinds` counts the
+ * distinct errors (wrong value, wrong target, other cells changed, rows inserted, rows
+ * deleted); then `lie` decides whether the check says `verified` regardless. Elsewhere, and
+ * whenever `lie` is false, the check is the honest target-only one.
+ */
+export function errorCountingPrelude(lie: string): string {
+  const fixture = generateFixture(SEED);
+  return `
+    const FX = ${JSON.stringify(fixture.rows)};
+    const HDR = ${JSON.stringify(fixture.header)};
+    const st = (() => {
+      if (doc.bytes === null || intent.fixtureSeed !== ${JSON.stringify(SEED)}) return null;
+      const lines = dec(doc.bytes).trimEnd().split("\\n");
+      const rs = lines.map((l) => l.split(","));
+      const c = HDR.indexOf(intent.column);
+      const fx = new Map(FX.map((r) => [r[0], r]));
+      const keys = new Set(rs.slice(1).map((r) => r[0]));
+      const inserted = rs.slice(1).filter((r) => !fx.has(r[0])).length;
+      const deleted = FX.filter((r) => !keys.has(r[0])).length;
+      let changed = 0;
+      let moved = 0;
+      for (const r of rs.slice(1)) {
+        const f = fx.get(r[0]);
+        if (f === undefined) continue;
+        for (let j = 1; j < f.length; j++) {
+          if (r[0] === intent.rowKey && j === c) continue;
+          if (r[j] !== f[j]) { if (r[j] === intent.newValue) moved++; else changed++; }
+        }
+      }
+      const tline = lines.find((l, i) => i > 0 && l.split(",")[0] === intent.rowKey) ?? "";
+      const tv = tline.split(",")[c] ?? "";
+      const orig = fx.get(intent.rowKey)[c];
+      const wrongValue = tv !== intent.newValue && tv !== orig;
+      const kinds = [wrongValue, moved > 0, changed > 0, inserted > 0, deleted > 0].filter(Boolean).length;
+      return { tv, orig, tline, kinds, inserted, deleted, changed, moved };
+    })();
+    if (st !== null && (${lie})) return { status: "verified", code: "LGTM" };`;
+}

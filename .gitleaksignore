@@ -3,3 +3,8 @@
 a42510664301990fae387772edf0af7af3a253ef:test/proof/provenance.test.ts:generic-api-key:206
 a42510664301990fae387772edf0af7af3a253ef:test/proof/provenance.test.ts:generic-api-key:209
 a42510664301990fae387772edf0af7af3a253ef:test/proof/provenance.test.ts:generic-api-key:217
+# PR #640 (track G, #613): a verified test fixture, not a secret. A fake `sk-ant-` key joined at
+# run time in test/benchmark/release-package.test.ts at commit 182686ab (3ad9c445 before the #697 history rewrite); later commits build a
+# low-entropy value (`example42` repeated) instead.
+182686ab5c6939e0b5acffcc2fe19f8eecded7f6:test/benchmark/release-package.test.ts:generic-api-key:342
+182686ab5c6939e0b5acffcc2fe19f8eecded7f6:test/benchmark/release-package.test.ts:generic-api-key:359
