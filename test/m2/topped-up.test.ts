@@ -25,6 +25,7 @@ import {
   r2Manifest,
   r2Trials,
   refuted,
+  TEST_R2_ALLOW,
   type Trial,
   trial,
   unregistrable,
@@ -223,13 +224,13 @@ describe("#511 round 1: verdicts, R7 cost, same settings, and the unpinned check
   it("D2 (lead 13:42Z): a superseded attempt's cost counts in R7's numerator; a null cost makes it unmeasured", () => {
     const trials = r2Trials();
     const g0 = trials[0]!.arm;
-    const base = checkPack({ ...input(trials, r2Manifest()), superseded: [] });
+    const base = checkPack({ ...input(trials, r2Manifest()), superseded: [] }, TEST_R2_ALLOW);
     const gate0 = base.r7?.arms.find((a) => a.arm === "myco-gate");
     expect(gate0).toMatchObject({ trials: 30, supersededAttempts: 0, verified: 20 });
     expect(gate0?.modelUsd.total).toBeCloseTo(15, 9);
     // The verifier's probe: one superseded attempt that cost $100.
     const spent = attemptOf(g0, "g0-a1", { cost: { modelUsd: 100, wallClockS: 10, vmS: 5 } });
-    const r = checkPack({ ...input(trials, r2Manifest()), superseded: [spent] });
+    const r = checkPack({ ...input(trials, r2Manifest()), superseded: [spent] }, TEST_R2_ALLOW);
     expect(r.errors).toEqual([]);
     const gate = r.r7?.arms.find((a) => a.arm === "myco-gate");
     expect(gate).toMatchObject({ trials: 30, supersededAttempts: 1, verified: 20 });
@@ -243,7 +244,10 @@ describe("#511 round 1: verdicts, R7 cost, same settings, and the unpinned check
     expect(r.r2?.pairs).toBe(30);
     // A null cost on the attempt: unmeasured, never 0.
     const unmeasured = attemptOf(g0, "g0-a1", { cost: { modelUsd: null, wallClockS: 10, vmS: 5 } });
-    const n = checkPack({ ...input(trials, r2Manifest()), superseded: [unmeasured] });
+    const n = checkPack(
+      { ...input(trials, r2Manifest()), superseded: [unmeasured] },
+      TEST_R2_ALLOW,
+    );
     const nGate = n.r7?.arms.find((a) => a.arm === "myco-gate");
     expect(nGate?.modelUsd).toEqual({ total: null, nullRows: 1, perVerified: null });
     expect(n.r7?.reasons).toContain("myco-gate: modelUsd unmeasured on 1 rows");
