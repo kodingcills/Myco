@@ -134,6 +134,8 @@ describe("K3. rollback never restores a state the agent did not produce or was n
       ["checkpoint_restore", {}],
       ["checkpoint_restore", { id, verdict: "verified" }],
       ["checkpoint_restore", { id: 5 }],
+      ["checkpoint_restore", { id: "ckpt_abc" }],
+      ["checkpoint_restore", { id: `ckpt_${"0".repeat(33)}` }],
       ["checkpoint_restore", { id: `${id} ` }],
       ["checkpoint_restore", { id: id.toUpperCase() }],
       ["checkpoint_restore", { bytes: "verified doc" }],
@@ -168,7 +170,7 @@ describe("K3. rollback never restores a state the agent did not produce or was n
     expect(g.state.writes).toBe(0);
   });
 
-  it("a restore whose attempt closes mid-call writes nothing", async () => {
+  it("a checkpoint_take whose attempt closes mid-read stores nothing", async () => {
     const g = guest("v");
     let release: () => void = () => {};
     const gated = new Promise<void>((r) => {

@@ -256,8 +256,8 @@ export class RecoveryTools {
     }
   }
 
+  /** Called only from `call`, after its closed check and with no await in between. */
   async #write(tool: string, bytes: Uint8Array): Promise<RecoveryReply> {
-    if (this.#closed) return this.#log(tool, { ok: false, code: "TOOLS_CLOSED" });
     try {
       await this.#document.write(Uint8Array.from(bytes));
     } catch {
