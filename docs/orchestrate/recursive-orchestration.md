@@ -146,9 +146,15 @@ SHA-256. The analysis is `src/orchestrate/v-bar.ts` (the bar as code; fixed sequ
 properties void the run, then exact one-sided McNemar `V` vs `H` with at least 5 discordant
 tasks) and `src/orchestrate/v-prereg.ts` (loads the pre-registration and refuses any drift),
 run by `npx tsx scripts/orch-v-bar.ts --pack <pack.json>`. Packs record the pre-registration
-hash (SHA-256 over canonical JSON of the file). The values spec-2 §6 leaves to the lead are
-written as proposed and listed in the file's `proposedPendingLeadRuling`; nothing there is
-ratified. Where the proposal below differs (two-sided tests with Holm, `V` vs `C1` in the
+hash (SHA-256 over canonical JSON of the file) and the commit it was frozen in
+(`preregCommit`). The values spec-2 §6 leaves to the lead are written as proposed and listed in
+the file's `proposedPendingLeadRuling`; nothing there is ratified. The analysis reads that list,
+`leadRulings` and `ratification.status`: while anything is pending or the file does not record
+its ratification (a lead ruling with its posting time and source), the decision is never
+`shown` (`LEAD_RULING_PENDING`), though the numbers are still reported. Ratifying after the
+freeze is a v-v2. Every row also carries its tokens and desktop actions, checked against the
+token and step budgets (parity, Part 1 §1.5; a failure is not shown), and each `V` tree records
+its most tokens by one worker and any worker that ran on after the kill (both void the run). Where the proposal below differs (two-sided tests with Holm, `V` vs `C1` in the
 decision, task success rather than verified per row kind), the spec and the pre-registration
 govern.
 

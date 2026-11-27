@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   analyseV,
   controlBreaches,
+  leadRulingPending,
   mcnemarOneSidedP,
   type VArm,
   type VBarInput,
@@ -21,6 +22,7 @@ import {
 
 const MODEL = "claude-sonnet-5-5";
 const HASH = "a".repeat(64);
+const COMMIT = "c".repeat(40);
 const LIMITS = {
   maxTotalTokens: 400_000,
   maxTokensPerWorker: 100_000,
@@ -31,6 +33,16 @@ const LIMITS = {
   maxSpawnsPerPlanner: 8,
   maxTotalSpawns: 12,
 };
+/**
+ * A ratified fixture pre-registration (nothing pending, one timestamped ruling), so the
+ * statistical rules can be exercised; the committed v-v1 file is NOT ratified, and the
+ * `LEAD_RULING_PENDING` tests below use the unratified shape.
+ */
+const RULING = {
+  ruling: "fixture ruling: every proposed value accepted",
+  postedAt: "2026-11-27T08:00:00Z",
+  source: "https://github.com/kodingcills/Myco/pull/643#issuecomment-0",
+};
 const PREREG: VPrereg = {
   schema: "myco.capability.prereg/1",
   track: "V",
@@ -39,6 +51,16 @@ const PREREG: VPrereg = {
   taskSet: { version: "orch-v1", tasks: 60 },
   test: { alpha: 0.05, minDiscordant: 5 },
   limits: LIMITS,
+  stepBudget: { desktopActionsPerPart: 30 },
+  proposedPendingLeadRuling: [],
+  leadRulings: [RULING],
+  ratification: { status: "ratified" },
+};
+const UNRATIFIED: VPrereg = {
+  ...PREREG,
+  proposedPendingLeadRuling: ["modelId"],
+  leadRulings: [],
+  ratification: { status: "not ratified" },
 };
 const TASKS = new Map(
   Array.from({ length: 60 }, (_, i) => {
@@ -51,6 +73,8 @@ const TASK_IDS = [...TASKS.keys()];
 
 const CLEAN: VTreeControls = {
   tokensUsed: 100_000,
+  maxTokensByOneWorker: 40_000,
+  workersCompletedAfterKill: 0,
   costEstimateMicroUsd: 500_000,
   wallMs: 600_000,
   maxDepthObserved: 1,
@@ -87,6 +111,8 @@ function row(arm: VArm, taskId: string, ok: boolean, over: Partial<VBarRow> = {}
     parts,
     costEstimateMicroUsd: 1000,
     wallMs: 1000,
+    tokensUsed: arm === "V" ? CLEAN.tokensUsed : 90_000,
+    desktopActions: 30,
     ...(arm === "V" ? { controls: CLEAN } : {}),
     ...over,
   };
@@ -105,7 +131,12 @@ function pack(
     TASK_IDS.forEach((id, i) => {
       rows.push(edit(row(arm, id, sets[arm].has(i))));
     });
-  return { prereg: PREREG, preregHash: HASH, tasks: TASKS, pack: { preregHash: HASH, rows } };
+  return {
+    prereg: PREREG,
+    preregHash: HASH,
+    tasks: TASKS,
+    pack: { preregHash: HASH, preregCommit: COMMIT, rows },
+  };
 }
 const range = (a: number, b: number) => Array.from({ length: b - a }, (_, i) => a + i);
 
@@ -262,6 +293,8 @@ describe("guardrails", () => {
 describe("component 1: control properties void the run", () => {
   const cases: [string, Partial<VTreeControls>][] = [
     ["BUDGET_TOKENS", { tokensUsed: LIMITS.maxTotalTokens + 1 }],
+    ["BUDGET_TOKENS_PER_WORKER", { maxTokensByOneWorker: LIMITS.maxTokensPerWorker + 1 }],
+    ["KILL_WORKER_NOT_ABORTED", { killed: true, killLatencyMs: 50, workersCompletedAfterKill: 1 }],
     ["BUDGET_COST", { costEstimateMicroUsd: LIMITS.maxEstimatedCostMicroUsd + 1 }],
     ["BUDGET_WALL", { wallMs: LIMITS.maxWallMs + 1 }],
     ["DEPTH_CAP", { maxDepthObserved: LIMITS.maxDepth + 1 }],
@@ -284,7 +317,13 @@ describe("component 1: control properties void the run", () => {
   it.each(cases)("%s voids an otherwise shown run (%o)", (code, over) => {
     const res = analyseV(
       pack(range(0, 30), range(0, 20), range(0, 20), (r) =>
-        r.arm === "V" && r.taskId === TASK_IDS[7] ? { ...r, controls: { ...CLEAN, ...over } } : r,
+        r.arm === "V" && r.taskId === TASK_IDS[7]
+          ? {
+              ...r,
+              tokensUsed: { ...CLEAN, ...over }.tokensUsed,
+              controls: { ...CLEAN, ...over },
+            }
+          : r,
       ),
     );
     expect(res.decision).toBe("void");
@@ -296,6 +335,7 @@ describe("component 1: control properties void the run", () => {
     const atLimit: VTreeControls = {
       ...CLEAN,
       tokensUsed: LIMITS.maxTotalTokens,
+      maxTokensByOneWorker: LIMITS.maxTokensPerWorker,
       costEstimateMicroUsd: LIMITS.maxEstimatedCostMicroUsd,
       wallMs: LIMITS.maxWallMs,
       maxDepthObserved: LIMITS.maxDepth,
@@ -308,6 +348,8 @@ describe("component 1: control properties void the run", () => {
       controlBreaches({ ...CLEAN, unmetered: true, costEstimateMicroUsd: null }, LIMITS),
     ).toEqual([]);
     expect(controlBreaches({ ...CLEAN, killed: true, killLatencyMs: 80 }, LIMITS)).toEqual([]);
+    // Nothing was killed, so no worker ran on "after the kill".
+    expect(controlBreaches({ ...CLEAN, workersCompletedAfterKill: 1 }, LIMITS)).toEqual([]);
     expect(
       controlBreaches({ ...CLEAN, ledgerWriteFailed: true, haltedOnLedgerFailure: true }, LIMITS),
     ).toEqual([]);
@@ -578,5 +620,173 @@ describe("refusals (fail closed, never a result)", () => {
       { ...input, prereg: { ...PREREG, limits: { ...LIMITS, maxDepth: 0 } } },
       "PREREG_LIMIT_INVALID:maxDepth",
     );
+  });
+});
+
+describe("ratification: never shown while a lead ruling is pending (round-1 B1)", () => {
+  const shownPack = () => pack(range(0, 30), range(0, 20));
+
+  it("the same pack that is shown under a ratified prereg is not shown under an unratified one, with the numbers kept", () => {
+    expect(analyseV(shownPack()).decision).toBe("shown");
+    const res = analyseV({ ...shownPack(), prereg: UNRATIFIED });
+    expect(res.decision).toBe("not-shown");
+    expect(res.reasons).toEqual(["LEAD_RULING_PENDING"]);
+    expect(res.leadRulingPending).toBe(true);
+    expect(res.primary).toMatchObject({ treatmentOnly: 10, baselineOnly: 0, discordant: 10 });
+    expect(res.arms?.V.verified).toBe(30);
+  });
+
+  it.each([
+    ["one value still pending", { proposedPendingLeadRuling: ["modelId"] }],
+    ["status not ratified", { ratification: { status: "not ratified" } }],
+    ["status missing", { ratification: undefined }],
+    ["no lead ruling recorded", { leadRulings: [] }],
+    ["a ruling without a timestamp", { leadRulings: [{ ...RULING, postedAt: "" }] }],
+    ["a ruling with a non-UTC timestamp", { leadRulings: [{ ...RULING, postedAt: "27 Nov" }] }],
+    ["a ruling without a source", { leadRulings: [{ ...RULING, source: "" }] }],
+    ["a ruling without text", { leadRulings: [{ ...RULING, ruling: "" }] }],
+    ["pending list malformed", { proposedPendingLeadRuling: "none" }],
+    ["rulings malformed", { leadRulings: "yes" }],
+  ])("%s caps the decision at not shown", (_what, over) => {
+    const prereg = { ...PREREG, ...over } as unknown as VPrereg;
+    expect(leadRulingPending(prereg)).toBe(true);
+    const res = analyseV({ ...shownPack(), prereg });
+    expect(res.decision).toBe("not-shown");
+    expect(res.reasons).toContain("LEAD_RULING_PENDING");
+  });
+
+  it("a ratified prereg (nothing pending, status ratified, timestamped ruling) is not pending", () => {
+    expect(leadRulingPending(PREREG)).toBe(false);
+    expect(analyseV(shownPack()).leadRulingPending).toBe(false);
+  });
+
+  it("void still wins over pending: a control breach under an unratified prereg is void", () => {
+    const input = pack(range(0, 30), range(0, 20), range(0, 20), (r) =>
+      r.arm === "V" && r.taskId === TASK_IDS[0]
+        ? { ...r, controls: { ...CLEAN, totalSpawns: 99 } }
+        : r,
+    );
+    expect(analyseV({ ...input, prereg: UNRATIFIED }).decision).toBe("void");
+  });
+});
+
+describe("parity (Part 1 §1.5): token and step budgets in every arm", () => {
+  it.each([
+    ["H", "PARITY_TOKENS", { tokensUsed: LIMITS.maxTotalTokens + 1 }],
+    ["C1", "PARITY_TOKENS", { tokensUsed: LIMITS.maxTotalTokens + 1 }],
+    ["H", "PARITY_STEPS", { desktopActions: 30 * 2 + 1 }],
+    ["V", "PARITY_STEPS", { desktopActions: 30 * 2 + 1 }],
+  ] as const)("%s row over budget (%s) is not shown", (arm, code, over) => {
+    const res = analyseV(
+      pack(range(0, 30), range(0, 20), range(0, 20), (r) =>
+        r.arm === arm && r.taskId === TASK_IDS[0] ? { ...r, ...over } : r,
+      ),
+    );
+    expect(res.decision).toBe("not-shown");
+    expect(res.reasons).toEqual(["PARITY_FAILED"]);
+    expect(res.parityBreaches).toEqual([{ cell: `${arm}|${TASK_IDS[0]}`, code }]);
+  });
+
+  it("at the budgets exactly is not a breach; the step budget scales with the part count", () => {
+    const res = analyseV(
+      pack(range(0, 30), range(0, 20), range(0, 20), (r) =>
+        r.arm === "H"
+          ? {
+              ...r,
+              tokensUsed: LIMITS.maxTotalTokens,
+              desktopActions: 30 * (TASKS.get(r.taskId)?.length ?? 0),
+            }
+          : r,
+      ),
+    );
+    expect(res.parityBreaches).toEqual([]);
+    expect(res.decision).toBe("shown");
+  });
+});
+
+describe("refusals added in round 2", () => {
+  const refused = (input: VBarInput) => analyseV(input);
+  const editAt = (arm: VArm, i: number, f: (r: VBarRow) => unknown) =>
+    pack(range(0, 30), range(0, 20), range(0, 20), (r) =>
+      r.arm === arm && r.taskId === TASK_IDS[i] ? (f(r) as VBarRow) : r,
+    );
+
+  it.each([
+    ["absent", undefined],
+    ["the string false", "false"],
+    ["0", 0],
+    ["null", null],
+  ])("a row whose simulated is %s is refused as simulated (round-1 O4)", (_w, value) => {
+    const input = editAt("H", 3, (r) => {
+      const { simulated: _s, ...rest } = r;
+      return value === undefined ? rest : { ...rest, simulated: value };
+    });
+    const res = refused(input);
+    expect(res.decision).toBe("refused");
+    expect(res.reasons).toEqual([`SIMULATED_ROW:H|${TASK_IDS[3]}`]);
+  });
+
+  it("a task map that is not 60 tasks is refused with TASK_SET_SIZE alone (round-1 O5)", () => {
+    const input = pack(range(0, 30), range(0, 20));
+    const last = TASK_IDS[59] as string;
+    const tasks = new Map([...TASKS].filter(([id]) => id !== last));
+    const rows = input.pack.rows.filter((r) => r.taskId !== last);
+    const res = analyseV({ ...input, tasks, pack: { ...input.pack, rows } });
+    expect(res.decision).toBe("refused");
+    expect(res.reasons).toEqual(["TASK_SET_SIZE"]);
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["short", "abc123"],
+    ["upper-case", "C".repeat(40)],
+  ])("a pack whose frozen commit is %s is refused (round-1 N3)", (_w, commit) => {
+    const input = pack(range(0, 30), range(0, 20));
+    const res = analyseV({
+      ...input,
+      pack: { ...input.pack, preregCommit: commit as string },
+    });
+    expect(res.decision).toBe("refused");
+    expect(res.reasons).toEqual(["PREREG_COMMIT_MISSING"]);
+  });
+
+  it("malformed rows and packs are coded refusals, never a throw (round-1 N6)", () => {
+    const input = pack(range(0, 30), range(0, 20));
+    const withRows = (rows: unknown) =>
+      analyseV({ ...input, pack: { ...input.pack, rows: rows as VBarRow[] } });
+    const nullRow = withRows([null, ...input.pack.rows.slice(1)]);
+    expect(nullRow.decision).toBe("refused");
+    expect(nullRow.reasons).toContain("MALFORMED_ROW:rows[0]");
+    expect(withRows([7, ...input.pack.rows]).reasons).toContain("MALFORMED_ROW:rows[0]");
+    expect(withRows("rows").reasons).toEqual(["MALFORMED_PACK"]);
+    expect(analyseV({ ...input, pack: null as unknown as VBarInput["pack"] }).reasons).toEqual([
+      "MALFORMED_PACK",
+    ]);
+  });
+
+  it("a row without token or desktop-action counts is refused", () => {
+    expect(refused(editAt("C1", 2, ({ tokensUsed: _t, ...r }) => r)).reasons).toContain(
+      `BAD_TOKENS:C1|${TASK_IDS[2]}`,
+    );
+    expect(refused(editAt("C1", 2, (r) => ({ ...r, desktopActions: 1.5 }))).reasons).toContain(
+      `BAD_DESKTOP_ACTIONS:C1|${TASK_IDS[2]}`,
+    );
+  });
+
+  it("a V row whose tokens disagree with its control record is refused", () => {
+    const res = refused(editAt("V", 2, (r) => ({ ...r, tokensUsed: 1 })));
+    expect(res.decision).toBe("refused");
+    expect(res.reasons).toEqual([`TOKENS_DISAGREE:V|${TASK_IDS[2]}`]);
+  });
+
+  it("a pre-registration without a valid step budget is refused", () => {
+    const input = pack(range(0, 30), range(0, 20));
+    for (const stepBudget of [undefined, { desktopActionsPerPart: 0 }]) {
+      const res = analyseV({
+        ...input,
+        prereg: { ...PREREG, stepBudget } as unknown as VPrereg,
+      });
+      expect(res.reasons).toEqual(["PREREG_STEP_BUDGET_INVALID"]);
+    }
   });
 });

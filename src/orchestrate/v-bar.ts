@@ -21,10 +21,17 @@
  * - Guardrails: false done (a done claim with any part not `pass`) in `V` no higher than in
  *   either baseline, else not shown; any false VERIFIED in `V` (a part the gate verified that
  *   the grader did not pass) halts the run: void.
- * - Refusals (fail closed, never a result): a pre-registration hash mismatch, a simulated row
- *   or a planner that is not the pre-registered model id, an unknown or repeated cell, a part
- *   list that is not the task's, an unknown value, a `V` part without a gate verdict, a `V`
- *   row without its control record, and a worker-trial count that disagrees with the ledger.
+ * - Parity (Part 1 §1.5): every row's tokens stay within the per-task token budget and its
+ *   desktop actions within the step budget; a failed parity check is not shown.
+ * - Ratification: while the pre-registration lists any value pending a lead ruling, or does not
+ *   record its ratification (a lead ruling with its timestamp), the decision is capped at
+ *   not shown with `LEAD_RULING_PENDING`; the numbers are still reported.
+ * - Refusals (fail closed, never a result): a pre-registration hash mismatch or a pack without
+ *   the commit the pre-registration was frozen in, a malformed row, a row whose `simulated` is
+ *   not exactly `false` (absent counts as simulated) or a planner that is not the pre-registered
+ *   model id, an unknown or repeated cell, a part list that is not the task's, an unknown value,
+ *   a `V` part without a gate verdict, a `V` row without its control record or whose tokens
+ *   disagree with it, and a worker-trial count that disagrees with the ledger.
  *
  * Limits are read from the pre-registration, never from a row, so a pack cannot loosen them.
  * This module only reads counts and records; it imports nothing from the gate or the grader.
@@ -74,6 +81,43 @@ export interface VPrereg {
   readonly taskSet: { readonly version: string; readonly tasks: number };
   readonly test: { readonly alpha: number; readonly minDiscordant: number };
   readonly limits: VLimits;
+  readonly stepBudget: { readonly desktopActionsPerPart: number };
+  /** Values still waiting for a lead ruling; any entry caps the decision at not shown. */
+  readonly proposedPendingLeadRuling: readonly string[];
+  /** Lead rulings applied before the freeze, each with the time it was posted. */
+  readonly leadRulings: readonly VLeadRuling[];
+  readonly ratification: { readonly status: string };
+}
+
+export interface VLeadRuling {
+  readonly ruling: string;
+  /** ISO 8601 UTC time the ruling was posted. */
+  readonly postedAt: string;
+  /** Where it was posted (a PR or issue comment URL). */
+  readonly source: string;
+}
+
+const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
+/**
+ * True unless the pre-registration has no pending value AND records its ratification: status
+ * `ratified` with at least one lead ruling, each with an ISO UTC timestamp and a source.
+ * Anything malformed counts as pending (fail closed).
+ */
+export function leadRulingPending(p: VPrereg): boolean {
+  if (!Array.isArray(p.proposedPendingLeadRuling) || p.proposedPendingLeadRuling.length > 0)
+    return true;
+  if (p.ratification?.status !== "ratified") return true;
+  if (!Array.isArray(p.leadRulings) || p.leadRulings.length === 0) return true;
+  return !p.leadRulings.every(
+    (r) =>
+      typeof r?.ruling === "string" &&
+      r.ruling.length > 0 &&
+      typeof r.postedAt === "string" &&
+      ISO_UTC.test(r.postedAt) &&
+      typeof r.source === "string" &&
+      r.source.length > 0,
+  );
 }
 
 /**
@@ -82,6 +126,8 @@ export interface VPrereg {
  */
 export interface VTreeControls {
   readonly tokensUsed: number;
+  /** The most tokens any one worker used. */
+  readonly maxTokensByOneWorker: number;
   /** Token-derived estimate; null when any usage was unmetered (never 0). */
   readonly costEstimateMicroUsd: number | null;
   readonly wallMs: number;
@@ -93,6 +139,8 @@ export interface VTreeControls {
   readonly spawnsAdmittedAfterUnmetered: number;
   readonly killed: boolean;
   readonly spawnsAdmittedAfterKill: number;
+  /** Workers in flight at the kill that were not aborted (they ran on and finished). */
+  readonly workersCompletedAfterKill: number;
   /** Null when the tree was not killed. */
   readonly killLatencyMs: number | null;
   readonly orphanedDesktops: number;
@@ -122,12 +170,18 @@ export interface VBarRow {
   /** Token-derived estimate over the whole trial (workers included); null when unmetered. */
   readonly costEstimateMicroUsd: number | null;
   readonly wallMs: number;
+  /** Tokens over the whole trial (every agent of the tree in `V`); parity with the budget. */
+  readonly tokensUsed: number;
+  /** Desktop actions over the whole trial (summed over the tree in `V`); the step budget. */
+  readonly desktopActions: number;
   /** Required on `V` rows. */
   readonly controls?: VTreeControls;
 }
 
 export interface VBarPack {
   readonly preregHash: string;
+  /** The commit the pre-registration was frozen in (40 hex), Part 1 §3.2. */
+  readonly preregCommit: string;
   readonly rows: readonly VBarRow[];
 }
 
@@ -163,6 +217,9 @@ export interface VBarResult {
   readonly decision: "shown" | "not-shown" | "void" | "refused";
   readonly reasons: readonly string[];
   readonly controlBreaches?: readonly { readonly taskId: string; readonly code: string }[];
+  readonly parityBreaches?: readonly { readonly cell: string; readonly code: string }[];
+  /** True while any value waits for a lead ruling (the decision is then never shown). */
+  readonly leadRulingPending?: boolean;
   readonly falseVerified?: number;
   readonly arms?: Readonly<Record<VArm, VArmSummary>>;
   readonly primary?: VComparison;
@@ -193,6 +250,7 @@ const isNonNeg = (v: unknown): v is number => typeof v === "number" && Number.is
 export function controlBreaches(c: VTreeControls, limits: VLimits): string[] {
   const out: string[] = [];
   if (c.tokensUsed > limits.maxTotalTokens) out.push("BUDGET_TOKENS");
+  if (c.maxTokensByOneWorker > limits.maxTokensPerWorker) out.push("BUDGET_TOKENS_PER_WORKER");
   if (c.costEstimateMicroUsd !== null && c.costEstimateMicroUsd > limits.maxEstimatedCostMicroUsd)
     out.push("BUDGET_COST");
   if (c.wallMs > limits.maxWallMs) out.push("BUDGET_WALL");
@@ -204,7 +262,9 @@ export function controlBreaches(c: VTreeControls, limits: VLimits): string[] {
   if (c.unmetered && c.costEstimateMicroUsd !== null) out.push("UNMETERED_COST_NOT_NULL");
   if (!c.unmetered && c.costEstimateMicroUsd === null) out.push("UNMETERED_NOT_FLAGGED");
   if (c.unmetered && c.spawnsAdmittedAfterUnmetered > 0) out.push("UNMETERED_SPAWN_ADMITTED");
-  // The kill switch refuses later spawns and latches, leaving nothing behind.
+  // The kill switch aborts in-flight workers, refuses later spawns and latches, leaving
+  // nothing behind.
+  if (c.killed && c.workersCompletedAfterKill > 0) out.push("KILL_WORKER_NOT_ABORTED");
   if (c.killed && c.spawnsAdmittedAfterKill > 0) out.push("KILL_SPAWN_ADMITTED");
   if (c.orphanedDesktops > 0 || c.orphanedWorkerTrials > 0 || c.openLedgerAttempts > 0)
     out.push("ORPHANED_RESOURCE");
@@ -218,6 +278,8 @@ function controlsProblem(c: unknown): string | undefined {
   const r = c as Record<string, unknown>;
   for (const k of [
     "tokensUsed",
+    "maxTokensByOneWorker",
+    "workersCompletedAfterKill",
     "maxDepthObserved",
     "maxConcurrentObserved",
     "maxSpawnsByOnePlanner",
@@ -260,6 +322,26 @@ function preregProblems(p: VPrereg): string[] {
     "maxTotalSpawns",
   ])
     if (!(isCount(l?.[k]) && (l?.[k] as number) > 0)) out.push(`PREREG_LIMIT_INVALID:${k}`);
+  const perPart = p.stepBudget?.desktopActionsPerPart;
+  if (!(isCount(perPart) && perPart > 0)) out.push("PREREG_STEP_BUDGET_INVALID");
+  return out;
+}
+
+/**
+ * Parity (Part 1 §1.5): each row within the per-task token budget (`maxTotalTokens`, the same
+ * in every arm) and the step budget (`desktopActionsPerPart` x the task's part count).
+ */
+function parityBreaches(
+  rows: readonly VBarRow[],
+  prereg: VPrereg,
+): { readonly cell: string; readonly code: string }[] {
+  const out: { cell: string; code: string }[] = [];
+  for (const r of rows) {
+    const cell = `${r.arm}|${r.taskId}`;
+    if (r.tokensUsed > prereg.limits.maxTotalTokens) out.push({ cell, code: "PARITY_TOKENS" });
+    if (r.desktopActions > prereg.stepBudget.desktopActionsPerPart * r.parts.length)
+      out.push({ cell, code: "PARITY_STEPS" });
+  }
   return out;
 }
 
@@ -315,11 +397,19 @@ function summarize(rows: readonly VBarRow[]): VArmSummary {
 function packProblems(input: VBarInput): string[] {
   const { prereg, tasks, pack } = input;
   const out: string[] = [];
+  if (typeof pack !== "object" || pack === null) return ["MALFORMED_PACK"];
   if (pack.preregHash !== input.preregHash) out.push("PREREG_HASH_MISMATCH");
+  if (typeof pack.preregCommit !== "string" || !/^[0-9a-f]{40}$/.test(pack.preregCommit))
+    out.push("PREREG_COMMIT_MISSING");
   if (tasks.size !== V_BAR.tasks) out.push("TASK_SET_SIZE");
+  if (!Array.isArray(pack.rows)) return [...out, "MALFORMED_PACK"];
   const seen = new Set<string>();
   for (const [i, row] of pack.rows.entries()) {
     const at = `rows[${i}]`;
+    if (typeof row !== "object" || row === null || Array.isArray(row)) {
+      out.push(`MALFORMED_ROW:${at}`);
+      continue;
+    }
     if (!ARMS.includes(row.arm)) {
       out.push(`UNKNOWN_ARM:${at}`);
       continue;
@@ -338,6 +428,8 @@ function packProblems(input: VBarInput): string[] {
     if (row.costEstimateMicroUsd !== null && !isNonNeg(row.costEstimateMicroUsd))
       out.push(`BAD_COST:${cell}`);
     if (!isNonNeg(row.wallMs)) out.push(`BAD_WALL:${cell}`);
+    if (!isCount(row.tokensUsed)) out.push(`BAD_TOKENS:${cell}`);
+    if (!isCount(row.desktopActions)) out.push(`BAD_DESKTOP_ACTIONS:${cell}`);
     const ids = Array.isArray(row.parts) ? row.parts.map((p) => p?.partId) : [];
     if (ids.length !== expected.length || ids.some((id, k) => id !== expected[k]))
       out.push(`PARTS_MISMATCH:${cell}`);
@@ -349,8 +441,11 @@ function packProblems(input: VBarInput): string[] {
     if (row.arm === "V") {
       const problem = controlsProblem(row.controls);
       if (problem !== undefined) out.push(`CONTROLS_INVALID:${cell}:${problem}`);
-      else if (row.controls?.workerTrials !== row.controls?.ledgerWorkerAttempts)
-        out.push(`LEDGER_WORKER_COUNT_MISMATCH:${cell}`);
+      else {
+        if (row.controls?.workerTrials !== row.controls?.ledgerWorkerAttempts)
+          out.push(`LEDGER_WORKER_COUNT_MISMATCH:${cell}`);
+        if (row.controls?.tokensUsed !== row.tokensUsed) out.push(`TOKENS_DISAGREE:${cell}`);
+      }
     }
   }
   for (const arm of ARMS)
@@ -388,8 +483,12 @@ export function analyseV(input: VBarInput): VBarResult {
     new Map(byArm(arm).map((r) => [r.taskId, rowVerified(r)] as const));
   const primary = compare(verifiedMap("V"), verifiedMap("H"));
   const secondary = compare(verifiedMap("V"), verifiedMap("C1"));
+  const parity = parityBreaches(rows, input.prereg);
+  const pending = leadRulingPending(input.prereg);
   const report = {
     controlBreaches: breaches,
+    parityBreaches: parity,
+    leadRulingPending: pending,
     falseVerified,
     arms,
     primary,
@@ -409,5 +508,8 @@ export function analyseV(input: VBarInput): VBarResult {
   if (primary.discordant < input.prereg.test.minDiscordant)
     reasons.push(`UNDERPOWERED_AT_N:${V_BAR.tasks}:DISCORDANT:${primary.discordant}`);
   else if (primary.p > input.prereg.test.alpha) reasons.push("NOT_SIGNIFICANT");
+  if (parity.length > 0) reasons.push("PARITY_FAILED");
+  // A bar nobody has ratified can never be reported as met (Part 1 §3.1).
+  if (pending) reasons.push("LEAD_RULING_PENDING");
   return { decision: reasons.length === 0 ? "shown" : "not-shown", reasons, ...report };
 }
