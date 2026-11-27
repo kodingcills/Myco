@@ -143,8 +143,10 @@ describe("fleet image definition: the a11y stack and OSWorld's action interface 
     expect(DOCKERFILE).not.toMatch(/huggingface|\.qcow2|\.vmdk|Ubuntu-arm|happysixd/i);
     expect(DOCKERFILE).toMatch(/^EXPOSE 5000$/m);
   });
+});
 
-  it("pins every fleet file by SHA-256 in the harness stamp, and the parity harness stamps the same sets", () => {
+describe("fleet pins", () => {
+  it("pins every fleet file by SHA-256 in the harness stamp", () => {
     for (const set of [MYCO_FLEET.files, MYCO_FLEET.referenceFiles])
       for (const [rel, digest] of Object.entries(set))
         expect(sha256Hex(readFileSync(join(ROOT, rel))), rel).toBe(digest);
@@ -313,7 +315,7 @@ describe.runIf(hasPython)(
         }
         expect(p.sampleSha256).toBe(preregSha256(sample));
         expect(p.grader).toBe(OSWORLD_EVALUATE_GRADER);
-        const log = (p.envLog as [string, string][]).slice(0, 4);
+        const log = (p.envLog as unknown as [string, string][]).slice(0, 4);
         expect(log).toEqual([
           ["reset", "calc-a"],
           ["close", "calc-a"],
@@ -437,7 +439,13 @@ describe("measure.sh: re-runnable, host-labelled, guarded, and actively driven (
     writeFileSync(join(bin, "docker"), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
     const r = spawnSync("bash", [SCRIPT, "cold", "1"], {
       encoding: "utf8",
-      env: { PATH: `${bin}:/usr/bin:/bin`, HOST_LABEL: "", OUT_DIR: join(bin, "out") },
+      env: {
+        PATH: `${bin}:/usr/bin:/bin`,
+        HOST_LABEL: "",
+        OUT_DIR: join(bin, "out"),
+        READY_TIMEOUT: "1",
+      },
+      timeout: 15_000,
     });
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/^MEASURE_HOST_UNLABELLED/);

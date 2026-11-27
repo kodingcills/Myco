@@ -4,8 +4,10 @@
 > Tests use scripted fakes (MOCK).
 
 Under the lead's 13:55Z ruling, Myco adds only the completion gate, before DONE is accepted.
-Everything else is OSWorld's own: the environment, the in-VM controller, the evaluator and
-the standard Claude runner, at `0ad41bee56565efe7bb3c3a5ebc67590a1b8276f`. This page covers:
+Everything else is OSWorld's own: `DesktopEnv`, the controller and its server, the evaluator
+and the standard Claude runner, at `0ad41bee56565efe7bb3c3a5ebc67590a1b8276f`. Since the 14:05Z
+ruling the desktops are the Myco Linux fleet (the `myco-fleet` provider, the same in every arm;
+[host-requirements.md](host-requirements.md)). This page covers:
 
 - where the gate hooks in;
 - what changes between arms;
@@ -73,8 +75,11 @@ The pinned runner constructs `AnthropicAgent` inline and passes it straight to
 changing upstream code. This repository vendors and modifies no upstream code. The change
 is therefore recorded as a patch,
 [`src/gate-hooks/osworld/run_multienv_claude.gate.patch`](../../../src/gate-hooks/osworld/run_multienv_claude.gate.patch),
-to be applied to a pinned checkout only when a run is approved. It makes three changes to
+to be applied to a pinned checkout only when a run is approved. It makes four changes to
 `scripts/python/run_multienv_claude.py`:
+
+0. **Provider choice.** `--provider_name` also accepts `myco-fleet`, the Myco Linux fleet
+   provider every arm uses (14:05Z ruling).
 
 1. **Imports.** It imports `ARMS` and `wrap_agent` from `myco_done_gate`, with the hook's
    directory on `PYTHONPATH`, and imports `shlex`.
@@ -89,6 +94,42 @@ evaluator. All three arms run this same patched runner. The patched runner's SHA
 pinned (`OSWORLD_HARNESS.patchedAgentRunnerSha256`), and the R1 grader refuses a run whose
 recorded runner digest is anything else. The CI job checks that the patch applies to a fresh
 pinned clone and produces exactly that digest (`test/benchmark/upstream-r1-grade.test.ts`).
+
+A second patch,
+[`src/benchmark/upstream/fleet/desktop_env_providers.patch`](../../../src/benchmark/upstream/fleet/desktop_env_providers.patch),
+registers the providers: it adds `myco-fleet` and `utm-reference` (parity reference only) to
+`desktop_env/providers/__init__.py`, and adds the two names to `DesktopEnv`'s clean-start and
+dirty-start provider sets in `desktop_env/desktop_env.py`. It changes nothing else; the CI job
+checks that `DesktopEnv.evaluate` is byte-identical after it. Both patched digests are pinned
+(`OSWORLD_HARNESS.patchedFiles`), and so are the fleet's own files (`MYCO_FLEET.files`): the R1
+grader refuses a run on any other bytes, any other provider, or an image not pinned by digest.
+
+## Arm (c)'s form: pending ruling `self-check-form` (round-1 verdict N3)
+
+Arm (c) today is a prompt suffix: the pre-registered self-verification text, appended through
+AnthropicAgent's own `system_prompt_suffix`. Arm (b) differs from it in two ways at once: (b)
+has an oracle, and (b) also gets a structural second chance (a refused DONE becomes WAIT, plus
+one feedback turn). So (b) vs (c) mixes "an oracle" with "an extra forced turn after DONE".
+
+**The structural alternative**, for the lead to rule on (not built):
+- intercept the agent's **first** DONE exactly as the gate does (DONE becomes WAIT), with no
+  gate and no oracle;
+- give the agent one fixed, oracle-free user message, the same every time: "Re-check the saved
+  file against every requirement of the task, then finish again";
+- accept the next DONE unconditionally; the same `--max_steps` budget in every arm.
+
+**Trade-offs:**
+- *For:* it isolates the oracle's contribution. (b) vs structural (c) differ only in whether
+  the second-chance turn is triggered by an oracle verdict (with codes) or always. It is the
+  stronger honest baseline (REAL-NUMBERS rule 2): any model gets the same forced re-check.
+- *Against:* it is a Myco-designed intervention, like the suffix, and it costs one extra turn
+  on every episode, including ones that were already correct (the gate costs a turn only on a
+  refusal). Upstream's runner has no such mode, so it adds to the patch surface. And it changes
+  the meaning of (c)'s false-done rate: a false done must survive a forced re-check.
+- *Option:* run both forms (four arms). That raises trials from 351 to 468 at n = 117.
+
+The current pre-registration keeps the prompt-suffix arm and lists `self-check-form` as a
+pending ruling, so "shown" is refused until the lead decides.
 
 ## The gate's oracle (pending ruling `gate-oracle`; the main build item)
 

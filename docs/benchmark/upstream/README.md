@@ -14,6 +14,18 @@ via the benchmark's standard computer-use runner. Myco adds only the completion 
 DONE is accepted. OSWorld comes first; WAA is phase 2 (deferred, not dropped). See
 [`gate-hook.md`](gate-hook.md) and [`host-requirements.md`](host-requirements.md).
 
+**Retarget (lead, 2026-11-27 14:05Z; #741 comment 7220313158), scope (14:37Z) and reference
+hypervisor (15:21Z).** The environment is now the **Myco Linux fleet**: one lightweight
+container desktop per task (`src/benchmark/upstream/fleet/Dockerfile`) running OSWorld's own
+controller server at the pin unmodified, with the AT-SPI accessibility stack (LibreOffice's GTK3
+VCL plugin) and pyautogui/python-xlib, driven by OSWorld's own `DesktopEnv` through the
+`myco-fleet` provider (`myco_fleet_provider.py`), the same in every arm. OSWorld's task configs,
+setup steps, controller and evaluator are unchanged. OSWorld's own VM image is only the
+**parity reference** (OSWorld's `Ubuntu-arm.zip` in UTM, a stated deviation from its VMware
+reference): a pre-declared sample ([`r1-parity-sample.json`](r1-parity-sample.json)) must score
+the same on both before any live run (`osworld_parity.py`, `src/benchmark/upstream/parity.ts`).
+Nothing in this repository builds, pulls or starts the image or the VM.
+
 ## 1. Licenses and attribution
 
 | Item | Where | License | What Myco does |
@@ -163,8 +175,8 @@ task with:
 - its setup and postconfig step types;
 - requirement codes.
 
-Nothing in it selects or drops a task. OSWorld's image has the apps, its controller serves
-the getters, and its evaluate path runs the postconfig.
+Nothing in it selects or drops a task. The fleet image has the three LibreOffice apps, OSWorld's
+controller serves the getters, and its evaluate path runs the postconfig.
 
 ## 5. Pre-registration, gate hook, host
 
@@ -173,5 +185,8 @@ the getters, and its evaluate path runs the postconfig.
   It refuses "shown" while anything is pending.
 - [`gate-hook.md`](gate-hook.md) covers the DONE gate hook, the three arms, the documented
   runner patch, and the constraint on the gate's oracle.
-- [`host-requirements.md`](host-requirements.md) lists the provider options, images, sizing
-  and egress, for Tiffany's decision. Nothing has been pulled or started.
+- [`host-requirements.md`](host-requirements.md) covers the fleet (the R1 host), the
+  coordinator's measured numbers, how to re-measure with `measure.sh`, and the exact host
+  requirement for the parity reference run. Nothing has been pulled or started.
+- [`r1-parity-sample.json`](r1-parity-sample.json) is the pre-declared parity sample: five
+  tasks (calc 2, writer 2, impress 1) with scripted known-good and known-bad sequences.

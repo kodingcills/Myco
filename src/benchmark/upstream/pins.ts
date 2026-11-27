@@ -26,8 +26,9 @@ export const WAA_PIN: UpstreamPin = {
 
 /**
  * The public-benchmark R1 harness (lead ruling 2026-11-27 ~13:55Z, #700 comment 7220110528):
- * OSWorld's OWN environment, action server, evaluator and Claude runner, unmodified, at
- * OSWORLD_PIN.commit. Myco adds only the DONE gate (see docs/benchmark/upstream). Each file is
+ * OSWorld's OWN DesktopEnv, controller and its server, evaluator and Claude runner, at
+ * OSWORLD_PIN.commit. Myco adds only the DONE gate and (14:05Z ruling, #741) the `myco-fleet`
+ * provider registration (see docs/benchmark/upstream and MYCO_FLEET below). Each file is
  * pinned by SHA-256; the R1 grader (`./r1-grade.ts`) refuses a run whose recorded harness is
  * not exactly this, and the upstream CI job re-hashes the files in a fresh clone.
  */

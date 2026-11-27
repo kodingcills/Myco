@@ -1,19 +1,26 @@
 /**
  * Shape check and analysis gate for the confirmatory R1 on the public OSWorld subset (draft
  * pre-registration docs/benchmark/upstream/r1-public-prereg.json), under the lead's
- * 2026-11-27 ~13:55Z harness ruling (#700 comment 7220110528).
+ * 2026-11-27 rulings: 13:55Z harness (#700 comment 7220110528), 14:05Z retarget to the Myco
+ * Linux fleet, 14:37Z scope and 15:21Z UTM parity reference (#741).
  *
- * `preregProblems` checks the record states what the ruling requires: OSWorld's own harness
- * at the pinned commit, its standard Claude runner, one action layer asserted identical across
- * arms, where DONE is intercepted, exactly the three arms (no gate / gate before DONE /
- * self-check), the upstream evaluate path as grader, and the WAA phase-2 entry.
+ * `preregProblems` checks the record states what the rulings require: OSWorld's own harness
+ * at the pinned commit on the `myco-fleet` provider (adapter, image, image digest field), its
+ * standard Claude runner, one action layer ("OSWorld controller, identical across arms"),
+ * where DONE is intercepted, exactly the three arms on the shared runner, action layer,
+ * provider and budget, the upstream evaluate path as grader, the WAA phase-2 entry, a parity
+ * section (parity before any live run, the committed sample by hash, the UTM reference as a
+ * stated deviation), and the four ruling citations.
  *
  * `analyzePublicR1` refuses "shown" (the #652 rule) while:
- *  - the record has any shape problem, is not frozen, has a pending lead ruling, or any field
- *    still says PENDING;
- *  - a row is not LIVE, or was not graded by the upstream evaluate path at the pin (the MOCK
- *    metric runner's `upstream-metric-mock/1` is refused like any other grader);
- *  - the gated LIVE rows do not cover exactly the pre-registered n distinct subset tasks.
+ *  - the record has any shape problem, is not a committed pre-registration (by hash), is not
+ *    frozen, has a pending lead ruling, any field still says PENDING, or its image is not
+ *    pinned by digest;
+ *  - no parity assessment for this record's sample has passed;
+ *  - a row is not LIVE, is simulated (`simulated` present and not exactly false), or was not
+ *    graded by the upstream evaluate path at the pin (the MOCK metric runner's
+ *    `upstream-metric-mock/1` is refused like any other grader);
+ *  - any arm's LIVE rows do not cover exactly the pre-registered n distinct subset tasks.
  * Only then does it apply the primary outcome: 0 false accepts (the gate accepted DONE and
  * the upstream evaluator did not pass; ungradable counts against the bar). Reasons are codes.
  * It imports nothing from the gate or the gate hook.

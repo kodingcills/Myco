@@ -188,7 +188,10 @@ instead of skipping when an input is missing. It then runs the public-R1 harness
 (`upstream-r1-grade.test.ts`, `osworld-gate-hook.test.ts`) against the OSWorld clone: the
 pinned harness file hashes, the `DesktopEnv.evaluate()` path in `run_single_example`, the
 documented runner patch, and the DONE gate hook through upstream's real loop with fakes. No VM
-or container is started.
+or container is started. The same step runs `osworld-fleet.test.ts` (#741): the Myco fleet
+provider on upstream's real `Provider`/`VMManager` base classes, and the provider registration
+patch applied to upstream's own `desktop_env/providers/__init__.py`; the step also checks that
+patch leaves `DesktopEnv.evaluate` byte-identical. No image is built or pulled.
 
 See what the planner would do for your branch:
 
