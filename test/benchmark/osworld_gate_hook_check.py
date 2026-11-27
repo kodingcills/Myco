@@ -7,8 +7,9 @@ agent, a fake environment and a fake gate, under the three R1 arms, and writes
     python3 -I osworld_gate_hook_check.py <hook_dir> <work_dir> [<osworld_checkout>]
 
 With an OSWorld checkout at the pinned commit, the same scenarios also run through the REAL
-upstream loop, ``lib_run_single.run_single_example`` (its only third-party import,
-``wrapt_timeout_decorator``, is stubbed; its fixed sleeps are skipped), and the report
+upstream loop, ``lib_run_single.run_single_example`` (its third-party import
+``wrapt_timeout_decorator`` and an os_symphony drawing helper that needs Pillow are stubbed;
+its fixed sleeps are skipped), and the report
 records what that loop handed to ``env.step`` and the score ``env.evaluate()`` returned,
 which upstream writes to result.txt. No VM, no model, no network: every agent turn, screen
 and score below is scripted.
@@ -139,6 +140,11 @@ def load_upstream_loop():
     stub = types.ModuleType("wrapt_timeout_decorator")
     stub.__all__ = []
     sys.modules["wrapt_timeout_decorator"] = stub
+    # lib_run_single imports a drawing helper for another agent (os_symphony) at module level;
+    # it needs Pillow and is never used by run_single_example. Stub that one leaf module.
+    helper = types.ModuleType("mm_agents.os_symphony.utils.common_utils")
+    helper.draw_coordinates = lambda *a, **k: None
+    sys.modules["mm_agents.os_symphony.utils.common_utils"] = helper
     sys.path.insert(0, OSWORLD)
     lrs = importlib.import_module("lib_run_single")
     lrs.time = types.SimpleNamespace(sleep=lambda s: None)  # skip the fixed 60 s / 20 s waits
