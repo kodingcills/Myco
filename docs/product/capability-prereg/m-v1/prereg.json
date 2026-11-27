@@ -1,0 +1,214 @@
+{
+  "schema": "myco.capability-prereg/1",
+  "track": "M",
+  "version": "m-v1",
+  "capability": "Learning from verified outcomes",
+  "spec": "docs/product/capability-spec.md §2 M, under §1 (shared rules), §3 (pre-registration), §4 (constraints) and §5 (sequencing)",
+  "ratification": {
+    "status": "ratified",
+    "note": "Ratified by the lead rulings of 2026-11-27 06:21Z and 06:30Z, relayed by the coordinator (leadRulings). No ruling is pending. Re-frozen before merge and before any run, after round-1 verification on PR #646: exact learn-slot coverage, the gate audit-log guardrail, the LEAD_RULING_PENDING and simulated-flag refusals, and a Wilson interval on false done. Any change after the first measurement run is a new version, m-v2 (capability-spec §3.3).",
+    "pending": []
+  },
+  "leadRulings": [
+    {
+      "id": "n",
+      "time": "2026-11-27T06:21Z",
+      "ruling": "n = 90, under the same VM-hours rule as J and K. Put the estimate in the pre-registration before freezing. If it would delay the trial run or the demo, fall back to n = 40, pre-registered as EXPLORATORY, before any data.",
+      "applied": "Superseded for track M by the 06:30Z ruling: rep-v1 as accepted caps n at 60 (fc-v1 has 60 no-fault satisfiable tasks on 20 fixture seeds, and a similar task shares no fixture seed with a learn task). The VM-hours estimate is recorded under vmHoursEstimate.",
+      "source": "coordinator relay on PR #646, comment 7211429206"
+    },
+    {
+      "id": "n",
+      "time": "2026-11-27T06:30Z",
+      "ruling": "Option B: n = 60 (30 repeat + 30 similar, the rep-v1 ceiling), confirmatory, k = 1. VM-hours as in vmHoursEstimate (15.6 h, doubled if Ultra trials are slower). It keeps the accepted no-fault rep-v1 task set and the new-seed rule; option A changes what is measured, and option C adds a task-set build. The other 06:21Z M rulings stand.",
+      "applied": "taskSet rep-v1 at 30 learn, 30 repeat, 30 similar (60 test units); confirmatory; each test unit run once per arm.",
+      "source": "coordinator relay on PR #646, comment 7211561751"
+    },
+    {
+      "id": "learn-families",
+      "time": "2026-11-27T06:21Z",
+      "ruling": "rep-v1 (calc-record-edit only) is accepted.",
+      "applied": "taskSet rep-v1, unchanged.",
+      "source": "coordinator relay on PR #646, comment 7211429206"
+    },
+    {
+      "id": "base-surface-both-shown",
+      "time": "2026-11-27T06:21Z",
+      "ruling": "Whichever of I or J has the higher grader-verified rate; a tie goes to I.",
+      "applied": "baseSurface rule as proposed (src/skills/m-prereg.ts resolveBaseSurface), unchanged.",
+      "source": "coordinator relay on PR #646, comment 7211429206"
+    },
+    {
+      "id": "model-id",
+      "time": "2026-11-27T06:21Z",
+      "ruling": "claude-sonnet-5-5, the same as the pilot.",
+      "applied": "modelId claude-sonnet-5-5, unchanged.",
+      "source": "coordinator relay on PR #646, comment 7211429206"
+    },
+    {
+      "id": "advice-delivery",
+      "time": "2026-11-27T06:21Z",
+      "ruling": "Harness-side retrieval, with the cold arm on an empty store.",
+      "applied": "arms.definition as proposed: skills-on reads the frozen store through callRetrieve rendered as advice text; cold runs against an empty store (head = GENESIS).",
+      "source": "coordinator relay on PR #646, comment 7211429206"
+    }
+  ],
+  "vmHoursEstimate": {
+    "perTrialSeconds": 375,
+    "perTrialSource": "the repo's measured per-trial cost on the Windows VM, 140 s cold reset + about 100 s redeploy + about 135 s trial (docs/baseline/screenshot-agent.md), as track J's pre-registration uses",
+    "trials": "learn tasks + 2 arms x test units; each test unit is run once per arm (k = 1)",
+    "options": [
+      {
+        "option": "A or C: n = 90",
+        "learn": 45,
+        "testUnits": 90,
+        "trials": 225,
+        "vmHours": 23.4
+      },
+      {
+        "option": "B: n = 60",
+        "learn": 30,
+        "testUnits": 60,
+        "trials": 150,
+        "vmHours": 15.6
+      },
+      {
+        "option": "D: n = 40",
+        "learn": 20,
+        "testUnits": 40,
+        "trials": 100,
+        "vmHours": 10.4
+      }
+    ],
+    "note": "If an Ultra trial takes twice M1's time, double each figure. M's VM time comes only when the critical path does not need the VM (capability-spec §4, m2-plan §7.0), and M is measured only after I (and J, if it ran)."
+  },
+  "hypothesis": "H1: on the rep-v1 test units, skills-on (the frozen learn-phase store) has a higher grader-verified rate than cold (the same surface with an empty store). H0: no increase. One-sided.",
+  "baseSurface": {
+    "rule": "best shown of I, J, else C1 (capability-spec §2 M, §5.4)",
+    "candidates": [
+      {
+        "capability": "I",
+        "surface": "C1+I"
+      },
+      {
+        "capability": "J",
+        "surface": "hcu+shell+J"
+      }
+    ],
+    "fallback": "C1",
+    "measurementOrder": ["I", "J", "M"],
+    "ordering": "M is measured only after I's bar is decided under I's committed pre-registration, and after J's if J has run. The pack records the surface and the I and J outcomes it was chosen from (status, grader-verified rate, pre-registration hash); the analysis re-applies the rule and reports not-shown if the pack's surface is not the rule's."
+  },
+  "arms": {
+    "treatment": "skills-on",
+    "control": "cold",
+    "definition": "Both arms run the base surface with the same tool list, harness, model, step budget, output ceiling, pacing and retry budget. skills-on retrieves from the store frozen after the learn phase (its head recorded in the pack and on every skills-on row); cold runs against an empty store (head = store GENESIS). Test-phase trials never write the store."
+  },
+  "phases": {
+    "learn": "The 30 learn tasks run cold, in the pre-registered order, before the test phase. The gate is called at the end of each learn trial because the store rule needs its verdict; learn rows are gated rows and never part of the bar. A skill is stored only from a learn trial that claimed done, that the gate verified and accepted, and that the independent grader graded pass on the same persisted bytes (admission, src/skills/admission.ts). A gate verdict alone never stores a skill.",
+    "test": "The 60 test units run in both arms in the pre-registered order (ABBA over units). Neither arm calls the gate; test rows are gate-less."
+  },
+  "verified": "capability-spec §1.1. Test rows: a done claim that the independent grader (src/benchmark/grade/) graded pass on the harness's capture. Learn rows: a done claim the gate verified and accepted and the grader graded pass, on the same bytes. A pass without a done claim is correct-not-claimed; ungradable or ungraded is never verified. The gate's verdict is never the measurement.",
+  "primaryMetric": "Grader-verified rate on the 60 rep-v1 test units, per arm.",
+  "taskSet": {
+    "version": "rep-v1",
+    "source": "fc-v1 (no-fault, satisfiable tasks)",
+    "manifest": "docs/product/capability-prereg/m-v1/rep-v1-manifest.json",
+    "manifestSha256": "0cc72bf3e05062161849a1bd2a51cc4852de0a39cf83d62caf285d0e42be7f0f",
+    "learn": 30,
+    "repeat": 30,
+    "similar": 30,
+    "testUnits": 60
+  },
+  "seeds": {
+    "taskBuild": "m-v1-build-2026-11-27-Rq7d",
+    "assignment": "m-v1-assign-2026-11-27-Wt3k",
+    "bootstrap": "m-v1-boot-2026-11-27-Hc8n"
+  },
+  "stepBudget": 30,
+  "wallClockBudget": null,
+  "retryBudget": 0,
+  "scoredAttemptsPerTrial": 1,
+  "modelId": "claude-sonnet-5-5",
+  "harness": "Claude Ultra (Claude Code), $0 Anthropic API, no Messages-API calls. The baseline surface must run on the Ultra harness (capability-spec §1.3, §5.4).",
+  "bar": {
+    "test": "exact McNemar (sign test on discordant test units)",
+    "sided": "one-sided",
+    "alpha": 0.05,
+    "minDiscordant": 5,
+    "direction": "skills-on better than cold",
+    "unit": "the rep-v1 test unit, paired across arms",
+    "statement": "Shown only if skills-on is better than cold with p <= 0.05 and at least 5 discordant units, every guardrail holds, parity and the schedule hold, and every scheduled trial is present exactly once (each learn slot's (scheduleIndex, taskId) and each test slot's (scheduleIndex, unit, arm) once; no exclusions, no retries)."
+  },
+  "secondary": [
+    "Repeat and similar units separately: counts, rates with Wilson 95% intervals, and their own one-sided McNemar p. Reported, not part of the bar.",
+    "Per arm: steps, wall time and token-derived cost ESTIMATE per verified task, each over ALL trials; a null cost on any trial makes the cell null, never 0.",
+    "Per arm: false done (a done claim graded fail, ungradable or not graded)."
+  ],
+  "guardrails": [
+    "Zero stored skills from a learn trial that is not verified (done claim, gate verified and accepted, grader pass on the same bytes).",
+    "Every stored skill's source learn trial is graded pass by the grader; a source graded fail or ungradable is a breach.",
+    "A per-skill scan finds no fixture value or intent value of its source task, no host path and no digest (the skill content rules, src/skills/record.ts).",
+    "Every stored skill is the one its source row names, and the store head is the pack's head.",
+    "Zero stored skills from a non-verified gate verdict, checked against the gate audit log (capability-spec §2 M): the pack carries the learn phase's gate decision log (gate-audit.jsonl, myco-gate --audit), every logged decision for a stored skill's source run names that run's task, the last one is verified and accepted, and the source row's gate field agrees. A missing or unreadable log is not shown."
+  ],
+  "notShown": [
+    "p > 0.05, or the difference is not in the pre-registered direction",
+    "fewer than 5 discordant units, reported as underpowered at n with the discordant count",
+    "a guardrail breached",
+    "a parity, schedule or coverage check failed (no exclusions: a harness fault stays in the denominator as not verified)",
+    "the base surface is not the rule's"
+  ],
+  "refusals": [
+    "the pack's pre-registration hash does not match this file, or this file is not committed at the pack's recorded commit",
+    "an analysis file changed since the freeze",
+    "simulated and real rows mixed, or a simulated row in a real pack (a row or pack is real only when its simulated field is absent or exactly false and its planner is a model id)",
+    "a real pack while ratification.status is not ratified",
+    "a real pack while any lead ruling is pending (LEAD_RULING_PENDING)"
+  ],
+  "evidence": {
+    "r1": false,
+    "simulatedRowsCount": false,
+    "note": "Experiment rows (evidence never-r1), not myco.benchmark.arm-row/1. No measurement run happens until the integrity fixes land and the lead gives GO for track M (capability-spec §4)."
+  },
+  "rowSchema": "myco.skills.rep-row/1",
+  "packSchema": "myco.skills.rep-pack/1",
+  "packFiles": ["pack.json", "rows.jsonl", "store/skills.jsonl", "gate-audit.jsonl"],
+  "analysis": {
+    "command": "npx tsx scripts/m-learning-analysis.ts --pack <pack-dir>",
+    "files": [
+      {
+        "path": "scripts/m-learning-analysis.ts",
+        "sha256": "bdc71b6d4135901f3d5a9bf05ce4bcad8642b2d1dcb6b30083a42eaf9de7f30c"
+      },
+      {
+        "path": "src/foundry/stats.ts",
+        "sha256": "3efa8f92d76c439c339bbd9637c4f207378d502d2392d690eef81f6071853582"
+      },
+      {
+        "path": "src/skills/m-analysis.ts",
+        "sha256": "9c991fbc653ca4f42444136dd7551e5dfe915af4b36710a72ded0f851d0859ce"
+      },
+      {
+        "path": "src/skills/m-prereg.ts",
+        "sha256": "732acda4e0d5743cc62ffe2bc59e6acae7776b529ae2e69d00fe4faa096505be"
+      },
+      {
+        "path": "src/skills/record.ts",
+        "sha256": "62b6f0079dd2c406bec1bd0c73f9b2c258e34bb05b2ebc187567f849530b0b11"
+      },
+      {
+        "path": "src/skills/rep-row.ts",
+        "sha256": "65d764e7eeb9e54097b246a8c293df37d7da39e06005364e040e8e164bab2434"
+      },
+      {
+        "path": "src/skills/rep-taskset.ts",
+        "sha256": "6f8d861ac12398036caf8b922c8aa68cb7d4600bf7a58923d8dacfb43069a062"
+      },
+      {
+        "path": "src/skills/store.ts",
+        "sha256": "799028b6a6be43fab3c3fa249b8c31b646ec2f85ca32f391118b8e8d7bbb2721"
+      }
+    ]
+  }
+}

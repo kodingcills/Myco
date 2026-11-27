@@ -114,6 +114,12 @@ const IMPLEMENTATIONS: Record<string, string> = {
 const REVIEWED_NON_ACTUATORS: Record<string, string> = {
   "src/baseline/planner.ts": "Planner.act asks a model for a decision; it actuates nothing",
   "src/baseline/hcu-shell/trial.ts": "HcuShellPlanner.act asks a model for a decision",
+  "src/baseline/hcu-shell-live/planner.ts":
+    "HcuShellPlanner.act asks headless Claude Code (subscription) for a decision; actuates nothing",
+  "src/baseline/hcu-shell-live/runner.ts":
+    "deadline fence around HcuShellPlanner.act (refuses calls after the trial deadline); actuates nothing",
+  "src/baseline/hcu-shell-live/simulated.ts":
+    "simulated HcuShellPlanner.act for the dry run; actuates nothing",
   "src/foundry/baseline/executor.ts":
     "Foundry baseline-arm harness (TIF-58): external baseline arms, audited by the Foundry scorer; not O's B / B+O agent (follow-up)",
   "src/foundry/baseline/recorder.ts": "records a delivered action; actuates nothing",

@@ -25,6 +25,7 @@ import {
   r3Manifest,
   r3Trials,
   refuted,
+  TEST_R2_ALLOW,
   type Trial,
   trial,
   writePack,
@@ -458,7 +459,7 @@ describe("M2 evidence: process gates", () => {
 
 describe("M2 evidence: R2 pairing", () => {
   it("pairs by task, fixture and fault class and counts the paired table", () => {
-    const r = checkPack(input(r2Trials(), r2Manifest()));
+    const r = checkPack(input(r2Trials(), r2Manifest()), TEST_R2_ALLOW);
     expect(r.errors).toEqual([]);
     expect(r.r2).toMatchObject({
       pass: true,
@@ -477,6 +478,7 @@ describe("M2 evidence: R2 pairing", () => {
     let trials = r2Trials().filter((t) => t.arm.trialKey !== "s3");
     let r = checkPack(
       input(trials, r2Manifest({ expectTrials: { "myco-gate": 30, "hcu+shell": 29 } })),
+      TEST_R2_ALLOW,
     );
     expect(has(r, /R2: myco-gate g3 has no hcu\+shell pair/)).toBe(true);
     expect(has(r, /29 pairs, expected 30/)).toBe(true);
@@ -485,14 +487,14 @@ describe("M2 evidence: R2 pairing", () => {
     const s4 = trials.findIndex((t) => t.arm.trialKey === "s4");
     trials[s4]!.arm = { ...trials[s4]!.arm, taskId: "fc-5" };
     trials[s4]!.grade = { ...trials[s4]!.grade, taskId: "fc-5" };
-    r = checkPack(input(trials, r2Manifest()));
+    r = checkPack(input(trials, r2Manifest()), TEST_R2_ALLOW);
     expect(has(r, /hcu\+shell: two rows for task fc-5/)).toBe(true);
     trials = r2Trials();
     const s7 = trials.findIndex((t) => t.arm.trialKey === "s7");
     trials = trials.map((t) =>
       t.arm.arm === "hcu+shell" ? { ...t, arm: { ...t.arm, outputCeiling: 256 } } : t,
     );
-    r = checkPack(input(trials, r2Manifest()));
+    r = checkPack(input(trials, r2Manifest()), TEST_R2_ALLOW);
     expect(s7).toBeGreaterThan(0);
     expect(has(r, /model settings differ between the arms/)).toBe(true);
   });
@@ -515,6 +517,7 @@ describe("M2 evidence: R2 pairing", () => {
         trials,
         r2Manifest({ expectTrials: { "myco-gate": 31, "hcu+shell": 31 }, expectPairs: 31 }),
       ),
+      TEST_R2_ALLOW,
     );
     expect(r.errors).toEqual([]);
     expect(r.r2).toMatchObject({ pass: true, pairs: 31, bothSucceed: 16 });
@@ -524,7 +527,7 @@ describe("M2 evidence: R2 pairing", () => {
     const trials = r2Trials();
     const s3 = trials.findIndex((t) => t.arm.trialKey === "s3");
     trials[s3]!.arm = { ...trials[s3]!.arm, instructionSha256: "c".repeat(64) };
-    const r = checkPack(input(trials, r2Manifest()));
+    const r = checkPack(input(trials, r2Manifest()), TEST_R2_ALLOW);
     expect(has(r, /R2: g3\/s3: instruction text differs between the arms/)).toBe(true);
     expect(r.r2?.pass).toBe(false);
   });
@@ -535,9 +538,9 @@ describe("M2 evidence: R2 pairing", () => {
     const trials = r2Trials();
     const g20 = trials.findIndex((t) => t.arm.trialKey === "g20");
     trials[g20] = trial(20);
-    const r = checkPack(input(trials, r2Manifest()));
+    const r = checkPack(input(trials, r2Manifest()), TEST_R2_ALLOW);
     expect(r.r2).toMatchObject({ discordant: 6, gateOnly: 6, underpowered: false });
-    expect(checkPack(input(r2Trials(), r2Manifest())).r2).toMatchObject({
+    expect(checkPack(input(r2Trials(), r2Manifest()), TEST_R2_ALLOW).r2).toMatchObject({
       discordant: 5,
       underpowered: true,
     });
@@ -613,7 +616,7 @@ describe("M2 evidence: R3 per-class rates", () => {
 
 describe("M2 evidence: R7 cost per verified task", () => {
   it("divides each field summed over all trials by the verified tasks", () => {
-    const r = checkPack(input(r2Trials(), r2Manifest()));
+    const r = checkPack(input(r2Trials(), r2Manifest()), TEST_R2_ALLOW);
     const by = Object.fromEntries(r.r7!.arms.map((a) => [a.arm, a]));
     expect(by["myco-gate"]).toMatchObject({ trials: 30, verified: 20 });
     expect(by["myco-gate"]!.modelUsd.perVerified).toBeCloseTo(15 / 20, 12);
@@ -625,7 +628,7 @@ describe("M2 evidence: R7 cost per verified task", () => {
   it("never counts a null cost as 0", () => {
     const trials: Trial[] = r2Trials();
     trials[25]!.arm = { ...trials[25]!.arm, cost: { ...trials[25]!.arm.cost, modelUsd: null } };
-    const r = checkPack(input(trials, r2Manifest()));
+    const r = checkPack(input(trials, r2Manifest()), TEST_R2_ALLOW);
     const gate = r.r7!.arms.find((a) => a.arm === "myco-gate")!;
     expect(gate.modelUsd).toEqual({ total: null, nullRows: 1, perVerified: null });
     expect(gate.wallClockS.perVerified).toBeCloseTo(150, 12);
@@ -635,7 +638,7 @@ describe("M2 evidence: R7 cost per verified task", () => {
 
   it("reports no verified task instead of dividing by zero", () => {
     const trials = r2Trials().map((t, i) => (t.arm.arm === "myco-gate" ? refuted(i) : t));
-    const r = checkPack(input(trials, r2Manifest()));
+    const r = checkPack(input(trials, r2Manifest()), TEST_R2_ALLOW);
     const gate = r.r7!.arms.find((a) => a.arm === "myco-gate")!;
     expect(gate.verified).toBe(0);
     expect(gate.modelUsd.perVerified).toBeNull();

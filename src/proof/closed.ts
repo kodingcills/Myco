@@ -32,7 +32,7 @@
  * the guess. That is the price of keeping equality checkable; it is stated in the doc.
  */
 
-import { type HashLedger, NO_LEDGER } from "../export-guard/provenance.ts";
+import { type HashLedger, NO_LEDGER, ownerScope } from "../export-guard/provenance.ts";
 import { REASON_CODES } from "../gate/api.ts";
 import { POLICY_AGENT_CODES, POLICY_DECISION_CODES } from "../policy/codes.ts";
 import {
@@ -144,43 +144,56 @@ export function textRef(raw: string): TextRef {
  * from `KEY_NAMES` and `KEY_MODIFIERS`, and is also put to the identity guard.
  */
 export interface Allowlist {
-  readonly id: (raw: string) => string;
-  readonly arm: (raw: string) => string;
-  readonly policyCode: (raw: string) => string;
-  readonly mediaType: (raw: string) => string;
-  readonly tool: (raw: string) => string;
-  readonly app: (raw: string) => string;
-  readonly keys: (raw: string) => string;
-  readonly subject: (raw: string) => string;
+  /** Each closer takes the raw value and the field's exact bundle JSON path (`$.run.runId`). */
+  readonly id: (raw: string, path: string) => string;
+  readonly arm: (raw: string, path: string) => string;
+  readonly policyCode: (raw: string, path: string) => string;
+  readonly mediaType: (raw: string, path: string) => string;
+  readonly tool: (raw: string, path: string) => string;
+  readonly app: (raw: string, path: string) => string;
+  readonly keys: (raw: string, path: string) => string;
+  readonly subject: (raw: string, path: string) => string;
 }
 
 /**
- * The ledger scope of every id field (#579 O3). Ids cross-reference (a verdict's `evidence`
- * names evidence ids, its `taskId` the run's), so they share one scope: a harness-produced hash
- * kept in one id field is kept in all of them, and the bindings still hold.
+ * The ledger scope of a hashed value in a proof bundle (#579 O3; #599 O-a; #602 N-a): the RUN
+ * id plus the field's EXACT JSON path in the bundle, array indexes included
+ * (`$.records[3].body.tool`, `$.records[5].body.evidence[0]`). The same binding as the episode
+ * export and track U (episode id + exact path, `episodeScope`): a harness hash recorded for one
+ * run, one field, one record is re-hashed in another run, another field or another record.
+ *
+ * The run id is the bundle's `run.runId` as written (on a re-export, the input's run id is that
+ * same value). Ids cross-reference (a verdict's `evidence` names evidence ids), and the bindings
+ * still hold on a re-export: each position records its own value, so every cross-referenced
+ * copy is kept, and a copy that is not is re-hashed and the self-verify refuses the export.
  */
-export const ID_SCOPE = "id";
+export function proofScope(runId: string, path: string): string {
+  return ownerScope(runId, path);
+}
 
 /**
  * `ledger` is the harness's hash ledger (#579 O3; `bundleHashLedger`): an exact `h-<60hex>` is
- * kept as is only when it records it for that field's scope (`ID_SCOPE` for every id; the field
- * name for a vocabulary field: `action.tool`, `action.keys`, `action.app`, `policy.subject`,
- * `policy.reasonCode`, `evidence.mediaType`). With none (the default), every `h-<60hex>` input
- * is an agent's as far as the exporter knows, and is re-hashed.
+ * kept as is only when it records it at `proofScope(runId, path)` for that field. With none (the
+ * default), every `h-<60hex>` input is an agent's as far as the exporter knows, and is re-hashed.
  */
-export function allowlist(guard: IdentityGuard, ledger: HashLedger = NO_LEDGER): Allowlist {
-  const id = (raw: string) =>
-    isPlainId(raw) && guard.hit(raw) === null ? raw : hashValue(raw, ID_SCOPE, ledger);
+export function allowlist(
+  guard: IdentityGuard,
+  ledger: HashLedger = NO_LEDGER,
+  runId = "",
+): Allowlist {
+  const at = (path: string) => proofScope(runId, path);
+  const id = (raw: string, path: string) =>
+    isPlainId(raw) && guard.hit(raw) === null ? raw : hashValue(raw, at(path), ledger);
   return {
     id,
-    arm: (raw) => ((KNOWN_ARMS as readonly string[]).includes(raw) ? raw : id(raw)),
-    policyCode: (raw) => closedPolicyCode(raw, ledger),
-    mediaType: (raw) => closedMediaType(raw, ledger),
-    tool: (raw) => closedTool(raw, ledger),
-    app: (raw) => closedApp(raw, ledger),
-    keys: (raw) =>
-      isClosedKeys(raw) && guard.hit(raw) === null ? raw : hashValue(raw, "action.keys", ledger),
-    subject: (raw) => closedSubject(raw, ledger),
+    arm: (raw, path) => ((KNOWN_ARMS as readonly string[]).includes(raw) ? raw : id(raw, path)),
+    policyCode: (raw, path) => closedPolicyCode(raw, ledger, at(path)),
+    mediaType: (raw, path) => closedMediaType(raw, ledger, at(path)),
+    tool: (raw, path) => closedTool(raw, ledger, at(path)),
+    app: (raw, path) => closedApp(raw, ledger, at(path)),
+    keys: (raw, path) =>
+      isClosedKeys(raw) && guard.hit(raw) === null ? raw : hashValue(raw, at(path), ledger),
+    subject: (raw, path) => closedSubject(raw, ledger, at(path)),
   };
 }
 
@@ -214,17 +227,15 @@ export function sameId(raw: string, emitted: string | undefined): boolean {
 }
 
 /** A policy code: as is when it is a member of `POLICY_REASON_CODES`, else hashed. */
-export function closedPolicyCode(raw: string, ledger: HashLedger = NO_LEDGER): string {
+export function closedPolicyCode(raw: string, ledger: HashLedger = NO_LEDGER, scope = ""): string {
   return (POLICY_REASON_CODES as readonly string[]).includes(raw)
     ? raw
-    : hashValue(raw, "policy.reasonCode", ledger);
+    : hashValue(raw, scope, ledger);
 }
 
 /** A media type: as is when it is a member of `MEDIA_TYPES` (exact match), else hashed. */
-export function closedMediaType(raw: string, ledger: HashLedger = NO_LEDGER): string {
-  return (MEDIA_TYPES as readonly string[]).includes(raw)
-    ? raw
-    : hashValue(raw, "evidence.mediaType", ledger);
+export function closedMediaType(raw: string, ledger: HashLedger = NO_LEDGER, scope = ""): string {
+  return (MEDIA_TYPES as readonly string[]).includes(raw) ? raw : hashValue(raw, scope, ledger);
 }
 
 /** The arms an arm field may carry as is (#518's ledger arms); any other value is an id. */
