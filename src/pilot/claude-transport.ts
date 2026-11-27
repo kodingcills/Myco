@@ -119,7 +119,8 @@ export function classOfStatus(status: number): PilotHarnessClass {
 export const USAGE_LIMIT_TEXT =
   /usage[ _-]?limit|(?<!rate[ _-]?)limit (?:reached|exceeded|hit)|limit (?:will )?resets?|\bresets? (?:at |on |in )?(?:\d|mon|tue|wed|thu|fri|sat|sun|tomorrow)|(?:weekly|daily|monthly|hourly|session|\d+[ -]?hour|five[ -]hour|opus|sonnet|haiku|fable) limit|(?:you['\u2018\u2019\u02bc]?ve|you have) (?:hit|reached) your (?:usage )?limit/i;
 
-const FORMAT_CHARS = /[\p{Cf}\u180e]/gu;
+// U+180E (Mongolian vowel separator) is in `\p{Cf}` (Unicode 6.3+); pinned by a test.
+const FORMAT_CHARS = /\p{Cf}/gu;
 const HYPHENS = /[\u2010-\u2015]/g;
 
 /**
