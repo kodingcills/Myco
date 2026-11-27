@@ -166,7 +166,6 @@ describe("policy guard: the host log and the agent surface", () => {
     const proto = Object.getOwnPropertyNames(Object.getPrototypeOf(g)).sort();
     expect(proto).toEqual(
       [
-        "commit",
         "configSha256",
         "constructor",
         "decide",

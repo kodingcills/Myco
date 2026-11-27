@@ -33,6 +33,7 @@ import { type ActionPolicy, type PolicyRequest, resolveScoped } from "../actions
 import type { ActResult, AppAdapter, ProgramAction, TargetRef } from "../core/adapter.ts";
 import type { PauseGate, PolicyTrigger } from "../handoff/broker.ts";
 import { guardAction } from "../handoff/policy.ts";
+import { chordEffect } from "./chord.ts";
 import type { ActuatorId, PolicyAgentCode } from "./codes.ts";
 import type { ActionFacts, TrialScope } from "./engine.ts";
 import { type GuardDecision, type PolicyGuard, UnrecognisedAction } from "./guard.ts";
@@ -78,9 +79,6 @@ export function refusalText(code: PolicedCode, policyId: string | null): string 
 // ---------------------------------------------------------------------------------------------
 // Host-side reducers.
 
-const SAVE = /^(?:ctrl|control|cmd|meta)\+s$/;
-const SAVE_AS = /^(?:(?:ctrl|control|cmd|meta)\+shift\+s|shift\+(?:ctrl|control|cmd|meta)\+s|f12)$/;
-
 /** A host path the action writes, resolved through symlinks; unresolvable is unrecognised. */
 function hostPath(raw: unknown): string {
   if (typeof raw !== "string" || !isAbsolute(raw)) throw new UnrecognisedAction();
@@ -98,13 +96,28 @@ function writeFacts(paths: readonly string[]): ActionFacts {
   };
 }
 
-/** Key chords: Save writes over the original document; Save As has an unknown target. */
+/**
+ * Key chords, parsed exactly as the guest parses them (`./chord.ts`): Save writes over the
+ * original document; any chord not on the closed allow-list (Save As, menu accelerators, close
+ * chords whose dialog defaults to Save, a chord the guest would refuse) is unrecognised.
+ */
 export function keyFacts(keys: unknown, scope: TrialScope): ActionFacts {
-  if (typeof keys !== "string") throw new UnrecognisedAction();
-  const k = keys.toLowerCase().replace(/\s+/g, "");
-  if (SAVE_AS.test(k)) throw new UnrecognisedAction();
-  if (SAVE.test(k)) return { ...NO_FACTS, writes: [scope.originalDocument], destructive: 1 };
+  const effect = chordEffect(keys);
+  if (effect === "unknown") throw new UnrecognisedAction();
+  if (effect === "save") return { ...NO_FACTS, writes: [scope.originalDocument], destructive: 1 };
   return NO_FACTS;
+}
+
+// C0 controls other than tab, newline and carriage return, and DEL. Typed through XTest such a
+// character can arrive as a control chord (U+0013 is Ctrl+S), so typed text carrying one is
+// unrecognised rather than guessed at.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the control characters are the point.
+const CONTROL_CHAR = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+
+/** Typed text: refuse control characters; otherwise only the credential classifier matters. */
+function typedFacts(text: unknown, credentialInput: () => boolean): ActionFacts {
+  if (typeof text !== "string" || CONTROL_CHAR.test(text)) throw new UnrecognisedAction();
+  return { ...NO_FACTS, credentialInput: credentialInput() };
 }
 
 /** Reduce an `AppAdapter` action. */
@@ -119,6 +132,7 @@ export function adapterFacts(
     case "waitFor":
       return NO_FACTS;
     case "typeText":
+      return typedFacts(action.text, () => isCredentialTarget(action.ref));
     case "setValue":
       return { ...NO_FACTS, credentialInput: isCredentialTarget(action.ref) };
     case "keyPress":
@@ -134,30 +148,51 @@ function policedCode(decided: GuardDecision | null): PolicedCode {
 }
 
 /**
- * The async guard step shared by the async wrappers: wait on N's pause gate, decide, open a
- * handoff for `require-approval`. Returns the facts to commit on proceed, or the refusal.
+ * The async guard step shared by the async wrappers: wait on N's pause gate, decide (which
+ * reserves the action's destructive operations), open a handoff for `require-approval`. On
+ * proceed the reservation is committed before the caller forwards; on anything else it is
+ * released. The reservation is taken at decision time, so actions running concurrently (or
+ * waiting on a human) can never all pass `destructive-limit` against the same count.
  */
 async function guardAsync(
   guard: PolicyGuard,
   trigger: PolicyTrigger & PauseGate,
   actuator: ActuatorId,
   reduce: () => ActionFacts,
-): Promise<
-  { ok: true; facts: ActionFacts } | { ok: false; code: PolicedCode; policyId: string | null }
-> {
-  let facts: ActionFacts | null = null;
+): Promise<{ ok: true } | { ok: false; code: PolicedCode; policyId: string | null }> {
+  let reduced = false;
   let decided: GuardDecision | null = null;
   const memo = (): ActionFacts => {
-    facts ??= reduce();
+    const facts = reduce();
+    reduced = true;
     return facts;
   };
   const policy = guard.handoffPolicy(actuator, memo, (d) => {
     decided = d;
   });
-  const outcome = await guardAction(policy, trigger, { tool: actuator, args: {} });
-  if (outcome.kind === "proceed" && facts !== null) return { ok: true, facts };
+  let proceed = false;
+  try {
+    const outcome = await guardAction(policy, trigger, { tool: actuator, args: {} });
+    proceed = outcome.kind === "proceed" && reduced && decided !== null;
+  } finally {
+    // Settled exactly once, on every path (a throw included): a hold is never left reserved.
+    const d = decided as GuardDecision | null;
+    if (proceed) d?.hold.commit();
+    else d?.hold.release();
+  }
+  if (proceed) return { ok: true };
   const d = decided as GuardDecision | null;
   return { ok: false, code: policedCode(d), policyId: d?.policyId ?? null };
+}
+
+/** Settle a sync decision's hold: commit on allow (the caller forwards), release otherwise. */
+function settle(d: GuardDecision): boolean {
+  if (d.decision === "allow") {
+    d.hold.commit();
+    return true;
+  }
+  d.hold.release();
+  return false;
 }
 
 /**
@@ -192,7 +227,6 @@ export function policedAppAdapter(
         adapterFacts(action, guard.scope, options.isCredentialTarget),
       );
       if (!r.ok) return { outcome: "failed", details: refusalText(r.code, r.policyId) };
-      guard.commit(r.facts);
       return inner.act(action);
     },
   };
@@ -239,7 +273,7 @@ export function desktopFacts(
     case "launch":
       return { ...NO_FACTS, launches: [launchedApp(action.command)] };
     case "typeTextGlobal":
-      return { ...NO_FACTS, credentialInput: focusIsCredential() };
+      return typedFacts(action.text, focusIsCredential);
     case "clickAt":
       return NO_FACTS;
     case "keyPress":
@@ -276,7 +310,6 @@ export function policedDesktopTransport<S, T extends GuardedDesktopTransport<S>>
         desktopFacts(action, guard.scope, () => options.focusIsCredential(session)),
       );
       if (!r.ok) return "failed";
-      guard.commit(r.facts);
       return inner.act(session, action);
     },
   };
@@ -300,16 +333,12 @@ export function policedLinuxActuator<R extends GuardedActuatorReport>(
 ): GuardedLinuxActuator<R | GuardedActuatorReport> {
   return {
     act(docPath, cell, value, save) {
-      let facts: ActionFacts = NO_FACTS;
-      const d = guard.decide("linux-actuator.act", () => {
-        // The cell and value are typed into a spreadsheet cell, never a credential field; the
-        // only file effect is the save over `docPath`.
-        facts = save === false ? NO_FACTS : writeFacts([docPath]);
-        return facts;
-      });
-      if (d.decision !== "allow")
-        return { ok: false, error: refusalText(policedCode(d), d.policyId) };
-      guard.commit(facts);
+      // The cell and value are typed into a spreadsheet cell, never a credential field; the
+      // only file effect is the save over `docPath`.
+      const d = guard.decide("linux-actuator.act", () =>
+        save === false ? NO_FACTS : writeFacts([docPath]),
+      );
+      if (!settle(d)) return { ok: false, error: refusalText(policedCode(d), d.policyId) };
       return inner.act(docPath, cell, value, save);
     },
   };
@@ -329,13 +358,8 @@ export function policedCrossAppActuator<T extends GuardedCrossAppActuator>(
   guard: PolicyGuard,
 ): GuardedCrossAppActuator {
   const step = (actuator: ActuatorId, path: string, forward: () => void): void => {
-    let facts: ActionFacts = NO_FACTS;
-    const d = guard.decide(actuator, () => {
-      facts = writeFacts([path]);
-      return facts;
-    });
-    if (d.decision !== "allow") throw new PolicyRefusal(policedCode(d), d.policyId);
-    guard.commit(facts);
+    const d = guard.decide(actuator, () => writeFacts([path]));
+    if (!settle(d)) throw new PolicyRefusal(policedCode(d), d.policyId);
     forward();
   };
   return {
@@ -366,13 +390,8 @@ export function guardedActionPolicy(inner: ActionPolicy, guard: PolicyGuard): Ac
     check(request: PolicyRequest) {
       const base = inner.check(request);
       if (!base.allow) return base;
-      let facts: ActionFacts = NO_FACTS;
-      const d = guard.decide("action-router.policy", () => {
-        facts = writeFacts(base.writes);
-        return facts;
-      });
-      if (d.decision !== "allow") return { allow: false, code: policedCode(d) as PolicyAgentCode };
-      guard.commit(facts);
+      const d = guard.decide("action-router.policy", () => writeFacts(base.writes));
+      if (!settle(d)) return { allow: false, code: policedCode(d) as PolicyAgentCode };
       return base;
     },
   };

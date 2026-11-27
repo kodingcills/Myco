@@ -333,7 +333,7 @@ describe("policed wrappers: host-side reduction of real actions", () => {
     const { adapter, calls } = fakeAdapter();
     const g = guardFor(f, ALL_RULES);
     const p = policedAppAdapter(adapter, g, adapterOpts);
-    expect(await p.act({ kind: "keyPress", keys: "Ctrl+S" })).toEqual({
+    expect(await p.act({ kind: "keyPress", keys: "ctrl+s" })).toEqual({
       outcome: "failed",
       details: expect.stringMatching(/^POLICY_DENIED pol-[0-9a-f]{12}$/),
     });
@@ -341,10 +341,159 @@ describe("policed wrappers: host-side reduction of real actions", () => {
       outcome: "failed",
       details: "POLICY_DENIED",
     });
+    // The guest reads a capital as Shift held: `Ctrl+S` is Ctrl+Shift+S, Save As.
+    expect(await p.act({ kind: "keyPress", keys: "Ctrl+S" })).toEqual({
+      outcome: "failed",
+      details: "POLICY_DENIED",
+    });
     expect(calls).toEqual([]);
     expect(g.log().map((e) => e.code)).toEqual([
       "POLICY_OVERWRITE_ORIGINAL",
       "POLICY_ACTION_UNRECOGNISED",
+      "POLICY_ACTION_UNRECOGNISED",
+    ]);
+  });
+
+  // Round 1 D1: every spelling the guest's parse_chord delivers as Ctrl+S (or Meta+S).
+  const SAVE_SPELLINGS = [
+    "ctrl+s",
+    "ctrl++s",
+    "ctrl+s+",
+    "+ctrl+s",
+    "ctrl+ctrl+s",
+    " CTRL + s ",
+    "control+s",
+    "cmd+s",
+    "meta+s",
+    "super+s",
+    "SUPER+s",
+    "ctrl+ s\u0085",
+    "+++ctrl+++s+++",
+  ];
+
+  it.each(SAVE_SPELLINGS)(
+    "app adapter and desktop transport: %j is Save, refused by no-overwrite-original",
+    async (keys) => {
+      const f = fixture();
+      const g = guardFor(f, oneRule({ kind: "no-overwrite-original", effect: "deny" }));
+      const { adapter, calls } = fakeAdapter();
+      const p = policedAppAdapter(adapter, g, adapterOpts);
+      expect(await p.act({ kind: "keyPress", keys })).toEqual({
+        outcome: "failed",
+        details: expect.stringMatching(/^POLICY_DENIED pol-[0-9a-f]{12}$/),
+      });
+      const { t, calls: dcalls } = fakeDesktop();
+      const d = policedDesktopTransport(t, g, desktopOpts);
+      expect(await d.act("s1", { kind: "keyPress", keys })).toBe("failed");
+      expect([calls, dcalls]).toEqual([[], []]);
+      expect(g.log().map((e) => e.code)).toEqual([
+        "POLICY_OVERWRITE_ORIGINAL",
+        "POLICY_OVERWRITE_ORIGINAL",
+      ]);
+    },
+  );
+
+  // Save As, menu accelerators, close/quit (their dialog defaults to Save), export, print, F10,
+  // F12, both command keys at once, and chords the guest would refuse: never forwarded.
+  const UNRECOGNISED_CHORDS = [
+    "ctrl+shift+s",
+    "shift+ctrl+s",
+    "Ctrl+S",
+    "meta+S",
+    "f12",
+    "F12",
+    "shift+f12",
+    "alt+f",
+    "alt+F",
+    "option+f",
+    "alt+s",
+    "ctrl+alt+s",
+    "f10",
+    "shift+f10",
+    "alt+f2",
+    "ctrl+w",
+    "ctrl+q",
+    "ctrl+e",
+    "ctrl+p",
+    "ctrl+shift+e",
+    "ctrl+meta+s",
+    "ctrl+f4",
+    "alt+f4",
+    "",
+    "+",
+    "ctrl",
+    "ctrl+",
+    "hyper+s",
+    "ctrl+ss",
+    "ctrl+﻿s",
+    "ctrl+f256",
+    "__proto__+s",
+    "constructor+s",
+  ];
+
+  it.each(UNRECOGNISED_CHORDS)(
+    "%j is POLICY_ACTION_UNRECOGNISED and never forwarded, even with only an unrelated rule",
+    async (keys) => {
+      const f = fixture();
+      // A config that would allow the chord if it were reduced to no facts at all.
+      const g = guardFor(f, ALLOW_ALL);
+      const { adapter, calls } = fakeAdapter();
+      const p = policedAppAdapter(adapter, g, adapterOpts);
+      expect(await p.act({ kind: "keyPress", keys })).toEqual({
+        outcome: "failed",
+        details: "POLICY_DENIED",
+      });
+      expect(calls).toEqual([]);
+      expect(g.log().map((e) => e.code)).toEqual(["POLICY_ACTION_UNRECOGNISED"]);
+    },
+  );
+
+  it.each([
+    "ctrl+c",
+    "ctrl+v",
+    "ctrl+x",
+    "ctrl+z",
+    "ctrl+shift+z",
+    "cmd+a",
+    "Return",
+    "enter",
+    "tab",
+    "shift+tab",
+    "escape",
+    "a",
+    "A",
+    "shift+left",
+    "ctrl+shift+right",
+    "f2",
+    "F02",
+    "s",
+    "shift+s",
+  ])("%j cannot write a file by itself and is forwarded", async (keys) => {
+    const f = fixture();
+    const g = guardFor(f, ALL_RULES, { screen: () => false });
+    const { adapter, calls } = fakeAdapter();
+    const p = policedAppAdapter(adapter, g, adapterOpts);
+    expect((await p.act({ kind: "keyPress", keys })).outcome).toBe("delivered_unverified");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("typed text carrying a control character (U+0013 is Ctrl+S) is unrecognised", async () => {
+    const f = fixture();
+    const g = guardFor(f, ALLOW_ALL);
+    const { adapter, calls } = fakeAdapter();
+    const p = policedAppAdapter(adapter, g, adapterOpts);
+    expect((await p.act({ kind: "typeText", ref: "c", text: "a\u0013" })).outcome).toBe("failed");
+    const { t, calls: dcalls } = fakeDesktop();
+    const d = policedDesktopTransport(t, g, desktopOpts);
+    expect(await d.act("s1", { kind: "typeTextGlobal", text: "\u007f" })).toBe("failed");
+    expect(await d.act("s1", { kind: "typeTextGlobal", text: "line\tone\r\ntwo" })).toBe(
+      "delivered_unverified",
+    );
+    expect([calls.length, dcalls.length]).toEqual([0, 1]);
+    expect(g.log().map((e) => e.code)).toEqual([
+      "POLICY_ACTION_UNRECOGNISED",
+      "POLICY_ACTION_UNRECOGNISED",
+      "POLICY_ALLOWED",
     ]);
   });
 
@@ -479,6 +628,163 @@ describe("policed wrappers: host-side reduction of real actions", () => {
       error: expect.stringMatching(/^POLICY_APPROVAL_REQUIRED pol-/),
     });
     expect(calls).toEqual([]);
+  });
+});
+
+// Round 1 D2: the destructive limit holds exactly under concurrent async actions.
+describe("destructive-limit: check-and-reserve is atomic across concurrent actions", () => {
+  const LIMIT = (max: number) => oneRule({ kind: "destructive-limit", effect: "deny", max });
+  const N = 25;
+  /** A sensor that answers after a varying delay, so decisions interleave. */
+  const jitter = () => {
+    let i = 0;
+    return () =>
+      new Promise<boolean>((r) => {
+        i += 1;
+        setTimeout(() => r(false), (i * 7) % 5);
+      });
+  };
+
+  it.each([0, 1, 3])(
+    "app adapter: %i of %i concurrent Ctrl+S are forwarded, exactly",
+    async (max) => {
+      const f = fixture();
+      const g = guardFor(f, LIMIT(max), { screen: jitter() });
+      const { adapter, calls } = fakeAdapter();
+      const p = policedAppAdapter(adapter, g, adapterOpts);
+      const out = await Promise.all(
+        Array.from({ length: N }, () => p.act({ kind: "keyPress", keys: "ctrl+s" })),
+      );
+      expect(calls).toHaveLength(max);
+      expect(out.filter((o) => o.outcome === "failed")).toHaveLength(N - max);
+      const codes = g.log().map((e) => e.code);
+      expect(codes.filter((c) => c === "POLICY_ALLOWED")).toHaveLength(max);
+      expect(codes.filter((c) => c === "POLICY_DESTRUCTIVE_LIMIT")).toHaveLength(N - max);
+    },
+  );
+
+  it("desktop transport: 2 of 25 concurrent saves are forwarded, then the limit stays spent", async () => {
+    const f = fixture();
+    const g = guardFor(f, LIMIT(2), { screen: jitter() });
+    const { t, calls } = fakeDesktop();
+    const p = policedDesktopTransport(t, g, desktopOpts);
+    await Promise.all(
+      Array.from({ length: N }, () => p.act("s1", { kind: "keyPress", keys: "meta+s" })),
+    );
+    expect(calls).toHaveLength(2);
+    expect(await p.act("s1", { kind: "keyPress", keys: "ctrl+s" })).toBe("failed");
+    expect(await p.act("s1", { kind: "keyPress", keys: "ctrl+c" })).toBe("delivered_unverified");
+    expect(calls).toHaveLength(3);
+  });
+
+  it("a held action that is not forwarded releases its reservation", async () => {
+    const f = fixture();
+    let flagged = true;
+    const g = guardFor(
+      f,
+      {
+        schema: "myco.policy-config/1",
+        policies: [
+          { id: "lim", kind: "destructive-limit", effect: "deny", max: 1 },
+          { id: "inj", kind: "flagged-screen", effect: "require-approval" },
+        ],
+      },
+      { screen: async () => flagged },
+    );
+    const { adapter, calls } = fakeAdapter();
+    const p = policedAppAdapter(adapter, g, adapterOpts);
+    // Held for approval; NO_APPROVALS cancels it: not forwarded, so the slot comes back.
+    expect((await p.act({ kind: "keyPress", keys: "ctrl+s" })).outcome).toBe("failed");
+    flagged = false;
+    expect((await p.act({ kind: "keyPress", keys: "ctrl+s" })).outcome).toBe(
+      "delivered_unverified",
+    );
+    expect((await p.act({ kind: "keyPress", keys: "ctrl+s" })).outcome).toBe("failed");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("while a save waits on a human, a concurrent save cannot take the same slot", async () => {
+    const f = fixture();
+    const s = brokerSetup();
+    let flagged = true;
+    const g = guardFor(
+      f,
+      {
+        schema: "myco.policy-config/1",
+        policies: [
+          { id: "lim", kind: "destructive-limit", effect: "deny", max: 1 },
+          { id: "inj", kind: "flagged-screen", effect: "require-approval" },
+        ],
+      },
+      { screen: () => flagged },
+    );
+    const { adapter, calls } = fakeAdapter();
+    const p = policedAppAdapter(adapter, g, {
+      trigger: s.trigger,
+      isCredentialTarget: () => false,
+    });
+    const held = p.act({ kind: "keyPress", keys: "ctrl+s" });
+    await flush();
+    await flush();
+    const pending = s.operator.pending();
+    expect(pending).toHaveLength(1);
+    flagged = false;
+    // The open handoff pauses the agent; a second policed adapter on the same guard, with no
+    // broker, decides at once and must see the held reservation.
+    const other = policedAppAdapter(adapter, g, adapterOpts);
+    expect((await other.act({ kind: "keyPress", keys: "ctrl+s" })).outcome).toBe("failed");
+    s.operator.resolve({
+      handoffId: pending[0]?.handoffId as string,
+      outcome: "approve",
+      via: "cli",
+    });
+    expect((await held).outcome).toBe("delivered_unverified");
+    expect(calls).toHaveLength(1);
+    expect(g.log().map((e) => e.code)).toEqual([
+      "POLICY_FLAGGED_SCREEN",
+      "POLICY_DESTRUCTIVE_LIMIT",
+    ]);
+  });
+
+  it("sync paths: the cross-app and router wrappers commit on allow, release on refusal", () => {
+    const f = fixture();
+    const copy = join(f.docDir, "copy.csv");
+    writeFileSync(copy, "x");
+    const g = guardFor(f, {
+      schema: "myco.policy-config/1",
+      policies: [
+        { id: "lim", kind: "destructive-limit", effect: "deny", max: 2 },
+        { id: "scope", kind: "write-scope", effect: "deny" },
+      ],
+    });
+    const { a, calls } = fakeCross();
+    const p = policedCrossAppActuator(a, g);
+    p.calcSet(copy, "A1", "1");
+    // Refused by write-scope: nothing reserved, nothing spent.
+    expect(() => p.calcSet(f.outside, "A1", "1")).toThrow(PolicyRefusal);
+    p.writerAppend(copy, "T", "1");
+    expect(() => p.calcSet(copy, "A1", "3")).toThrow(PolicyRefusal);
+    expect(calls).toEqual(["calc", "writer"]);
+  });
+
+  it("a decision that times out reserves nothing", async () => {
+    const f = fixture();
+    let slow = true;
+    const g = guardFor(f, LIMIT(1), {
+      timeoutMs: 20,
+      screen: () =>
+        slow ? new Promise<boolean>((r) => setTimeout(() => r(false), 60)) : Promise.resolve(false),
+    });
+    const { adapter, calls } = fakeAdapter();
+    const p = policedAppAdapter(adapter, g, adapterOpts);
+    expect((await p.act({ kind: "keyPress", keys: "ctrl+s" })).outcome).toBe("failed");
+    await new Promise((r) => setTimeout(r, 80)); // the late reading arrives
+    slow = false;
+    expect((await p.act({ kind: "keyPress", keys: "ctrl+s" })).outcome).toBe(
+      "delivered_unverified",
+    );
+    expect(calls).toHaveLength(1);
+    expect(g.log().map((e) => e.code)).toEqual(["POLICY_ENGINE_TIMEOUT", "POLICY_ALLOWED"]);
   });
 });
 

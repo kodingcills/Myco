@@ -13,9 +13,12 @@
  * a non-boolean flag, a negative count) are `POLICY_ACTION_UNRECOGNISED`, denied. An engine
  * built from an invalid config denies every action with `POLICY_CONFIG_INVALID`.
  *
- * The engine holds one piece of trial state: the number of destructive operations already
- * forwarded (`commit`). Nothing on it can relax, disable or replace a rule: the rules are
- * frozen at construction and there is no setter.
+ * The engine holds one piece of trial state: the destructive operations already forwarded plus
+ * those reserved by decided actions that have not settled yet. `decide` judges and reserves in
+ * one synchronous step, so concurrent async actions can never all pass against the same count
+ * (the limit holds exactly); the caller commits the hold when it forwards and releases it when
+ * it does not. Nothing on the engine can relax, disable or replace a rule: the rules are frozen
+ * at construction and there is no setter.
  *
  * It has no reference to the gate, vault, task registry, grader or evidence root, and adds no
  * `myco.gate/v1` field (`test/policy/boundary.test.ts`).
@@ -24,7 +27,12 @@
 import { createHash } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { type PolicyDecisionCode, type PolicyDecisionKind, RULE_CODE } from "./codes.ts";
+import {
+  type PolicyDecisionCode,
+  type PolicyDecisionKind,
+  type PolicyRuleKind,
+  RULE_CODE,
+} from "./codes.ts";
 import type { PolicyConfig, PolicyRule } from "./config.ts";
 
 /** What one proposed action does, reduced by the host. Never agent text. */
@@ -63,10 +71,28 @@ export interface PolicyEngine {
   readonly configSha256: string;
   readonly scope: TrialScope;
   /** Rule kinds the config declares (the guard checks it has a sensor for each that needs one). */
-  readonly kinds: ReadonlySet<string>;
+  readonly kinds: readonly PolicyRuleKind[];
+  /** Judge `input` against the forwarded and reserved destructive counts. Reserves nothing. */
   evaluate(input: EngineInput): EngineDecision;
-  /** Record that an action was forwarded (counts its destructive operations). */
-  commit(facts: ActionFacts): void;
+  /**
+   * Judge `input` and, unless denied, reserve its destructive operations in the same
+   * synchronous step. The caller settles the hold exactly once: `commit` when the action is
+   * forwarded, `release` when it is not.
+   */
+  decide(input: EngineInput): EngineVerdict;
+}
+
+/** A reservation of destructive operations. Settling twice is a no-op. */
+export interface DestructiveHold {
+  /** The action was forwarded: the reserved operations count as spent. */
+  commit(): void;
+  /** The action was not forwarded: the reservation is returned. */
+  release(): void;
+}
+
+export interface EngineVerdict {
+  readonly decision: EngineDecision;
+  readonly hold: DestructiveHold;
 }
 
 export class PolicyScopeError extends Error {
@@ -169,34 +195,59 @@ export function createPolicyEngine(
     throw new PolicyScopeError();
   const resolved = resolveScope(scope);
   const rules: readonly PolicyRule[] = config === null ? [] : config.policies;
-  const kinds = new Set<string>(rules.map((r) => r.kind));
+  const kinds: readonly PolicyRuleKind[] = Object.freeze([...new Set(rules.map((r) => r.kind))]);
   const invalidId = opaquePolicyId(configSha256, "\0invalid-config");
+  // Destructive operations forwarded (`spent`) and held by decided, not yet settled, actions
+  // (`reserved`). A decision judges against both, so concurrent actions cannot share a slot.
   let spent = 0;
+  let reserved = 0;
+
+  const evaluate = (input: EngineInput): EngineDecision => {
+    if (config === null)
+      return { decision: "deny", code: "POLICY_CONFIG_INVALID", policyId: invalidId };
+    if (!validInput(input))
+      return { decision: "deny", code: "POLICY_ACTION_UNRECOGNISED", policyId: null };
+    let best: EngineDecision = { decision: "allow", code: "POLICY_ALLOWED", policyId: null };
+    for (const rule of rules) {
+      if (!matches(rule, input, resolved, spent + reserved)) continue;
+      if (RANK[rule.effect] > RANK[best.decision])
+        best = {
+          decision: rule.effect,
+          code: RULE_CODE[rule.kind],
+          policyId: opaquePolicyId(configSha256, rule.id),
+        };
+    }
+    return best;
+  };
+
+  const hold = (n: number): DestructiveHold => {
+    reserved += n;
+    let open = true;
+    return Object.freeze({
+      commit(): void {
+        if (!open) return;
+        open = false;
+        reserved -= n;
+        spent += n;
+      },
+      release(): void {
+        if (!open) return;
+        open = false;
+        reserved -= n;
+      },
+    });
+  };
 
   return Object.freeze({
     configSha256,
     scope: resolved,
     kinds,
-    evaluate(input: EngineInput): EngineDecision {
-      if (config === null)
-        return { decision: "deny", code: "POLICY_CONFIG_INVALID", policyId: invalidId };
-      if (!validInput(input))
-        return { decision: "deny", code: "POLICY_ACTION_UNRECOGNISED", policyId: null };
-      let best: EngineDecision = { decision: "allow", code: "POLICY_ALLOWED", policyId: null };
-      for (const rule of rules) {
-        if (!matches(rule, input, resolved, spent)) continue;
-        if (RANK[rule.effect] > RANK[best.decision])
-          best = {
-            decision: rule.effect,
-            code: RULE_CODE[rule.kind],
-            policyId: opaquePolicyId(configSha256, rule.id),
-          };
-      }
-      return best;
-    },
-    commit(facts: ActionFacts): void {
-      const n = facts.destructive;
-      if (typeof n === "number" && Number.isInteger(n) && n > 0) spent += n;
+    evaluate,
+    decide(input: EngineInput): EngineVerdict {
+      // One synchronous step: judge, then reserve. Nothing can run between the two.
+      const decision = evaluate(input);
+      const n = decision.decision === "deny" ? 0 : input.destructive;
+      return Object.freeze({ decision, hold: hold(n) });
     },
   });
 }

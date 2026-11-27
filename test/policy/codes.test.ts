@@ -50,6 +50,8 @@ describe("track O closed vocabularies", () => {
     expect(POLICY_START_REFUSALS).toEqual([
       "POLICY_CONFIG_MISSING",
       "POLICY_CONFIG_NOT_HOST",
+      "POLICY_CONFIG_NOT_REGULAR",
+      "POLICY_CONFIG_TOO_LARGE",
       "POLICY_SCOPE_INVALID",
       "POLICY_SENSOR_MISSING",
     ]);

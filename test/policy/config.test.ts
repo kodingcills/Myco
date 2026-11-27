@@ -2,11 +2,14 @@
  * Track O host config: declared on the host, never in the agent's reach; pinned by SHA-256 at
  * load; missing refuses the trial; unparseable denies every action.
  */
+
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadPolicyConfig, parsePolicyConfig } from "../../src/policy/config.ts";
+import { readBoundedNoBlock } from "../../src/policy/bounded-read.ts";
+import { loadPolicyConfig, MAX_CONFIG_BYTES, parsePolicyConfig } from "../../src/policy/config.ts";
 import { startPolicy } from "../../src/policy/guard.ts";
 import { ALL_RULES, fixture, oneRule, writeConfig } from "./helpers.ts";
 
@@ -85,6 +88,37 @@ describe("policy config: refuse to start rather than run unpoliced", () => {
   });
 });
 
+describe.runIf(process.platform !== "win32")(
+  "policy config: blocking and unbounded objects fail closed at once (child, hard timeout)",
+  () => {
+    const CHILD = join(import.meta.dirname, "config-child.ts");
+    const run = (mode: string): unknown => {
+      const started = Date.now();
+      const child = spawnSync(process.execPath, ["--import", "tsx", CHILD, mode], {
+        cwd: join(import.meta.dirname, "..", ".."),
+        encoding: "utf8",
+        timeout: 8_000,
+        killSignal: "SIGKILL",
+      });
+      expect(child.signal, `${mode}: the loader blocked and was killed`).toBeNull();
+      expect(Date.now() - started).toBeLessThan(8_000);
+      return JSON.parse(child.stdout.trim());
+    };
+
+    it.each([
+      ["fifo", { ok: false, code: "POLICY_CONFIG_NOT_REGULAR" }],
+      ["fifo-in-root", { ok: false, code: "POLICY_CONFIG_NOT_HOST" }],
+      ["swap-to-fifo", { ok: false, code: "not-regular" }],
+    ])("%s", (mode, want) => expect(run(mode)).toEqual(want), 15_000);
+
+    it.runIf(process.platform === "linux")(
+      "dev-zero",
+      () => expect(run("dev-zero")).toEqual({ ok: false, code: "POLICY_CONFIG_NOT_REGULAR" }),
+      15_000,
+    );
+  },
+);
+
 describe("policy config: pinned, closed, fail closed", () => {
   it("the recorded hash is the SHA-256 of the exact bytes read", () => {
     const f = fixture();
@@ -142,6 +176,57 @@ describe("policy config: pinned, closed, fail closed", () => {
       agent: { code: "POLICY_DENIED" },
     });
     expect(r.guard.configSha256).toBe(createHash("sha256").update(text).digest("hex"));
+  });
+
+  it("a config of exactly MAX_CONFIG_BYTES loads; one byte more refuses the trial unread", () => {
+    const f = fixture();
+    const body = JSON.stringify(oneRule({ kind: "write-scope", effect: "deny" }));
+    const exact = body + " ".repeat(MAX_CONFIG_BYTES - Buffer.byteLength(body));
+    const p = writeConfig(f, exact);
+    const loaded = loadPolicyConfig(p, { agentRoots: [f.docDir] });
+    expect(loaded).toMatchObject({ ok: true, config: { schema: "myco.policy-config/1" } });
+    writeFileSync(p, `${exact} `);
+    expect(loadPolicyConfig(p, { agentRoots: [f.docDir] })).toEqual({
+      ok: false,
+      code: "POLICY_CONFIG_TOO_LARGE",
+    });
+    expect(start(f, p)).toEqual({ ok: false, code: "POLICY_CONFIG_TOO_LARGE" });
+  });
+
+  it("a symlink at the config's own name (to a host file) and a directory are not regular", () => {
+    const f = fixture();
+    const target = writeConfig(f, ALL_RULES);
+    const link = join(f.host, "link.json");
+    symlinkSync(target, link);
+    expect(start(f, link)).toEqual({ ok: false, code: "POLICY_CONFIG_NOT_REGULAR" });
+    const dir = join(f.host, "dir.json");
+    mkdirSync(dir);
+    expect(start(f, dir)).toEqual({ ok: false, code: "POLICY_CONFIG_NOT_REGULAR" });
+    // The target itself, named directly, still loads.
+    expect(start(f, target)).toMatchObject({ ok: true });
+  });
+
+  it.runIf(process.platform === "linux")(
+    "a file whose size lies (procfs reports 0) is caught by the bounded read, not read on",
+    () => {
+      const p = "/proc/self/status";
+      expect(readBoundedNoBlock(p, 16, lstatSync(p))).toEqual({ ok: false, code: "too-large" });
+      const loaded = loadPolicyConfig(p, { agentRoots: [] });
+      // procfs reports size 0, so only the read's own bound can refuse it; the file is far
+      // under 64 KiB, so it loads, as bytes that do not parse (deny-all).
+      expect(loaded).toMatchObject({ ok: true, config: null });
+    },
+  );
+
+  it("an inode swapped between the pre-check and the open is refused", () => {
+    const f = fixture();
+    const a = writeConfig(f, ALL_RULES, "a.json");
+    const b = writeConfig(f, ALL_RULES, "b.json");
+    expect(readBoundedNoBlock(a, MAX_CONFIG_BYTES, lstatSync(b))).toEqual({
+      ok: false,
+      code: "swapped",
+    });
+    expect(readBoundedNoBlock(a, MAX_CONFIG_BYTES, lstatSync(a))).toMatchObject({ ok: true });
   });
 
   it("a parsed config is deeply frozen", () => {

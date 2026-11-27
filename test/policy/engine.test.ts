@@ -96,14 +96,55 @@ describe("policy engine: the spec's example policies", () => {
     const { e } = engine();
     const one: ActionFacts = { ...NONE, destructive: 1 };
     expect(e.evaluate({ ...one, screenFlagged: false })).toMatchObject({ decision: "allow" });
-    e.commit(one);
-    e.commit(one);
+    e.decide({ ...one, screenFlagged: false }).hold.commit();
+    e.decide({ ...one, screenFlagged: false }).hold.commit();
     expect(e.evaluate({ ...one, screenFlagged: false })).toMatchObject({
       decision: "deny",
       code: "POLICY_DESTRUCTIVE_LIMIT",
     });
     // A non-destructive action is still allowed at the limit.
     expect(e.evaluate(NONE)).toMatchObject({ decision: "allow" });
+  });
+
+  it("decide reserves before the action; release returns the slot, commit spends it once", () => {
+    const { e } = engine(); // at-most-2
+    const one: EngineInput = { ...NONE, destructive: 1 };
+    const a = e.decide(one);
+    const b = e.decide(one);
+    expect([a.decision.decision, b.decision.decision]).toEqual(["allow", "allow"]);
+    // Two unsettled reservations already fill the limit: a third is denied, and reserves nothing.
+    const c = e.decide(one);
+    expect(c.decision).toMatchObject({ decision: "deny", code: "POLICY_DESTRUCTIVE_LIMIT" });
+    expect(e.evaluate(one)).toMatchObject({ code: "POLICY_DESTRUCTIVE_LIMIT" });
+    c.hold.release(); // a deny's hold is empty: releasing it frees nothing
+    expect(e.evaluate(one)).toMatchObject({ code: "POLICY_DESTRUCTIVE_LIMIT" });
+    a.hold.release();
+    a.hold.release(); // settling twice is a no-op
+    a.hold.commit();
+    expect(e.evaluate(one)).toMatchObject({ decision: "allow" });
+    b.hold.commit();
+    b.hold.commit();
+    const d = e.decide(one);
+    expect(d.decision).toMatchObject({ decision: "allow" });
+    d.hold.commit();
+    expect(e.evaluate(one)).toMatchObject({ code: "POLICY_DESTRUCTIVE_LIMIT" });
+    // A non-destructive action still passes and reserves nothing.
+    expect(e.decide(NONE).decision).toMatchObject({ decision: "allow" });
+  });
+
+  it("require-approval reserves too (the human may approve while others decide)", () => {
+    const { e } = engine({
+      schema: "myco.policy-config/1",
+      policies: [
+        { id: "lim", kind: "destructive-limit", effect: "deny", max: 1 },
+        { id: "inj", kind: "flagged-screen", effect: "require-approval" },
+      ],
+    });
+    const held = e.decide({ ...NONE, destructive: 1, screenFlagged: true });
+    expect(held.decision.decision).toBe("require-approval");
+    expect(e.evaluate({ ...NONE, destructive: 1 })).toMatchObject({ decision: "deny" });
+    held.hold.release();
+    expect(e.evaluate({ ...NONE, destructive: 1 })).toMatchObject({ decision: "allow" });
   });
 
   it("an action that alone exceeds the limit is denied", () => {
@@ -119,6 +160,56 @@ describe("policy engine: the spec's example policies", () => {
       decision: "require-approval",
       code: "POLICY_FLAGGED_SCREEN",
       policyId: opaquePolicyId(SHA, "injected"),
+    });
+  });
+
+  it("write-scope: one path inside and one outside the doc dir is outside (any, not every)", () => {
+    const { e } = engine();
+    const inside = join(e.scope.documentDir, "copy.xlsx");
+    for (const writes of [
+      [inside, "/etc/passwd"],
+      ["/etc/passwd", inside],
+    ])
+      expect(e.evaluate({ ...NONE, writes })).toMatchObject({
+        decision: "deny",
+        code: "POLICY_WRITE_OUTSIDE_SCOPE",
+      });
+    // The same through deletes, and split across writes and deletes.
+    expect(e.evaluate({ ...NONE, deletes: [inside, "/etc/passwd"] })).toMatchObject({
+      code: "POLICY_WRITE_OUTSIDE_SCOPE",
+    });
+    expect(e.evaluate({ ...NONE, writes: [inside], deletes: ["/etc/passwd"] })).toMatchObject({
+      code: "POLICY_WRITE_OUTSIDE_SCOPE",
+    });
+  });
+
+  it("among equally restrictive matches, the first rule in the file names the decision", () => {
+    const rules = [
+      { id: "creds-first", kind: "no-credential-input", effect: "deny" },
+      { id: "scope-second", kind: "write-scope", effect: "deny" },
+      { id: "flag-third", kind: "flagged-screen", effect: "require-approval" },
+      { id: "flag-fourth", kind: "flagged-screen", effect: "require-approval" },
+    ];
+    const both: EngineInput = { ...NONE, credentialInput: true, writes: ["/etc/passwd"] };
+    const a = engine({ schema: "myco.policy-config/1", policies: rules }).e;
+    expect(a.evaluate(both)).toEqual({
+      decision: "deny",
+      code: "POLICY_CREDENTIAL_INPUT",
+      policyId: opaquePolicyId(SHA, "creds-first"),
+    });
+    // Swap the two deny rules: the other one now names the decision.
+    const swapped = [rules[1], rules[0], rules[2], rules[3]];
+    const b = engine({ schema: "myco.policy-config/1", policies: swapped }).e;
+    expect(b.evaluate(both)).toEqual({
+      decision: "deny",
+      code: "POLICY_WRITE_OUTSIDE_SCOPE",
+      policyId: opaquePolicyId(SHA, "scope-second"),
+    });
+    // Same kind, same effect: the earlier id wins.
+    expect(a.evaluate({ ...NONE, screenFlagged: true })).toEqual({
+      decision: "require-approval",
+      code: "POLICY_FLAGGED_SCREEN",
+      policyId: opaquePolicyId(SHA, "flag-third"),
     });
   });
 

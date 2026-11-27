@@ -8,9 +8,17 @@
  * every policy log entry and policy row. The engine never re-reads it, so editing the file
  * during a trial changes nothing.
  *
- * Fail closed:
- * - a missing or unreadable file refuses to start the trial (`POLICY_CONFIG_MISSING`); a trial
- *   never runs unpoliced instead;
+ * Fail closed, in this order, and nothing is opened before steps 1 to 3 pass:
+ * 1. a missing or unresolvable path refuses to start the trial (`POLICY_CONFIG_MISSING`); a
+ *    trial never runs unpoliced instead;
+ * 2. a path that resolves inside an agent root is `POLICY_CONFIG_NOT_HOST`;
+ * 3. anything but a regular file (a symlink at the given name, a FIFO, a device such as
+ *    `/dev/zero`, a directory) is `POLICY_CONFIG_NOT_REGULAR`, and a file over
+ *    `MAX_CONFIG_BYTES` is `POLICY_CONFIG_TOO_LARGE`, both from `lstat` alone;
+ * 4. the read itself is non-blocking and bounded (`./bounded-read.ts`, the technique of `src/integrity/nonblocking-read.ts`): it
+ *    opens with `O_NONBLOCK | O_NOFOLLOW`, checks the open fd is the same regular file, and
+ *    reads at most `MAX_CONFIG_BYTES`. A swap after step 3 is refused, never followed. No
+ *    planted object can make startup hang or read without bound;
  * - a file that does not parse, or parses to anything but the closed schema below, loads as
  *   INVALID: the engine built from it denies every action (`POLICY_CONFIG_INVALID`), and the
  *   recorded hash is still the hash of the bytes that were read.
@@ -27,8 +35,9 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { lstatSync, realpathSync, type Stats } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
+import { type BoundedReadRefusal, readBoundedNoBlock } from "./bounded-read.ts";
 import {
   POLICY_EFFECTS,
   POLICY_RULE_KINDS,
@@ -158,14 +167,15 @@ export interface LoadOptions {
 export function loadPolicyConfig(path: string, options: LoadOptions): LoadedPolicyConfig {
   if (typeof path !== "string" || !isAbsolute(path))
     return { ok: false, code: "POLICY_CONFIG_NOT_HOST" };
+  // 1. Where it is. `realpath` resolves the name without opening the file, so a FIFO or a
+  //    device cannot block here.
   let real: string;
-  let bytes: Buffer;
   try {
     real = realpathSync.native(path);
-    bytes = readFileSync(real);
   } catch {
     return { ok: false, code: "POLICY_CONFIG_MISSING" };
   }
+  // 2. Not under an agent root, checked before anything is opened.
   for (const root of options.agentRoots) {
     let realRoot: string;
     try {
@@ -176,7 +186,30 @@ export function loadPolicyConfig(path: string, options: LoadOptions): LoadedPoli
     }
     if (within(real, realRoot)) return { ok: false, code: "POLICY_CONFIG_NOT_HOST" };
   }
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
-  const config = bytes.length > MAX_CONFIG_BYTES ? null : parsePolicyConfig(bytes.toString("utf8"));
-  return { ok: true, sha256, config };
+  // 3. What it is, without opening it: a regular file (not a symlink at the given name, a FIFO,
+  //    a device or a directory) of at most MAX_CONFIG_BYTES.
+  let pre: Stats;
+  let named: Stats;
+  try {
+    named = lstatSync(path);
+    pre = lstatSync(real);
+  } catch {
+    return { ok: false, code: "POLICY_CONFIG_MISSING" };
+  }
+  if (named.isSymbolicLink() || !pre.isFile())
+    return { ok: false, code: "POLICY_CONFIG_NOT_REGULAR" };
+  if (pre.size > MAX_CONFIG_BYTES) return { ok: false, code: "POLICY_CONFIG_TOO_LARGE" };
+  // 4. One bounded, non-blocking read of that same file (O_NONBLOCK | O_NOFOLLOW, fstat on the
+  //    open fd, same inode as step 3). A swap in between is refused, never followed.
+  const read = readBoundedNoBlock(real, MAX_CONFIG_BYTES, pre);
+  if (!read.ok) return { ok: false, code: READ_REFUSAL[read.code] };
+  const sha256 = createHash("sha256").update(read.bytes).digest("hex");
+  return { ok: true, sha256, config: parsePolicyConfig(read.bytes.toString("utf8")) };
 }
+
+const READ_REFUSAL: Readonly<Record<BoundedReadRefusal, PolicyStartRefusal>> = {
+  missing: "POLICY_CONFIG_MISSING",
+  "not-regular": "POLICY_CONFIG_NOT_REGULAR",
+  swapped: "POLICY_CONFIG_NOT_REGULAR",
+  "too-large": "POLICY_CONFIG_TOO_LARGE",
+};

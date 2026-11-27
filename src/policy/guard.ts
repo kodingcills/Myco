@@ -38,7 +38,9 @@ import { loadPolicyConfig } from "./config.ts";
 import {
   type ActionFacts,
   createPolicyEngine,
+  type DestructiveHold,
   type EngineDecision,
+  type EngineVerdict,
   type PolicyEngine,
   type TrialScope,
 } from "./engine.ts";
@@ -63,7 +65,14 @@ export interface GuardDecision {
   readonly code: PolicyDecisionCode;
   readonly policyId: string | null;
   readonly agent: { readonly code: PolicyAgentCode; readonly policyId: string | null } | null;
+  /**
+   * The destructive operations this decision reserved (none for a deny). The wrapper settles it
+   * exactly once: `commit` when it forwards the action, `release` when it does not.
+   */
+  readonly hold: DestructiveHold;
 }
+
+const NO_HOLD: DestructiveHold = Object.freeze({ commit: () => {}, release: () => {} });
 
 /** The per-trial row a pack is built from (`./pack.ts`). */
 export interface PolicyRow {
@@ -146,7 +155,7 @@ export class PolicyGuard {
     return this.#engine.scope;
   }
 
-  #record(actuator: ActuatorId, d: EngineDecision): GuardDecision {
+  #record(actuator: ActuatorId, d: EngineDecision, hold: DestructiveHold = NO_HOLD): GuardDecision {
     this.#seq += 1;
     this.#log.push(
       Object.freeze({
@@ -166,6 +175,7 @@ export class PolicyGuard {
         d.decision === "allow"
           ? null
           : Object.freeze({ code: AGENT_CODE[d.decision], policyId: d.policyId }),
+      hold,
     });
   }
 
@@ -183,12 +193,15 @@ export class PolicyGuard {
     }
   }
 
-  #evaluate(facts: ActionFacts, screenFlagged: boolean): EngineDecision {
+  /** Judge and reserve in one synchronous step, then log. */
+  #decideRecord(actuator: ActuatorId, facts: ActionFacts, screenFlagged: boolean): GuardDecision {
+    let verdict: EngineVerdict;
     try {
-      return this.#engine.evaluate({ ...facts, screenFlagged });
+      verdict = this.#engine.decide({ ...facts, screenFlagged });
     } catch {
-      return this.#fail("POLICY_ENGINE_ERROR");
+      return this.#record(actuator, this.#fail("POLICY_ENGINE_ERROR"));
     }
+    return this.#record(actuator, verdict.decision, verdict.hold);
   }
 
   /** Synchronous decision (sync actuators). An async sensor reading is a denial. */
@@ -210,12 +223,17 @@ export class PolicyGuard {
     }
     if (typeof flagged !== "boolean")
       return this.#record(actuator, this.#fail("POLICY_ENGINE_ERROR"));
-    return this.#record(actuator, this.#evaluate(facts, flagged));
+    return this.#decideRecord(actuator, facts, flagged);
   }
 
-  /** Asynchronous decision, bounded by `timeoutMs`. */
+  /**
+   * Asynchronous decision, bounded by `timeoutMs`. Only the facts and the sensor reading are
+   * awaited; the judgement and the reservation happen after the race, in one synchronous step,
+   * so a reading that arrives after the timeout reserves nothing.
+   */
   async decideAsync(actuator: ActuatorId, reduce: () => ActionFacts): Promise<GuardDecision> {
-    const work = (async (): Promise<EngineDecision> => {
+    type Read = { facts: ActionFacts; flagged: boolean } | EngineDecision;
+    const work = (async (): Promise<Read> => {
       const facts = this.#reduce(reduce);
       if ("decision" in facts) return facts;
       let flagged: unknown = false;
@@ -225,21 +243,23 @@ export class PolicyGuard {
         return this.#fail("POLICY_ENGINE_ERROR");
       }
       if (typeof flagged !== "boolean") return this.#fail("POLICY_ENGINE_ERROR");
-      return this.#evaluate(facts, flagged);
+      return { facts, flagged };
     })();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<EngineDecision>((resolve) => {
+    const timeout = new Promise<Read>((resolve) => {
       timer = setTimeout(() => resolve(this.#fail("POLICY_ENGINE_TIMEOUT")), this.#timeoutMs);
     });
     work.catch(() => {});
+    let read: Read;
     try {
-      const d = await Promise.race([work, timeout]);
-      return this.#record(actuator, d);
+      read = await Promise.race([work, timeout]);
     } catch {
       return this.#record(actuator, this.#fail("POLICY_ENGINE_ERROR"));
     } finally {
       clearTimeout(timer);
     }
+    if ("decision" in read) return this.#record(actuator, read);
+    return this.#decideRecord(actuator, read.facts, read.flagged);
   }
 
   /**
@@ -268,11 +288,6 @@ export class PolicyGuard {
         } satisfies PolicyPauseRequest;
       },
     };
-  }
-
-  /** Record that an allowed action was forwarded (destructive-operation count). */
-  commit(facts: ActionFacts): void {
-    this.#engine.commit(facts);
   }
 
   log(): readonly PolicyLogEntry[] {
@@ -331,7 +346,7 @@ export function startPolicy(options: StartPolicyOptions): StartPolicyResult {
     return { ok: false, code: "POLICY_SCOPE_INVALID" };
   }
   const screen = options.screenSensor ?? null;
-  if (engine.kinds.has("flagged-screen") && typeof screen !== "function")
+  if (engine.kinds.includes("flagged-screen") && typeof screen !== "function")
     return { ok: false, code: "POLICY_SENSOR_MISSING" };
   return { ok: true, guard: new PolicyGuard(engine, screen, timeoutMs) };
 }
