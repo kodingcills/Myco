@@ -22,13 +22,24 @@
  * writer, a process launcher or the gate package that host those interfaces.
  *
  * Known limit (follow-up): a `click` carries only a target ref, so these reducers cannot tell a
- * click on a Save or Delete button from any other click; the independent violation checker
+ * click on a Save or Delete button from any other click, nor a click that opens the File menu
+ * (after which a plain `s`, the mnemonic, saves); the independent violation checker
  * (`src/violations/`) still sees the result in the file-system diff. Classifying click targets
  * needs track I's live state.
+ *
+ * A desktop `launch` is recognised only for a program the host lists by its real absolute path
+ * (`LaunchTable`), with no arguments or exactly one argument vector the host declared for it.
+ * Its base name is never judged: the guest runs any command with any arguments, and the file
+ * effect of an argument vector is not inferred here. What a listed program does once running
+ * (typed text into a launched terminal or editor) is the remaining limit, governed only by
+ * `app-allowlist`.
+ *
+ * A forwarded action's destructive slot stays spent even if the app then fails: the policy
+ * cannot know whether the write happened, so it counts it.
  */
 
 import { existsSync } from "node:fs";
-import { basename, isAbsolute } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { type ActionPolicy, type PolicyRequest, resolveScoped } from "../actions/policy.ts";
 import type { ActResult, AppAdapter, ProgramAction, TargetRef } from "../core/adapter.ts";
 import type { PauseGate, PolicyTrigger } from "../handoff/broker.ts";
@@ -257,21 +268,98 @@ export interface GuardedDesktopTransport<S> {
   destroy(session: S): Promise<void>;
 }
 
-/** The app id a launch names: the command's base name, lower-cased. Compared, never echoed. */
-export function launchedApp(command: unknown): string {
-  if (typeof command !== "string" || command.length === 0) throw new UnrecognisedAction();
-  return basename(command).toLowerCase();
+/**
+ * One program the host lets the agent launch. The guest runs `Command::new(command).args(args)`
+ * (`runtime/crates/myco-rt-agent/src/processes.rs`), so a launch's file effect depends on its
+ * whole argument vector, not on the program's name: `cp A B` overwrites B, and
+ * `soffice --convert-to xlsx --outdir D F` overwrites `D/F.xlsx` without asking.
+ */
+export interface LaunchEntry {
+  /** The app id `app-allowlist` judges (for example `soffice`). */
+  readonly app: string;
+  /**
+   * The exact argument vectors the host allows, compared element by element (a closed shape,
+   * as track J's `SHELL_PROGRAMS` is). Absent or empty: the program launches with no arguments
+   * only. The host lists only vectors with no file effect (no path operands, no output or
+   * conversion options).
+   */
+  readonly argv?: readonly (readonly string[])[];
+}
+
+/**
+ * The host's launch list, keyed by the program's real absolute path (no symlink hop, no `..`,
+ * no `.`, no doubled `/`). A launch is judged by that path, never by its base name.
+ */
+export type LaunchTable = Readonly<Record<string, LaunchEntry>>;
+
+/** The canonical spelling of an absolute path: what the kernel would resolve, hop-free. */
+function canonicalCommand(raw: unknown): string | null {
+  if (typeof raw !== "string" || !isAbsolute(raw) || resolve(raw) !== raw) return null;
+  // `resolveScoped` refuses control characters and hard-linked files and resolves every
+  // symlink hop; a spelling that differs from its resolution is not the listed program itself.
+  return resolveScoped(raw, "/") === raw ? raw : null;
+}
+
+function cleanArgv(v: unknown): v is readonly string[] {
+  return Array.isArray(v) && v.length <= 64 && v.every((a) => typeof a === "string");
+}
+
+/** Copy and check a host launch table at wrapper construction; a malformed one throws. */
+export function freezeLaunchTable(table: LaunchTable): ReadonlyMap<string, LaunchEntry> {
+  const out = new Map<string, LaunchEntry>();
+  if (typeof table !== "object" || table === null) throw new Error("POLICY_LAUNCH_TABLE_INVALID");
+  for (const [path, entry] of Object.entries(table)) {
+    const argv = entry?.argv ?? [];
+    if (
+      typeof path !== "string" ||
+      !isAbsolute(path) ||
+      resolve(path) !== path ||
+      typeof entry?.app !== "string" ||
+      entry.app.length === 0 ||
+      entry.app.length > 256 ||
+      !Array.isArray(argv) ||
+      !argv.every(cleanArgv)
+    )
+      throw new Error("POLICY_LAUNCH_TABLE_INVALID");
+    out.set(path, Object.freeze({ app: entry.app, argv: argv.map((a) => Object.freeze([...a])) }));
+  }
+  return out;
+}
+
+/**
+ * Reduce a launch. Unrecognised unless the command is the canonical real path of a program the
+ * host listed AND its arguments are empty or exactly one of that program's declared vectors.
+ * A bare name (the guest would search its PATH), a relative or symlinked spelling, another
+ * binary sharing a listed base name, and any undeclared argument all fail closed.
+ */
+export function launchFacts(
+  command: unknown,
+  args: unknown,
+  table: ReadonlyMap<string, LaunchEntry>,
+): ActionFacts {
+  const path = canonicalCommand(command);
+  if (path === null) throw new UnrecognisedAction();
+  const entry = table.get(path);
+  if (entry === undefined || !cleanArgv(args)) throw new UnrecognisedAction();
+  if (args.length > 0) {
+    const declared = entry.argv ?? [];
+    const same = (v: readonly string[]) =>
+      v.length === args.length && v.every((x, k) => x === args[k]);
+    if (!declared.some(same)) throw new UnrecognisedAction();
+  }
+  return { ...NO_FACTS, launches: [entry.app] };
 }
 
 export function desktopFacts(
   action: GuardedDesktopAction,
   scope: TrialScope,
   focusIsCredential: () => boolean,
+  launches: ReadonlyMap<string, LaunchEntry>,
 ): ActionFacts {
   if (typeof action !== "object" || action === null) throw new UnrecognisedAction();
   switch (action.kind) {
     case "launch":
-      return { ...NO_FACTS, launches: [launchedApp(action.command)] };
+      return launchFacts(action.command, action.args, launches);
     case "typeTextGlobal":
       return typedFacts(action.text, focusIsCredential);
     case "clickAt":
@@ -287,6 +375,8 @@ export interface DesktopGuardOptions<S> {
   readonly trigger: PolicyTrigger & PauseGate;
   /** Host classifier: is the focused field of `session` a credential field? */
   readonly focusIsCredential: (session: S) => boolean;
+  /** The programs the agent may launch (`LaunchTable`). Empty: every launch is unrecognised. */
+  readonly launches: LaunchTable;
 }
 
 /**
@@ -298,6 +388,7 @@ export function policedDesktopTransport<S, T extends GuardedDesktopTransport<S>>
   guard: PolicyGuard,
   options: DesktopGuardOptions<S>,
 ): T {
+  const launches = freezeLaunchTable(options.launches);
   return {
     ...inner,
     create: () => inner.create(),
@@ -307,7 +398,7 @@ export function policedDesktopTransport<S, T extends GuardedDesktopTransport<S>>
     destroy: (s: S) => inner.destroy(s),
     async act(session: S, action: GuardedDesktopAction): Promise<GuardedOutcome> {
       const r = await guardAsync(guard, options.trigger, "desktop-transport.act", () =>
-        desktopFacts(action, guard.scope, () => options.focusIsCredential(session)),
+        desktopFacts(action, guard.scope, () => options.focusIsCredential(session), launches),
       );
       if (!r.ok) return "failed";
       return inner.act(session, action);

@@ -134,6 +134,45 @@ describe("policy engine: the spec's example policies", () => {
     expect(e.decide(NONE).decision).toMatchObject({ decision: "allow" });
   });
 
+  it("every settle is one-shot: commit->commit, release->commit and release->release change nothing", () => {
+    const { e } = engine(); // at-most-2
+    const one: EngineInput = { ...NONE, destructive: 1 };
+    expect(e.usage()).toEqual({ spent: 0, reserved: 0 });
+
+    // commit -> commit: the second commit spends nothing more.
+    const a = e.decide(one);
+    expect(e.usage()).toEqual({ spent: 0, reserved: 1 });
+    a.hold.commit();
+    expect(e.usage()).toEqual({ spent: 1, reserved: 0 });
+    a.hold.commit();
+    expect(e.usage()).toEqual({ spent: 1, reserved: 0 });
+    a.hold.release(); // commit -> release: the spent slot is not handed back
+    expect(e.usage()).toEqual({ spent: 1, reserved: 0 });
+
+    // release -> commit: a returned reservation can never be spent afterwards (no negative
+    // reserve, so no slot gained back).
+    const b = e.decide(one);
+    expect(e.usage()).toEqual({ spent: 1, reserved: 1 });
+    b.hold.release();
+    expect(e.usage()).toEqual({ spent: 1, reserved: 0 });
+    b.hold.commit();
+    expect(e.usage()).toEqual({ spent: 1, reserved: 0 });
+
+    // release -> release.
+    const c = e.decide(one);
+    c.hold.release();
+    c.hold.release();
+    expect(e.usage()).toEqual({ spent: 1, reserved: 0 });
+
+    // The limit still holds exactly: one more save is allowed, then none.
+    const d = e.decide(one);
+    expect(d.decision).toMatchObject({ decision: "allow" });
+    d.hold.commit();
+    expect(e.usage()).toEqual({ spent: 2, reserved: 0 });
+    expect(e.decide(one).decision).toMatchObject({ code: "POLICY_DESTRUCTIVE_LIMIT" });
+    expect(e.usage()).toEqual({ spent: 2, reserved: 0 }); // a deny reserves nothing
+  });
+
   it("require-approval reserves too (the human may approve while others decide)", () => {
     const { e } = engine({
       schema: "myco.policy-config/1",

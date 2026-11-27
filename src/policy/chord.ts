@@ -18,9 +18,11 @@
  *   print chords, and any chord the guest itself would refuse to parse.
  *
  * The allow-list is the fail-closed direction: an app binding nobody listed is `unknown`, never
- * an allow. Plain keys (no modifier, or Shift only) act inside whatever has focus; they can only
- * confirm a Save dialog that some earlier action opened, and every chord that opens one is
- * `unknown`. A click on a Save button is the known limit documented in `./actuators.ts`.
+ * an allow. Plain keys (no modifier, or Shift only) act inside whatever has focus, so they can
+ * also act on a menu or dialog that an earlier action opened. Every chord that opens a menu or
+ * a Save dialog is `unknown`, but a CLICK can open one too: a click on the File menu followed by
+ * a plain `s` (the menu mnemonic) saves, and a click on a Save button saves outright. Clicks are
+ * the known limit documented in `./actuators.ts`.
  */
 
 export type Modifier = "ctrl" | "shift" | "alt" | "meta";

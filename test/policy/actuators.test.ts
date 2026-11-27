@@ -12,7 +12,19 @@
  * 3. require-approval opens a track N handoff on the async paths (approve forwards, reject does
  *    not) and is a refusal (`POLICY_APPROVAL_REQUIRED`) on the sync paths.
  */
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type ActionPolicy, workspacePolicy } from "../../src/actions/policy.ts";
@@ -22,11 +34,13 @@ import type { CrossAppActuator } from "../../src/gate/cross-app-demo.ts";
 import type { Actuator } from "../../src/linux/actuator.ts";
 import {
   ACTUATOR_WRAPPERS,
+  freezeLaunchTable,
   type GuardedCrossAppActuator,
   type GuardedDesktopAction,
   type GuardedDesktopTransport,
   type GuardedLinuxActuator,
   guardedActionPolicy,
+  type LaunchTable,
   NO_APPROVALS,
   PolicyRefusal,
   policedAppAdapter,
@@ -221,7 +235,21 @@ function scratchOf(f: Fixture): string {
 }
 
 const adapterOpts = { trigger: NO_APPROVALS, isCredentialTarget: () => false };
-const desktopOpts = { trigger: NO_APPROVALS, focusIsCredential: () => false };
+
+/** A host bin directory with stand-in programs, at its real path. */
+const BIN = realpathSync(mkdtempSync(join(tmpdir(), "myco-policy-bin-")));
+for (const name of ["soffice", "xterm"]) {
+  writeFileSync(join(BIN, name), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(BIN, name), 0o755);
+}
+const SOFFICE = join(BIN, "soffice");
+const XTERM = join(BIN, "xterm");
+/** The host's launch list for these tests: soffice may also run as `soffice --calc`. */
+const LAUNCHES: LaunchTable = {
+  [SOFFICE]: { app: "soffice", argv: [["--calc"]] },
+  [XTERM]: { app: "xterm" },
+};
+const desktopOpts = { trigger: NO_APPROVALS, focusIsCredential: () => false, launches: LAUNCHES };
 
 /** Run one call through each wrapper; returns whether the inner actuator was reached. */
 const WRAPPER_CASES: Record<
@@ -541,18 +569,21 @@ describe("policed wrappers: host-side reduction of real actions", () => {
     const p = policedDesktopTransport(t, g, {
       trigger: NO_APPROVALS,
       focusIsCredential: () => true,
+      launches: LAUNCHES,
     });
-    expect(await p.act("s1", { kind: "launch", command: "/usr/bin/xterm", args: [] })).toBe(
-      "failed",
-    );
+    expect(await p.act("s1", { kind: "launch", command: XTERM, args: [] })).toBe("failed");
     expect(await p.act("s1", { kind: "typeTextGlobal", text: MARKER })).toBe("failed");
-    expect(await p.act("s1", { kind: "launch", command: "/usr/bin/soffice", args: [] })).toBe(
+    expect(await p.act("s1", { kind: "launch", command: SOFFICE, args: [] })).toBe(
       "delivered_unverified",
     );
-    expect(calls).toHaveLength(1);
+    expect(await p.act("s1", { kind: "launch", command: SOFFICE, args: ["--calc"] })).toBe(
+      "delivered_unverified",
+    );
+    expect(calls).toHaveLength(2);
     expect(g.log().map((e) => e.code)).toEqual([
       "POLICY_APP_NOT_ALLOWED",
       "POLICY_CREDENTIAL_INPUT",
+      "POLICY_ALLOWED",
       "POLICY_ALLOWED",
     ]);
   });
@@ -789,7 +820,239 @@ describe("destructive-limit: check-and-reserve is atomic across concurrent actio
   });
 });
 
+/** A transport that runs a launch the way the guest does: `Command::new(command).args(args)`. */
+function spawningDesktop() {
+  const calls: GuardedDesktopAction[] = [];
+  const t: GuardedDesktopTransport<string> = {
+    create: async () => "s1",
+    observe: async () => ({}),
+    act: async (_s, a) => {
+      calls.push(a);
+      if (a.kind === "launch") {
+        const r = spawnSync(a.command, [...a.args], { stdio: "ignore", timeout: 10_000 });
+        return r.status === 0 ? "delivered_unverified" : "failed";
+      }
+      return "delivered_unverified";
+    },
+    readFile: async () => "",
+    reset: async () => {},
+    destroy: async () => {},
+  };
+  return { t, calls };
+}
+
+const FILE_RULES = {
+  schema: "myco.policy-config/1",
+  policies: [
+    { id: "keep-original", kind: "no-overwrite-original", effect: "deny" },
+    { id: "doc-dir-only", kind: "write-scope", effect: "deny" },
+    { id: "none-destructive", kind: "destructive-limit", effect: "deny", max: 0 },
+  ],
+};
+
+const launch = (command: unknown, args: unknown = []) =>
+  ({ kind: "launch", command, args }) as unknown as GuardedDesktopAction;
+
+describe("desktop transport: a launch is judged by its real path and its whole argument vector", () => {
+  it("verdict probe 1: `launch cp <outside> <original>` is refused and the original is untouched", async () => {
+    const f = fixture();
+    writeFileSync(f.outside, "TAMPERED");
+    const cp = realpathSync("/bin/cp");
+    // The probe's spawning transport really overwrites a file when a cp launch reaches it.
+    const scratch = join(scratchOf(f), "victim.txt");
+    writeFileSync(scratch, "pristine");
+    const raw = spawningDesktop();
+    expect(await raw.t.act("s1", launch(cp, [f.outside, scratch]))).toBe("delivered_unverified");
+    expect(readFileSync(scratch, "utf8")).toBe("TAMPERED");
+
+    const { t, calls } = spawningDesktop();
+    const g = guardFor(f, FILE_RULES);
+    // Even with cp itself listed (no arguments declared), its arguments are refused.
+    const p = policedDesktopTransport(t, g, {
+      ...desktopOpts,
+      launches: { ...LAUNCHES, [cp]: { app: "cp" } },
+    });
+    expect(await p.act("s1", { kind: "keyPress", keys: "ctrl+s" })).toBe("failed");
+    expect(await p.act("s1", launch(cp, [f.outside, f.original]))).toBe("failed");
+    expect(await p.act("s1", launch("/bin/cp", [f.outside, f.original]))).toBe("failed");
+    expect(calls).toEqual([]);
+    expect(readFileSync(f.original, "utf8")).toBe("pristine");
+    expect(g.log().map((e) => e.code)).toEqual([
+      "POLICY_OVERWRITE_ORIGINAL",
+      "POLICY_ACTION_UNRECOGNISED",
+      "POLICY_ACTION_UNRECOGNISED",
+    ]);
+  });
+
+  it("verdict probe 2: a soffice convert into the doc dir and a look-alike soffice are refused", async () => {
+    const f = fixture();
+    const fake = join(f.docDir, "soffice");
+    writeFileSync(fake, "#!/bin/sh\nexit 0\n");
+    chmodSync(fake, 0o755);
+    const convert = [
+      "--headless",
+      "--convert-to",
+      "xlsx",
+      "--outdir",
+      f.docDir,
+      "/tmp/original.csv",
+    ];
+    const { t, calls } = spawningDesktop();
+    const g = guardFor(f, ALL_RULES); // app-allowlist: soffice, localc
+    const p = policedDesktopTransport(t, g, desktopOpts);
+    expect(await p.act("s1", launch(SOFFICE, convert))).toBe("failed");
+    expect(await p.act("s1", launch("/usr/bin/soffice", convert))).toBe("failed");
+    expect(await p.act("s1", launch(fake, []))).toBe("failed");
+    expect(calls).toEqual([]);
+    expect(g.log().map((e) => e.code)).toEqual(Array(3).fill("POLICY_ACTION_UNRECOGNISED"));
+  });
+
+  it("only the listed real path, with no arguments or exactly a declared vector, is recognised", async () => {
+    const f = fixture();
+    const linkDir = join(f.root, "bin-link");
+    symlinkSync(BIN, linkDir);
+    const linkFile = join(f.docDir, "office");
+    symlinkSync(SOFFICE, linkFile);
+    const { t, calls } = fakeDesktop();
+    const g = guardFor(f, ALL_RULES);
+    const p = policedDesktopTransport(t, g, desktopOpts);
+    const refused: GuardedDesktopAction[] = [
+      launch("soffice"), // bare name: the guest would search its PATH
+      launch(relative(process.cwd(), SOFFICE)), // relative
+      launch(`${BIN}/../${BIN.split("/").pop()}/soffice`), // `..`
+      launch(`${BIN}//soffice`), // doubled slash
+      launch(`${BIN}/./soffice`), // `.`
+      launch(`${BIN}/soffice/`), // trailing slash
+      launch(join(linkDir, "soffice")), // through a symlinked directory
+      launch(linkFile), // a symlink to the listed program
+      launch(`${BIN}/SOFFICE`), // a different file
+      launch(`${SOFFICE}\n`), // a control character
+      launch(""),
+      launch(42),
+      launch(null),
+      launch(SOFFICE, "--calc"), // args not an array
+      { kind: "launch", command: SOFFICE } as unknown as GuardedDesktopAction, // no args field
+      launch(SOFFICE, [1]),
+      launch(SOFFICE, ["--calc", f.original]), // a declared vector plus an operand
+      launch(SOFFICE, ["--calc", "--calc"]),
+      launch(SOFFICE, ["--CALC"]),
+      launch(SOFFICE, ["--calc "]),
+      launch(SOFFICE, [""]),
+      launch(SOFFICE, ["--writer"]),
+      launch(XTERM, ["--calc"]), // another program's vector
+      launch(XTERM, ["-e", "sh"]),
+    ];
+    for (const [k, a] of refused.entries())
+      expect(await p.act("s1", a), `refused[${k}]`).toBe("failed");
+    expect(calls).toEqual([]);
+    expect(g.log().map((e) => e.code)).toEqual(
+      Array(refused.length).fill("POLICY_ACTION_UNRECOGNISED"),
+    );
+    expect(await p.act("s1", launch(SOFFICE, []))).toBe("delivered_unverified");
+    expect(await p.act("s1", launch(SOFFICE, ["--calc"]))).toBe("delivered_unverified");
+    expect(calls).toHaveLength(2);
+  });
+
+  it("no launch table: every launch is unrecognised", async () => {
+    const f = fixture();
+    const { t, calls } = fakeDesktop();
+    const g = guardFor(f, ALL_RULES);
+    const p = policedDesktopTransport(t, g, { ...desktopOpts, launches: {} });
+    expect(await p.act("s1", launch(SOFFICE))).toBe("failed");
+    expect(calls).toEqual([]);
+    expect(g.log().map((e) => e.code)).toEqual(["POLICY_ACTION_UNRECOGNISED"]);
+  });
+
+  it("the table is checked and copied when the wrapper is built", async () => {
+    for (const bad of [
+      { "bin/soffice": { app: "soffice" } },
+      { [`${BIN}//soffice`]: { app: "soffice" } },
+      { [SOFFICE]: { app: "" } },
+      { [SOFFICE]: {} },
+      { [SOFFICE]: { app: "soffice", argv: ["--calc"] } },
+      { [SOFFICE]: { app: "soffice", argv: [[1]] } },
+    ])
+      expect(() => freezeLaunchTable(bad as unknown as LaunchTable)).toThrow(
+        "POLICY_LAUNCH_TABLE_INVALID",
+      );
+    expect(() => freezeLaunchTable(null as unknown as LaunchTable)).toThrow(
+      "POLICY_LAUNCH_TABLE_INVALID",
+    );
+    const f = fixture();
+    const vector = ["--calc"];
+    const argv: string[][] = [vector];
+    const table: Record<string, { app: string; argv?: string[][] }> = {
+      [SOFFICE]: { app: "soffice", argv },
+    };
+    const { t, calls } = fakeDesktop();
+    const p = policedDesktopTransport(t, guardFor(f, ALL_RULES), {
+      ...desktopOpts,
+      launches: table,
+    });
+    // Mutating the host's object afterwards changes nothing.
+    table[XTERM] = { app: "soffice" };
+    argv.push(["--writer"]);
+    vector[0] = "--impress";
+    expect(await p.act("s1", launch(SOFFICE, ["--impress"]))).toBe("failed");
+    expect(await p.act("s1", launch(SOFFICE, ["--calc"]))).toBe("delivered_unverified");
+    calls.length = 0;
+    expect(await p.act("s1", launch(XTERM))).toBe("failed");
+    expect(await p.act("s1", launch(SOFFICE, ["--writer"]))).toBe("failed");
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("policed wrappers: require-approval opens a track N handoff (async paths)", () => {
+  it("a human's fixed-it never forwards the held action, and releases its slot", async () => {
+    const f = fixture();
+    const s = brokerSetup();
+    let flagged = true;
+    const g = guardFor(
+      f,
+      {
+        schema: "myco.policy-config/1",
+        policies: [
+          { id: "lim", kind: "destructive-limit", effect: "deny", max: 1 },
+          { id: "inj", kind: "flagged-screen", effect: "require-approval" },
+        ],
+      },
+      { screen: () => flagged },
+    );
+    const { adapter, calls } = fakeAdapter();
+    const p = policedAppAdapter(adapter, g, {
+      trigger: s.trigger,
+      isCredentialTarget: () => false,
+    });
+    const held = p.act({ kind: "keyPress", keys: "ctrl+s" });
+    await flush();
+    await flush();
+    const pending = s.operator.pending();
+    expect(pending).toHaveLength(1);
+    s.operator.resolve({
+      handoffId: pending[0]?.handoffId as string,
+      outcome: "fixed-it",
+      via: "cli",
+    });
+    expect(await held).toEqual({
+      outcome: "failed",
+      details: expect.stringMatching(/^POLICY_APPROVAL_REQUIRED pol-[0-9a-f]{12}$/),
+    });
+    expect(calls).toEqual([]);
+    // The slot came back: with the screen clear, one save (the limit) is forwarded, then none.
+    flagged = false;
+    const other = policedAppAdapter(adapter, g, adapterOpts);
+    expect((await other.act({ kind: "keyPress", keys: "ctrl+s" })).outcome).toBe(
+      "delivered_unverified",
+    );
+    expect((await other.act({ kind: "keyPress", keys: "ctrl+s" })).outcome).toBe("failed");
+    expect(calls).toHaveLength(1);
+    expect(g.log().map((e) => e.code)).toEqual([
+      "POLICY_FLAGGED_SCREEN",
+      "POLICY_ALLOWED",
+      "POLICY_DESTRUCTIVE_LIMIT",
+    ]);
+  });
+
   it("approve forwards the action; reject and timeout do not", async () => {
     const f = fixture();
     const s = brokerSetup();

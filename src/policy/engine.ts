@@ -80,6 +80,11 @@ export interface PolicyEngine {
    * forwarded, `release` when it is not.
    */
   decide(input: EngineInput): EngineVerdict;
+  /**
+   * Host-side snapshot of the destructive accounting: operations forwarded (`spent`) and held
+   * by decided, unsettled actions (`reserved`). Never agent-facing.
+   */
+  usage(): { readonly spent: number; readonly reserved: number };
 }
 
 /** A reservation of destructive operations. Settling twice is a no-op. */
@@ -243,6 +248,7 @@ export function createPolicyEngine(
     scope: resolved,
     kinds,
     evaluate,
+    usage: () => Object.freeze({ spent, reserved }),
     decide(input: EngineInput): EngineVerdict {
       // One synchronous step: judge, then reserve. Nothing can run between the two.
       const decision = evaluate(input);

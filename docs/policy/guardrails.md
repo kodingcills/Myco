@@ -66,7 +66,7 @@ bytes. Editing the file during a trial changes nothing.
 | `flagged-screen` declared with no host screen sensor | refused (`POLICY_SENSOR_MISSING`) |
 | Config does not parse to the closed schema | every action denied (`POLICY_CONFIG_INVALID`) |
 | Facts reducer, classifier or sensor throws | denied (`POLICY_ENGINE_ERROR`) |
-| Action the reducer cannot reduce: a key chord off the closed allow-list (Save As, any Alt chord or menu accelerator, F10, F12, close or quit chords, a chord the guest would refuse), typed text with a control character, an unknown action kind | denied (`POLICY_ACTION_UNRECOGNISED`) |
+| Action the reducer cannot reduce: a key chord off the closed allow-list (Save As, any Alt chord or menu accelerator, F10, F12, close or quit chords, a chord the guest would refuse), typed text with a control character, a launch of a program not listed by its real path or with arguments the host did not declare, an unknown action kind | denied (`POLICY_ACTION_UNRECOGNISED`) |
 | Async decision slower than the timeout (default 2 s) | denied (`POLICY_ENGINE_TIMEOUT`) |
 | Synchronous actuator meets `require-approval` | refused (`POLICY_APPROVAL_REQUIRED`), never allowed |
 
@@ -97,17 +97,44 @@ Shift held. So `ctrl++s`, `+ctrl+s`, `ctrl+ctrl+s` and `super+s` are all Save, w
 the original document. Every other chord is judged against a closed allow-list of chords that
 cannot write a file by themselves (clipboard, undo, select-all, formatting, navigation, plain
 keys); anything off the list is `POLICY_ACTION_UNRECOGNISED`. That includes `Ctrl+S` with a
-capital S, which the guest delivers as Ctrl+Shift+S (Save As).
+capital S, which the guest delivers as Ctrl+Shift+S (Save As). Plain keys act inside whatever
+has focus, so they can act on a menu or dialog an earlier action opened. Every chord that opens
+one is unrecognised, but a click can open one too (see the known limit below).
+
+A desktop `launch` is judged by the program's real absolute path and its whole argument vector,
+never by its base name. The guest runs `Command::new(command).args(args)` for any command, so
+`cp <file> <original>` or `soffice --convert-to xlsx --outdir <docDir> <file>` would write
+files that no file policy ever sees. The host passes `policedDesktopTransport` a `LaunchTable`
+keyed by each allowed program's real path. A launch is `POLICY_ACTION_UNRECOGNISED` unless:
+
+- its command is exactly a listed path: absolute, with no `.`, `..`, doubled or trailing `/`,
+  and no symlink hop (a bare name the guest would look up on its PATH, a relative path, a
+  symlink to a listed program, and another binary sharing a listed base name are all refused);
+  and
+- its arguments are empty, or exactly (element by element) one of the argument vectors the host
+  declared for that program. The host declares only vectors with no file effect, such as
+  `soffice --calc`; anything else, including any path operand, is refused.
+
+An empty table refuses every launch. A recognised launch carries the entry's app id to
+`app-allowlist`.
 
 `destructive-limit` holds exactly under concurrency. The engine judges an action and reserves
 its destructive operations in one synchronous step (`PolicyEngine.decide`), counting both the
 operations already forwarded and those reserved by actions that have not settled yet. The
 wrapper commits the reservation when it forwards the action and releases it on any other
 outcome: a refusal, a rejected or cancelled approval, a timeout, or a throw. An action waiting
-for a human's approval keeps its slot reserved.
+for a human's approval keeps its slot reserved; if the human answers "fixed it", the agent's held
+action is not forwarded and its slot is released. Each settle is one-shot: a second commit or
+release, in either order, changes nothing. A forwarded action's slot stays spent even if the app
+then fails, because the policy cannot know whether the write happened.
 
-Known limit: a click carries only a target ref, so a click on a Save or Delete button is not
-recognised by the reducers. The violation checker still sees its effect in the file-system diff.
+Known limits:
+
+- A click carries only a target ref, so a click on a Save or Delete button is not recognised
+  by the reducers, and neither is a click that opens the File menu (after which a plain `s`, the
+  menu mnemonic, saves). The violation checker still sees the effect in the file-system diff.
+- What a listed program does once it runs (for example text typed into a launched terminal or
+  editor) is governed only by `app-allowlist`; the launch table cannot see it.
 
 ## The host record
 
