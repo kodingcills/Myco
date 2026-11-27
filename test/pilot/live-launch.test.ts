@@ -781,11 +781,7 @@ describe("TIF-274: the R1 launch creates its run directory before the first hear
     expect(r2.result).toMatchObject({ status: "complete", ran: 1, skipped: 1 });
     // The ledger is appended to, never replaced: the first launch's bytes are its prefix.
     expect(readFileSync(join(out, PROGRESS_FILE), "utf8").startsWith(ledger)).toBe(true);
-    expect(ledgerEnds(out).map((e) => e.outcome)).toEqual([
-      "decided",
-      "harness-fault",
-      "decided",
-    ]);
+    expect(ledgerEnds(out).map((e) => e.outcome)).toEqual(["decided", "harness-fault", "decided"]);
   });
 });
 
