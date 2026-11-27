@@ -1,0 +1,3 @@
+vm-session: holding /tmp/myco-win11.vm.lock as 28185 vm-session.sh
+call : isError= False [('text', '{"ok":true,"input_emitted":false,"screen":{"coordinate_space":"screen_image_px","height":480,"screenshot_returned":true,"width":640}}'), ('image', 44264)]
+call : isError= False [('text', '{"ok":true,"input_emitted":false,"screen":{"coordinate_space":"screen_image_px","height":480,"screenshot_returned":true,"width":640}}'), ('image', 44248)]

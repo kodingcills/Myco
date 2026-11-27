@@ -1,0 +1,6 @@
+wait-guest-ready: first ssh answer after 160s (guest CPU 280s)
+reset-trial-vm: boot class=cold first_ssh_s=160 guest_cpu_first_ssh_s=280 attempts=1
+reset-trial-vm: WARNING MYCO_GUEST_EGRESS=open: guest egress NOT verified closed. Maintenance only; never run trials or put credentials in this guest (TIF-275)
+reset-trial-vm: timing stop=1 restore=2 start=3 ready=205 egress=0 clock=20 total=231
+reset-trial-vm: host swap used 1870 of 3072 MB
+reset-trial-vm: ready on 'clean-base'

@@ -1,0 +1,9 @@
+build-trial-base: 13:49:29Z step 1: open egress for the maintenance window; restore and boot clean-base
+build-trial-base: 13:53:30Z step 2: state before; signatures; ngen; idle tasks; full scan
+build-trial-base: 15:30:07Z step 3: disable maintenance trigger and Windows Update; check Defender
+build-trial-base: 15:30:46Z step 3b: install HCU from hcu-build (sha256-checked in the guest)
+build-trial-base: 15:31:04Z step 4: remove the maintenance script; clean shutdown
+build-trial-base: 15:31:34Z step 5: deny egress; boot in place; verify + probe
+build-trial-base: 15:31:57Z step 5: boot in place was fast (guest CPU 4s < 100s); clean shutdown and one more start
+build-trial-base: 15:34:51Z step 5b: HCU in the interactive session; MCP over --attach: initialise, GUI tool, one screenshot
+build-trial-base: HCU MCP probe failed (see 14c-hcu-mcp-probe.json)
