@@ -428,7 +428,9 @@ export const episodeMirrorSchema: JsonSchema = {
               anyOf: [
                 {
                   type: "array",
-                  maxItems: 20,
+                  // REASON_CODES.length, as #542's schema computes it (21 since the xlsx
+                  // gate's SHEET_SET_MISMATCH, TIF-274 prerequisite).
+                  maxItems: 21,
                   items: { type: "string", pattern: "^[A-Z][A-Z0-9_]{0,63}$" },
                 },
                 { type: "null" },

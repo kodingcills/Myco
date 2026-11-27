@@ -107,7 +107,7 @@ describe("calc-record-edit v2: the whole document must equal pristine + intent",
     expect(result).toMatchObject({
       verdict: "verified",
       reasonCodes: ["ORACLE_PASS"],
-      oracle: { family: "calc-record-edit", version: "2" },
+      oracle: { family: "calc-record-edit", version: "3" },
     });
   });
 
