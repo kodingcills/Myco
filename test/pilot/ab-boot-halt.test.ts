@@ -141,6 +141,9 @@ const ack = (root: string, id: string) => {
 
 const CRASH_POINTS = ["before-hook", "graded", "incident", "trial-record", "grade"] as const;
 
+/** #583 N1: case and whitespace variants of "cold"; none is a recorded cold boot. */
+const COLD_VARIANTS = ["Cold", " cold", "COLD", "cold ", "cold\n"] as const;
+
 describe("a live non-cold reset is a sticky halt (crash-safe, ack-only)", () => {
   for (const at of CRASH_POINTS)
     for (const cls of ["fast", null] as const)
@@ -247,6 +250,13 @@ describe("a live non-cold reset is a sticky halt (crash-safe, ack-only)", () => 
       ["cold, then a missing-field record", [cold, noField], /boot class is unrecorded/],
       ["an unknown string", [{ ...cold, resetBootClass: "warm" }], /boot class is warm/],
       ["a non-string", [{ ...cold, resetBootClass: 1 }], /boot class is 1/],
+      // #583 N1: the comparison is exact; no case or whitespace variant of cold passes.
+      ...COLD_VARIANTS.map((v): [string, readonly Record<string, unknown>[], RegExp] => [
+        `the variant ${JSON.stringify(v)}`,
+        [{ ...cold, resetBootClass: v }],
+        new RegExp(`boot class is ${v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}, not`),
+      ]),
+      ["cold, then Cold", [cold, { ...cold, resetBootClass: "Cold" }], /boot class is Cold, not/],
     ];
     for (const [name, records, reason] of cases) {
       rmSync(join(t.root, "incidents"), { recursive: true, force: true });
@@ -270,6 +280,25 @@ describe("a live non-cold reset is a sticky halt (crash-safe, ack-only)", () => 
     expect(recordDecided(liveCtx(t.root, t.arm), { ...t.decided, resetBootClass: "cold" })).toMatch(
       /boot class is unrecorded/,
     );
+    // #583 N1: a re-record over a case or whitespace variant does not count it as cold, and a
+    // fresh record whose reset reports a variant halts too.
+    for (const v of COLD_VARIANTS) {
+      rmSync(join(t.root, "incidents"), { recursive: true, force: true });
+      writeFileSync(p, `${JSON.stringify({ ...cold, resetBootClass: v })}\n`);
+      expect(
+        recordDecided(liveCtx(t.root, t.arm), { ...t.decided, resetBootClass: "cold" }),
+        `prior ${JSON.stringify(v)}`,
+      ).toMatch(/HALTED: .*not a recorded cold boot/s);
+      rmSync(join(t.root, "incidents"), { recursive: true, force: true });
+      writeFileSync(p, "");
+      expect(
+        recordDecided(liveCtx(t.root, t.arm), {
+          ...t.decided,
+          resetBootClass: v as unknown as "cold",
+        }),
+        `reported ${JSON.stringify(v)}`,
+      ).toMatch(/HALTED: .*not a recorded cold boot/s);
+    }
     // All cold (two records): no incident.
     rmSync(join(t.root, "incidents"), { recursive: true, force: true });
     writeFileSync(p, `${JSON.stringify(cold)}\n${JSON.stringify(cold)}\n`);
@@ -386,6 +415,13 @@ describe("a live pack refuses any reset that is not a recorded cold boot", () =>
       },
     ],
     ["a non-string", (l) => Object.assign(l[0] as object, { resetBootClass: 1 })],
+    // #583 N1: export and check-pack compare exactly; no case or whitespace variant passes.
+    ...COLD_VARIANTS.map((v): [string, (lines: Record<string, unknown>[]) => void] => [
+      `the variant ${JSON.stringify(v)}`,
+      (l) => {
+        Object.assign(l[0] as object, { resetBootClass: v });
+      },
+    ]),
   ];
 
   it("export refuses a live run with a non-cold boot; a simulated run is unaffected", {
@@ -397,18 +433,29 @@ describe("a live pack refuses any reset that is not a recorded cold boot", () =>
     const live = JSON.parse(readFileSync(header, "utf8"));
     const trials = join(root, "on", "ab-trials.jsonl");
     const original = readFileSync(trials, "utf8");
-    for (const [name, edit] of variants) {
+    // Pack directories are named by index: variant names differing only in case ("Cold",
+    // "COLD") would name one directory on a case-insensitive file system (macOS).
+    for (const [i, [name, edit]] of variants.entries()) {
       writeFileSync(trials, original);
       setBoot(trials, edit);
       // Simulated: the boot class is the fake's, and the pack exports as before.
       writeFileSync(header, JSON.stringify({ ...live, simulated: true }));
-      expect(() => exportAbPack(out, 0, join(out, `sim-${name}`), ROOT), name).not.toThrow();
-      writeFileSync(header, JSON.stringify({ ...live, simulated: false }));
-      expect(() => exportAbPack(out, 0, join(out, `live-${name}`), ROOT), name).toThrow(
-        /a live pack needs every trial's reset to be a recorded cold boot/,
-      );
+      expect(() => exportAbPack(out, 0, join(out, `sim-${i}`), ROOT), name).not.toThrow();
+      // Live: `simulated: false`, and (#583 N2) a header with no `simulated` field at all.
+      const { simulated: _drop, ...noField } = live;
+      for (const [mode, h] of [
+        ["false", { ...live, simulated: false }],
+        ["missing", noField],
+      ] as const) {
+        writeFileSync(header, JSON.stringify(h));
+        expect(
+          () => exportAbPack(out, 0, join(out, `live-${mode}-${i}`), ROOT),
+          `${mode} ${name}`,
+        ).toThrow(/a live pack needs every trial's reset to be a recorded cold boot/);
+      }
     }
     writeFileSync(trials, original);
+    writeFileSync(header, JSON.stringify({ ...live, simulated: false }));
     expect(() => exportAbPack(out, 0, join(out, "live-cold"), ROOT)).not.toThrow();
   });
 
@@ -436,7 +483,7 @@ describe("a live pack refuses any reset that is not a recorded cold boot", () =>
         const r = checkAbPack(pack, ROOT);
         expect(r.ok, `live ${name}`).toBe(false);
         expect(r.errors.join("\n")).toMatch(
-          /off: .*(not a recorded cold boot|unrecorded).*a live pack needs every reset to be a recorded cold boot/,
+          /off: .*(not a recorded cold boot|unrecorded).*a live pack needs every reset to be a recorded cold boot/s,
         );
       }
     }
