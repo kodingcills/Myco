@@ -10,6 +10,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { PREREG_MD } from "../../src/pilot/ab-prereg.ts";
 import { AB_TASKS, abArm, stage1Arms, writeAbPack } from "./ab-fixture.ts";
 import { manifest, r1Trials, writePack } from "./pack-fixture.ts";
 
@@ -38,7 +39,7 @@ beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "m2-scorecard-ab-"));
   writeAbPack("m2-ab-s0", { stage: 0 }, root);
   // The CLI resolves the pre-registration from the repository: a committed file stands in.
-  const prereg = { root: REPO, file: "docs/product/m2-plan-draft.md" };
+  const prereg = { root: REPO, file: PREREG_MD };
   writeAbPack("m2-ab-s1", { stage: 1, preregRepoFile: prereg }, root);
   const { off } = stage1Arms();
   const sat = AB_TASKS.filter((t) => t.satisfiable).map((t) => t.taskId);

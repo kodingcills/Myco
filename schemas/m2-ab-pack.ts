@@ -1,3 +1,4 @@
+import { PREREG_JSON, PREREG_MD } from "../src/pilot/ab-prereg.ts";
 import type { JsonSchema } from "./validate.ts";
 
 /**
@@ -28,18 +29,19 @@ export const m2AbPackManifestSchema: JsonSchema = {
     /** Said in the manifest, and enforced: A/B rows are never R1 evidence. */
     evidenceUse: { const: "experiment-only (never R1 evidence)" },
     /**
-     * Stage 1 only (required there): the committed pre-registration file, as a repository-relative
-     * path, and the sha256 the pack declares for it. The check hashes the file itself. The file must
-     * be inside the repository once symlinks are resolved, and may not be inside the pack or under
-     * `docs/research/experiments/` (a pack cannot certify its own pre-registration; #554 round 1,
-     * D2). Track E's committed file (#549) will pin the exact path once it lands.
+     * Stage 1 only (required there): the committed pre-registration file and the sha256 the pack
+     * declares for it. The file is pinned to exactly track E's pre-registration, `PREREG_MD` or
+     * `PREREG_JSON` (`src/pilot/ab-prereg.ts`, #549), so a pack cannot bind a design file
+     * committed after its run. The check hashes the file itself, and still requires it to be
+     * inside the repository once symlinks are resolved, outside the pack and outside
+     * `docs/research/experiments/` (`preregLocation`, #554 round 1, D2).
      */
     preregistration: {
       type: "object",
       additionalProperties: false,
       required: ["file", "sha256"],
       properties: {
-        file: { type: "string", pattern: "^(?!/)(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._/-]{1,256}$" },
+        file: { type: "string", enum: [PREREG_MD, PREREG_JSON] },
         sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
       },
     },

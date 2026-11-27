@@ -32,6 +32,7 @@ import { m2TrialOpsSchema } from "../../schemas/m2-evidence.ts";
 import { validateSchema } from "../../schemas/validate.ts";
 import type { BenchmarkArmRow } from "../benchmark/check.ts";
 import type { BenchmarkGradeRow } from "../benchmark/grade/row.ts";
+import { PREREG_JSON, PREREG_MD } from "../pilot/ab-prereg.ts";
 import {
   AB_EVIDENCE_USE,
   type AbResult,
@@ -142,6 +143,14 @@ function layoutErrors(dir: string, stage1: boolean): string[] {
   return errors;
 }
 
+/**
+ * The only files a Stage-1 pack may bind as its pre-registration: track E's committed
+ * pre-registration (#549), exactly as `src/pilot/ab-prereg.ts` names it. Compared by exact
+ * string, so a copy elsewhere, a case variant, a link under another name or the pack's README
+ * is refused before it is opened; the location check and the hash below still apply to these.
+ */
+export const PREREG_FILES: readonly string[] = [PREREG_MD, PREREG_JSON];
+
 /** Where every evidence pack lives; a pre-registration may never be one of its files. */
 export const EVIDENCE_TREE = "docs/research/experiments";
 
@@ -245,7 +254,12 @@ export function readAbPack(dir: string, repoRoot: string): AbPackInput {
     : null;
   let preregCommittedSha256: string | null = null;
   const file = (manifest as { preregistration?: { file?: unknown } } | null)?.preregistration?.file;
-  if (typeof file === "string") {
+  if (typeof file === "string" && !PREREG_FILES.includes(file))
+    // Never opened: only track E's committed pre-registration may be bound (#554 S1).
+    readErrors.push(
+      `preregistration.file ${file}: not the pre-registration (it must be exactly ${PREREG_FILES.join(" or ")})`,
+    );
+  else if (typeof file === "string") {
     const where = preregLocation(dir, repoRoot, file);
     if (where.error !== null) readErrors.push(`preregistration.file ${file}: ${where.error}`);
     else {
