@@ -122,6 +122,11 @@ computed by a separate direct call, in four cases:
 - an uncaptured file;
 - an `infeasible` task where the agent says done.
 
+It also pins one upstream leniency as mirrored, not corrected. WAA's `compare_table` reads
+sheets through `pandas.read_excel`, which turns `"0045678"` and `"45678"` into the same number.
+So the upstream evaluator passes an unpadded id on task `0bf05a7d-…-WOS`, whose whole point is
+the padding, and Myco reports that pass unchanged. This is a finding for #671, not a fix.
+
 The gold files in these tests are written by the test, not upstream's (§1). The tests are MOCK
 and prove plumbing only. The `upstream evaluators` CI job runs them against fresh pinned clones,
 and they must not skip.
