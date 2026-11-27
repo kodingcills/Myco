@@ -1,0 +1,6 @@
+Correction report
+Source: source.pdf
+Sheet: sheet.csv
+
+EMP-0046 qty:
+EMP-0082 joined:
