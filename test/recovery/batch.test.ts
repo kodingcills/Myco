@@ -429,11 +429,13 @@ describe("K15 (D1). only a done claim the gate verified and the grader passed is
       return { claim: "" };
     };
     expect((await one(trial("t2#K", "K", silent))).claim).toBe("no-claim");
-    for (const near of ["Done", " done", "done "])
-      expect(
-        (await one(trial("t3#K", "K", async (_c, w) => (w.setGuest(STEPS), { claim: near }))))
-          .claim,
-      ).toBe("not-done");
+    for (const near of ["Done", " done", "done "]) {
+      const nearMiss: Agent = async (_c, w) => {
+        w.setGuest(STEPS);
+        return { claim: near };
+      };
+      expect((await one(trial("t3#K", "K", nearMiss))).claim).toBe("not-done");
+    }
   });
 
   it("the round-1 probe: 5 fail-closed K trials graded pass never pass the bar", async () => {
