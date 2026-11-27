@@ -4,7 +4,8 @@ import type { JsonSchema } from "./validate.ts";
  * False-completion benchmark ledgers (TIF-267 / M2-04). Two closed row shapes, written by
  * two different parties and joined only by the check (`src/benchmark/check.ts`):
  *
- *  - an ARM row, written by the arm's harness (Myco's gate arm, or `hcu+shell`): what the
+ *  - an ARM row, written by the arm's harness (Myco's gate arm, `hcu+shell`, or a capability
+ *    arm, `CAPABILITY_ARMS`, which is never R1 or evidence): what the
  *    agent claimed, what the gate said (Myco arm only), whether the claim was accepted;
  *  - a GRADE row, written by the independent grader: whether the persisted document
  *    satisfies the intent. It carries no claim and no gate verdict.
@@ -17,6 +18,73 @@ const nullableSha: JsonSchema = { anyOf: [sha256Hex, { type: "null" }] };
 const trialKey: JsonSchema = { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" };
 const taskId: JsonSchema = { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" };
 const nullableNumber: JsonSchema = { anyOf: [{ type: "number", minimum: 0 }, { type: "null" }] };
+
+/** The arms the R1 and A/B evidence paths read. Unchanged by the capability arms. */
+export const R1_PATH_ARMS = ["myco-gate", "hcu+shell"] as const;
+
+/**
+ * Capability-arm values (tracks I-V; capability-spec.md §3.4, capability-spec-2.md §1.5),
+ * added as ONE reviewed schema change. Each is a tool surface written `<base>+<capability>`,
+ * with Part 2's base surface `B` resolved to `C1` (capability-spec-2.md §1.3: "Until any
+ * Part 1 bar is shown, `B` = `C1`"); a later base (e.g. `C1+I+N`) is a new reviewed change.
+ * `C1` is the screenshot-only baseline on the capability (Ultra) harness, gate-less by
+ * default and gated for K's and P's baseline. `hcu+shell` is a baseline too, but it is an
+ * R1-path arm and stays in `R1_PATH_ARMS`, unchanged. Q and S have no arms (property bars).
+ *
+ * Capability rows are experiment rows: `checkBenchmark` refuses every one of these values
+ * under `evidence` and under the task-set binding (`--require-r1`, `--evidence`), and the M2
+ * pack manifest's `expectTrials` admits only `R1_PATH_ARMS`, so no R1 or A/B pack holds one.
+ */
+export const CAPABILITY_ARMS = [
+  "C1",
+  "C1+I",
+  "hcu+shell+I",
+  "hcu+shell+J",
+  "C1+K",
+  "C1+L",
+  "C1+M",
+  "C1+M-cold",
+  "C1+N",
+  "C1+O",
+  "C1+P",
+  "hcu+shell+R",
+  "C1+T",
+  "hcu+shell+T",
+  "C1+U",
+  "hcu+shell+U",
+  "hcu+shell+V",
+] as const;
+
+/**
+ * Which track each capability arm belongs to and the same-harness baseline arm it pairs with
+ * (the bar's comparison, or a reported secondary). `C1` is every C1-based track's baseline.
+ */
+export const CAPABILITY_ARM_PAIRS: Readonly<
+  Record<
+    Exclude<(typeof CAPABILITY_ARMS)[number], "C1" | "C1+M-cold">,
+    {
+      readonly track: string;
+      readonly baseline: "C1" | "hcu+shell" | "C1+M-cold";
+      readonly role: "primary" | "secondary";
+    }
+  >
+> = {
+  "C1+I": { track: "I", baseline: "C1", role: "primary" },
+  "hcu+shell+I": { track: "I", baseline: "hcu+shell", role: "secondary" },
+  "hcu+shell+J": { track: "J", baseline: "hcu+shell", role: "primary" },
+  "C1+K": { track: "K", baseline: "C1", role: "primary" },
+  "C1+L": { track: "L", baseline: "C1", role: "primary" },
+  "C1+M": { track: "M", baseline: "C1+M-cold", role: "primary" },
+  "C1+N": { track: "N", baseline: "C1", role: "primary" },
+  "C1+O": { track: "O", baseline: "C1", role: "primary" },
+  "C1+P": { track: "P", baseline: "C1", role: "primary" },
+  "hcu+shell+R": { track: "R", baseline: "hcu+shell", role: "primary" },
+  "C1+T": { track: "T", baseline: "C1", role: "primary" },
+  "hcu+shell+T": { track: "T", baseline: "hcu+shell", role: "secondary" },
+  "C1+U": { track: "U", baseline: "C1", role: "primary" },
+  "hcu+shell+U": { track: "U", baseline: "hcu+shell", role: "primary" },
+  "hcu+shell+V": { track: "V", baseline: "hcu+shell", role: "primary" },
+};
 
 export const benchmarkArmRowSchema: JsonSchema = {
   type: "object",
@@ -42,7 +110,7 @@ export const benchmarkArmRowSchema: JsonSchema = {
   properties: {
     schema: { const: "myco.benchmark.arm-row/1" },
     taskSetVersion: { type: "string", minLength: 1, maxLength: 64 },
-    arm: { type: "string", enum: ["myco-gate", "hcu+shell"] },
+    arm: { type: "string", enum: [...R1_PATH_ARMS, ...CAPABILITY_ARMS] },
     trialKey,
     taskId,
     faultClass: { type: "string", pattern: "^[a-z0-9-]{1,64}$" },
@@ -54,7 +122,10 @@ export const benchmarkArmRowSchema: JsonSchema = {
     outputCeiling: { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] },
     /** What the agent said at the end: it finished, it did not, or it said neither. */
     claim: { type: "string", enum: ["done", "not-done", "no-claim"] },
-    /** Myco arm: the gate call. `hcu+shell`: null (that arm has no gate). */
+    /**
+     * Myco arm: the gate call. `hcu+shell`: null (that arm has no gate). A capability arm:
+     * null on a gate-less row, the gate call on a gated row (capability-spec.md §1.1).
+     */
     gate: {
       anyOf: [
         { type: "null" },
