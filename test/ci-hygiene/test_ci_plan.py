@@ -706,6 +706,11 @@ class AffectedMode(unittest.TestCase):
         for f in ("test/via-helper.test.ts", "test/guard.test.ts"):
             self.assertIn(f, direct)
         self.assertIn("test/runs/list.test.ts", with_guard(["test/z.test.ts"], {**sources, "test/z.test.ts": ""}).scanners)
+        # ...and the draft plan itself uses the direct set.
+        p = draft(["src/other.ts"], {**sources, "src/other.ts": ""})
+        self.assertEqual(p.mode, "affected")
+        self.assertNotIn("test/runs/list.test.ts", p.scanners)
+        self.assertIn("test/via-helper.test.ts", p.scanners)
 
     def test_the_real_repo_guards_are_direct_scanners(self):
         # The pinned repo guards (REPO_GUARDS) scan the repo themselves, so affected mode runs
