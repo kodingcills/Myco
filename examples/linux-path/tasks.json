@@ -1,0 +1,16 @@
+{
+  "tasks": [
+    {
+      "id": "linux-calc-edit",
+      "title": "Linux path demo edit (calc-record-edit)",
+      "family": "calc-record-edit",
+      "stateFile": "saved.csv",
+      "spec": {
+        "fixtureSeed": "linux-path",
+        "rowKey": "EMP-0007",
+        "column": "name",
+        "newValue": "REVISED-269269"
+      }
+    }
+  ]
+}
