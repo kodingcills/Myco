@@ -404,6 +404,8 @@ describe("P9: the VM-hours estimate", () => {
     ["tasks not the size", set("vmHoursEstimate.tasks", 40), /trials must be/],
     ["zero seconds", set("vmHoursEstimate.secondsPerTrial", 0), /positive number/],
     ["wrong VM-hours", set("vmHoursEstimate.vmHours", 20), /vmHours must be trials x/],
+    ["VM-hours off by 0.1", set("vmHoursEstimate.vmHours", 30.1), /vmHours must be trials x/],
+    ["fallback off by 0.1", set("vmHoursEstimate.atFallback.vmHours", 13.4), /atFallback/],
     ["wrong timeout hours", set("vmHoursEstimate.atTrialTimeout.vmHours", 50), /atTrialTimeout/],
     ["no timeout", set("vmHoursEstimate.atTrialTimeout", null), /atTrialTimeout/],
     ["fallback at 30", set("vmHoursEstimate.atFallback.tasks", 30), /atFallback/],
