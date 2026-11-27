@@ -37,6 +37,8 @@
     "scripts/parallel-run.ts",
     "scripts/m2-corrections-ab.ts",
     "scripts/myco-schedule.ts",
-    "scripts/myco-record.ts"
+    "scripts/myco-record.ts",
+    "scripts/s-v1-freeze.ts",
+    "scripts/s-v1-analysis.ts"
   ]
 }
