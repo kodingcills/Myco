@@ -37,6 +37,7 @@
     "scripts/parallel-run.ts",
     "scripts/m2-corrections-ab.ts",
     "scripts/myco-schedule.ts",
+    "scripts/ci-required-green.ts",
     "scripts/myco-record.ts"
   ]
 }
