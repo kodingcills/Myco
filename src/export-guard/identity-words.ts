@@ -63,8 +63,34 @@ export function identityNeedles(raw: string, wholeMin: number): string[] {
   return out;
 }
 
-/** Whether `value` holds `raw` (whole or by a word, folded, by substring). */
-export function holdsIdentity(value: string, raw: string, wholeMin: number): boolean {
+/** A configured entry: a class or kind, and the configured string (never printed). */
+export type IdentityPair = readonly [string, string];
+
+/**
+ * The needles of each entry of one entry list, computed once per list and wholeMin. Keyed on
+ * the list object (a WeakMap): nothing outlives the caller's list.
+ */
+const NEEDLES = new WeakMap<readonly IdentityPair[], { min: number; needles: string[][] }>();
+function needlesOf(entries: readonly IdentityPair[], wholeMin: number): string[][] {
+  const hit = NEEDLES.get(entries);
+  if (hit !== undefined && hit.min === wholeMin) return hit.needles;
+  const needles = entries.map(([, raw]) => identityNeedles(raw, wholeMin));
+  NEEDLES.set(entries, { min: wholeMin, needles });
+  return needles;
+}
+
+/**
+ * The indices (in order) of every entry `value` holds: the folded value contains the entry's
+ * whole folded string, or one of its words of 3+ characters (`identityNeedles`).
+ */
+export function heldEntries(
+  value: string,
+  entries: readonly IdentityPair[],
+  wholeMin: number,
+): number[] {
   const v = identityFold(value);
-  return identityNeedles(raw, wholeMin).some((n) => v.includes(n));
+  const out: number[] = [];
+  for (const [i, ns] of needlesOf(entries, wholeMin).entries())
+    if (ns.some((n) => v.includes(n))) out.push(i);
+  return out;
 }

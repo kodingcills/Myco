@@ -31,7 +31,7 @@
  */
 import { readFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
-import { holdsIdentity, identityFold } from "../export-guard/identity-words.ts";
+import { heldEntries, identityFold } from "../export-guard/identity-words.ts";
 
 export type IdentityClass = "username" | "hostname" | "identity";
 
@@ -127,5 +127,13 @@ export function heldIdentity(
   value: string,
   entries: readonly IdentityEntry[],
 ): IdentityEntry | undefined {
-  return entries.find(([, e]) => holdsIdentity(value, e, IDENTITY_MIN_CHARS));
+  return heldIdentities(value, entries)[0];
+}
+
+/** Every identity `value` holds (same rule as `heldIdentity`), in order. */
+export function heldIdentities(
+  value: string,
+  entries: readonly IdentityEntry[],
+): IdentityEntry[] {
+  return heldEntries(value, entries, IDENTITY_MIN_CHARS).map((i) => entries[i] as IdentityEntry);
 }

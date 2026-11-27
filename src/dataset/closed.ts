@@ -26,7 +26,7 @@
  * values stay equal; a guessed exact input can be confirmed (as in #553).
  */
 import { createHash } from "node:crypto";
-import { holdsIdentity, identityFold } from "../export-guard/identity-words.ts";
+import { heldEntries, identityFold } from "../export-guard/identity-words.ts";
 import { episodeScope, HashLedger, keepOrHash, NO_LEDGER } from "../export-guard/provenance.ts";
 import {
   EPISODE_COST_BASIS,
@@ -226,9 +226,9 @@ const IDENTITY_MIN_CHARS = 3;
  * string or any word of 3 or more characters of a multi-word one (a full name's `First` alone;
  * #580 O1, the rule shared with the episode export and Q, `src/export-guard/identity-words.ts`).
  */
-const holdsOne = (value: string, id: string) => holdsIdentity(value, id, IDENTITY_MIN_CHARS);
-const holds = (value: string, joined: readonly JoinedIdentity[]) =>
-  joined.some(([, id]) => holdsOne(value, id));
+const held = (value: string, joined: readonly JoinedIdentity[]) =>
+  heldEntries(value, joined, IDENTITY_MIN_CHARS).map((i) => joined[i] as JoinedIdentity);
+const holds = (value: string, joined: readonly JoinedIdentity[]) => held(value, joined).length > 0;
 
 /** Where a value sits, for the provenance check (#579 O3): the scope and the harness's ledger. */
 interface Site {
@@ -460,7 +460,7 @@ export function joinedIdentity(
     const t = fields[templateOf(path)];
     if (t === undefined || t.kind === "text" || (t.kind === "closed" && t.exempt)) continue;
     if (HASHED.test(v)) continue;
-    for (const [kind, id] of joined) if (holdsOne(v, id)) out.push({ kind, path });
+    for (const [kind] of held(v, joined)) out.push({ kind, path });
   }
   return out;
 }
@@ -481,7 +481,7 @@ export function manifestIdentity(
       /^episodes\/[0-9a-f]{64}\.json$/.test(v)
     )
       continue;
-    for (const [kind, id] of joined) if (holdsOne(v, id)) out.push({ kind, path });
+    for (const [kind] of held(v, joined)) out.push({ kind, path });
   }
   return out;
 }
