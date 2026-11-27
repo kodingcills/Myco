@@ -149,13 +149,14 @@ describe("D1 round 3: every corruption of the bound task is drawn, not fixed", (
   });
 
   it("V1 (#610 item 2): EACH bound-task case is drawn, none left on the fixed path", () => {
-    // A case on the fixed path holds the round-2 document in every drawn class at once, and
-    // none of the wider corruptions (those exist only with a draw).
+    // A case on the fixed path holds the round-2 document in every drawn class at once.
     for (const c of own) {
       const allFixed = DRAWN.every((cls) => hex(docOf(c, cls)) === hex(docOf(fixed, cls)));
       expect(allFixed, c.id).toBe(false);
-      expect(c.corruptions.length, c.id).toBeGreaterThan(fixed.corruptions.length);
     }
+    // The first case of each proposal also carries the wider corruptions (with a draw only).
+    for (const p of proposals)
+      expect(p[0]?.corruptions.length).toBeGreaterThan(fixed.corruptions.length);
   });
 
   it("V5 (#610 item 2): the drawn wrong values spread over value kinds, not one numeric shift", () => {

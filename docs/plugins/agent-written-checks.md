@@ -29,7 +29,9 @@ corruption classes it catches. It must declare the format of its family's docume
      names;
    - the read corruptions the host derives from every correct document (three truncations,
      three flipped bytes and a missing file per case);
-   - in every case, beyond the one-error documents, 16 more drawn documents (#610 item 1):
+   - in the first bound-task case of every proposal, beyond its one-error documents, 16 more
+     drawn documents (#610 item 1; every shape once per proposal, since each document is one
+     sandboxed run):
      - a **two-error document for every pair** of the five single errors (`CALC_ERRORS` in
        `src/oracle-selftest/subjects.ts`): a wrong value at the target, the new value written
        to another cell instead (wrong target), 1 to 3 other cells changed, a row with a fresh

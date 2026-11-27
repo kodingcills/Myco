@@ -431,8 +431,9 @@ function oddValue(draw: Draw, shape: CalcOddValue, avoid: string[]): string {
  * One document carrying exactly the single errors in `errors`, every one drawn from `draw`:
  * the wrong value, the cell the new value moves to, the changed cells and their values, the
  * inserted row (its key, values and position) and the deleted row. The errors never undo each
- * other: changed cells avoid the target and the moved cell, and the deleted row is one no other
- * error touched.
+ * other or add a third: changed cells avoid the target and the moved cell and never take the
+ * new value (that would be a wrong target too), and the deleted row is one no other error
+ * touched.
  */
 function compoundCsv(
   draw: Draw,
@@ -478,7 +479,7 @@ function compoundCsv(
   if (errors.has("cell"))
     for (let k = 1 + draw(3); k > 0; k--) {
       const e = freeCell(() => true);
-      e.row[e.c] = randomValue(draw, e.cur, cells, [e.cur]);
+      e.row[e.c] = randomValue(draw, e.cur, cells, [e.cur, p.newValue]);
     }
   if (errors.has("row-delete")) {
     const free = rows.flatMap((r, i) => (i > 0 && !touched.has(r[0] as string) ? [i] : []));
@@ -546,14 +547,17 @@ function drawnWideCorruptions(
  * (`draw` absent). Agent-written checks (track C) pass `draw`, a host-side random source: then
  * the wrong value, the wrong target, the collateral cells and values and the truncation point
  * are drawn afresh for every case, so a check's author cannot compute the self-test documents
- * from the task's intent. With `draw`, every case also carries the wider drawn corruptions of
- * `drawnWideCorruptions` (two errors, out-of-grammar values, inserted and deleted rows) after
- * its six single-error ones. Throws when an intent does not locate a record and column.
+ * from the task's intent. With `draw` and `wide`, every case also carries the wider drawn
+ * corruptions of `drawnWideCorruptions` (two errors, out-of-grammar values, inserted and
+ * deleted rows) after its six single-error ones; track C asks for them on one bound-task case
+ * per proposal, since each is one sandboxed run. Throws when an intent does not locate a
+ * record and column.
  */
 export function calcCasesFor(
   params: readonly CalcRecordEditParams[],
   fileName: string,
   draw?: Draw,
+  wide = false,
 ): SelfTestCase<CalcRecordEditParams>[] {
   return params.map((p, i) => {
     const fixture = generateFixture(p.fixtureSeed);
@@ -569,7 +573,7 @@ export function calcCasesFor(
     let wrongTarget: string;
     let collateral: string;
     let cut: Uint8Array;
-    let wide: { cls: CorruptionClass; text: string }[] = [];
+    let extra: { cls: CorruptionClass; text: string }[] = [];
     if (draw === undefined) {
       const names = DATA_COLUMNS.map((c) => c.name);
       const neighbour = names[(names.indexOf(p.column) + 1) % names.length] as string;
@@ -587,7 +591,7 @@ export function calcCasesFor(
     } else {
       ({ wrongValue, wrongTarget, collateral } = drawnValueCorruptions(draw, p, fixture, correct));
       cut = bytes.slice(0, 1 + draw(bytes.length - 1));
-      wide = drawnWideCorruptions(draw, p, fixture, correct);
+      if (wide) extra = drawnWideCorruptions(draw, p, fixture, correct);
     }
     return {
       id: `calc-${String(i + 1).padStart(2, "0")}`,
@@ -601,7 +605,7 @@ export function calcCasesFor(
         { cls: "truncated", doc: { fileName, bytes: cut } },
         { cls: "missing-file", doc: doc(null) },
         // After the six above, so the first corruption of each class stays the single-error one.
-        ...wide.map((w) => ({ cls: w.cls, doc: doc(w.text) })),
+        ...extra.map((w) => ({ cls: w.cls, doc: doc(w.text) })),
       ],
     };
   });

@@ -26,7 +26,7 @@ import {
   calcCases,
   calcCasesFor,
 } from "../../src/oracle-selftest/subjects.ts";
-import type { SavedDocument } from "../../src/oracle-selftest/types.ts";
+import type { SavedDocument, SelfTestCase } from "../../src/oracle-selftest/types.ts";
 import { cleanupPlugins, SPEC, TASK } from "./helpers.ts";
 import {
   ATTACKS,
@@ -88,11 +88,13 @@ function errorsOf(csv: string): Set<CalcError> {
   return out;
 }
 
-const ownCases = () => agentCheckSelfTestCases("calc-record-edit", TASK).slice(0, 3);
+/** The bound-task case that carries the wider corruptions: the first of each proposal. */
+const wideCase = () =>
+  agentCheckSelfTestCases("calc-record-edit", TASK)[0] as SelfTestCase<unknown>;
 const WIDE = CALC_ERROR_PAIRS.length + 2 + CALC_ODD_VALUES.length;
 
-describe("#610 item 1: every bound-task case carries the wider drawn corruptions", () => {
-  const cases = [...ownCases(), ...ownCases()];
+describe("#610 item 1: every proposal's self-test carries the wider drawn corruptions", () => {
+  const cases = Array.from({ length: 6 }, wideCase);
 
   it("ten two-error documents (every pair), one per pair, each carrying exactly that pair", () => {
     expect(CALC_ERROR_PAIRS.length).toBe(10);
@@ -113,18 +115,19 @@ describe("#610 item 1: every bound-task case carries the wider drawn corruptions
     }
   });
 
-  it("a deleted row never erases the other error of its pair (1000 draws)", () => {
-    // A deletion that hits the moved cell's row or a changed cell's row leaves a one-error
-    // document. With 198 rows that happens about once in 100 draws, so 1000 draws find it.
-    const withDelete = CALC_ERROR_PAIRS.flatMap((pair, k) =>
-      pair.includes("row-delete") ? [[pair, k] as const] : [],
-    );
+  it("every drawn pair document carries exactly its pair, no fewer and no more (1000 draws)", () => {
+    // Rare draws are where an error goes missing or a third appears: a deletion that hits the
+    // moved cell's row or a changed cell's row (about once in 100 draws with 198 rows) leaves
+    // one error; a changed cell that takes the new value adds a wrong target.
     for (let n = 0; n < 1000; n++) {
-      const [c] = calcCasesFor([SPEC], TASK.fileName, randomInt);
-      for (const [pair, k] of withDelete) {
+      const [c] = calcCasesFor([SPEC], TASK.fileName, randomInt, true);
+      CALC_ERROR_PAIRS.forEach((pair, k) => {
         const doc = c?.corruptions[SINGLE.length + k]?.doc as SavedDocument;
-        expect([...errorsOf(text(doc))].sort(), pair.join("+")).toEqual([...pair].sort());
-      }
+        const got = [...errorsOf(text(doc))].sort();
+        // Only on a mismatch, so 10,000 passing checks stay cheap.
+        if (got.join("+") !== [...pair].sort().join("+"))
+          expect(got, pair.join("+")).toEqual([...pair].sort());
+      });
     }
   }, 60_000);
 
@@ -178,9 +181,15 @@ describe("#610 item 1: every bound-task case carries the wider drawn corruptions
     }
   });
 
-  it("the random cases carry them too, and the public (undrawn) cases do not", () => {
-    const random = agentCheckSelfTestCases("calc-record-edit", TASK).slice(3);
-    for (const c of random) expect(c.corruptions.length).toBe(SINGLE.length + WIDE);
+  it("one bound-task case per proposal carries them; the other cases and the public ones do not", () => {
+    for (let n = 0; n < 4; n++) {
+      const cases = agentCheckSelfTestCases("calc-record-edit", TASK);
+      expect(cases.map((c) => c.corruptions.length)).toEqual([
+        SINGLE.length + WIDE,
+        ...cases.slice(1).map(() => SINGLE.length),
+      ]);
+      expect([cases[0]?.intent, cases[0]?.correct.fileName]).toEqual([SPEC, TASK.fileName]);
+    }
     for (const c of calcCases()) expect(c.corruptions.map((x) => x.cls)).toEqual(SINGLE);
   });
 
