@@ -47,7 +47,7 @@ import {
   type VerifyOptions,
   verifyProofBundle,
 } from "./bundle.ts";
-import { pilotProofInput } from "./from-pilot.ts";
+import { assertPilotOutside, pilotProofInput, writePilotBundle } from "./from-pilot.ts";
 import { hostIdentity, type IdentityContext } from "./identity.ts";
 import { parseLedgerJsonl } from "./ledger.ts";
 import { ProofReportError, renderProofReport } from "./report.ts";
@@ -257,9 +257,11 @@ export function main(argv: readonly string[], io: CliIo): number {
       const trial = flags.get("--trial");
       if (out === undefined || trial === undefined)
         throw new UsageError("export-pilot needs --trial and --out");
+      // Refused before anything is read: export-pilot never writes into the run (#674, B1).
+      assertPilotOutside(input, out);
       const pilot = pilotProofInput(input, trial);
       const bundle = exportProofBundle(pilot.input, hostRedaction(forbid, users), identity);
-      writeFileSync(out, serializeProofBundle(bundle));
+      writePilotBundle(input, out, serializeProofBundle(bundle));
       // The evidence directory is a host path: never printed (it is `<RUN_DIR>/trials/<trial>`).
       emit(
         io,

@@ -2,7 +2,10 @@
  * Track Q (replayable proof): a bundle's input (`ProofRunInput`) from an R1 pilot run directory
  * (#674). The first writer of `RUN.json` that reads what a real run leaves on disk, so the Q1
  * integrity bar ("100% of bundles from the measurement run verify") can be measured on real
- * runs once they exist. This module only READS the run directory; it changes no runner file.
+ * runs once they exist. This module only READS the run directory; it changes no runner file,
+ * and `writePilotBundle` refuses an output path inside the run directory or its external
+ * anchor directory (`assertPilotOutside`), so `export-pilot` has no write path into either.
+ * `trials/`, `trials/<trialKey>/`, the progress ledger and #518's ledger must not be symlinks.
  *
  * The run directory is the R1 pilot's `--out`, or one corrections A/B arm directory (the same
  * runner writes both). Read, for one trial key:
@@ -35,8 +38,16 @@
  * key or a value from the directory (the loader's own errors, which quote the path, are
  * replaced).
  */
-import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { anchorPathFor, type LedgerHead, verifyAnchor } from "../m2/attempt-ledger.ts";
 import {
   type AttemptRecord,
@@ -74,6 +85,69 @@ const fail = (code: string, message: string): never => {
   throw new ProofExportError(code, message);
 };
 
+/** Whether a directory entry exists at `path` (a symlink counts, even a dangling one). */
+function entryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Refuse `path` when it is a symlink (dangling or not); absent is allowed. */
+function refuseSymlink(path: string, code: string, what: string): void {
+  if (entryExists(path) && lstatSync(path).isSymbolicLink()) fail(code, `${what} is a symlink`);
+}
+
+/**
+ * The real path of `p`: symlinks followed on its longest existing prefix, the rest (the parts
+ * that do not exist yet, which a write would create) appended as given.
+ */
+function realOf(p: string): string {
+  let at = resolve(p);
+  const rest: string[] = [];
+  while (!existsSync(at) && dirname(at) !== at) {
+    rest.unshift(basename(at));
+    at = dirname(at);
+  }
+  return join(existsSync(at) ? realpathSync.native(at) : at, ...rest);
+}
+
+function isInside(target: string, root: string): boolean {
+  const rel = relative(realOf(root), realOf(target));
+  return rel === "" || !(rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel));
+}
+
+/**
+ * Refuse an output path that would write into the run: inside `runDir` or inside the directory
+ * of its external #518 anchor (both as given and as resolved), symlinks followed on the path's
+ * existing prefix. A symlink at the output path itself is refused outright (a dangling one
+ * would otherwise create its target). `export-pilot` never writes into what it reads.
+ */
+export function assertPilotOutside(runDir: string, out: string): void {
+  refuseSymlink(out, "PROOF_PILOT_OUT", "the output path");
+  const roots = [runDir, dirname(anchorPathFor(runDir)), dirname(anchorPathFor(realOf(runDir)))];
+  for (const root of roots)
+    if (isInside(out, root)) fail("PROOF_PILOT_OUT", "the output path is inside the run");
+}
+
+/**
+ * Write a pilot bundle to `out` after `assertPilotOutside`, through a temporary file in the
+ * same directory and a rename: the rename replaces the directory entry, so an existing `out`
+ * that is a hard link to a run file is unlinked, never written through.
+ */
+export function writePilotBundle(runDir: string, out: string, text: string): void {
+  assertPilotOutside(runDir, out);
+  const temp = join(dirname(resolve(out)), `.${basename(out)}.${process.pid}.tmp`);
+  try {
+    writeFileSync(temp, text, { flag: "wx" });
+    renameSync(temp, out);
+  } finally {
+    rmSync(temp, { force: true });
+  }
+}
+
 /** The bytes of a regular file under the trial directory, or null when it is absent. */
 function regularFile(path: string, name: string): Uint8Array | null {
   if (!existsSync(path)) {
@@ -91,6 +165,7 @@ function regularFile(path: string, name: string): Uint8Array | null {
 
 function loadProgress(runDir: string): LedgerState {
   const path = join(runDir, PROGRESS_FILE);
+  refuseSymlink(path, "PROOF_PILOT_PROGRESS", "the progress ledger");
   if (!existsSync(path)) return fail("PROOF_PILOT_PROGRESS", "the run has no progress ledger");
   try {
     return loadLedger(path);
@@ -121,7 +196,10 @@ function loadAttemptLedger(
   trialKey: string,
 ): { lines: unknown[]; head: LedgerHead; trialKey: string } | undefined {
   const path = join(runDir, PILOT_ATTEMPTS_FILE);
-  if (!existsSync(path)) return undefined;
+  if (!entryExists(path)) return undefined;
+  // A symlink (even a dangling one, which `existsSync` would read as "no ledger") is refused.
+  if (!lstatSync(path).isFile())
+    fail("PROOF_LEDGER_CHAIN", "the attempt ledger is not a regular file");
   const lines = readJsonlLines(path, "PROOF_LEDGER_CHAIN", "the attempt ledger");
   const anchorPath = anchorPathFor(runDir);
   if (!existsSync(anchorPath))
@@ -159,6 +237,9 @@ export function pilotProofInput(runDir: string, trialKey: string): PilotProofInp
     fail("PROOF_PILOT_MISMATCH", "the arm row is not this trial's");
 
   const trialDir = join(runDir, "trials", trialKey);
+  // The evidence files are read through these directories: neither may be a symlink.
+  refuseSymlink(join(runDir, "trials"), "PROOF_PILOT_EVIDENCE", "the trials directory");
+  refuseSymlink(trialDir, "PROOF_PILOT_EVIDENCE", "the trial directory");
   const steps: ProofStep[] = [];
   const gateTasks = regularFile(join(trialDir, PILOT_GATE_TASKS_FILE), PILOT_GATE_TASKS_FILE);
   if (gateTasks !== null)
@@ -190,7 +271,8 @@ export function pilotProofInput(runDir: string, trialKey: string): PilotProofInp
   if (steps.length === 0) fail("PROOF_PILOT_EVIDENCE", "the trial directory holds no evidence");
 
   const simulated =
-    (state.header as { simulated: boolean }).simulated || existsSync(join(runDir, SIMULATED_FILE));
+    // Any entry counts as the marker, even a dangling symlink (fail toward "never evidence").
+    (state.header as { simulated: boolean }).simulated || entryExists(join(runDir, SIMULATED_FILE));
   const ledger = loadAttemptLedger(runDir, trialKey);
   return {
     input: {

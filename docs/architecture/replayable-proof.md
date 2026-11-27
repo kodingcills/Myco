@@ -83,13 +83,18 @@ and home directory.
 `export-pilot` (`src/proof/from-pilot.ts`, `pilotProofInput`) builds the `ProofRunInput` of one
 trial from what the R1 runner already leaves on disk, so no hand-written `RUN.json` is needed.
 `RUN_DIR` is the R1 pilot's `--out`, or one corrections A/B arm directory (the same runner writes
-both). It only reads; no runner file changes. The result goes through `exportProofBundle` like
-any `RUN.json`, so the allowlist, the identity guard and the self-verify all still apply.
+both). It only reads; no runner file changes. It has no write path into the run either: an
+`--out` inside `RUN_DIR` or inside the directory of its external #518 anchor (symlinks followed
+on the path's existing prefix), or an `--out` that is itself a symlink, is refused before
+anything is read (`PROOF_PILOT_OUT`). The bundle is written to a temporary file beside `--out`
+and renamed into place, so an existing `--out` that is a hard link to a run file is replaced,
+never written through. The result goes through `exportProofBundle` like any `RUN.json`, so the
+allowlist, the identity guard and the self-verify all still apply.
 
 | Source (in `RUN_DIR`) | Becomes |
 |---|---|
 | `pilot-progress.jsonl` (read by the runner's own `loadLedger`) | `run.runId` and `run.taskId` from the trial's start line, `run.arm` from its end line's arm row, `run.simulated` from the header |
-| `SIMULATED` marker | `run.simulated: true`, whatever the header says (fail toward "never evidence") |
+| `SIMULATED` marker (any entry, even a dangling symlink) | `run.simulated: true`, whatever the header says (fail toward "never evidence") |
 | `trials/<KEY>/gate-tasks.json` | evidence `gate-tasks` (kind `gate-registry`, `application/json`) |
 | `trials/<KEY>/doc.csv` | evidence `persisted-doc` (kind `persisted-document`, `text/csv`); it must hash to the arm row's `persistedSha256`, and must be absent when that is null |
 | `attempts.jsonl` (#518), when present | the ledger, with its head taken from the **external** anchor (`anchorPathFor`, outside `RUN_DIR`) and checked by #518's own `verifyAnchor` |
@@ -105,16 +110,23 @@ pilot directory has no verdict record (`verdictCarried: false`) until the runner
 gate result per trial. That change is in `src/pilot/runner.ts`, the critical path, and is left
 to its owner (#674).
 
+**`gate-tasks.json` is bound to nothing the runner recorded (stated gap).** `doc.csv` must match
+the arm row's `persistedSha256`, but the runner records no digest of the gate registry, so the
+`gate-tasks` evidence attests whatever bytes are on disk at export time: a registry replaced
+after the run exports without refusal. Binding it needs the runner to record its digest on the
+arm row (a `src/pilot/runner.ts` change, left to its owner).
+
 `export-pilot` refuses, with a code and a structural message (never a path, a key or a value):
 
 | Export code | Refused when |
 |---|---|
 | `PROOF_PILOT_TRIAL` | the trial key is not a closed id (it names a directory, so no separator and no `..` is ever joined), or it is not in the progress ledger exactly once |
-| `PROOF_PILOT_PROGRESS` | no progress ledger, one that does not load, or one with no header |
+| `PROOF_PILOT_OUT` | `--out` is inside `RUN_DIR` or inside its external anchor directory, or is a symlink (checked before anything is read) |
+| `PROOF_PILOT_PROGRESS` | no progress ledger, one that is a symlink, one that does not load, or one with no header (an empty file) |
 | `PROOF_PILOT_OPEN` | the trial has no end, or its end has no arm row (a crash closure) |
 | `PROOF_PILOT_MISMATCH` | the arm row names another trial or task |
-| `PROOF_PILOT_EVIDENCE` | `doc.csv` differs from the arm row's digest, is missing when recorded, or is present when none was recorded; an evidence file is not a regular file (a symlink, even a dangling one); no evidence at all |
-| `PROOF_LEDGER_CHAIN` / `PROOF_LEDGER_ANCHOR` | #518's ledger fails its own check, has no external anchor or disagrees with it (a consistent rewrite that was not re-anchored); a trial whose fault class #518 cannot name has no end there, so its export is refused |
+| `PROOF_PILOT_EVIDENCE` | `doc.csv` differs from the arm row's digest, is missing when recorded, or is present when none was recorded; an evidence file is not a regular file (a symlink, even a dangling one); `trials/` or `trials/KEY/` is a symlink; no evidence at all |
+| `PROOF_LEDGER_CHAIN` / `PROOF_LEDGER_ANCHOR` | #518's ledger is not a regular file (a symlink, even a dangling one, is not read as "no ledger"), fails its own check, has no external anchor or disagrees with it (a consistent rewrite that was not re-anchored); a trial whose fault class #518 cannot name has no end there, so its export is refused |
 
 Every bundle built from a pilot directory so far comes from a SIMULATED dry run (the tests).
 Simulated rows are never evidence.
