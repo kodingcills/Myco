@@ -16,6 +16,22 @@ export const SOURCES = ["src/gate/families.ts", "src/gate/calc-document.ts"].map
   join(ROOT, p),
 );
 
+/** Subscription-quota wording (lead ruling, PR #598 round 2, D3): each one stops the run. */
+export const USAGE_LIMIT_PHRASES = [
+  "Claude AI usage limit reached|1700000000",
+  "Claude usage limit reached. Your limit will reset at 3pm (America/New_York).",
+  "5-hour limit reached ∙ resets 3pm",
+  "5 hour limit reached",
+  "Weekly limit reached ∙ resets Mon",
+  "weekly limit reached",
+  "Opus limit reached ∙ resets 11pm",
+  "Sonnet limit reached · resets 3pm",
+  "Your limit will reset at 5pm",
+  "Limit resets at 9am",
+  "daily limit exceeded",
+  "usage_limit_reached",
+] as const;
+
 export const tmp = (prefix = "myco-pilot-") => mkdtempSync(join(tmpdir(), prefix));
 
 export function config(pacing: Partial<PacingConfig> = {}) {
