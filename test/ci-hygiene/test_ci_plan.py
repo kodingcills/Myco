@@ -986,6 +986,16 @@ class Workflow(unittest.TestCase):
         missing = REQUIRED - set(self.names)
         self.assertEqual(missing, set())
 
+    def test_the_launch_gate_reads_the_same_required_set(self):
+        # scripts/ci-required-green.ts (the R1 pilot launch gate, #678) reads this file.
+        import json
+
+        with open(os.path.join(REPO_ROOT, "scripts", "ci-required-checks.json"), encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        self.assertEqual(set(cfg["required"]), REQUIRED)
+        self.assertEqual(len(cfg["required"]), len(REQUIRED))
+        self.assertEqual(cfg["workflow"], ".github/workflows/ci.yml")
+
     def test_required_jobs_never_skip_at_job_level(self):
         # Every required job but `check` is unconditional. `check` may skip only on a
         # successful plan whose mode is exactly `affected` (#678): evaluated, not grepped.

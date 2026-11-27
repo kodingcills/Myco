@@ -1,0 +1,11 @@
+{
+  "comment": "The five checks branch protection requires on main (docs/ci.md). scripts/ci-required-green.ts and test/ci-hygiene/test_ci_plan.py both read this list; renaming a check here without the branch protection change leaves it pending forever.",
+  "workflow": ".github/workflows/ci.yml",
+  "required": [
+    "check (macos-latest)",
+    "check (ubuntu-latest)",
+    "myco-agent tests (ubuntu-latest)",
+    "runtime guest agent tests (ubuntu-latest)",
+    "secret scan (gitleaks)"
+  ]
+}
