@@ -844,6 +844,9 @@ describe("gate: evidence refs and the rejection list are pinned (round 1 D3)", (
         "fixtureFile",
         "fixtureSha256",
         "fixtureCsv",
+        "persistedFormat",
+        "format",
+        "fixtureXlsx",
       ].sort(),
     );
     for (const field of ["verdict", "items", "evidenceRoot"]) {
