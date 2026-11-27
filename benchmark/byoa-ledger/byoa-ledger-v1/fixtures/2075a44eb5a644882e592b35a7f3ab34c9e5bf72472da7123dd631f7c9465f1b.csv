@@ -1,0 +1,22 @@
+id,date,payee,amount,category
+179,2026-04-02,Lake Gym,839.79,office
+243,2026-11-12,Spark Telecom,1512.62,health
+579,2026-11-17,Pine Insurance,267.59,health
+602,2026-03-05,Star Cinema,1212.15,leisure
+1084,2026-09-26,Wave Internet,1897.54,office
+1291,2026-08-03,Oak Hardware,1821.95,travel
+2170,2026-02-22,Star Cinema,1201.35,leisure
+2350,2026-04-06,River Cafe,760.53,food
+3144,2026-03-07,Star Cinema,196.81,travel
+4245,2026-12-02,Corner Grocer,1071.66,bills
+6621,2026-05-11,Wave Internet,1187.61,home
+6841,2026-08-14,Metro Transit,1410.96,office
+6939,2026-09-21,City Utility,1755.43,food
+6982,2026-07-06,Acme Rent,1471.92,travel
+7197,2026-08-07,Oak Hardware,1643.99,travel
+7300,2026-09-07,Hill Pharmacy,285.29,travel
+7617,2026-03-03,Hill Pharmacy,705.30,leisure
+8522,2026-09-27,Pine Insurance,1453.54,travel
+9020,2026-11-24,Oak Hardware,1459.76,bills
+9354,2026-05-24,Acme Rent,761.79,leisure
+#rows,20

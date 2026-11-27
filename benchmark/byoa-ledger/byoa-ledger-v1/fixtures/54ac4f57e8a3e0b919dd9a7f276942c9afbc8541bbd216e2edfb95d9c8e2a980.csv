@@ -1,0 +1,10 @@
+id,date,payee,amount,category
+1412,2026-10-05,Metro Transit,1599.40,office
+2346,2026-12-05,Book Nook,1853.86,food
+2531,2026-01-19,Pine Insurance,1606.93,leisure
+4129,2026-06-20,Spark Telecom,958.53,health
+5063,2026-12-11,Book Nook,985.04,leisure
+8303,2026-08-25,Lake Gym,674.97,health
+9232,2026-03-20,Oak Hardware,750.70,gifts
+9321,2026-07-17,Pine Insurance,1827.50,travel
+#rows,8
