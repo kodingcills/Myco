@@ -737,7 +737,9 @@ export function listRunTree(
         path: rel || ".",
         detail: `directory refused (${listed.code})`,
       });
-      return false;
+      // A refused dir is recorded and its siblings are still listed; only the entry cap
+      // stops the whole walk (so the listing never depends on readdir order).
+      return listed.code !== "too-many";
     }
     budget -= listed.names.length;
     for (const name of listed.names) {

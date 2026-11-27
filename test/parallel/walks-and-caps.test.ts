@@ -156,6 +156,18 @@ describe.skipIf(!UNIX)("F1: the vault's run-dir walk never follows a swapped dir
     expect(violations.map((v) => [v.code, v.path])).toEqual([["unexpected-file", "seal.json"]]);
   });
 
+  it("a refused dir does not stop the walk: every sibling is still listed, whatever the readdir order", () => {
+    const dir = join(base, "run");
+    const names = Array.from({ length: 20 }, (_, i) => `f${i}`);
+    files(dir, names);
+    symlinkSync("/usr", join(dir, "captured"));
+    const sawDir = lstatSync("/usr");
+    const lying = (p: string): Stats => (p === join(dir, "captured") ? sawDir : lstatSync(p));
+    const violations: IntegrityViolation[] = [];
+    expect(listRunTree(dir, violations, { lstat: lying }).sort()).toEqual([...names].sort());
+    expect(violations.map((v) => v.path)).toEqual(["captured"]);
+  });
+
   it("a name that vanishes before its lstat is still listed, so an unaccounted name fails", () => {
     const dir = join(base, "run");
     files(dir, ["seal.json", "ghost"]);
