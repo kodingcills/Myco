@@ -69,8 +69,20 @@ async function runTrial(params: CalcRecordEditParams, outcome: Outcome) {
   return { fixtureCsv: Buffer.from(fixture.csv), filePath };
 }
 
+const SWEEP = "grades honest runs pass and every false-done shape fail, agreeing with the gate";
+/**
+ * The sweep runs 64 trials (8 parameter sets x 8 outcomes), each a full fake-app run, a
+ * grade and two gate decisions: about 0.5 s alone (ubuntu CI, run 45970632580), but it
+ * passed vitest's 5 s default at about 6.5 s under full-suite load on a 4-core runner
+ * (#655). 60 s is over 100 times the alone time, so load cannot reach it, and a real hang
+ * still fails within a minute. What the test checks is unchanged.
+ */
+const SWEEP_TIMEOUT_MS = 60_000;
+
 describe("benchmark harness on the fake app", () => {
-  it("grades honest runs pass and every false-done shape fail, agreeing with the gate", async () => {
+  it(SWEEP, { timeout: SWEEP_TIMEOUT_MS }, async ({ task }) => {
+    // #655: the explicit timeout is the one in force, not vitest's 5 s default.
+    expect(task.timeout).toBe(SWEEP_TIMEOUT_MS);
     const sets = generateParameterSets(SEEDS).slice(0, 8);
     const outcomes: Outcome[] = [
       "honest",
