@@ -161,7 +161,12 @@ export class LiveStatus {
   }
 }
 
-function driverFor(config: PilotConfig, repoRoot: string, deps: LiveDeps) {
+function driverFor(
+  config: PilotConfig,
+  repoRoot: string,
+  deps: LiveDeps,
+  log: (line: string) => void,
+) {
   return liveVmDriver(
     {
       spawn: deps.spawn,
@@ -169,7 +174,7 @@ function driverFor(config: PilotConfig, repoRoot: string, deps: LiveDeps) {
       env: deps.env,
       envAllowlist: config.childEnvAllowlist,
     },
-    { backend: deps.vmBackend(), repoRoot, ...(deps.now ? { now: deps.now } : {}) },
+    { backend: deps.vmBackend(), repoRoot, log, ...(deps.now ? { now: deps.now } : {}) },
   );
 }
 
@@ -197,7 +202,15 @@ export async function launchR1Live(
   if (refusals.length > 0) return { exitCode: EXIT.refused, refusals, result: null };
 
   const now = deps.now ?? Date.now;
+  // The heartbeat is the first write into the run directory, so a fresh `--out` must exist
+  // before it (TIF-274). Recursive mkdir is a no-op on an existing directory: a resume keeps
+  // its ledger untouched.
+  mkdirSync(opts.outDir, { recursive: true });
   const status = new LiveStatus(opts.outDir, "r1-pilot", now, deps.heartbeatMs ?? 60_000);
+  const runLog = (l: string) => {
+    status.log(l);
+    deps.log(l);
+  };
   let result: PilotRunResult | null = null;
   try {
     result = await runPilot({
@@ -206,15 +219,12 @@ export async function launchR1Live(
       outDir: opts.outDir,
       repoRoot: opts.repoRoot,
       oracleSources: opts.oracleSources,
-      driver: driverFor(opts.config, opts.repoRoot, deps),
+      driver: driverFor(opts.config, opts.repoRoot, deps, runLog),
       plannerModelId: opts.config.model,
       liveLaunchSha256: configSha256(opts.config),
       ...(deps.sleep ? { sleep: deps.sleep } : {}),
       now,
-      log: (l) => {
-        status.log(l);
-        deps.log(l);
-      },
+      log: runLog,
     });
     const exitCode = exitCodeFor(result);
     if (exitCode === EXIT.usageLimit) {
@@ -269,6 +279,10 @@ export async function launchAbLive(
   const root = stageRoot(opts.outRoot, opts.stage);
   mkdirSync(root, { recursive: true });
   const status = new LiveStatus(root, "corrections-ab", now, deps.heartbeatMs ?? 60_000);
+  const runLog = (l: string) => {
+    status.log(l);
+    deps.log(l);
+  };
   try {
     const result = await (seams.runStage ?? runAbStage)({
       repoRoot: opts.repoRoot,
@@ -276,17 +290,14 @@ export async function launchAbLive(
       loaded: opts.loaded,
       stage: opts.stage,
       outRoot: opts.outRoot,
-      driver: driverFor(on, opts.repoRoot, deps),
+      driver: driverFor(on, opts.repoRoot, deps, runLog),
       plannerModelId: on.model,
       oracleSources: opts.oracleSources,
       ...(opts.planSha256 === undefined ? {} : { liveLaunchSha256: opts.planSha256 }),
       launchRealTrials: true,
       ...(deps.sleep ? { sleep: deps.sleep } : {}),
       now,
-      log: (l) => {
-        status.log(l);
-        deps.log(l);
-      },
+      log: runLog,
     });
     const exitCode = exitCodeFor(result);
     if (exitCode === EXIT.usageLimit) {

@@ -135,7 +135,30 @@ cost (null when unmetered), the root report and the ledger head. The ledger hold
 `planner-end`, `halt`, `abandoned` and `run-end` rows. `run-end` is the last row: nothing is
 appended after it (a late `chargePlanner`, a leaked handle or a late worker writes nothing).
 
-## Measurement bar proposal (pre-registered, for docs/product/capability-spec.md)
+## Pre-registration v-v1 (frozen, values pending a lead ruling)
+
+The bar V is judged by is `docs/product/capability-spec-2.md` §2 V, frozen as
+`docs/product/capability-prereg/v-v1/prereg.json` (Part 1 §3): the V section's digest, the
+`orch-v1` task set (`benchmark/orchestration/orch-v1/`, 60 tasks of 2-4 gated Calc-CSV parts,
+built by `src/orchestrate/orch-taskset.ts`) and its manifest SHA-256, seeds, step budget, model
+id, the orchestrator limits every `V` tree runs under, and the analysis files with their
+SHA-256. The analysis is `src/orchestrate/v-bar.ts` (the bar as code; fixed sequence: control
+properties void the run, then exact one-sided McNemar `V` vs `H` with at least 5 discordant
+tasks) and `src/orchestrate/v-prereg.ts` (loads the pre-registration and refuses any drift),
+run by `npx tsx scripts/orch-v-bar.ts --pack <pack.json>`. Packs record the pre-registration
+hash (SHA-256 over canonical JSON of the file) and the commit it was frozen in
+(`preregCommit`). The values spec-2 §6 leaves to the lead are written as proposed and listed in
+the file's `proposedPendingLeadRuling`; nothing there is ratified. The analysis reads that list,
+`leadRulings` and `ratification.status`: while anything is pending or the file does not record
+its ratification (a lead ruling with its posting time and source), the decision is never
+`shown` (`LEAD_RULING_PENDING`), though the numbers are still reported. Ratifying after the
+freeze is a v-v2. Every row also carries its tokens and desktop actions, checked against the
+token and step budgets (parity, Part 1 §1.5; a failure is not shown), and each `V` tree records
+its most tokens by one worker and any worker that ran on after the kill (both void the run). Where the proposal below differs (two-sided tests with Holm, `V` vs `C1` in the
+decision, task success rather than verified per row kind), the spec and the pre-registration
+govern.
+
+## Measurement bar proposal (#534; superseded by the pre-registration above)
 
 Proposed for the capability spec to adopt; not run in this change (measurement needs the
 integrity fixes in flight and the lead's GO, on Claude Ultra only).

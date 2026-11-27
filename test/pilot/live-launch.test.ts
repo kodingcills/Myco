@@ -20,6 +20,12 @@ import { apiKeyPathRefusal, claudeDriver, type SpawnFn } from "../../src/pilot/c
 import { CHILD_ENV_ALLOWLIST, configSha256, type PilotConfig } from "../../src/pilot/config.ts";
 import { COST_BASIS } from "../../src/pilot/cost.ts";
 import { fakeDriver, PILOT_DRY_RUN_PLANNER, virtualClock } from "../../src/pilot/dry-run.ts";
+import {
+  HCU_PROBE_LOG,
+  HCU_WARMUP_ATTEMPTS,
+  HCU_WARMUP_SPACING_MS,
+  probeHcuDesktop,
+} from "../../src/pilot/hcu-ssh.ts";
 import { trialLaunchPlan } from "../../src/pilot/launch.ts";
 import {
   AttemptLedger,
@@ -43,23 +49,32 @@ import {
 } from "../../src/pilot/live-launch.ts";
 import { HarnessFault, runPilot } from "../../src/pilot/runner.ts";
 import {
+  agentTokenFile,
+  DEFAULT_DEPLOY_TIMEOUT_MS,
   DEFAULT_GUEST_ROOT,
+  DEPLOY_OK_LINE,
+  DEPLOY_SCRIPT,
   guestTrialPaths,
   HOST_CAPTURE_FILE,
   liveVmDriver,
   parseBootClass,
   realVmBackend,
+  runDeploy,
   taskFixtureBytes,
   VM_FAULT,
   type VmBackend,
+  VmTrialStep,
 } from "../../src/pilot/vm-capture.ts";
+import { type FakeHcuMode, fakeHcuSession, HCU_COLD_TEXT } from "./fake-hcu.ts";
 import {
   CLEAN_RESULT_FAULT_PHRASES,
   CLEAN_RESULT_TASK_DATA,
   config,
   FAULT_WORDING,
+  FOLDED_CLAIM_LINES,
   FOLDED_USAGE_PHRASES,
   NBSP,
+  NON_CLAIM_LINES,
   PUBLISHED,
   ROOT,
   SOURCES,
@@ -105,19 +120,50 @@ function fakeVm(
   o: {
     bootClass?: "cold" | "fast" | null;
     failReset?: boolean;
+    /** Fail the n-th deploy (1-based) only, or every deploy with `true`. */
+    failDeploy?: boolean | number;
     failOpen?: boolean;
     failCaptureRead?: boolean;
     corruptSeed?: boolean;
+    /**
+     * The pre-agent HCU probe's guest (#733 round 2, B1): a fake HCU, probed through the real
+     * `probeHcuDesktop` and `connectHcuGui`. A mode for every probe, or one per probe (1-based).
+     */
+    hcu?: FakeHcuMode | ((n: number) => FakeHcuMode);
   } = {},
 ) {
   const guest = new Map<string, Buffer>();
   const events: Event[] = [];
   let reads = 0;
+  let deploys = 0;
+  let probes = 0;
+  /** The warm-up spacing the probe asked for (a fake clock: it waits one macrotask). */
+  const warmupSleeps: number[] = [];
+  /** Every fake-HCU event across probes (`hcu-open`, `hcu-screenshot`, `hcu-close`). */
+  const hcuLog: string[] = [];
   const backend: VmBackend = {
+    async probeHcu(log) {
+      probes++;
+      events.push("hcu-probe");
+      const mode = typeof o.hcu === "function" ? o.hcu(probes) : (o.hcu ?? "ok");
+      await probeHcuDesktop(fakeHcuSession(mode, hcuLog).open, 200, {
+        log,
+        sleep: (ms) => {
+          warmupSleeps.push(ms);
+          return new Promise((r) => setImmediate(r));
+        },
+      });
+    },
     async reset() {
       events.push("reset");
       if (o.failReset) throw new Error("utm said no");
       return { bootClass: o.bootClass === undefined ? "cold" : o.bootClass };
+    },
+    async deploy() {
+      deploys++;
+      events.push("deploy");
+      if (o.failDeploy === true || o.failDeploy === deploys)
+        throw new Error("deploy-to-vm.sh exited 1");
     },
     async open() {
       events.push("open");
@@ -144,7 +190,7 @@ function fakeVm(
       };
     },
   };
-  return { backend, guest, events, built: 0 };
+  return { backend, guest, events, warmupSleeps, hcuLog, built: 0 };
 }
 
 interface SpawnCall {
@@ -345,13 +391,16 @@ describe("R1 launch with every precondition and fakes reaches the live driver", 
         Object.keys(call.options.env ?? {}).every((k) => CHILD_ENV_ALLOWLIST.includes(k)),
       ).toBe(true);
     }
-    // The VM step, in order, per trial: reset, open, seed (write + read back), [agent], capture, close.
+    // The VM step, in order, per trial: reset, deploy (#691), open, seed (write + read back),
+    // the pre-agent HCU check (#733 B1), [agent], capture, close.
     const k1 = guestDoc("r1p-fc-v1-001-a1");
-    expect(vm.events.slice(0, 6)).toEqual([
+    expect(vm.events.slice(0, 8)).toEqual([
       "reset",
+      "deploy",
       "open",
       `write ${k1}`,
       `read ${k1}`,
+      "hcu-probe",
       `read ${k1}`,
       "close",
     ]);
@@ -486,8 +535,29 @@ describe("VM step failures are code-only harness faults", () => {
 
   for (const [name, o, cls, msg] of [
     ["reset fails", { failReset: true }, "spawn-failed", VM_FAULT.reset],
+    ["agent deploy fails (#691)", { failDeploy: true }, "transport-error", VM_FAULT.deploy],
     ["channel does not open", { failOpen: true }, "transport-error", VM_FAULT.open],
     ["seed does not read back", { corruptSeed: true }, "transport-error", VM_FAULT.seedReadBack],
+    [
+      "HCU unreachable before the agent (#733 B1)",
+      { hcu: "unreachable" },
+      "transport-error",
+      VM_FAULT.hcu,
+    ],
+    [
+      "HCU answers but its screenshot fails (#733 B1)",
+      { hcu: "no-screenshot" },
+      "transport-error",
+      VM_FAULT.hcu,
+    ],
+    ["HCU answers with no image (#733 B1)", { hcu: "no-image" }, "transport-error", VM_FAULT.hcu],
+    ["HCU serves no GUI tool (#733 B1)", { hcu: "no-gui" }, "transport-error", VM_FAULT.hcu],
+    [
+      "HCU never answers: the probe's bound (#733 B1)",
+      { hcu: "hang" },
+      "transport-error",
+      VM_FAULT.hcu,
+    ],
     ["capture read fails", { failCaptureRead: true }, "transport-error", VM_FAULT.read],
   ] as const)
     it(name, async () => {
@@ -499,6 +569,8 @@ describe("VM step failures are code-only harness faults", () => {
       // A failure before the agent never starts claude; the channel is always closed.
       if (name !== "capture read fails") expect(claude.calls).toHaveLength(0);
       if (vm.events.includes("open") && !o.failOpen) expect(vm.events.at(-1)).toBe("close");
+      // A failed deploy stops the step there: the channel is never opened (#691).
+      if ("failDeploy" in o) expect(vm.events).toEqual(["reset", "deploy"]);
     });
 
   it("reports the reset's boot class to the runner (#546 / #563); none when unmeasured", async () => {
@@ -733,6 +805,58 @@ describe("resume continues from the durable ledger", () => {
   });
 });
 
+describe("TIF-274: the R1 launch creates its run directory before the first heartbeat", () => {
+  const ok = () => fakeClaude(() => ({ stdout: resultJson("x\nDONE") }));
+  for (const [name, sub] of [
+    ["an --out directory that does not exist yet", ["r1-pilot-fresh"]],
+    ["a nested --out whose parents do not exist yet", ["runs", "nested", "r1-pilot-fresh"]],
+  ] as const)
+    it(`launches with ${name} and writes the heartbeat`, async () => {
+      const out = join(tmp(), ...sub);
+      expect(existsSync(out)).toBe(false);
+      const cfg = { ...config(), trials: ["fc-v1-001"] };
+      const r = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), ok()));
+      expect(r.refusals).toEqual([]);
+      expect(r.exitCode).toBe(EXIT.complete);
+      expect(JSON.parse(readFileSync(join(out, LIVE_STATUS_FILE), "utf8"))).toMatchObject({
+        runner: "r1-pilot",
+        state: "finished",
+        exitCode: 0,
+      });
+      expect(ledgerEnds(out).map((e) => e.outcome)).toEqual(["decided"]);
+    });
+
+  it("a refused launch still creates nothing, not even the directory", async () => {
+    const out = join(tmp(), "never-created");
+    const r = await launchR1Live(
+      r1Opts(twoTrials(), out, { launchRealTrials: false }),
+      deps(fakeVm(), ok()),
+    );
+    expect(r.exitCode).toBe(EXIT.refused);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it("a resume of an existing run directory keeps its ledger and continues it", async () => {
+    const out = join(tmp(), "r1-pilot-resume");
+    const cfg = twoTrials();
+    const first = fakeClaude((n) =>
+      n === 1
+        ? { stdout: resultJson("x\nDONE") }
+        : { stdout: "", stderr: "Credit balance is too low", code: 1 },
+    );
+    const r1 = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), first));
+    expect(r1.exitCode).toBe(EXIT.subscriptionStop);
+    const ledger = readFileSync(join(out, PROGRESS_FILE), "utf8");
+
+    const r2 = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), ok()));
+    expect(r2.exitCode).toBe(EXIT.complete);
+    expect(r2.result).toMatchObject({ status: "complete", ran: 1, skipped: 1 });
+    // The ledger is appended to, never replaced: the first launch's bytes are its prefix.
+    expect(readFileSync(join(out, PROGRESS_FILE), "utf8").startsWith(ledger)).toBe(true);
+    expect(ledgerEnds(out).map((e) => e.outcome)).toEqual(["decided", "harness-fault", "decided"]);
+  });
+});
+
 describe("A/B launch", () => {
   const LOADED = loadPrereg(ROOT);
   const sha = abPlanSha256(LOADED, 0, PUBLISHED);
@@ -831,7 +955,8 @@ describe("A/B launch", () => {
     expect(o.launchRealTrials).toBe(true);
     expect(o.liveLaunchSha256).toBe(sha);
     expect(o.plannerModelId).toBe("claude-sonnet-5-5");
-    expect(vm.events[0]).toBe("reset");
+    // The A/B shares the live driver, so its trials deploy after the reset too (#691).
+    expect(vm.events.slice(0, 3)).toEqual(["reset", "deploy", "open"]);
     expect(claude.calls).toHaveLength(1);
     const status = JSON.parse(readFileSync(join(out, "stage0", LIVE_STATUS_FILE), "utf8"));
     expect(status).toMatchObject({ runner: "corrections-ab", state: "finished", exitCode: 0 });
@@ -1606,6 +1731,48 @@ describe("#606 S1+S2: stderr-only quota wording on a claimless clean result, and
         expect([t, await launchWith(output)]).toEqual([t, decidedAs("no-claim")]);
   });
 
+  // #611: the claim line is folded as the vocabularies are, and a folded claim line is never
+  // reclassified by the quota, billing or auth exceptions (in the text or on stderr).
+  const CLAIMLESS_FAULTS: readonly (readonly [string, string])[] = [
+    ...USAGE_LIMIT_PHRASES.map((p) => [p, "usage-limit"] as const),
+    ...CLEAN_RESULT_FAULT_PHRASES,
+  ];
+
+  it.each(FOLDED_CLAIM_LINES)(
+    "#611: claim line %s is read as the claim, with and without quota, billing or auth wording in the text and on stderr",
+    async (_name, line, claim) => {
+      expect(await launchWith({ stdout: resultJson(`Edited.\n${line}`), code: 0 })).toEqual(
+        decidedAs(claim),
+      );
+      for (const [t] of CLAIMLESS_FAULTS)
+        for (const [shape, output] of [
+          ["text", { stdout: resultJson(`${t}\n${line}`), code: 0 }],
+          ["stderr", { stdout: resultJson(`Edited.\n${line}`), stderr: t, code: 0 }],
+          ["text and stderr", { stdout: resultJson(`${t}\n${line}`), stderr: t, code: 0 }],
+        ] as const)
+          expect([t, shape, await launchWith(output)]).toEqual([t, shape, decidedAs(claim)]);
+    },
+    // Dozens of full fake launches per case: well under 1 s here, but past vitest's default
+    // 5 s on a loaded macOS runner (check (macos-latest) on #692). Assertions unchanged.
+    60_000,
+  );
+
+  it.each(NON_CLAIM_LINES)(
+    "#611 negatives: last line %s is still no claim: no-claim alone, stopped with quota, billing or auth wording",
+    async (line) => {
+      expect(await launchWith({ stdout: resultJson(`Edited.\n${line}`), code: 0 })).toEqual(
+        decidedAs("no-claim"),
+      );
+      for (const [t, cls] of CLAIMLESS_FAULTS)
+        for (const [shape, output] of [
+          ["text", { stdout: resultJson(`${t}\n${line}`), code: 0 }],
+          ["stderr", { stdout: resultJson(`Edited.\n${line}`), stderr: t, code: 0 }],
+        ] as const)
+          expect([t, shape, await launchWith(output)]).toEqual([t, shape, expectedFor(cls)]);
+    },
+    60_000, // the same batch of full fake launches per case as above
+  );
+
   it("the A/B launch's live driver shares the classifier: stderr-only and NBSP quota wording is usage-limit there too", async () => {
     const LOADED = loadPrereg(ROOT);
     for (const output of [
@@ -1751,6 +1918,485 @@ describe("round 2, D4: same class, different message is not a repeat", () => {
     const r2 = await launchR1Live(r1Opts(twoTrials(), tmp()), deps(fakeVm(), same));
     expect(r2.exitCode).toBe(EXIT.repeatFailure);
     expect(same.calls).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// #691 (TIF-274, critical path): the trial snapshot holds no in-guest agent, so the live driver
+// deploys it after every reset and before the channel opens.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Every reset is followed at once by a deploy, every deploy follows a reset, and every open
+ * follows a deploy: a skipped deploy, a deploy before the reset, or an open before the deploy
+ * all fail this.
+ */
+function expectDeployAfterEveryReset(events: readonly string[]) {
+  const resets = events.filter((e) => e === "reset").length;
+  expect(resets).toBeGreaterThan(0);
+  expect(events.filter((e) => e === "deploy")).toHaveLength(resets);
+  events.forEach((e, i) => {
+    if (e === "reset") expect(events[i + 1]).toBe("deploy");
+    if (e === "deploy") expect(events[i - 1]).toBe("reset");
+    if (e === "open") expect(events[i - 1]).toBe("deploy");
+  });
+}
+
+const deployAttempts = (out: string, taskId: string) =>
+  (loadLedger(join(out, PROGRESS_FILE)).byTask.get(taskId) ?? []).map((a) => ({
+    key: a.start.trialKey,
+    supersedes: a.start.supersedes,
+    outcome: a.end?.outcome,
+    harnessClass: a.end?.harnessClass,
+    faultMessage: a.end?.faultMessage,
+  }));
+
+describe("#691: the live driver deploys the in-guest agent after each reset, before open()", () => {
+  const ok = () => fakeClaude(() => ({ stdout: resultJson("x\nDONE") }));
+
+  it("first attempts: reset, deploy, open, in that order, for every trial", async () => {
+    const vm = fakeVm();
+    const out = tmp();
+    const r = await launchR1Live(r1Opts(twoTrials(), out), deps(vm, ok()));
+    expect(r.exitCode).toBe(EXIT.complete);
+    expectDeployAfterEveryReset(vm.events);
+    expect(vm.events.filter((e) => e === "reset")).toHaveLength(2);
+    expect(vm.events.filter((e) => e === "open")).toHaveLength(2);
+  });
+
+  it("a failed deploy is a transport-error harness fault: open() is not reached, claude not started, the trial re-runs in place", async () => {
+    const vm = fakeVm({ failDeploy: 1 });
+    const claude = ok();
+    const out = tmp();
+    const cfg = { ...config(), trials: ["fc-v1-001"] };
+    const r = await launchR1Live(r1Opts(cfg, out), deps(vm, claude));
+    expect(r.exitCode).toBe(EXIT.complete);
+    expect(r.result).toMatchObject({ status: "complete", ran: 1, faulted: 1, stopCode: null });
+    // Attempt 1: reset, deploy (fails), nothing else. Attempt 2: a fresh reset, deploy, open, ...
+    expect(vm.events.slice(0, 5)).toEqual(["reset", "deploy", "reset", "deploy", "open"]);
+    expectDeployAfterEveryReset(vm.events);
+    expect(deployAttempts(out, "fc-v1-001")).toEqual([
+      {
+        key: "r1p-fc-v1-001-a1",
+        supersedes: null,
+        outcome: "harness-fault",
+        harnessClass: "transport-error",
+        faultMessage: VM_FAULT.deploy,
+      },
+      {
+        key: "r1p-fc-v1-001-a2",
+        supersedes: "r1p-fc-v1-001-a1",
+        outcome: "decided",
+        harnessClass: null,
+        faultMessage: undefined,
+      },
+    ]);
+    // Only the re-run started the agent; the faulted attempt never reached claude.
+    expect(claude.calls).toHaveLength(1);
+    expect(claude.calls[0]?.options.cwd?.toString()).toMatch(/r1p-fc-v1-001-a2$/);
+  });
+
+  it("a deploy that always fails never opens the channel or starts claude; the repeat rule stops the run", async () => {
+    const vm = fakeVm({ failDeploy: true });
+    const claude = ok();
+    const out = tmp();
+    const r = await launchR1Live(r1Opts(twoTrials(), out), deps(vm, claude));
+    expect(r.exitCode).toBe(EXIT.repeatFailure);
+    expect(r.result?.stopCode).toBe("repeat-failure");
+    expect(vm.events).toEqual(["reset", "deploy", "reset", "deploy"]);
+    expect(claude.calls).toEqual([]);
+    expect(ledgerEnds(out).map((e) => [e.outcome, e.harnessClass, e.faultMessage])).toEqual([
+      ["harness-fault", "transport-error", VM_FAULT.deploy],
+      ["harness-fault", "transport-error", VM_FAULT.deploy],
+    ]);
+  });
+
+  it("--resume: the resumed attempt deploys after its reset and before open(), in place", async () => {
+    const out = tmp();
+    const cfg = twoTrials();
+    const stopped = await launchR1Live(r1Opts(cfg, out), deps(fakeVm({ failDeploy: true }), ok()));
+    expect(stopped.exitCode).toBe(EXIT.repeatFailure);
+
+    const vm2 = fakeVm();
+    const claude2 = ok();
+    const r = await launchR1Live(r1Opts(cfg, out), deps(vm2, claude2));
+    expect(r.exitCode).toBe(EXIT.complete);
+    expect(vm2.events.slice(0, 3)).toEqual(["reset", "deploy", "open"]);
+    expectDeployAfterEveryReset(vm2.events);
+    // fc-v1-001 re-runs in place as attempt 3, superseding the two deploy faults.
+    expect(deployAttempts(out, "fc-v1-001").map((a) => [a.key, a.supersedes, a.outcome])).toEqual([
+      ["r1p-fc-v1-001-a1", null, "harness-fault"],
+      ["r1p-fc-v1-001-a2", "r1p-fc-v1-001-a1", "harness-fault"],
+      ["r1p-fc-v1-001-a3", "r1p-fc-v1-001-a2", "decided"],
+    ]);
+    expect(claude2.calls[0]?.options.cwd?.toString()).toMatch(/r1p-fc-v1-001-a3$/);
+  });
+
+  it("the trial deadline passing during the deploy is a timeout fault; open() is not reached", async () => {
+    const vm = fakeVm();
+    const ac = new AbortController();
+    const backend: VmBackend = {
+      reset: () => vm.backend.reset(),
+      async deploy() {
+        await vm.backend.deploy();
+        ac.abort();
+      },
+      open: () => vm.backend.open(),
+      probeHcu: (log) => vm.backend.probeHcu(log),
+    };
+    const trialDir = tmp();
+    const step = new VmTrialStep(
+      { backend, repoRoot: ROOT },
+      { task: task1(), runId: "k", trialKey: "r1p-fc-v1-001-a1", trialDir, signal: ac.signal },
+    );
+    const fault = await step.prepare().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(fault).toBeInstanceOf(HarnessFault);
+    expect((fault as HarnessFault).harnessClass).toBe("timeout");
+    expect((fault as HarnessFault).message).toBe(VM_FAULT.deployTimeout);
+    expect(vm.events).toEqual(["reset", "deploy"]);
+  });
+});
+
+describe("#733 B1 (lead ruling 13:38Z): the pre-agent HCU check is a harness fault, never an agent outcome", () => {
+  /** A fake claude that also marks, in the VM's event log, the moment the agent starts. */
+  const agentIn = (vm: ReturnType<typeof fakeVm>) =>
+    fakeClaude(
+      () => ({ stdout: resultJson("x\nNOT DONE") }),
+      () => vm.events.push("claude"),
+    );
+
+  it("the probe runs on every attempt after reset, deploy and seed, and before the agent starts", async () => {
+    const vm = fakeVm();
+    const claude = agentIn(vm);
+    const out = tmp();
+    const r = await launchR1Live(r1Opts(twoTrials(), out), deps(vm, claude));
+    expect(r.exitCode).toBe(EXIT.complete);
+    const k1 = guestDoc("r1p-fc-v1-001-a1");
+    expect(vm.events.slice(0, 7)).toEqual([
+      "reset",
+      "deploy",
+      "open",
+      `write ${k1}`,
+      `read ${k1}`,
+      "hcu-probe",
+      "claude",
+    ]);
+    // Once per attempt, each one before that attempt's agent.
+    expect(vm.events.filter((e) => e === "hcu-probe")).toHaveLength(2);
+    vm.events.forEach((e, i) => {
+      if (e === "claude") expect(vm.events[i - 1]).toBe("hcu-probe");
+    });
+  });
+
+  for (const mode of ["unreachable", "no-screenshot"] as const)
+    it(`HCU ${mode} once: the attempt is a transport-error fault, claude never starts, the trial re-runs in place and is decided`, async () => {
+      const vm = fakeVm({ hcu: (n) => (n === 1 ? mode : "ok") });
+      const claude = agentIn(vm);
+      const out = tmp();
+      const cfg = { ...config(), trials: ["fc-v1-001"] };
+      const r = await launchR1Live(r1Opts(cfg, out), deps(vm, claude));
+      expect(r.exitCode).toBe(EXIT.complete);
+      expect(r.result).toMatchObject({ status: "complete", ran: 1, faulted: 1, stopCode: null });
+      expect(deployAttempts(out, "fc-v1-001")).toEqual([
+        {
+          key: "r1p-fc-v1-001-a1",
+          supersedes: null,
+          outcome: "harness-fault",
+          harnessClass: "transport-error",
+          faultMessage: VM_FAULT.hcu,
+        },
+        {
+          key: "r1p-fc-v1-001-a2",
+          supersedes: "r1p-fc-v1-001-a1",
+          outcome: "decided",
+          harnessClass: null,
+          faultMessage: undefined,
+        },
+      ]);
+      // The faulted attempt never reached claude; only the re-run did, after its own probe.
+      expect(claude.calls).toHaveLength(1);
+      expect(claude.calls[0]?.options.cwd?.toString()).toMatch(/r1p-fc-v1-001-a2$/);
+      const firstAgent = vm.events.indexOf("claude");
+      expect(vm.events.slice(0, firstAgent).filter((e) => e === "hcu-probe")).toHaveLength(2);
+      // The faulted attempt closed its guest channel before the re-run's reset.
+      const secondReset = vm.events.indexOf("reset", 1);
+      expect(vm.events[secondReset - 1]).toBe("close");
+      // One decided row only: the faulted attempt is not an agent outcome and is not counted.
+      const decided = ledgerEnds(out).filter((e) => e.outcome === "decided");
+      expect(decided).toHaveLength(1);
+    });
+
+  it("an HCU that never produces a screenshot: no agent, no decided row, and the repeat rule stops the run (exit 6)", async () => {
+    const vm = fakeVm({ hcu: "no-screenshot" });
+    const claude = agentIn(vm);
+    const out = tmp();
+    const r = await launchR1Live(r1Opts(twoTrials(), out), deps(vm, claude));
+    expect(r.exitCode).toBe(EXIT.repeatFailure);
+    expect(r.result?.stopCode).toBe("repeat-failure");
+    expect(claude.calls).toEqual([]);
+    expect(vm.events).not.toContain("claude");
+    expect(ledgerEnds(out).map((e) => [e.outcome, e.harnessClass, e.faultMessage])).toEqual([
+      ["harness-fault", "transport-error", VM_FAULT.hcu],
+      ["harness-fault", "transport-error", VM_FAULT.hcu],
+    ]);
+    // Nothing decided, so nothing counted (the ledger's decided rows are the only rows counted).
+    expect(ledgerEnds(out).filter((e) => e.outcome === "decided")).toEqual([]);
+  });
+
+  it("an unreachable HCU never reaches the agent through runPilot either (the same fault, no row)", async () => {
+    const vm = fakeVm({ hcu: "unreachable" });
+    const claude = agentIn(vm);
+    const out = tmp();
+    const r = await launchR1Live(r1Opts(twoTrials(), out), deps(vm, claude));
+    expect(r.exitCode).toBe(EXIT.repeatFailure);
+    expect(claude.calls).toEqual([]);
+    const ends = ledgerEnds(out);
+    expect(ends.every((e) => e.outcome === "harness-fault")).toBe(true);
+    // Codes only: no HCU or SSH text reaches the ledger.
+    expect(JSON.stringify(ends)).not.toContain("secret host detail");
+    expect(JSON.stringify(ends)).not.toContain("myco-win11");
+  });
+
+  it("the deadline passing before the probe is a timeout fault; the probe and the agent are not reached", async () => {
+    const vm = fakeVm();
+    const ac = new AbortController();
+    const backend: VmBackend = {
+      reset: () => vm.backend.reset(),
+      deploy: () => vm.backend.deploy(),
+      async open() {
+        const ch = await vm.backend.open();
+        return {
+          writeFile: (p, b) => ch.writeFile(p, b),
+          async readFile(p) {
+            const b = await ch.readFile(p);
+            ac.abort();
+            return b;
+          },
+          close: () => ch.close(),
+        };
+      },
+      probeHcu: (log) => vm.backend.probeHcu(log),
+    };
+    const step = new VmTrialStep(
+      { backend, repoRoot: ROOT },
+      {
+        task: task1(),
+        runId: "k",
+        trialKey: "r1p-fc-v1-001-a1",
+        trialDir: tmp(),
+        signal: ac.signal,
+      },
+    );
+    const fault = await step.prepare().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect((fault as HarnessFault).harnessClass).toBe("timeout");
+    expect((fault as HarnessFault).message).toBe(VM_FAULT.hcuTimeout);
+    expect(vm.events).not.toContain("hcu-probe");
+    expect(vm.events.at(-1)).toBe("close");
+  });
+
+  it("a failed probe makes the VM step itself close the guest channel (not only the driver)", async () => {
+    for (const mode of ["unreachable", "no-screenshot"] as const) {
+      const vm = fakeVm({ hcu: mode });
+      const step = new VmTrialStep(
+        { backend: vm.backend, repoRoot: ROOT },
+        {
+          task: task1(),
+          runId: "k",
+          trialKey: "r1p-fc-v1-001-a1",
+          trialDir: tmp(),
+          signal: new AbortController().signal,
+        },
+      );
+      const fault = await step.prepare().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect((fault as HarnessFault).message).toBe(VM_FAULT.hcu);
+      expect(vm.events.slice(-2)).toEqual(["hcu-probe", "close"]);
+    }
+  });
+
+  it("round 2 addendum (lead ruling 15:44Z): a cold guest (fail, fail, succeed) passes the warm-up; claude starts once, after it; each attempt is logged as a code", async () => {
+    const vm = fakeVm({ hcu: "cold-2" });
+    const claude = agentIn(vm);
+    const out = tmp();
+    const d = deps(vm, claude);
+    const cfg = { ...config(), trials: ["fc-v1-001"] };
+    const r = await launchR1Live(r1Opts(cfg, out), d);
+    expect(r.exitCode).toBe(EXIT.complete);
+    expect(r.result).toMatchObject({ status: "complete", ran: 1, faulted: 0, stopCode: null });
+    // One probe, three screenshots, 10 s apart (fake clock), then the agent.
+    expect(vm.events.filter((e) => e === "hcu-probe")).toHaveLength(1);
+    expect(vm.hcuLog.filter((e) => e === "hcu-screenshot")).toHaveLength(HCU_WARMUP_ATTEMPTS);
+    expect(vm.warmupSleeps).toEqual([HCU_WARMUP_SPACING_MS, HCU_WARMUP_SPACING_MS]);
+    expect(vm.events[vm.events.indexOf("claude") - 1]).toBe("hcu-probe");
+    expect(claude.calls).toHaveLength(1);
+    // The harness log has one code line per attempt, keyed to the trial; never HCU's text.
+    const key = "r1p-fc-v1-001-a1";
+    expect(d.lines.filter((l) => l.includes("hcu-probe:"))).toEqual([
+      `${key}: ${HCU_PROBE_LOG.attempt(1, "failed")}`,
+      `${key}: ${HCU_PROBE_LOG.attempt(2, "failed")}`,
+      `${key}: ${HCU_PROBE_LOG.attempt(3, "ok")}`,
+    ]);
+    expect(d.lines.join("\n")).not.toContain(HCU_COLD_TEXT);
+    expect(JSON.stringify(ledgerEnds(out))).not.toContain(HCU_COLD_TEXT);
+    // The decided row is the agent's; the warm-up left no fault behind.
+    expect(ledgerEnds(out).map((e) => e.outcome)).toEqual(["decided"]);
+  });
+
+  it("round 2 addendum: all 3 warm-up attempts failing is the harness fault (transport-error, VM_FAULT.hcu); claude never starts and nothing is decided", async () => {
+    const vm = fakeVm({ hcu: "no-screenshot" });
+    const claude = agentIn(vm);
+    const out = tmp();
+    const d = deps(vm, claude);
+    const cfg = { ...config(), trials: ["fc-v1-001"] };
+    const r = await launchR1Live(r1Opts(cfg, out), d);
+    // Two attempts (the second identical fault stops the run), each with exactly 3 screenshots.
+    expect(r.exitCode).toBe(EXIT.repeatFailure);
+    expect(vm.events.filter((e) => e === "hcu-probe")).toHaveLength(2);
+    expect(vm.hcuLog.filter((e) => e === "hcu-screenshot")).toHaveLength(2 * HCU_WARMUP_ATTEMPTS);
+    expect(vm.warmupSleeps).toEqual(Array(4).fill(HCU_WARMUP_SPACING_MS));
+    expect(claude.calls).toEqual([]);
+    expect(vm.events).not.toContain("claude");
+    expect(ledgerEnds(out).map((e) => [e.outcome, e.harnessClass, e.faultMessage])).toEqual([
+      ["harness-fault", "transport-error", VM_FAULT.hcu],
+      ["harness-fault", "transport-error", VM_FAULT.hcu],
+    ]);
+    expect(ledgerEnds(out).filter((e) => e.outcome === "decided")).toEqual([]);
+    const probeLines = d.lines.filter((l) => l.includes("hcu-probe:"));
+    expect(probeLines.filter((l) => l.endsWith(" failed"))).toHaveLength(6);
+    expect(probeLines.filter((l) => l.endsWith(" ok"))).toEqual([]);
+  });
+
+  it("the fault messages are fixed and code-only", () => {
+    expect(VM_FAULT.hcu).toMatch(/^hcu-unreachable: /);
+    expect(VM_FAULT.hcu).not.toMatch(/[\\/]|myco-win11|ssh/i);
+  });
+});
+
+describe("#691: runDeploy runs the M1 sweep's verified deploy, bounded", () => {
+  /** A fake `bash deploy-to-vm.sh`: prints `stdout`, exits `code` (never, when `hang`). */
+  function fakeDeploySpawn(o: {
+    stdout?: string;
+    code?: number;
+    hang?: boolean;
+    throws?: boolean;
+  }) {
+    const calls: SpawnCall[] = [];
+    const kills: (NodeJS.Signals | number | undefined)[] = [];
+    const spawn: SpawnFn = (command, args, options) => {
+      calls.push({ command, args, options });
+      if (o.throws) throw new Error("spawn bash ENOENT");
+      const child = new EventEmitter() as ChildProcess & EventEmitter;
+      const out = new PassThrough();
+      const err = new PassThrough();
+      Object.assign(child, {
+        stdout: out,
+        stderr: err,
+        kill: (s?: NodeJS.Signals | number) => {
+          kills.push(s);
+          return true;
+        },
+      });
+      if (!o.hang)
+        setImmediate(() => {
+          out.write(o.stdout ?? "");
+          err.write("==> copying agent tree to guest\n");
+          out.end();
+          err.end();
+          setImmediate(() => child.emit("close", o.code ?? 0));
+        });
+      return child;
+    };
+    return { spawn, calls, kills };
+  }
+  const echoed: Buffer[] = [];
+  const run = (f: ReturnType<typeof fakeDeploySpawn>, timeoutMs?: number) =>
+    runDeploy({
+      repoRoot: ROOT,
+      spawn: f.spawn,
+      tokenOut: "/h/private/agent-token",
+      env: { PATH: "/bin", MYCO_TOKEN_OUT: "/somewhere/else" },
+      echo: (d) => echoed.push(d),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
+
+  it("runs bash agent/bootstrap/deploy-to-vm.sh with MYCO_TOKEN_OUT set to the trial's token file path", async () => {
+    const f = fakeDeploySpawn({
+      stdout: `==> ping verified:\n\n${DEPLOY_OK_LINE}\n  token : ...\n`,
+    });
+    await expect(run(f)).resolves.toBeUndefined();
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]?.command).toBe("bash");
+    expect(f.calls[0]?.args).toEqual([join(ROOT, ...DEPLOY_SCRIPT)]);
+    expect(DEPLOY_SCRIPT.join("/")).toBe("agent/bootstrap/deploy-to-vm.sh");
+    expect(existsSync(join(ROOT, ...DEPLOY_SCRIPT))).toBe(true);
+    // A path only, and the trial's path wins over an operator export (one file for both ends).
+    expect(f.calls[0]?.options.env?.MYCO_TOKEN_OUT).toBe("/h/private/agent-token");
+    expect(f.calls[0]?.options.env?.PATH).toBe("/bin");
+    expect(Buffer.concat(echoed).toString()).toContain(DEPLOY_OK_LINE);
+  });
+
+  for (const [name, o, why] of [
+    ["a non-zero exit", { stdout: "deploy-to-vm: copy failed\n", code: 1 }, /exited 1/],
+    [
+      "exit 0 without the success line",
+      { stdout: "==> registering\n", code: 0 },
+      /without DEPLOY OK/,
+    ],
+    [
+      "the success line only as part of another line",
+      { stdout: "NOT DEPLOY OK\n" },
+      /without DEPLOY OK/,
+    ],
+    ["a spawn failure", { throws: true }, /ENOENT/],
+  ] as const)
+    it(`rejects on ${name}`, async () => {
+      await expect(run(fakeDeploySpawn(o))).rejects.toThrow(why);
+    });
+
+  it("a deploy past its bound is killed and rejects (no hang)", async () => {
+    const f = fakeDeploySpawn({ hang: true });
+    await expect(run(f, 20)).rejects.toThrow(/exceeded its bound/);
+    expect(f.kills).toEqual(["SIGTERM"]);
+  });
+
+  it("the default bound is the M1 sweep's 400 s", () => {
+    expect(DEFAULT_DEPLOY_TIMEOUT_MS).toBe(400_000);
+    expect(readFileSync(join(ROOT, "scripts", "m1-sweep.sh"), "utf8")).toMatch(
+      /alarm 400; exec @ARGV" agent\/bootstrap\/deploy-to-vm\.sh/,
+    );
+  });
+});
+
+describe("#691: open() reads the token file the deploy just wrote", () => {
+  it("one path for both: --token-file, else MYCO_TOKEN_OUT, else ~/.myco-token; never MYCO_AGENT_TOKEN", () => {
+    expect(agentTokenFile("/op/tok", { MYCO_TOKEN_OUT: "/env/tok" }, "/h")).toBe("/op/tok");
+    expect(agentTokenFile(undefined, { MYCO_TOKEN_OUT: "/env/tok" }, "/h")).toBe("/env/tok");
+    expect(agentTokenFile(undefined, { MYCO_TOKEN_OUT: "" }, "/h")).toBe("/h/.myco-token");
+    expect(agentTokenFile(undefined, { MYCO_AGENT_TOKEN: "stale-value" }, "/h")).toBe(
+      "/h/.myco-token",
+    );
+  });
+
+  it("the real backend passes that one path to both the deploy and open()", () => {
+    // realVmBackend refuses under vitest, so its source is checked: one `tokenOut`, from
+    // agentTokenFile, is the deploy's MYCO_TOKEN_OUT and open()'s --token-file.
+    const src = readFileSync(join(ROOT, "src", "pilot", "vm-capture.ts"), "utf8");
+    const body = src.slice(src.indexOf("export function realVmBackend"));
+    expect(body).toMatch(
+      /const tokenOut = agentTokenFile\(opts\.tokenFile, process\.env, homedir\(\)\);/,
+    );
+    expect(body).toMatch(/return runDeploy\(\{[^}]*\btokenOut,/);
+    expect(body).toMatch(
+      /resolveRunLiveToken\(\["--token-file", tokenOut\], process\.env, homedir\(\)\)/,
+    );
   });
 });
 

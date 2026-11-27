@@ -21,7 +21,12 @@ import {
   parseClaim,
   type SpawnFn,
 } from "../../src/pilot/claude-transport.ts";
-import { CHILD_ENV_ALLOWLIST, configSha256 } from "../../src/pilot/config.ts";
+import {
+  ACTUATOR_GRANTS,
+  CHILD_ENV_ALLOWLIST,
+  configSha256,
+  GATE_GRANT,
+} from "../../src/pilot/config.ts";
 import { virtualClock } from "../../src/pilot/dry-run.ts";
 import { trialLaunchPlan } from "../../src/pilot/launch.ts";
 import { loadLedger, PROGRESS_FILE } from "../../src/pilot/ledger.ts";
@@ -31,8 +36,10 @@ import {
   CLEAN_RESULT_TASK_DATA,
   config,
   FAULT_WORDING,
+  FOLDED_CLAIM_LINES,
   FOLDED_USAGE_PHRASES,
   NBSP,
+  NON_CLAIM_LINES,
   PUBLISHED,
   ROOT,
   SOURCES,
@@ -124,6 +131,11 @@ describe("headless Claude Code transport (fake spawn)", () => {
     const { plan, fake, transport, trialDir } = setup(result("Edited the cell.\nDONE"));
     await transport.runAgent(plan, null);
     expect(readFileSync(plan.mcpConfigPath, "utf8")).toBe(mcpConfigJson(plan));
+    // #732: the written MCP config and the spawned argv carry the actuator AND the gate.
+    const written = JSON.parse(readFileSync(plan.mcpConfigPath, "utf8")).mcpServers;
+    expect(Object.keys(written).sort()).toEqual(["myco-gate", "myco-hcu"]);
+    for (const grant of [...ACTUATOR_GRANTS, GATE_GRANT])
+      expect(fake.calls[0]?.args).toContain(grant);
     expect(fake.calls).toHaveLength(1);
     expect(fake.calls[0]?.command).toBe("claude");
     expect(fake.calls[0]?.args).toEqual(plan.argv);
@@ -146,6 +158,17 @@ describe("headless Claude Code transport (fake spawn)", () => {
     expect(parseClaim("could not\nNOT DONE\n")).toBe("not-done");
     expect(parseClaim("DONE\nmaybe")).toBe("no-claim");
     expect(parseClaim("done")).toBe("no-claim");
+  });
+
+  it("#611: folds Unicode spaces, tabs and format characters in the claim line; non-claims stay no-claim", () => {
+    for (const [name, line, claim] of FOLDED_CLAIM_LINES) {
+      expect([name, parseClaim(`Edited.\n${line}`)]).toEqual([name, claim]);
+      expect([name, parseClaim(`Edited.\n${line}\n`)]).toEqual([name, claim]);
+      // Still the last line only.
+      expect([name, parseClaim(`${line}\nmore`)]).toEqual([name, "no-claim"]);
+    }
+    for (const line of NON_CLAIM_LINES)
+      expect([line, parseClaim(`Edited.\n${line}`)]).toEqual([line, "no-claim"]);
   });
 
   // Verifier round 1, D2: every probe from the verdict, and the "uncertain is a harness fault" rule.

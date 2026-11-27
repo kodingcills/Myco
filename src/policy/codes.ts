@@ -79,6 +79,8 @@ export const POLICY_START_REFUSALS = [
   "POLICY_CONFIG_TOO_LARGE",
   "POLICY_SCOPE_INVALID",
   "POLICY_SENSOR_MISSING",
+  /** The agent is granted a tool no wrapper polices, e.g. raw `myco-rt` act (`./surface.ts`). */
+  "POLICY_UNPOLICED_SURFACE",
 ] as const;
 export type PolicyStartRefusal = (typeof POLICY_START_REFUSALS)[number];
 
