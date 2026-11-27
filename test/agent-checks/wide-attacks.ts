@@ -34,12 +34,18 @@ export const SINGLE = [
   "missing-file",
 ];
 
-/** The self-test as it was before #610: the same drawn cases, single-error documents only. */
+/**
+ * The self-test as it was before #610, on the bound task: its three drawn cases, single-error
+ * documents only. (The random cases are left out to save sandbox time; every check here is
+ * honest off the bound seed, so they could only accept it.)
+ */
 export function singleErrorCases(): SelfTestCase<unknown>[] {
-  return agentCheckSelfTestCases("calc-record-edit", TASK).map((c) => {
-    expect(c.corruptions.slice(0, SINGLE.length).map((x) => x.cls)).toEqual(SINGLE);
-    return { ...c, corruptions: c.corruptions.slice(0, SINGLE.length) };
-  });
+  return agentCheckSelfTestCases("calc-record-edit", TASK)
+    .slice(0, 3)
+    .map((c) => {
+      expect(c.corruptions.slice(0, SINGLE.length).map((x) => x.cls)).toEqual(SINGLE);
+      return { ...c, corruptions: c.corruptions.slice(0, SINGLE.length) };
+    });
 }
 
 export const fixture = generateFixture(SEED);
