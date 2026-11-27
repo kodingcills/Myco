@@ -79,7 +79,7 @@ describe("subscription preflight (names only)", () => {
   });
 });
 
-describe("the runner CLI cannot start real trials in this change", () => {
+describe("the runner CLI refuses a real launch unless every precondition holds", () => {
   it("launch with an API-path variable set: refused, the name printed, the value never", {
     timeout: 60_000,
   }, () => {
@@ -107,13 +107,16 @@ describe("the runner CLI cannot start real trials in this change", () => {
     );
     expect(wrong.status).toBe(3);
     expect(wrong.stderr).toMatch(/--launch-real-trials and --plan-sha256/);
-    // Flag and the right hash: still refused, because the live path is a later step.
+    // Flag and the right hash, but not under scripts/vm-session.sh: still refused (TIF-274),
+    // before any VM, guest channel or `claude` is touched (test/pilot/live-launch.test.ts has
+    // the trap `claude` and every other precondition).
     const right = cli(
       ["launch", "--out", out, "--launch-real-trials", "--plan-sha256", plan.configSha256],
       baseEnv(),
     );
     expect(right.status).toBe(3);
-    expect(right.stderr).toMatch(/later, lead-approved step/);
+    expect(right.stderr).toMatch(/the VM session lock is not held/);
+    expect(right.stderr).not.toMatch(/--launch-real-trials and --plan-sha256/);
   });
 
   it("the CLI wires no live transport and spawns no process", () => {

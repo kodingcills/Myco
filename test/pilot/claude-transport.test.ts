@@ -226,8 +226,12 @@ describe("headless Claude Code transport (fake spawn)", () => {
     expect(faultOf(() => interpretResult(verbose({ error: "overloaded" }), "", 1))).toBe(
       "rate-limit",
     );
+    // TIF-274 live driver: a billing error stops the run (fail closed), it is not a rate limit.
     expect(faultOf(() => interpretResult(verbose({ error: "billing_error" }), "", 1))).toBe(
-      "rate-limit",
+      "billing",
+    );
+    expect(faultOf(() => interpretResult(verbose({ api_error_status: 402 }), "", 1))).toBe(
+      "billing",
     );
     expect(faultOf(() => interpretResult(verbose({ error: "authentication_failed" }), "", 1))).toBe(
       "auth",
@@ -308,13 +312,21 @@ describe("headless Claude Code transport (fake spawn)", () => {
       "Too many requests",
       "Opus limit reached ∙ resets 11pm",
       "Your limit will reset at 5pm",
-      "You're out of extra usage",
       "Weekly limit reached",
       "daily limit exceeded",
-      "Credit balance is too low",
-      "quota exceeded",
     ])
       expect([t, classOfText(t)]).toEqual([t, "rate-limit"]);
+    // TIF-274 live driver: credit, billing and quota wording stops the run (fail closed).
+    for (const t of [
+      "You're out of extra usage",
+      "Credit balance is too low",
+      "quota exceeded",
+      "API Error: 402 Payment Required",
+      "Your credits are exhausted",
+      "Insufficient credit to continue",
+      "billing_error: your plan is suspended for billing",
+    ])
+      expect([t, classOfText(t)]).toEqual([t, "billing"]);
     for (const t of [
       "Invalid API key · Please run /login",
       "OAuth token has expired. Please obtain a new token or refresh your existing token.",

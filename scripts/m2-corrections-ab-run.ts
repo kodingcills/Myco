@@ -38,7 +38,6 @@ import {
   exportAbPack,
   incidentStatus,
   launchPlanDiff,
-  liveAbRefusals,
   loadPrereg,
   PREREG_JSON,
   PREREG_MD,
@@ -52,6 +51,8 @@ import { abDryRun } from "../src/pilot/ab-dry-run.ts";
 import { configSha256 } from "../src/pilot/config.ts";
 import { fakeDriver, virtualClock } from "../src/pilot/dry-run.ts";
 import { preflightRefusal, subscriptionPreflight } from "../src/pilot/launch.ts";
+import { realLiveDeps } from "../src/pilot/live-deps.ts";
+import { launchAbLive } from "../src/pilot/live-launch.ts";
 import { publishedTasks } from "../src/pilot/reviewed.ts";
 
 class UsageError extends Error {}
@@ -218,23 +219,29 @@ try {
         break;
       }
       const stage = stageFlag();
-      need("--out");
+      const dir = need("--out");
       const { loaded, published } = printPlan(stage);
-      // The same preconditions runAbStage applies to any live run (one source of truth).
-      const pinnedPlan = flag("--plan-sha256");
-      const refusals = liveAbRefusals({
-        repoRoot: ROOT,
-        loaded,
-        stage,
-        published,
-        launchRealTrials: rest.includes("--launch-real-trials"),
-        ...(pinnedPlan === undefined ? {} : { liveLaunchSha256: pinnedPlan }),
-      });
-      refusals.push(
-        "no live driver is wired: the VM-side capture is a later, lead-approved step, so this change cannot start real trials",
+      // The same preconditions runAbStage applies to any live run (one source of truth), plus
+      // the VM lock and concurrency 1; runAbStage and runPilot re-check them before any trial.
+      const r = await launchAbLive(
+        {
+          loaded,
+          stage,
+          published,
+          outRoot: dir,
+          repoRoot: ROOT,
+          oracleSources: SOURCES,
+          launchRealTrials: rest.includes("--launch-real-trials"),
+          planSha256: flag("--plan-sha256"),
+        },
+        realLiveDeps(ROOT, flag("--token-file"), (l) => err(`${l}\n`)),
       );
-      err(`refusing to launch the corrections A/B:\n${refusals.map((r) => `  - ${r}\n`).join("")}`);
-      process.exitCode = 3;
+      if (r.refusals.length > 0)
+        err(
+          `refusing to launch the corrections A/B:\n${r.refusals.map((x) => `  - ${x}\n`).join("")}`,
+        );
+      else out(`LIVE corrections A/B, Stage ${stage}: ${JSON.stringify(r.result)}\n`);
+      process.exitCode = r.exitCode;
       break;
     }
     default:

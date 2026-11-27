@@ -46,6 +46,13 @@ export const PILOT_HARNESS_CLASSES = [
   "crash",
   "spawn-failed",
   "transport-error",
+  /**
+   * A credit, billing or quota error from the CLI (TIF-274 live driver). It stops the run at
+   * once with a code (fail closed, never a back-off or retry loop); like `auth`, it does not
+   * spend the trial's attempt budget, so a resume after the operator fixed the account re-runs
+   * the trial.
+   */
+  "billing",
 ] as const;
 export type PilotHarnessClass = (typeof PILOT_HARNESS_CLASSES)[number];
 
@@ -54,11 +61,13 @@ export type PilotHarnessClass = (typeof PILOT_HARNESS_CLASSES)[number];
  * runner backs off and pauses on these instead of spending the trial's attempt budget, so a
  * limit spell never closes a trial: `maxAttemptsPerTrial` counts only the other harness faults
  * (verifier round 1, D1). Ledger growth stays bounded per invocation by the pause
- * (`maxConsecutiveRateLimits` rate limits in a row; one `auth` fault pauses at once).
+ * (`maxConsecutiveRateLimits` rate limits in a row; one `auth` or `billing` fault stops the
+ * run at once).
  */
 export const BUDGET_EXEMPT_CLASSES: ReadonlySet<PilotHarnessClass> = new Set([
   "rate-limit",
   "auth",
+  "billing",
 ]);
 
 export interface HeaderLine {

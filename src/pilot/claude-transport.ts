@@ -32,10 +32,11 @@ import { join } from "node:path";
 import { type AgentLaunchPlan, mcpConfigJson } from "../integrity/launch.ts";
 import type { CaptureInput } from "../integrity/vault.ts";
 import type { TokenUsage } from "./cost.ts";
-import { childEnv } from "./launch.ts";
+import { API_CREDENTIAL_NAMES, childEnv } from "./launch.ts";
 import type { PilotHarnessClass } from "./ledger.ts";
 import {
   type AgentReport,
+  ApiKeyPathFault,
   type AttemptContext,
   HarnessFault,
   type PilotDriver,
@@ -65,13 +66,14 @@ export const DEFAULT_KILL_GRACE_MS = 10_000;
 
 /**
  * Claude Code's structured error classes (the SDK assistant message's `error` field), mapped
- * to the pilot's harness classes. Limits and overload back off; a lost or refused login
- * pauses; anything else (including an unknown future class) is an unclassified error result.
+ * to the pilot's harness classes. Limits and overload back off; a lost or refused login and a
+ * credit, billing or quota error stop the run at once (fail closed, no retry loop); anything
+ * else (including an unknown future class) is an unclassified error result.
  */
 const ERROR_CLASS: Readonly<Record<string, PilotHarnessClass>> = {
   rate_limit: "rate-limit",
   overloaded: "rate-limit",
-  billing_error: "rate-limit",
+  billing_error: "billing",
   authentication_failed: "auth",
   oauth_org_not_allowed: "auth",
   account_on_hold: "auth",
@@ -83,6 +85,7 @@ const ERROR_CLASS: Readonly<Record<string, PilotHarnessClass>> = {
 export function classOfStatus(status: number): PilotHarnessClass {
   if (status === 429 || status === 529) return "rate-limit";
   if (status === 401 || status === 403) return "auth";
+  if (status === 402) return "billing";
   return "error-result";
 }
 
@@ -91,11 +94,20 @@ export function classOfStatus(status: number): PilotHarnessClass {
  * result, a non-zero exit) and carries no structured class; never for a clean result, whose
  * text is the agent's (fc-v1 fixtures hold qty values 401, 403 and 429). Subscription limit
  * wording varies by plan and version ("usage limit reached", "5-hour limit reached ∙ resets
- * 3pm", "Weekly limit reached", "Opus limit reached", "out of extra usage", API 429/529
- * bodies), so the vocabulary is broad; `test/pilot/claude-transport.test.ts` pins it.
+ * 3pm", "Weekly limit reached", "Opus limit reached", API 429/529 bodies), so the
+ * vocabulary is broad; `test/pilot/claude-transport.test.ts` pins it.
  */
 export const RATE_LIMIT_TEXT =
-  /rate[ _-]?limit|usage[ _-]?limit|limit (?:reached|exceeded|hit)|limit (?:will )?resets?|\bresets? (?:at |on |in )?(?:\d|mon|tue|wed|thu|fri|sat|sun|tomorrow)|too many requests|\b429\b|\b529\b|overloaded|quota|out of (?:extra )?usage|(?:weekly|daily|monthly|hourly|session|\d+[ -]?hour|five[ -]hour|opus|sonnet|haiku|fable) limit|credit balance|billing/i;
+  /rate[ _-]?limit|usage[ _-]?limit|limit (?:reached|exceeded|hit)|limit (?:will )?resets?|\bresets? (?:at |on |in )?(?:\d|mon|tue|wed|thu|fri|sat|sun|tomorrow)|too many requests|\b429\b|\b529\b|overloaded|(?:weekly|daily|monthly|hourly|session|\d+[ -]?hour|five[ -]hour|opus|sonnet|haiku|fable) limit/i;
+
+/**
+ * Credit, billing and quota wording ("Credit balance is too low", "out of extra usage", "quota
+ * exceeded", HTTP 402). Unlike a rate limit these do not clear by waiting, so they stop the run
+ * at once with code `billing` (fail closed; never a back-off or retry loop). Checked before the
+ * rate-limit vocabulary, after the login vocabulary.
+ */
+export const BILLING_TEXT =
+  /credit balance|out of credits?|credits? (?:exhausted|depleted|used up|ran out)|insufficient (?:credits?|funds|balance)|billing|payment (?:required|failed|method)|\b402\b|quota|out of (?:extra )?usage/i;
 
 export const AUTH_TEXT =
   /invalid (?:api )?key|api key|\/login|not logged in|log ?in again|please (?:log|sign) ?in|authenticat|unauthori[sz]ed|oauth|\b401\b|\b403\b|forbidden|credential|account (?:is )?on hold|verification required|token (?:has )?expired/i;
@@ -103,6 +115,7 @@ export const AUTH_TEXT =
 /** The text-fallback class of an error message, or null when it names neither. */
 export function classOfText(text: string): PilotHarnessClass | null {
   if (AUTH_TEXT.test(text)) return "auth";
+  if (BILLING_TEXT.test(text)) return "billing";
   if (RATE_LIMIT_TEXT.test(text)) return "rate-limit";
   return null;
 }
@@ -161,10 +174,24 @@ function structuredClass(messages: readonly Record<string, unknown>[]): PilotHar
         found.push(classOfStatus(st));
   }
   if (found.length === 0) return null;
-  // The most actionable class wins: a lost login pauses, a limit backs off.
+  // The most actionable class wins: a lost login or a billing error stops, a limit backs off.
   if (found.includes("auth")) return "auth";
+  if (found.includes("billing")) return "billing";
   if (found.includes("rate-limit")) return "rate-limit";
   return "error-result";
+}
+
+/**
+ * Claude Code names where its credential came from in its `system`/`init` message
+ * (`apiKeySource`; present in `--verbose` / stream output). On the subscription it is `none`.
+ * Any other value means the CLI is billing an API key: refused, fail closed, whatever the run's
+ * outcome. The returned text names the source field only, never a credential.
+ */
+export function apiKeySourceProblem(messages: readonly Record<string, unknown>[]): string | null {
+  for (const m of messages)
+    if (Object.hasOwn(m, "apiKeySource") && m.apiKeySource !== "none")
+      return 'claude reported an apiKeySource other than "none": it is not on the subscription';
+  return null;
 }
 
 /**
@@ -182,6 +209,9 @@ export function interpretResult(stdout: string, stderr: string, code: number | n
   const fault = (cls: PilotHarnessClass, why: string): never => {
     throw new HarnessFault(cls, why, usage);
   };
+  // An API-key run is never the agent's outcome and never retried: it stops the run first.
+  const apiKey = apiKeySourceProblem(messages);
+  if (apiKey !== null) throw new ApiKeyPathFault(apiKey, usage);
   const structured = structuredClass(messages);
   if (result === null) {
     const cls = structured ?? classOfText(stderr);
@@ -210,7 +240,21 @@ export function interpretResult(stdout: string, stderr: string, code: number | n
   return { claim: parseClaim(text), usage };
 }
 
+/**
+ * Why `claudeDriver` refuses to build: an API-path credential NAME in the agent's environment
+ * allowlist, which is the only way one could reach the `claude` process (names only; no value
+ * is read). A name in the parent environment is stripped by `childEnv` and refused earlier by
+ * the CLI preflight (`subscriptionPreflight`).
+ */
+export function apiKeyPathRefusal(opts: Pick<ClaudeDriverOptions, "envAllowlist">): string | null {
+  const named = API_CREDENTIAL_NAMES.filter((n) => opts.envAllowlist.includes(n));
+  if (named.length === 0) return null;
+  return `refusing the live driver: API-path credential name(s) ${named.join(", ")} in the agent's environment allowlist; the pilot runs on the Claude subscription only`;
+}
+
 export function claudeDriver(opts: ClaudeDriverOptions): PilotDriver {
+  const refusal = apiKeyPathRefusal(opts);
+  if (refusal !== null) throw new Error(refusal);
   return {
     simulated: false,
     transport(ctx: AttemptContext): PilotTransport {

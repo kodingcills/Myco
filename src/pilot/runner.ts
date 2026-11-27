@@ -61,6 +61,14 @@ import {
   taskStatus,
 } from "./ledger.ts";
 
+/**
+ * Why a run stopped fail-closed, with no retry loop (TIF-274 live driver). `auth`: the CLI's
+ * login is lost or refused; `billing`: a credit, billing or quota error; `api-key`: the CLI
+ * would bill an API key instead of the subscription; `repeat-failure`: two identical harness
+ * failures in a row. The CLIs exit 5 for the first three and 6 for `repeat-failure`.
+ */
+export type StopCode = "auth" | "billing" | "api-key" | "repeat-failure";
+
 /** A fault of the harness, not the agent: the only kind of attempt that is ever re-run. */
 export class HarnessFault extends Error {
   readonly harnessClass: PilotHarnessClass;
@@ -72,6 +80,26 @@ export class HarnessFault extends Error {
     this.harnessClass = harnessClass;
     this.usage = usage;
   }
+}
+
+/**
+ * The CLI ran (or would run) on an API key instead of the operator's subscription. Recorded as
+ * an `auth` fault, and it stops the run at once with code `api-key`: never retried, never an
+ * agent outcome.
+ */
+export class ApiKeyPathFault extends HarnessFault {
+  constructor(message: string, usage: TokenUsage | null = null) {
+    super("auth", message, usage);
+    this.name = "ApiKeyPathFault";
+  }
+}
+
+/** The fail-closed stop a fault demands, or null when the fault is re-run in place. */
+export function stopCodeOf(fault: HarnessFault): Exclude<StopCode, "repeat-failure"> | null {
+  if (fault instanceof ApiKeyPathFault) return "api-key";
+  if (fault.harnessClass === "auth") return "auth";
+  if (fault.harnessClass === "billing") return "billing";
+  return null;
 }
 
 export interface AttemptContext {
@@ -166,6 +194,14 @@ export interface PilotRunOptions {
    * halts the whole run (no new starts; status `halted`). A throw is a harness bug (fatal).
    */
   readonly afterDecided?: (d: DecidedTrial) => string | null;
+  /**
+   * Stop the run (code `repeat-failure`) when two harness faults in a row, with no decided
+   * trial between them, have the same class and message: the same failure twice is not going
+   * to clear by itself, and a third attempt only spends subscription time. Rate limits are
+   * excluded (they have their own back-off and pause), as are the immediate stops (`auth`,
+   * `billing`, `api-key`). Default: on for a live driver, off for a simulated one.
+   */
+  readonly abortOnRepeatedFailure?: boolean;
 }
 
 export interface PilotRunResult {
@@ -177,6 +213,8 @@ export interface PilotRunResult {
   readonly skipped: number;
   readonly faulted: number;
   readonly exhausted: readonly string[];
+  /** Set when the run stopped fail-closed (status `paused`); null otherwise. */
+  readonly stopCode: StopCode | null;
 }
 
 export const SIMULATED_PLANNER_PREFIX = "simulated:";
@@ -394,6 +432,9 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
     let stop: string | null = null;
     let halted: string | null = null;
     let fatal: unknown = null;
+    let stopCode: StopCode | null = null;
+    const abortOnRepeat = opts.abortOnRepeatedFailure ?? !simulated;
+    let lastFaultSignature: string | null = null;
     const pauseRequested = () =>
       [join(outDir, PAUSE_FILE), ...(opts.pauseFiles ?? [])].some((p) => existsSync(p));
 
@@ -615,8 +656,24 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
         log(
           `${trialKey}: harness fault (${fault.harnessClass}); the attempt is kept and the trial re-runs in place`,
         );
-        if (fault.harnessClass === "auth")
-          stop = `paused: the agent's Claude Code session is not authenticated (${trialKey}); log in to the subscription and re-run the same command to resume`;
+        const code = stopCodeOf(fault);
+        if (code !== null) {
+          // Fail closed: stop at once, no back-off, no retry loop. Resume is the operator's call.
+          stopCode ??= code;
+          stop =
+            code === "auth"
+              ? `stopped (auth): the agent's Claude Code session is not authenticated (${trialKey}); log in to the subscription and re-run the same command to resume`
+              : code === "billing"
+                ? `stopped (billing): the CLI reported a credit, billing or quota error (${trialKey}); fix the subscription account, then re-run the same command to resume`
+                : `stopped (api-key): the CLI would run on an API key, not the subscription (${trialKey}); remove the API-key path, then re-run the same command to resume`;
+        } else if (abortOnRepeat && fault.harnessClass !== "rate-limit") {
+          const signature = `${fault.harnessClass}\u0000${fault.message}`;
+          if (signature === lastFaultSignature) {
+            stopCode ??= "repeat-failure";
+            stop = `stopped (repeat-failure): two identical harness failures in a row (${fault.harnessClass}, last ${trialKey}); find the cause, then re-run the same command to resume`;
+          }
+          lastFaultSignature = signature;
+        }
         if (fault.harnessClass === "rate-limit") {
           consecutiveRateLimits++;
           if (consecutiveRateLimits >= config.pacing.maxConsecutiveRateLimits)
@@ -663,6 +720,7 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
           if (r === "decided") {
             ran++;
             consecutiveRateLimits = 0;
+            lastFaultSignature = null;
             break;
           }
           if (r === "faulted") {
@@ -705,6 +763,7 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
       skipped,
       faulted,
       exhausted,
+      stopCode,
     };
   } finally {
     release();

@@ -6,20 +6,28 @@
  *   npx tsx scripts/m2-r1-pilot.ts dry-run --out DIR       SIMULATED: fake transport, $0, never evidence
  *   npx tsx scripts/m2-r1-pilot.ts status  --out DIR       ledger summary and the cost ESTIMATE
  *   npx tsx scripts/m2-r1-pilot.ts export  --out DIR --to NEW_DIR
- *   npx tsx scripts/m2-r1-pilot.ts launch  --out DIR --launch-real-trials --plan-sha256 SHA [pacing]
+ *   scripts/vm-session.sh -- node --import tsx scripts/m2-r1-pilot.ts launch --out DIR \
+ *       --launch-real-trials --plan-sha256 SHA [--token-file PATH] [pacing]
  *
  * pacing: --concurrency N --delay-s S (defaults in benchmark/pilot/r1/config.json).
  *
- * `launch` never starts a real trial in this change: it checks the subscription preflight
- * (names only), requires the explicit flag and the sha256 of the plan `plan` printed, prints
- * the plan, and then refuses, because the VM-side capture is the lead-approved later step.
- * Exit: 0 ok / complete, 1 run failed, 2 usage, 3 refused, 4 paused or incomplete.
+ * `launch` starts REAL trials only when every precondition holds (`src/pilot/live-launch.ts`):
+ * the subscription preflight (names only), the explicit flag, the sha256 of the plan `plan`
+ * printed, the VM session lock held by `scripts/vm-session.sh`, concurrency 1. Otherwise it
+ * prints the plan and refuses with every reason. A live trial resets the VM, seeds the task
+ * document in the guest, runs headless Claude Code on the subscription, and captures the
+ * persisted document host-side over the SSH tunnel (`src/pilot/vm-capture.ts`). Re-run the
+ * same command to resume; `<out>/live-status.json` is the watchdog heartbeat.
+ * Exit: 0 ok / complete, 1 run failed, 2 usage, 3 refused, 4 paused or incomplete,
+ * 5 fail-closed stop (auth, billing/credit/quota, API key), 6 two identical failures in a row.
  */
 import { join, resolve } from "node:path";
 import { configSha256, type PacingConfig } from "../src/pilot/config.ts";
 import { COST_BASIS } from "../src/pilot/cost.ts";
 import { fakeDriver, PILOT_DRY_RUN_PLANNER, virtualClock } from "../src/pilot/dry-run.ts";
 import { preflightRefusal, subscriptionPreflight, trialLaunchPlan } from "../src/pilot/launch.ts";
+import { launchR1Live } from "../src/pilot/live-launch.ts";
+import { realLiveDeps } from "../src/pilot/live-deps.ts";
 import { loadLedger, PROGRESS_FILE, pilotStatus } from "../src/pilot/ledger.ts";
 import { loadReviewedConfig, publishedTasks } from "../src/pilot/reviewed.ts";
 import { exportRun, runPilot } from "../src/pilot/runner.ts";
@@ -133,19 +141,24 @@ try {
       }
       const dir = flag("--out");
       if (dir === undefined) throw new UsageError("launch needs --out DIR");
-      const sha = printPlan(dir);
-      if (!rest.includes("--launch-real-trials") || flag("--plan-sha256") !== sha) {
-        err(
-          "refusing to launch: a real launch needs --launch-real-trials and --plan-sha256 <the configSha256 printed above>\n",
-        );
-        process.exitCode = 3;
-        break;
-      }
-      err(
-        "refusing to launch: the live pilot is a later, lead-approved step. This change has no VM-side capture wired " +
-          "(claudeDriver needs `capture`), so it cannot start real trials. See docs/benchmark/pilot-runbook.md.\n",
+      printPlan(dir);
+      const tokenFile = flag("--token-file");
+      const r = await launchR1Live(
+        {
+          config: loadReviewedConfig(ROOT, published, overrides()),
+          published,
+          outDir: dir,
+          repoRoot: ROOT,
+          oracleSources: sources,
+          launchRealTrials: rest.includes("--launch-real-trials"),
+          planSha256: flag("--plan-sha256"),
+        },
+        realLiveDeps(ROOT, tokenFile, (l) => err(`${l}\n`)),
       );
-      process.exitCode = 3;
+      if (r.refusals.length > 0)
+        err(`refusing to launch:\n${r.refusals.map((x) => `  - ${x}\n`).join("")}`);
+      else out(`LIVE R1 pilot (cost: token-derived estimate): ${JSON.stringify(r.result)}\n`);
+      process.exitCode = r.exitCode;
       break;
     }
     default:
