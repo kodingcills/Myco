@@ -731,8 +731,7 @@ export async function runPilot(opts: PilotRunOptions): Promise<PilotRunResult> {
           if (transient > maxTransient) {
             transientCapped.push(task.taskId);
             stop = `paused: a transient rate limit hit ${task.taskId} again (${trialKey}) after its re-run; no further cold reset for this trial in this run directory (a resume runs the other trials only). Take it to the lead`;
-          }
-          else if (consecutiveRateLimits >= config.pacing.maxConsecutiveRateLimits)
+          } else if (consecutiveRateLimits >= config.pacing.maxConsecutiveRateLimits)
             stop = `paused after ${consecutiveRateLimits} rate limits in a row; re-run the same command later to resume`;
           else
             nextStartAt = Math.max(

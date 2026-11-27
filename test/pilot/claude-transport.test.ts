@@ -412,9 +412,9 @@ describe("headless Claude Code transport (fake spawn)", () => {
       '{"type":"result","subtype":"success","is_error":false,"result":"Claude AI usage limit reached|1700000000"}';
     expect(faultOf(() => interpretResult(exact, "", 0))).toBe("usage-limit");
     for (const code of [1, 0]) {
-      expect(faultOf(() => interpretResult("Claude AI usage limit reached|1700000000", "", code))).toBe(
-        "usage-limit",
-      );
+      expect(
+        faultOf(() => interpretResult("Claude AI usage limit reached|1700000000", "", code)),
+      ).toBe("usage-limit");
       expect(faultOf(() => interpretResult("5-hour limit reached ∙ resets 3pm", "", code))).toBe(
         "usage-limit",
       );

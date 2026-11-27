@@ -1123,7 +1123,7 @@ describe("round 2, D3: the subscription's usage limit stops; transient limits ba
     expect(vm.events.filter((e) => e === "reset")).toHaveLength(2);
     const list = attemptsOf(out, "fc-v1-001");
     expect(taskStatus(list, cfg.pacing.maxAttemptsPerTrial).kind).toBe("open");
-    expect(r.result?.transientCapped).toEqual(["fc-v1-001"]);
+    expect(r.result).toMatchObject({ transientCapped: ["fc-v1-001"] });
     // Round 3, F2: the cap is ledger-durable. A resume does not start fc-v1-001 again (no third
     // cold reset); it runs the other trial and stays paused, naming the capped trial.
     const vm2 = fakeVm();
@@ -1131,7 +1131,7 @@ describe("round 2, D3: the subscription's usage limit stops; transient limits ba
     const r2 = await launchR1Live(r1Opts(cfg, out), deps(vm2, again));
     expect(r2.exitCode).toBe(EXIT.paused);
     expect(r2.result).toMatchObject({ status: "paused", stopCode: null, ran: 1 });
-    expect(r2.result?.transientCapped).toEqual(["fc-v1-001"]);
+    expect(r2.result).toMatchObject({ transientCapped: ["fc-v1-001"] });
     expect(r2.result?.reason).toMatch(/fc-v1-001\. Take them to the lead/);
     expect(again.calls.map((c) => c.options.cwd?.toString().split("/").pop())).toEqual([
       "r1p-fc-v1-002-a1",
@@ -1156,7 +1156,10 @@ describe("round 3, F2: at most one extra cold reset per trial, in total, across 
 
   for (const [name, pacing] of [
     ["the second limit pauses in-run (default pacing)", {}],
-    ["each invocation pauses after one limit (maxConsecutiveRateLimits 1)", { maxConsecutiveRateLimits: 1 }],
+    [
+      "each invocation pauses after one limit (maxConsecutiveRateLimits 1)",
+      { maxConsecutiveRateLimits: 1 },
+    ],
   ] as const)
     it(`a persistent 529 over the first run and 3 resumes: 2 spawns and 2 resets for the trial in total (${name})`, async () => {
       const out = tmp();
@@ -1264,7 +1267,11 @@ describe("round 3, R2-D3a/b: quota wording stops with exit 7 on plain stdout and
       expect(r.result).toMatchObject({ status: "complete", ran: 2, faulted: 0, stopCode: null });
       const end = attemptsOf(out, "fc-v1-001")[0]?.end;
       expect(end?.outcome).toBe("decided");
-      const want = text.endsWith("NOT DONE") ? "not-done" : text.endsWith("DONE") ? "done" : "no-claim";
+      const want = text.endsWith("NOT DONE")
+        ? "not-done"
+        : text.endsWith("DONE")
+          ? "done"
+          : "no-claim";
       expect([text, end?.armRow?.claim]).toEqual([text, want]);
     }
   });
@@ -1275,7 +1282,10 @@ describe("round 3: the A/B launch reports a usage-limit stop to the lead (kills 
     const LOADED = loadPrereg(ROOT);
     const sha = abPlanSha256(LOADED, 0, PUBLISHED);
     const out = tmp();
-    const d = deps(fakeVm(), fakeClaude(() => decided));
+    const d = deps(
+      fakeVm(),
+      fakeClaude(() => decided),
+    );
     const r = await launchAbLive(
       {
         loaded: LOADED,
