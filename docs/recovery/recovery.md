@@ -146,20 +146,43 @@ another combination.
 - **Pre-registration hash**: SHA-256 of the file's canonical JSON (keys sorted, no
   whitespace) without its own `preregistrationHash` member, which stores it
   (`preregHash`, `src/recovery/prereg.ts`).
-- **Draft until the lead rules.** `status: "draft"`. Pending: the step budget (80) and the
-  `ms-long-v1` size (40) are the spec's proposals and open lead questions (§6), not ratified;
-  the manifest SHA-256 is null until `ms-long-v1` is built. `checkKPrereg` reports `frozen`
-  only with nothing pending, `status: "frozen"` and a manifest SHA-256 that matches the
-  committed manifest. Any edit to the file, a pinned file or the spec's K section fails the
-  check until the file is updated.
+- **Lead rulings, 06:21Z (relayed on #647).** `leadRulings` records both, each naming the
+  fields it settles: the step budget is 80, the same for both arms; `ms-long-v1` is n = 90
+  (45 faulted) under the J rule. `designation` is `"confirmatory"` at 90 and
+  `"exploratory"` at the n = 40 fallback (`sizeRule`); no other pairing passes the check. The
+  pinned spec section still says "40" and "proposed 80": `spec.amendedBy` states that the bar
+  is that section as amended by `leadRulings`.
+- **VM-hours estimate** (`vmHoursEstimate`, required, arithmetic checked): 90 tasks x 2 arms
+  x k = 1 = 180 trials at 600 s each (cold reset 140 s + redeploy 100 s, measured on the M1
+  VM, `docs/baseline/screenshot-agent.md`; plus 80 steps at 4.5 s, the planning rate of 135 s
+  for a C1 trial of up to 30 steps, since no Ultra or K trial is measured) = **30 VM-hours**.
+  If every trial ran to the pilot's 1800 s timeout: 102 VM-hours. At the n = 40 fallback:
+  13.3 VM-hours. The pilot's 90 s spacing adds about 4.5 h of wall clock but no VM work.
+- **Draft until the task set is built.** `status: "draft"`. Pending: the manifest SHA-256
+  (null until `ms-long-v1` is built) and `sizeRule.applied`: before freezing, recompute the
+  seconds per trial from the R1 pilot's measured `elapsedMs`, and the coordinator checks the
+  estimate against the VM schedule of the R1 pilot, the `hcu+shell` head-to-head, the
+  corrections A/B and the 90 s demo; if it would delay any of them, k-v1 switches to n = 40
+  exploratory before freezing. `leadRulingPending` is empty. `checkKPrereg` reports `frozen`
+  only with nothing pending, no lead ruling pending, `status: "frozen"` and a manifest SHA-256
+  that matches the committed manifest. Any edit to the file, a pinned file or the spec's K
+  section fails the check until the file is updated. The pins include the analysis's and
+  the grader's transitive modules (`src/recovery/trial.ts`; `grade.ts`, `sheet.ts`, `zip.ts`).
 - **Analysis**: `npx tsx scripts/k-recovery-analysis.ts --prereg <prereg.json> --k <pack>
   --none <pack> [--plumbing]` on two `myco.recovery.pack/1` files (one arm's batch, the
   pre-registration hash and the commit it was frozen in). It refuses: a pre-registration
-  failing its check; a pack whose hash is not the pre-registration's, or whose commit does not
-  hold a pre-registration with that hash (`git show`); a draft unless `--plumbing`; rows whose
-  task set or step budget differ from it, and, for evidence, whose model, task count or
-  faulted count differ. A halted batch is reported as halted. Otherwise it runs `recoveryBar`
-  unchanged. `--plumbing` output is never evidence.
+  failing its check; a pack whose hash is not the pre-registration's, whose commit is not on
+  main (an ancestor of `origin/main`), or whose commit does not hold a pre-registration with
+  that hash (`git show`); a draft unless `--plumbing`; a simulated row under evidence and a
+  real row under `--plumbing` (a row is real only when `simulated` is absent or exactly
+  `false`, #652); a complete batch holding a gate miss; rows whose task set or step budget
+  differ from it, and, for evidence, whose model, task count or faulted count differ. A halted
+  batch is reported as halted (with `frozen`, `evidence: false`, `shown: false`). Otherwise it
+  runs `recoveryBar` unchanged and reports `shown`: true only for evidence on a frozen,
+  confirmatory pre-registration with no lead ruling pending and a passing bar. Otherwise
+  `shown` and `bar.passes` are false and `notShown` names each reason (`PLUMBING`, `DRAFT`,
+  `LEAD_RULING_PENDING`, `EXPLORATORY`, `UNDERPOWERED`, `P_ABOVE_ALPHA`); the statistics are
+  reported unchanged. `LEAD_RULING_PENDING` exits 1 (#652).
 
 ## Separation from the gate (spec §1.2)
 
@@ -198,18 +221,18 @@ it equal to the gate's `STATE_FILE_LIMIT`.
 | §1.2 | Separation rules 1, 3 (in-process) and 4 | `boundary.test.ts` |
 | K18 | Multi-step instruction states each step's number, record, column and value, and the save (api.md, Corrections) | `test/tasks/multi-step-text.test.ts` T1-T5 |
 | K19 | Multi-step grader entry, independent of the gate, on the final captured document | `test/benchmark/multi-step-grade.test.ts` G1-G7; `test/benchmark/independence.test.ts` |
-| K20 | §3 pre-registration: fields, hash over canonical JSON, draft until the lead rules | `prereg.test.ts` P1-P6 |
-| K21 | The analysis refuses a pack whose hash or commit does not match, and a draft for evidence | `analysis.test.ts` A1-A6 |
+| K20 | §3 pre-registration: fields, hash over canonical JSON, the 06:21Z lead rulings recorded, VM-hours estimate, confirmatory/exploratory, draft until the task set is built | `prereg.test.ts` P1-P9 |
+| K21 | The analysis refuses a pack whose hash or commit does not match or is off main, a draft for evidence, simulated rows for evidence and real rows for plumbing, and a gate miss; never "shown" while a lead ruling is pending, for plumbing, a draft or an exploratory pre-registration (#652) | `analysis.test.ts` A1-A9 |
 | #601 | N5 grade check, N6 evidence default, F6 fault kind, S1, S2, `"DONE"` near-miss | `batch.test.ts` "#601 follow-ups", K15 |
 
 ## Not built here (follow-ups)
 
-- **`ms-long-v1`**: 40 long multi-step Calc tasks, 8 edits each, with a seeded mid-task fault
+- **`ms-long-v1`**: 90 long multi-step Calc tasks (40 at the exploratory fallback), 8 edits each, with a seeded mid-task fault
   (`kill-app`, `delayed-save`, `focus-change`) on half of them. It needs a deterministic build
   script (seeded by the pre-registration's `seeds.taskBuild`, instructions from
   `multiStepTaskText`), a SHA-256 manifest and a byte-identical test, and must be frozen before
   measurement. Its manifest SHA-256 then goes into the pre-registration, which is frozen once
-  the lead rules on the step budget and size.
+  the `sizeRule.applied` check is cleared.
 - **The seeded ABBA schedule** from `seeds.assignment`, and the trial adapter that wires
   `gradeMultiStep` in as each trial's injected grader.
 - **Serving the tools over MCP**: a stdio `myco-recovery` server bound to one trial, wired into
