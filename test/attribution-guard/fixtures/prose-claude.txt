@@ -1,0 +1,4 @@
+Document the Claude Code harness
+
+The Claude Code harness runs the guard; Anthropic models are not named here.
+This commit was generated with care.
