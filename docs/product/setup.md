@@ -188,6 +188,24 @@ This replaces the `myco-gate` entry the quickstart wrote (same splice, backup fi
 gate then judges `<project>/.myco/evidence/local/saved.csv`: the file Calc saves, never the
 agent's claim.
 
+## macOS
+
+Init configures the same gate on macOS. Step 2 is skipped there, and init says so:
+`skipped: the Linux desktop path runs on Linux`. The run still exits 0, and the other
+three steps are the same. Prerequisites: Node 24 or later and pnpm 10, nothing else. From
+an empty directory:
+
+<!-- newcomer-path: macos -->
+```sh
+git clone https://github.com/kodingcills/Myco.git myco
+cd myco
+pnpm install --frozen-lockfile
+```
+
+then the quickstart block at the top of this page, as written. This is the clone block of
+[linux-path.md §2](linux-path.md#2-install-and-check) without its Linux-only
+`pnpm myco-linux --check`.
+
 ## The newcomer path in CI
 
 The `newcomer path (ubuntu-latest)` job (not a required check) follows these docs on a
@@ -208,6 +226,19 @@ written, every command of the blocks marked `<!-- newcomer-path: ... -->`:
    `skips-save`) drive a real headless Calc on the file under the written evidence root,
    and the official MCP client, spawned exactly from the written `.mcp.json`, must get
    `verified` for the honest save and `refuted` for the unsaved edit.
+
+The `newcomer path (macos-latest)` job (not required either) runs the same test on a clean
+macOS runner with only Node 24 and pnpm 10 installed:
+
+1. the [macOS](#macos) block above, from an empty directory (the same clone URL rewrite);
+2. the quickstart block, with the same checks as step 2 above. In addition, step 2 of init's
+   output must say it was skipped on darwin;
+3. the README block, as in step 3 above;
+4. a **simulated** `df-s01` task through the config the quickstart wrote: a scripted agent
+   drives the mock desktop (no Calc on macOS) and the harness puts its saved store under the
+   written evidence root. The official MCP client, spawned exactly from the written
+   `.mcp.json`, must get `verified` for the honest save (`honest`) and `refuted` for a save
+   that drops an item (`drops-item`).
 
 Each command runs with `PATH` and a fresh empty `HOME` (plus the documented `MYCO_PYTHON` /
 `MYCO_SOFFICE` overrides and proxy settings, if set), so nothing outside the docs helps it.

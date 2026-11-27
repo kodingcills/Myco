@@ -61,6 +61,7 @@ events, which must carry the run's task and the run's arm (an anchored run must 
 
 ```
 npx tsx scripts/proof.ts export RUN.json --out bundle.json [--forbid-file F] [--user-file U] [--identity-file I]
+npx tsx scripts/proof.ts export-pilot RUN_DIR --trial KEY --out bundle.json [--forbid-file F] [--user-file U] [--identity-file I]
 npx tsx scripts/proof.ts verify bundle.json [--evidence-dir D] [--episode E] [--expect-head H] [--expect-ledger-head H] [--user-file U] [--identity-file I]
 npx tsx scripts/proof.ts report bundle.json --out report.html [verify flags]
 ```
@@ -76,6 +77,59 @@ closed. Register the guest's account name in `--user-file`. Neither file's conte
 printed. `--identity-file` lines (a full name, other names) and `--user-file` lines are also
 **identity strings** for the identity guard (below), with the host's account name, hostname
 and home directory.
+
+### From an R1 pilot run directory (#674)
+
+`export-pilot` (`src/proof/from-pilot.ts`, `pilotProofInput`) builds the `ProofRunInput` of one
+trial from what the R1 runner already leaves on disk, so no hand-written `RUN.json` is needed.
+`RUN_DIR` is the R1 pilot's `--out`, or one corrections A/B arm directory (the same runner writes
+both). It only reads; no runner file changes. It has no write path into the run either: an
+`--out` inside `RUN_DIR` or inside the directory of its external #518 anchor (symlinks followed
+on the path's existing prefix), or an `--out` that is itself a symlink, is refused before
+anything is read (`PROOF_PILOT_OUT`). The bundle is written to a temporary file beside `--out`
+and renamed into place, so an existing `--out` that is a hard link to a run file is replaced,
+never written through. The result goes through `exportProofBundle` like any `RUN.json`, so the
+allowlist, the identity guard and the self-verify all still apply.
+
+| Source (in `RUN_DIR`) | Becomes |
+|---|---|
+| `pilot-progress.jsonl` (read by the runner's own `loadLedger`) | `run.runId` and `run.taskId` from the trial's start line, `run.arm` from its end line's arm row, `run.simulated` from the header |
+| `SIMULATED` marker (any entry, even a dangling symlink) | `run.simulated: true`, whatever the header says (fail toward "never evidence") |
+| `trials/<KEY>/gate-tasks.json` | evidence `gate-tasks` (kind `gate-registry`, `application/json`) |
+| `trials/<KEY>/doc.csv` | evidence `persisted-doc` (kind `persisted-document`, `text/csv`); it must hash to the arm row's `persistedSha256`, and must be absent when that is null |
+| `attempts.jsonl` (#518), when present | the ledger, with its head taken from the **external** anchor (`anchorPathFor`, outside `RUN_DIR`) and checked by #518's own `verifyAnchor` |
+
+Evidence paths are relative to the trial directory, so
+`verify bundle.json --evidence-dir RUN_DIR/trials/KEY` re-checks the files. The R1 pilot alone
+writes no #518 ledger (only the A/B arm directories do), so its bundles carry no ledger anchor.
+
+**No verdict record (stated gap).** The runner records the gate's verdict on the arm row, but
+not the reason codes, evidence refs or oracle of its post-stop check. A verdict record needs the
+codes (`verified` requires `ORACLE_PASS`), and codes are never inferred. So a bundle from a
+pilot directory has no verdict record (`verdictCarried: false`) until the runner persists the
+gate result per trial. That change is in `src/pilot/runner.ts`, the critical path, and is left
+to its owner (#674).
+
+**`gate-tasks.json` is bound to nothing the runner recorded (stated gap).** `doc.csv` must match
+the arm row's `persistedSha256`, but the runner records no digest of the gate registry, so the
+`gate-tasks` evidence attests whatever bytes are on disk at export time: a registry replaced
+after the run exports without refusal. Binding it needs the runner to record its digest on the
+arm row (a `src/pilot/runner.ts` change, left to its owner).
+
+`export-pilot` refuses, with a code and a structural message (never a path, a key or a value):
+
+| Export code | Refused when |
+|---|---|
+| `PROOF_PILOT_TRIAL` | the trial key is not a closed id (it names a directory, so no separator and no `..` is ever joined), or it is not in the progress ledger exactly once |
+| `PROOF_PILOT_OUT` | `--out` is inside `RUN_DIR` or inside its external anchor directory, or is a symlink (checked before anything is read) |
+| `PROOF_PILOT_PROGRESS` | no progress ledger, one that is a symlink, one that does not load, or one with no header (an empty file) |
+| `PROOF_PILOT_OPEN` | the trial has no end, or its end has no arm row (a crash closure) |
+| `PROOF_PILOT_MISMATCH` | the arm row names another trial or task |
+| `PROOF_PILOT_EVIDENCE` | `doc.csv` differs from the arm row's digest, is missing when recorded, or is present when none was recorded; an evidence file is not a regular file (a symlink, even a dangling one); `trials/` or `trials/KEY/` is a symlink; no evidence at all |
+| `PROOF_LEDGER_CHAIN` / `PROOF_LEDGER_ANCHOR` | #518's ledger is not a regular file (a symlink, even a dangling one, is not read as "no ledger"), fails its own check, has no external anchor or disagrees with it (a consistent rewrite that was not re-anchored); a trial whose fault class #518 cannot name has no end there, so its export is refused |
+
+Every bundle built from a pilot directory so far comes from a SIMULATED dry run (the tests).
+Simulated rows are never evidence.
 
 ## The verifier
 
@@ -229,12 +283,29 @@ first 60 hex characters (240 bits) of that digest (`src/proof/hashed.ts`). Only 
 kept, so no input text survives. Every `h-` form other than exactly `h-<60hex>` (`h-<64hex>`,
 59 or 61 digits, upper case) is a plain value and is hashed. Even an exact `h-<60hex>` input is
 kept as is ONLY when the harness produced it (#579 O3, provenance-bound;
-`src/export-guard/provenance.ts`): the exporter's hash ledger records it for that field's scope
-(one scope for every id, since ids cross-reference; the field name for a vocabulary field).
-`bundleHashLedger(text)` builds the ledger from a bundle the harness wrote, after it verifies, so
-re-exporting a run from a bundle's own values is byte-identical. With no ledger every
+`src/export-guard/provenance.ts`): the exporter's hash ledger records it at that field's scope,
+which is the RUN id plus the field's exact JSON path in the bundle, array indexes included
+(`$.run.runId`, `$.records[3].body.tool`, `$.records[5].body.evidence[0]`; `proofScope`, #599
+O-a and #602 N-a). That is the binding the episode export and track U use (episode id plus exact
+path): a harness hash recorded for one run, field or record is re-hashed in any other. Ids
+cross-reference (a verdict's `evidence` names evidence ids), and each position records its own
+value, so a re-export keeps every copy; a copy that is not kept is re-hashed and the self-verify
+refuses the export.
+
+**The importer trust boundary** (#599 follow-up 2; `src/export-guard/seal.ts`). A validator
+cannot tell who wrote a value, so a hand-edited bundle whose chain was recomputed still verifies.
+The harness therefore SEALS each bundle it writes: `sealProofBundle(text, key)` is
+`HMAC-SHA256(key, "myco.proof.seal/1" NUL sha256(text))`, stored next to the bundle.
+`bundleHashLedger(text, { key, seal })` refuses (`PROOF_SEAL`) unless the seal holds for exactly
+those bytes under the harness key, before it trusts any value; then the bundle must verify; then
+its hashed values are recorded at their scopes. So re-exporting a run from a sealed bundle's own
+values is byte-identical, and an agent's `h-<60hex>` planted in a bundle never reaches a ledger.
+The key is harness-private: it is loaded at the point of use from a key file (`loadSealKey(path)`,
+at least 32 bytes, refused if group- or world-accessible on POSIX), is never printed, and every
+refusal is a code. The seal is NOT a public signature: only the key holder can check it, and a
+third party still verifies a bundle by its chain and an out-of-band head. With no ledger every
 `h-<60hex>` input (an agent's) is re-hashed, so it cannot carry hex-encoded text or a hex-letter
-identity. A bundle written before #579 is trusted by `bundleHashLedger`, so re-export from the
+identity. A bundle written before #599 has no seal and cannot be imported: re-export it from the
 source run instead. A bundle whose hashed-value field holds any other `h-`
 form is refused (`PROOF_SCHEMA`). Full content digests are NOT truncated: `TextRef.sha256`,
 `evidence.sha256`, `prevSha256`, the head, the ledger head and the episode digest stay the full
@@ -313,8 +384,11 @@ passes the result of verifying the same bytes.
   records map onto these shapes, never the reverse. TO FILE: once `myco.episode/1` carries the
   handoff log (N, #528's `handoffs` field) and policy decisions (O), the bundle references them
   through the episode instead of restating them.
-- **Live runner wiring.** The live harness must write `RUN.json` as the trial runs. That needs
-  the VM, so it is out of this PR (TO FILE, a local single-owner task under the VM lock).
+- **Live runner wiring.** `export-pilot` (#674) reads `RUN.json`'s content from an R1 run
+  directory after the run, so the runner needs no Q-specific writer. What is still missing is
+  the gate result of each trial's post-stop check (reason codes, evidence refs, oracle), which
+  the runner does not persist; until it does, pilot bundles carry no verdict record (#674's
+  follow-up, for the critical path's owner).
 
 ## Proposed pre-registered measurement bar (for `docs/product/capability-spec.md`)
 
