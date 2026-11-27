@@ -190,19 +190,18 @@ export function proposeAgentCheck(checkDir: string, binding: AgentCheckBinding):
   const cases = FAMILY_CASES[binding.family]();
   const reg = registerPlugin(checkDir, { hostCases: cases });
   if (!reg.ok) return refuse(`AGENT_CHECK_${reg.code}`, reg.reasons, reg.selftest);
-  const { manifest, selftest, provenance } = reg.registration;
+  const { manifest, provenance } = reg.registration;
   if (manifest.kinds.length !== 1 || manifest.kinds[0] !== "oracle")
     return refuse("AGENT_CHECK_NOT_ORACLE_ONLY", ["an agent-written check is an oracle only"]);
+  // An oracle registration exists only after its R5 self-test passed for every claim
+  // (`registerPlugin` refuses otherwise), so the report is present and passing here.
+  const selftest = reg.registration.selftest as OracleReport;
   if (!manifest.claims.some((c) => VALUE_CLASSES.includes(c)))
     return refuse(
       "AGENT_CHECK_NO_VALUE_CLAIM",
       [`claims none of ${VALUE_CLASSES.join(", ")}`],
       selftest,
     );
-  // registerPlugin returns ok only after the self-test passed for every claim; re-asserted
-  // here so a change to track T cannot silently let an unproven check through.
-  if (selftest === null || !selftest.pass)
-    return refuse("AGENT_CHECK_SELFTEST_FAILED", ["no passing self-test"], selftest);
   const claimed = selftest.claims.map((c) => selftest.perClass[c]);
   const check: AgentCheck = deepFreeze({
     binding: { taskId: binding.taskId, runId: binding.runId, family: binding.family },

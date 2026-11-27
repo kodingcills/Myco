@@ -276,7 +276,9 @@ describe("track C: an accepted check runs only as itself, only for its own task,
       for (const b of [
         { ...BINDING, taskId: "other-task" },
         { ...BINDING, runId: "run-2" },
-      ]) {
+        { ...BINDING, family: "writer-doc-edit" },
+        { ...BINDING, extra: "x" },
+      ] as never[]) {
         const s = runAgentCheck(check, b, doc, SPEC);
         expect([s.status, s.code, s.codeSource]).toEqual([
           "uncertain",

@@ -28,7 +28,7 @@ export function carriesAgentCheckSignal(value: unknown): boolean {
     if (depth > MAX_DEPTH) return true;
     if (seen.has(v)) return false;
     seen.add(v);
-    if (Array.isArray(v)) return v.some((x) => scan(x, depth + 1));
+    // Arrays too: their elements are their values.
     const o = v as Record<string, unknown>;
     if (
       o.kind === AGENT_CHECK_SIGNAL_KIND ||
