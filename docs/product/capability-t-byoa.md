@@ -39,7 +39,16 @@ budget (0) in both arms; `plugin_state` spends a step like any tool. Neither arm
   40 rows, columns spread evenly; **12 invalid-target** tasks (the id does not exist) as a
   false-done guardrail.
 - Built deterministically by a build script with a SHA-256 manifest and a byte-identical test,
-  like fc-v1, and frozen before measurement.
+  like fc-v1, and frozen before measurement. **Built (#673):** `benchmark/byoa-ledger/byoa-ledger-v1/`
+  from `src/tasks/byoa-ledger-taskset.ts` (build seed `byoa-ledger-v1/build`; check with
+  `npx tsx scripts/byoa-ledger-taskset.ts --check`). Four editable columns (date, payee, amount,
+  category), 15 satisfiable tasks each; one instruction template for both kinds. The `t-v1`
+  pre-registration pins it by `sha256(manifest.json)`. No trial has run on it.
+- **Guest staging (queued for the local VM owner, not run):** per trial, copy the task's
+  `fixtures/<sha256>.csv` into the guest read root as `ledger.csv` and verify its SHA-256 there,
+  open it in the plain text editor (Notepad on the Windows path), give the agent the task's
+  `instruction` verbatim, and after the agent stops capture `ledger.csv`'s bytes for
+  `ledger-csv/1`. One reset per trial, under the VM lock, only after the lead's GO.
 - **Grader:** a new entry `ledger-csv/1` in `src/benchmark/grade/`, written independently of
   the plugin (no shared code; `test/benchmark/independence.test.ts` already enforces both
   directions for `src/plugins/` and `examples/plugins/`). It reads the captured bytes against
