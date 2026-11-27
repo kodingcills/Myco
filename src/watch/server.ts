@@ -31,7 +31,8 @@ import { DecisionLogTail } from "./decision-log.ts";
 import { projectDecisions, type WatchEvent } from "./events.ts";
 import type { FrameSource } from "./frames.ts";
 import { PAGE_CSS, PAGE_HTML, PAGE_JS } from "./page.ts";
-import { hostNeedles, servableFrame } from "./sanitize-frame.ts";
+import type { PilotRunSource, PilotView } from "./run-dir.ts";
+import { frameLeaks, hostNeedles, servableFrame } from "./sanitize-frame.ts";
 
 export interface WatchServerOptions {
   /** Bind address. Default 127.0.0.1. */
@@ -47,6 +48,8 @@ export interface WatchServerOptions {
   /** The gate's decision log (`--audit` JSONL). Read-only. */
   readonly decisionLog?: string;
   readonly frames?: FrameSource;
+  /** A pilot run directory to follow (`run-dir.ts`), read-only. */
+  readonly pilot?: PilotRunSource;
   /** How often the log and frames are re-read. Default 250 ms. */
   readonly pollMs?: number;
   /** Most events the state carries (the latest ones). Default 2000. */
@@ -71,6 +74,10 @@ export interface WatchState {
   readonly omitted: number;
   readonly skipped: number;
   readonly logPresent: boolean;
+  /** The followed pilot run, or null (no `pilot` source, or the backstop refused the view). */
+  readonly pilot: PilotView | null;
+  /** The backstop scan found a host needle or path in the projected pilot view: not shown. */
+  readonly pilotRefused: boolean;
 }
 
 /** SSE bookkeeping, for tests and diagnostics. */
@@ -175,10 +182,34 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
   const tail = opts.decisionLog === undefined ? null : new DecisionLogTail(opts.decisionLog);
   const frames = opts.frames;
 
-  let current: WatchState = { runs: [], events: [], omitted: 0, skipped: 0, logPresent: false };
+  let current: WatchState = {
+    runs: [],
+    events: [],
+    omitted: 0,
+    skipped: 0,
+    logPresent: false,
+    pilot: null,
+    pilotRefused: false,
+  };
   let currentJson = "";
+  let pilot: PilotView | null = null;
+  let pilotRefused = false;
+  const pollPilot = () => {
+    if (opts.pilot === undefined) return;
+    let view: PilotView;
+    try {
+      view = opts.pilot.poll();
+    } catch {
+      return; // keep the last good view
+    }
+    // Backstop: the view is rebuilt from closed fields, but refuse it outright if any host
+    // needle, absolute host path or key-shaped string survived the projection.
+    pilotRefused = frameLeaks(Buffer.from(JSON.stringify(view)), false, needles);
+    pilot = pilotRefused ? null : view;
+  };
   const refresh = (): boolean => {
     tail?.poll();
+    pollPilot();
     const log = tail?.snapshot() ?? { present: false, records: [], malformed: 0 };
     const projected = projectDecisions(log.records, { runs, tasks });
     const omitted = Math.max(0, projected.events.length - maxEvents);
@@ -188,6 +219,8 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
       omitted,
       skipped: projected.skipped + log.malformed,
       logPresent: log.present,
+      pilot,
+      pilotRefused,
     };
     const json = JSON.stringify(next);
     if (json === currentJson) return false;
