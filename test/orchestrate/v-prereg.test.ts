@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { parseLimits } from "../../src/orchestrate/limits.ts";
-import { V_BAR, type VBarRow } from "../../src/orchestrate/v-bar.ts";
+import { leadRulingPending, V_BAR, type VBarRow } from "../../src/orchestrate/v-bar.ts";
 import {
   barSectionOf,
   loadVPrereg,
@@ -28,7 +28,7 @@ const raw = readFileSync(join(ROOT, V_PREREG_PATH), "utf8");
 const prereg = JSON.parse(raw) as VPreregFile & Record<string, unknown>;
 
 /** The v-v1 pre-registration hash. Packs record it; it changes only with a new version. */
-const V_V1_PREREG_HASH = "db638dc124d1e1600c18f938fca4d5c2f843a86550d0ec0f5991eab7c0d6229f";
+const V_V1_PREREG_HASH = "aecfbf8aea7cc9bc9ef262c1c1974cedba11c4d9b8498e9b3c39dc94031b5713";
 
 const temps: string[] = [];
 afterAll(() => {
@@ -117,7 +117,11 @@ describe("v-v1 pre-registration content (Part 1 §3.1)", () => {
   });
 
   it("does not claim ratification and lists the values pending a lead ruling", () => {
-    expect(String(prereg.ratification)).toMatch(/^not ratified/);
+    expect(prereg.ratification.status).toBe("not ratified");
+    // No lead ruling was posted on #643 before this freeze; the check is recorded with its time.
+    expect(prereg.leadRulings).toEqual([]);
+    expect(prereg.leadRulingsCheckedAt).toMatchObject({ found: "none" });
+    expect(leadRulingPending(prereg)).toBe(true);
     const pending = (prereg.proposedPendingLeadRuling as string[]).join("\n");
     for (const key of [
       "test.sided",
@@ -190,6 +194,8 @@ describe("scripts/orch-v-bar.ts", () => {
   const ids = [...loaded.tasks.keys()];
   const controls = {
     tokensUsed: 1000,
+    maxTokensByOneWorker: 500,
+    workersCompletedAfterKill: 0,
     costEstimateMicroUsd: 100,
     wallMs: 1000,
     maxDepthObserved: 1,
@@ -228,6 +234,8 @@ describe("scripts/orch-v-bar.ts", () => {
           })),
           costEstimateMicroUsd: 100,
           wallMs: 1000,
+          tokensUsed: 1000,
+          desktopActions: 10,
           ...(arm === "V" ? { controls } : {}),
         };
       }),
@@ -243,20 +251,51 @@ describe("scripts/orch-v-bar.ts", () => {
     });
   };
 
-  it("analyses a pack that records the hash: exit 0, decision printed", { timeout: 60_000 }, () => {
-    const r = run({ preregHash: V_V1_PREREG_HASH, rows: rows(false) });
+  const COMMIT = "f".repeat(40);
+
+  it("a winning pack under the committed (unratified) pre-registration is NOT shown: LEAD_RULING_PENDING, exit 0, numbers printed", {
+    timeout: 60_000,
+  }, () => {
+    const r = run({ preregHash: V_V1_PREREG_HASH, preregCommit: COMMIT, rows: rows(false) });
     expect(r.status, r.stderr).toBe(0);
-    const out = JSON.parse(r.stdout) as { decision: string; preregHash: string };
+    const out = JSON.parse(r.stdout) as {
+      decision: string;
+      preregHash: string;
+      reasons: string[];
+      primary: { treatmentOnly: number; discordant: number };
+    };
     expect(out.preregHash).toBe(V_V1_PREREG_HASH);
-    expect(out.decision).toBe("shown");
+    expect(out.decision).toBe("not-shown");
+    expect(out.reasons).toEqual(["LEAD_RULING_PENDING"]);
+    expect(out.primary).toMatchObject({ treatmentOnly: 10, discordant: 10 });
   });
 
   it("refuses a pack with another hash, and a simulated pack: exit 2", { timeout: 60_000 }, () => {
-    const wrong = run({ preregHash: "0".repeat(64), rows: rows(false) });
+    const wrong = run({ preregHash: "0".repeat(64), preregCommit: COMMIT, rows: rows(false) });
     expect(wrong.status).toBe(2);
     expect(JSON.parse(wrong.stdout).reasons).toContain("PREREG_HASH_MISMATCH");
-    const simulated = run({ preregHash: V_V1_PREREG_HASH, rows: rows(true) });
+    const simulated = run({ preregHash: V_V1_PREREG_HASH, preregCommit: COMMIT, rows: rows(true) });
     expect(simulated.status).toBe(2);
     expect(JSON.parse(simulated.stdout).decision).toBe("refused");
+  });
+
+  it("a malformed or unreadable pack is a coded refusal (exit 2), never a stack trace", {
+    timeout: 60_000,
+  }, () => {
+    const nullRow = run({ preregHash: V_V1_PREREG_HASH, preregCommit: COMMIT, rows: [null] });
+    expect(nullRow.status).toBe(2);
+    expect(nullRow.stderr).not.toMatch(/TypeError|at .*\.ts/);
+    expect(JSON.parse(nullRow.stdout)).toMatchObject({ decision: "refused" });
+    expect(JSON.parse(nullRow.stdout).reasons).toContain("MALFORMED_ROW:rows[0]");
+    const dir = mkdtempSync(join(tmpdir(), "v-pack-"));
+    temps.push(dir);
+    const path = join(dir, "pack.json");
+    writeFileSync(path, "{not json");
+    const bad = spawnSync("npx", ["tsx", "scripts/orch-v-bar.ts", "--pack", path], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    expect(bad.status).toBe(2);
+    expect(JSON.parse(bad.stdout).reasons).toEqual(["PACK_UNREADABLE"]);
   });
 });
