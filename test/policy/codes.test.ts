@@ -54,6 +54,7 @@ describe("track O closed vocabularies", () => {
       "POLICY_CONFIG_TOO_LARGE",
       "POLICY_SCOPE_INVALID",
       "POLICY_SENSOR_MISSING",
+      "POLICY_UNPOLICED_SURFACE",
     ]);
     expect(POLICY_PACK_REFUSALS).toHaveLength(5);
     expect(ACTUATOR_IDS).toHaveLength(6);
