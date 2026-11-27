@@ -107,6 +107,8 @@ function fakeVm(
   o: {
     bootClass?: "cold" | "fast" | null;
     failReset?: boolean;
+    /** Fail the n-th deploy (1-based) only, or every deploy with `true`. */
+    failDeploy?: boolean | number;
     failOpen?: boolean;
     failCaptureRead?: boolean;
     corruptSeed?: boolean;
@@ -115,11 +117,18 @@ function fakeVm(
   const guest = new Map<string, Buffer>();
   const events: Event[] = [];
   let reads = 0;
+  let deploys = 0;
   const backend: VmBackend = {
     async reset() {
       events.push("reset");
       if (o.failReset) throw new Error("utm said no");
       return { bootClass: o.bootClass === undefined ? "cold" : o.bootClass };
+    },
+    async deploy() {
+      deploys++;
+      events.push("deploy");
+      if (o.failDeploy === true || o.failDeploy === deploys)
+        throw new Error("deploy-to-vm.sh exited 1");
     },
     async open() {
       events.push("open");
@@ -347,10 +356,12 @@ describe("R1 launch with every precondition and fakes reaches the live driver", 
         Object.keys(call.options.env ?? {}).every((k) => CHILD_ENV_ALLOWLIST.includes(k)),
       ).toBe(true);
     }
-    // The VM step, in order, per trial: reset, open, seed (write + read back), [agent], capture, close.
+    // The VM step, in order, per trial: reset, deploy (#691), open, seed (write + read back),
+    // [agent], capture, close.
     const k1 = guestDoc("r1p-fc-v1-001-a1");
-    expect(vm.events.slice(0, 6)).toEqual([
+    expect(vm.events.slice(0, 7)).toEqual([
       "reset",
+      "deploy",
       "open",
       `write ${k1}`,
       `read ${k1}`,
