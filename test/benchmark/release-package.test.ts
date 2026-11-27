@@ -338,7 +338,7 @@ describe("leak scan", () => {
   });
 
   it("refuses secret-shaped strings, the canary, forbidden strings and this machine's names", () => {
-    const secret = ["sk", "ant", "api03", "Zq7Xw2Lr9Tk4Vb8Nm1"].join("-");
+    const secret = `sk-ant-${"example42".repeat(3)}`;
     const machine = { user: "qorvanuser", host: "qorvanhost-mbp.local" };
     const hygiene = { identity: machine, forbiddenStrings: ["PROJECT-NOVA-9"] };
     const opts = { hygiene };
@@ -355,7 +355,7 @@ describe("leak scan", () => {
   it("refuses the release when a dataset holds any of them, never echoing the text", () => {
     const d = join(newDir("leak2"), "dataset");
     mkdirSync(d);
-    const secret = ["sk", "ant", "api03", "Zq7Xw2Lr9Tk4Vb8Nm1"].join("-");
+    const secret = `sk-ant-${"example42".repeat(3)}`;
     writeFileSync(join(d, "a.json"), `{"key":"${secret}"}\n`);
     writeFileSync(join(d, "b.json"), `{"note":"${PLANTED_MARKER}"}\n`);
     writeFileSync(join(d, "c.json"), `{"by":"qorvanuser"}\n`);
@@ -374,7 +374,7 @@ describe("leak scan", () => {
     expect(msg).toContain("datasets/leaky/b.json:1 planted-marker");
     expect(msg).toContain("datasets/leaky/c.json:1 username");
     expect(msg).toContain("datasets/leaky/d.json:1 hostname");
-    expect(msg).not.toMatch(/Zq7Xw2|qorvan|PLANTED/);
+    expect(msg).not.toMatch(/example42|qorvan|PLANTED/);
     expect(existsSync(out)).toBe(false);
   });
 
