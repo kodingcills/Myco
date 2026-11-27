@@ -15,6 +15,7 @@
  * more errors, for one; see `known-limit.test.ts`). The signal stays advisory and is refused
  * as evidence.
  */
+import { randomInt } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { agentCheckSelfTestCases } from "../../src/agent-checks/check.ts";
 import {
@@ -23,6 +24,7 @@ import {
   CALC_ODD_VALUES,
   type CalcError,
   calcCases,
+  calcCasesFor,
 } from "../../src/oracle-selftest/subjects.ts";
 import type { SavedDocument } from "../../src/oracle-selftest/types.ts";
 import { cleanupPlugins, SPEC, TASK } from "./helpers.ts";
@@ -110,6 +112,21 @@ describe("#610 item 1: every bound-task case carries the wider drawn corruptions
       });
     }
   });
+
+  it("a deleted row never erases the other error of its pair (1000 draws)", () => {
+    // A deletion that hits the moved cell's row or a changed cell's row leaves a one-error
+    // document. With 198 rows that happens about once in 100 draws, so 1000 draws find it.
+    const withDelete = CALC_ERROR_PAIRS.flatMap((pair, k) =>
+      pair.includes("row-delete") ? [[pair, k] as const] : [],
+    );
+    for (let n = 0; n < 1000; n++) {
+      const [c] = calcCasesFor([SPEC], TASK.fileName, randomInt);
+      for (const [pair, k] of withDelete) {
+        const doc = c?.corruptions[SINGLE.length + k]?.doc as SavedDocument;
+        expect([...errorsOf(text(doc))].sort(), pair.join("+")).toEqual([...pair].sort());
+      }
+    }
+  }, 60_000);
 
   it("a document with only an inserted row and one with only a deleted row (collateral)", () => {
     for (const c of cases) {
