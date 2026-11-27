@@ -184,12 +184,23 @@ guard:
   picks one from context, so `Νίκος` alone and `ΝίκοςTrial` would otherwise disagree). So `Alice`, `ALICE`, `a.l.i.c.e`,
   `run-alice-1` all contain `alice`, a full name `First Last` matches **joined** as
   `firstlast` (`FirstLast`, `first.last`, `first_last`, `First-Last`, `FIRSTLAST`) and by
-  each word of three or more characters, a
+  each word of three or more characters alone (`<first>_trial`, `<Last>2`, `xx<first>`; the
+  rule is shared with the episode export and the track U container since #580 O1,
+  `src/export-guard/identity-words.ts`), a
   hostname matches whole and by its first DNS label, and a home directory whole and by its
   last segment. A configured string under two characters after normalisation is not matched
   (stated limit: a one-letter needle would match nearly every id);
 - generic shapes (key-like tokens, home-root and other host paths, `DOMAIN\user`,
   `user@host`) are the backstop's own patterns, run on the raw value.
+
+**Known limit: unconfigured names (accepted residual risk, #580 O4).** The guard catches only
+configured identities (this host's account name, hostname and home, the identity file,
+`--user-file`) and the generic shapes above. A name nobody configured, in an id that matches the
+closed id grammar, is written as is. For example, another machine's host name
+(`<name>-MacBook-Pro.local` as a run or task id) and a dotted, path-like id with an unconfigured
+name (`Users.<name>.Documents`) are both kept verbatim. The remedy is to list every name that may
+appear in the identity file before exporting. A test pins this
+(`test/proof/identity-words.test.ts`, "O4 residual") so this paragraph stays true.
 
 Enum members (`MEDIA_TYPES`, `POLICY_REASON_CODES`, the known arms, and every schema enum
 and constant) are constants of this code, not host values, so they are written as is and
