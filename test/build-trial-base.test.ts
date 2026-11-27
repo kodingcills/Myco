@@ -79,9 +79,17 @@ esac
 exit 0`,
   );
   const reset = join(dir, "reset.sh");
-  stub(reset, `echo "reset $* egress=\${MYCO_GUEST_EGRESS:-closed}" >> "${log}"\nexit 0`);
+  // The real reset prints its boot class (TIF-98 cold-boot check); a cold boot here.
+  stub(
+    reset,
+    `echo "reset $* egress=\${MYCO_GUEST_EGRESS:-closed}" >> "${log}"\necho "reset-trial-vm: boot class=cold first_ssh_s=140 guest_cpu_first_ssh_s=280 attempts=1" >&2\nexit 0`,
+  );
   const gate = join(dir, "gate.sh");
-  stub(gate, `echo "gate $*" >> "${log}"\nexit 0`);
+  // The real gate prints its first-ssh line with the guest CPU; a cold boot here.
+  stub(
+    gate,
+    `echo "gate $*" >> "${log}"\necho "wait-guest-ready: first ssh answer after 140s (guest CPU 280s)" >&2\nexit 0`,
+  );
   return {
     PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`,
     HOME: dir,

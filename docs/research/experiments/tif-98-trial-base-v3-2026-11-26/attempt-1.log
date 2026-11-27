@@ -1,0 +1,5 @@
+build-trial-base: 18:13:58Z step 1: open egress for the maintenance window; restore and boot clean-base
+build-trial-base: 18:18:54Z step 2: state before; signatures; ngen; idle tasks; full scan
+build-trial-base: idle/maintenance tasks did not finish (see 06-idle.log)
+build-trial-base: exit trap: re-denying guest egress
+guest-egress: isolate-from-host=true, ssh forward 127.0.0.1:2222->22 intact; VM left stopped (run scripts/reset-trial-vm.sh)
