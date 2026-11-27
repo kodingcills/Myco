@@ -184,8 +184,9 @@ controller serves the getters, and its evaluate path runs the postconfig.
   `src/benchmark/upstream/prereg.ts` checks that the record states what the ruling requires.
   It refuses "shown" while anything is pending.
 - [`gate-hook.md`](gate-hook.md) covers the DONE gate hook, the three arms (arm (c) is the
-  self-check re-verification the lead ruled at 15:26Z), the documented runner patch, and the
-  constraint on the gate's oracle.
+  primary self-check the lead ruled at 15:26Z and 18:11Z: a dump of the saved content that the
+  model re-verifies against), the two labelled ablations, the documented runner patch and the
+  narrow controller handle it passes, and the constraint on the gate's oracle.
 - [`host-requirements.md`](host-requirements.md) covers the fleet (the R1 host), the
   coordinator's measured numbers, how to re-measure with `measure.sh`, and the exact host
   requirement for the parity reference run. Nothing has been pulled or started.

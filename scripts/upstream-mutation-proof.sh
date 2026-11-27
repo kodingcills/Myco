@@ -89,7 +89,7 @@ run_mutant K1d-grader-accepts-unpatched-runner "$R" 'const digest = OSWORLD_HARN
 run_mutant K1e-analysis-counts-mock-runner-rows "$P" 'if (rows.some((r) => r.graderVersion !== OSWORLD_EVALUATE_GRADER))' 'if (false)' "$TP"
 run_mutant K1f-prereg-grader-not-upstream "$J" '"version": "osworld-desktopenv-evaluate@0ad41bee56565efe7bb3c3a5ebc67590a1b8276f"' '"version": "upstream-metric-mock/1"' "$TP"
 # K2 an arm with a different action layer passes the identical-layer tests.
-run_mutant K2a-self-check-arm-alters-actions "$H" '                codes = self._self_check(instruction)' '                codes = self._self_check(instruction)
+run_mutant K2a-self-check-arm-alters-actions "$H" '                accepted, pending = self._reverify()' '                accepted, pending = self._reverify()
                 out.append({"action_type": "WAIT"})' "$TH"
 run_mutant K2b-gate-arm-rewrites-non-done-action "$H" '                out.append(action)
                 continue' '                out.append(dict(action, command="pyautogui.sleep(0)"))
@@ -244,10 +244,10 @@ printf 'SAVED\\t%d\\n' \"\$saved\"" "$TH" "$HOME_ONLY"
   run_mutant SC7-probe-reads-hidden-dirs "$H" "-iname '*.pdf' \\) -not -path '*/.*' -newermt" "-iname '*.pdf' \\) -newermt" "$TH" "$RULES"
   run_mutant SC8-probe-format-rule-off "$H" '*.pdf) [ "$(head -c 5 "$1" 2>/dev/null)" = "%PDF-" ] ;;' '*.pdf) true ;;' "$TH" "$RULES"
   run_mutant SC9-nothing-saved-ignored "$H" '    if int(saved[0]) == 0:' '    if False:' "$TH"
-  run_mutant SC10-self-check-other-controller-call "$H" '            result = self.controller().run_bash_script(script, timeout=PROBE_SCRIPT_TIMEOUT_S)' '            self.controller().get_file("/home/user/Desktop/report.xlsx")
-            result = self.controller().run_bash_script(script, timeout=PROBE_SCRIPT_TIMEOUT_S)' "$TH"
+  run_mutant SC10-self-check-other-controller-call "$H" '            result = self.controller.run_bash_script(script, timeout=PROBE_SCRIPT_TIMEOUT_S)' '            self.controller.get_file("/home/user/Desktop/report.xlsx")
+            result = self.controller.run_bash_script(script, timeout=PROBE_SCRIPT_TIMEOUT_S)' "$TH"
 fi
-run_mutant SC11-patch-hands-hook-task-config src/gate-hooks/osworld/run_multienv_claude.gate.patch '+                            controller=lambda: env.controller),' '+                            controller=lambda: (env.controller, example)),' "$TH"
+run_mutant SC11-patch-hands-hook-task-config src/gate-hooks/osworld/run_multienv_claude.gate.patch '+                                env.provider.get_ip_address, env.path_to_vm, MycoPythonController)),' '+                                env.provider.get_ip_address, env.path_to_vm, MycoPythonController, example)),' "$TH"
 run_mutant SC12-prereg-self-check-unchecked "$P" 'out.push("SELF_CHECK_NOT_RULED");' '' "$TP"
 run_mutant SC13-prereg-may-not-read-unchecked "$P" '    !SELF_CHECK_MAY_NOT_READ.every((k) => mayNotRead.some((m) => m.includes(k)))' '    false' "$TP"
 run_mutant SC14-prereg-suffix-arm-kept "$J" '"promptSuffix": null,
@@ -255,9 +255,104 @@ run_mutant SC14-prereg-suffix-arm-kept "$J" '"promptSuffix": null,
       "selfCheck"' "$TP"
 run_mutant SC15-prereg-stale-pending-unchecked "$P" 'out.push("STALE_SELF_CHECK_PENDING");' '' "$TP"
 run_mutant SC16-prereg-1526-ruling-not-required "$P" '  "2026-11-27T15:26Z",
-] as const;' '] as const;' "$TP"
+  "2026-11-27T18:11Z",' '  "2026-11-27T18:11Z",' "$TP"
 run_mutant SC17-prereg-prompt-unchecked "$P" 'if (a.promptSuffix !== null)' 'if (false)' "$TP"
 run_mutant SC18-static-guard-allows-other-calls "$TX" 'if (m[1] !== "run_bash_script")' 'if (false)' "$TX"
+
+# Round 3 (#741, lead ruling 18:11Z). B1: the primary self-check dumps the saved content once and
+# the model judges; nothing saved is never a refusal. B2: a narrow controller handle with no path
+# to the environment. N1-N5 of the round-2 verdict.
+TFL="test/benchmark/osworld-fleet.test.ts"
+DUMPED="the dump hands back the real saved content"
+NEVER="never touches the environment, the evaluator, gold"
+RULES_CALLS="one probe call per DONE"
+if [ "$(uname -s)" = "Linux" ]; then
+  for name in "$DUMPED" "$NEVER" "$RULES_CALLS"; do
+    out=$(timeout 300 pnpm exec vitest run "$TH" -t "$name" 2>&1)
+    if [ $? -ne 0 ] || ! sed "s/\x1b\[[0-9;]*m//g" <<<"$out" | grep -qE "Tests +[1-9][0-9]* passed"; then
+      echo "BASELINE FAILED for filter: $name"
+      survived=1
+    fi
+  done
+  # B1: the arm's form.
+  run_mutant R3a-reverify-on-every-done "$H" '        if self._reverified:' '        if False:' "$TH"
+  run_mutant R3b-nothing-saved-refuses "$H" '        self._reverified = True
+        dump = self._dump()' '        dump = self._dump()
+        self._reverified = dump is not None and not dump.startswith("NOT SAVED")' "$TH"
+  run_mutant R3c-first-done-passes-unchecked "$H" '        return False, reverify_text(dump)' '        return True, None' "$TH"
+  run_mutant R3d-fails-open-without-dump "$H" '        return False, reverify_text(dump)' '        return dump is None, reverify_text(dump)' "$TH"
+  run_mutant R3e-free-model-turn-on-reverify "$H" '                accepted, pending = self._reverify()' '                accepted, pending = self._reverify()
+                if not accepted:
+                    self.feedback(self.agent, pending)
+                    return self.agent.predict(instruction, obs, *args, **kwargs)' "$TH"
+  run_mutant R3f-message-not-fixed "$H" '"finish again. This re-check happens once per task."' '"finish again. This re-check happens once per task. The grader expects saved files."' "$TH"
+  run_mutant R3g-dump-content-dropped "$H" '            return xlsx(z, members)' '            return []' "$TH" "$DUMPED"
+  run_mutant R3h-dump-reads-hidden-dirs "$H" 'dirs[:] = sorted(x for x in dirs if not x.startswith(".")' 'dirs[:] = sorted(x for x in dirs if True' "$TH" "$DUMPED"
+  run_mutant R3i-dump-follows-links "$H" ' or not n.lower().endswith(DOCS) or os.path.islink(p):' ' or not n.lower().endswith(DOCS):' "$TH" "$DUMPED"
+  # N1: the guest reads ground truth next to the home; killed by the runtime (inotify) test, not the pin.
+  run_mutant R3j-dump-reads-outside-home "$H" 'home, elapsed = sys.argv[1], int(sys.argv[2])' 'home, elapsed = os.path.dirname(sys.argv[1]), int(sys.argv[2])' "$TH" "$NEVER"
+  run_mutant W3-probe-reads-ground-next-to-home "$H" "printf 'SAVED\\t%d\\n' \"\$saved\"" "d=\$(dirname \"\$root\"); cat \"\$d/ground/re\"*\"t.txt\" >/dev/null 2>&1
+printf 'SAVED\\t%d\\n' \"\$saved\"" "$TH" "$RULES_CALLS"
+  # N2: probe calls per DONE.
+  run_mutant W4-two-dump-calls-per-done "$H" '            result = self.controller.run_bash_script(dump_script(elapsed),' '            self.controller.run_bash_script(dump_script(elapsed), timeout=PROBE_SCRIPT_TIMEOUT_S)
+            result = self.controller.run_bash_script(dump_script(elapsed),' "$TH"
+  run_mutant R3k-dump-on-every-done "$H" '        if self._reverified:
+            self.decisions.append(' '        if self._reverified:
+            self._dump()
+            self.decisions.append(' "$TH"
+  run_mutant R3l-rules-probe-twice "$H" '            result = self.controller.run_bash_script(script, timeout=PROBE_SCRIPT_TIMEOUT_S)' '            self.controller.run_bash_script(script, timeout=PROBE_SCRIPT_TIMEOUT_S)
+            result = self.controller.run_bash_script(script, timeout=PROBE_SCRIPT_TIMEOUT_S)' "$TH" "$RULES_CALLS"
+  # B2: ground truth through the environment the agent holds, or through the handle to the provider
+  # (names obfuscated, so the runtime tripwires, not the static check, kill them).
+  run_mutant W2b2-agent-env-score-refuses "$H" '        if self._reverified:' '        if getattr(getattr(self.agent, "en" + "v"), "sc" + "ore") < 1.0:
+            return False, None
+        if self._reverified:' "$TH"
+  run_mutant W2c2-agent-env-config-accepts "$H" '        if self._reverified:' '        if getattr(getattr(self.agent, "en" + "v"), "task_" + "con" + "fig"):
+            self._reverified = True
+        if self._reverified:' "$TH"
+  run_mutant B2p-handle-climbs-to-provider "$H" '        dump = self._dump()' '        dump = self._dump()
+        getattr(getattr(getattr(self.controller, "_add" + "ress"), "__se" + "lf__"), "contai" + "ner")' "$TH"
+fi
+# B2: the verifier's surviving mutants W2c2 and W2b2, as written against round 2: through the
+# getter's closure. The handle has no closure (the runtime route is closed: the closureRoute test
+# shows both blocked), and the static check names the climb.
+run_mutant W2c2-closure-evaluator-config-accepts "$H" '        if self._reverified:' '        try:
+            if self.controller.__closure__[0].cell_contents.task_config["evaluator"]:
+                self._reverified = True
+        except Exception:
+            pass
+        if self._reverified:' "$TX"
+run_mutant W2b2-closure-score-refuses "$H" '        if self._reverified:' '        try:
+            if self.controller.__closure__[0].cell_contents.score < 1.0:
+                return False, None
+        except Exception:
+            pass
+        if self._reverified:' "$TX"
+run_mutant B2a-patch-closes-over-env src/gate-hooks/osworld/run_multienv_claude.gate.patch '+                            controller=MycoControllerHandle(
++                                env.provider.get_ip_address, env.path_to_vm, MycoPythonController)),' '+                            controller=lambda: env.controller),' "$TH"
+run_mutant B2b-hook-accepts-any-callable "$H" '            if not isinstance(controller, ControllerHandle):' '            if not callable(controller) and not isinstance(controller, ControllerHandle):' "$TH"
+run_mutant B2c-handle-grows-a-dict "$H" '    __slots__ = ("_address", "_vm_path", "_controller_class")' '    pass' "$TH"
+run_mutant B2d-static-guard-misses-closure "$TX" '|__closure__|cell_contents|__globals__|__self__' '|__globals__' "$TX"
+run_mutant B2e-handle-ignores-port "$H" '        return parts[0], int(parts[1])' '        return parts[0], DEFAULT_SERVER_PORT' "$TH"
+# N3: the image check reads effective lines only.
+run_mutant N3a-launcher-commented-out "$SS" '/usr/libexec/at-spi-bus-launcher --launch-immediately >' '# /usr/libexec/at-spi-bus-launcher --launch-immediately >' "$TFL" "$IMG"
+run_mutant N3b-launcher-neutralised "$SS" '/usr/libexec/at-spi-bus-launcher --launch-immediately >' 'true /usr/libexec/at-spi-bus-launcher --launch-immediately >' "$TFL" "$IMG"
+run_mutant N3c-no-at-bridge-env "$DF" '    ACCESSIBILITY_ENABLED=1 \' '    ACCESSIBILITY_ENABLED=1 \
+    NO_AT_BRIDGE=1 \' "$TFL" "$IMG"
+# N4: `accepted` exactly true; a stdio result without structuredContent fails closed.
+run_mutant Y14-accepted-merely-truthy "$H" 'accepted = verdict == "verified" and reply.get("accepted") is True' 'accepted = verdict == "verified" and bool(reply.get("accepted"))' "$TH"
+run_mutant Y15-no-structured-content-forged "$H" '                return result.get("structuredContent")' '                return result.get("structuredContent") or {"apiVersion": GATE_API_VERSION, "verdict": "verified", "accepted": True, "reasonCodes": ["ORACLE_PASS"]}' "$TH"
+# N5: a duplicate row per arm.
+run_mutant Y6-duplicate-rows-pass "$P" 'armRows.length !== prereg.n || ' '' "$TP"
+# The pre-registration of the 18:11Z arm and its ablations.
+run_mutant R3m-prereg-1811-ruling-not-required "$P" '  "2026-11-27T18:11Z",
+] as const;' '] as const;' "$TP"
+run_mutant R3n-prereg-primary-unchecked "$P" '    selfCheck.primary !== true ||' '' "$TP"
+run_mutant R3o-prereg-nothing-saved-unchecked "$P" '    !selfCheck.nothingSaved.startsWith("Never a refusal") ||' '' "$TP"
+run_mutant R3p-prereg-ablations-unchecked "$P" 'out.push("ABLATIONS_NOT_LABELLED");' '' "$TP"
+run_mutant R3q-prereg-ablation-headline "$J" '"headline": false,' '"headline": true,' "$TP"
+run_mutant R3r-prereg-ablation-trials-unchecked "$P" '        typeof a.extraTrials !== "number" ||' '' "$TP"
+run_mutant R3s-prereg-dump-pin-drift "$J" '"dumpSha256": "e9df2a76bf967c56eecc7a6374e926ef20cb280eebd63dcaf62dca156f7d327e"' '"dumpSha256": "0000000000000000000000000000000000000000000000000000000000000000"' "$TH"
 if ! git diff --quiet -- src/benchmark/upstream benchmark/upstream src/gate-hooks src/gate docs/benchmark/upstream test/benchmark; then
   echo "FILES LEFT MODIFIED"
   survived=1

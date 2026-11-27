@@ -37,8 +37,21 @@ import { OSWORLD_EVALUATE_GRADER } from "../../src/benchmark/upstream/r1-grade.t
 const ROOT = resolve(import.meta.dirname, "..", "..");
 const FLEET = join(ROOT, "src/benchmark/upstream/fleet");
 const read = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
-const DOCKERFILE = read("src/benchmark/upstream/fleet/Dockerfile");
-const START = read("src/benchmark/upstream/fleet/start.sh");
+/**
+ * N3 (round 2): the image checks read the files' effective content only. Comment lines are
+ * dropped (and trailing comments in the shell script), so a commented-out line never counts.
+ */
+const effective = (text: string, trailing: boolean) =>
+  text
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("#"))
+    .map((l) => (trailing ? l.replace(/\s+#.*$/, "") : l))
+    .join("\n");
+const DOCKERFILE = effective(read("src/benchmark/upstream/fleet/Dockerfile"), false);
+const START = effective(read("src/benchmark/upstream/fleet/start.sh"), true);
+/** The start.sh line that RUNS `command` (it begins the line), or -1: a neutralised line (`true cmd`, `: cmd`, `echo cmd`) never counts. */
+const commandLine = (command: string) =>
+  START.split("\n").findIndex((l) => l.trim().startsWith(command));
 const REQS = read("src/benchmark/upstream/fleet/requirements-fleet.txt");
 const OSW = process.env.MYCO_UPSTREAM_OSWORLD ?? "";
 const REQUIRED = process.env.MYCO_UPSTREAM_REQUIRED === "1";
@@ -77,6 +90,31 @@ describe("fleet image definition: the a11y stack and OSWorld's action interface 
       expect(APT.has(pkg), pkg).toBe(true);
     expect(DOCKERFILE).toMatch(/^\s+SAL_USE_VCLPLUGIN=gtk3 \\$/m);
     expect(DOCKERFILE).toMatch(/^\s+GTK_MODULES=gail:atk-bridge \\$/m);
+    expect(DOCKERFILE).toMatch(/^\s+ACCESSIBILITY_ENABLED=1 \\$/m);
+    // N3: nothing switches the bridge or the plugin off again, or picks another plugin.
+    expect(DOCKERFILE).not.toMatch(/NO_AT_BRIDGE|GTK_A11Y|ACCESSIBILITY_ENABLED=0/);
+    expect(DOCKERFILE.match(/SAL_USE_VCLPLUGIN=/g)).toHaveLength(1);
+    expect(DOCKERFILE.match(/GTK_MODULES=/g)).toHaveLength(1);
+  });
+
+  it("N3: the image checks ignore comments and neutralised lines (bite check)", () => {
+    const launcher = "/usr/libexec/at-spi-bus-launcher --launch-immediately";
+    const raw = read("src/benchmark/upstream/fleet/start.sh");
+    const runs = (text: string) =>
+      effective(text, true)
+        .split("\n")
+        .some((l) => l.trim().startsWith(launcher));
+    expect(runs(raw)).toBe(true);
+    expect(runs(raw.replace(launcher, `# ${launcher}`))).toBe(false);
+    expect(runs(raw.replace(launcher, `true ${launcher}`))).toBe(false);
+    expect(runs(raw.replace(launcher, `: ${launcher}`))).toBe(false);
+    const docker = read("src/benchmark/upstream/fleet/Dockerfile");
+    const noBridge = effective(
+      docker.replace("ACCESSIBILITY_ENABLED=1 \\", "ACCESSIBILITY_ENABLED=1 NO_AT_BRIDGE=1 \\"),
+      false,
+    );
+    expect(noBridge).toMatch(/NO_AT_BRIDGE/);
+    expect(effective("# libreoffice-gtk3\nRUN true", false)).not.toContain("libreoffice-gtk3");
   });
 
   it("installs PyAutoGUI 0.9.54 and python3-xlib 0.15 (upstream's pins), every package hash-pinned", () => {
@@ -119,20 +157,25 @@ describe("fleet image definition: the a11y stack and OSWorld's action interface 
   });
 
   it("starts the AT-SPI bus and registry before anything that could start LibreOffice", () => {
-    const pos = (s: string) => START.indexOf(s);
+    // Each step is a line that runs the command (comments dropped; `true cmd` does not count).
     const order = [
       "Xvfb :0 -screen 0 1920x1080x24",
       'eval "$(dbus-launch --sh-syntax)"',
       "/usr/libexec/at-spi-bus-launcher --launch-immediately",
-      "org.a11y.Bus.GetAddress",
+      "until dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.a11y.Bus.GetAddress",
       "/usr/libexec/at-spi2-registryd",
       "exec /usr/bin/python /home/user/server/main.py",
-    ].map(pos);
+    ].map(commandLine);
     expect(order.every((p) => p >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // Nothing ends the script before the server: the only exit/exec lines are the readiness
+    // timeouts inside the wait loops and the final exec.
+    const lines = START.split("\n").map((l) => l.trim());
+    expect(lines.filter((l) => /^(exit|exec)\b/.test(l))).toEqual([
+      "exec /usr/bin/python /home/user/server/main.py",
+    ]);
     // No LibreOffice starts in the entrypoint: tasks open it later through the server.
-    const code = START.split("\n").filter((l) => !l.trim().startsWith("#"));
-    expect(code.join("\n")).not.toMatch(/soffice|libreoffice/i);
+    expect(START).not.toMatch(/soffice|libreoffice/i);
     expect(spawnSync("sh", ["-n", join(FLEET, "start.sh")]).status).toBe(0);
   });
 

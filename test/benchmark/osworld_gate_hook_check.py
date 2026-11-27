@@ -589,6 +589,8 @@ def dump_cases():
         # Only hidden-directory files, a lock file, a link and a too-deep file changed.
         "hiddenAndDeep": lambda h: (os.makedirs(at(".config", "libreoffice")(h)),
                                     plain(at(".config", "libreoffice", "registrymodifications.xcu")(h), "<x/>"),
+                                    xlsx_cells(at(".config", "stash.xlsx")(h), {"A1": 1}),
+                                    plain(at("Desktop", ".hidden.txt")(h), "hidden"),
                                     plain(at("Desktop", ".~lock.report.xlsx#")(h), "lock"),
                                     os.symlink(GOLD, at("Desktop", "linked.xlsx")(h)),
                                     os.makedirs(at("a", "b", "c", "d")(h)),
