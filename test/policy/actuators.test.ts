@@ -454,6 +454,7 @@ describe("policed wrappers: host-side reduction of real actions", () => {
     "ctrl+x",
     "ctrl+z",
     "ctrl+shift+z",
+    "ctrl+Z", // the guest holds Shift for the capital: Ctrl+Shift+Z, redo
     "cmd+a",
     "Return",
     "enter",

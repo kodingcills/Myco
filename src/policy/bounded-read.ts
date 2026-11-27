@@ -5,7 +5,7 @@
  * module because the policy boundary (`test/policy/boundary.test.ts`) forbids reaching
  * `src/integrity/`: open with `O_NONBLOCK | O_NOFOLLOW` (a FIFO opens at once instead of waiting
  * for a writer; a symlink at the last component is refused), `fstat` the open fd (regular file
- * only, the same device and inode as the caller's earlier `lstat`, at most `maxBytes`), then read
+ * only, the same device and inode as the caller's earlier `lstat`), then read
  * at most `maxBytes + 1` bytes from that fd, so a file that grows after the `fstat` is caught
  * rather than read on. Every refusal is immediate and carries a code.
  */
@@ -34,7 +34,6 @@ export function readBoundedNoBlock(path: string, maxBytes: number, expect: Stats
     const stat = fstatSync(fd);
     if (!stat.isFile()) return { ok: false, code: "not-regular" };
     if (stat.ino !== expect.ino || stat.dev !== expect.dev) return { ok: false, code: "swapped" };
-    if (stat.size > maxBytes) return { ok: false, code: "too-large" };
     const buf = Buffer.alloc(maxBytes + 1);
     let off = 0;
     while (off < buf.length) {
