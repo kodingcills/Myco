@@ -314,7 +314,9 @@ the one that counts.
 
 ## Job timeouts
 
-`check` has `timeout-minutes: 15` and `myco-agent tests` has 10. From 2026-11-23 to
+`check` has `timeout-minutes: 25` on macOS and 15 on ubuntu, and `myco-agent tests`
+has 10. macOS got 25 in #747: by 2026-11-27 its `check` took 11-14 min on plain
+`main` and was cancelled at the old 15-min limit. From 2026-11-23 to
 11-25, once a runner had the job, macOS `check` took at most 3.5 min (p50 1.8) and
 macOS `myco-agent tests` at most 0.9 min. A hang now ends as "timed out" in the
 step that hung, not as an unexplained cancel. `viewer-perf` keeps 20. A timeout

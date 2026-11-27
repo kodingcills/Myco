@@ -42,6 +42,8 @@
     "scripts/upstream-import.ts",
     "scripts/benchmark-release-package.ts",
     "scripts/benchmark-release-check-archive.ts",
-    "scripts/r-v1-analysis.ts"
+    "scripts/r-v1-analysis.ts",
+    "scripts/s-v1-freeze.ts",
+    "scripts/s-v1-analysis.ts"
   ]
 }
