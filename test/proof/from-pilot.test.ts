@@ -266,12 +266,58 @@ describe("refusals (codes and structural messages only)", () => {
     expect(codeOf(() => pilotProofInput(dir, key()))).toBe("PROOF_PILOT_EVIDENCE");
   });
 
+  it("a dangling symlink in place of the gate registry is refused, not read as absent", () => {
+    const dir = copyRun(plain.dir);
+    const gate = join(dir, "trials", key(), PILOT_GATE_TASKS_FILE);
+    rmSync(gate);
+    symlinkSync(join(tmp(), "gone.json"), gate);
+    expect(codeOf(() => pilotProofInput(dir, key()))).toBe("PROOF_PILOT_EVIDENCE");
+  });
+
+  it("a trial key that appears twice in the progress ledger", () => {
+    const dir = copyRun(plain.dir);
+    const path = join(dir, PROGRESS_FILE);
+    const lines = readFileSync(path, "utf8").trim().split("\n");
+    const mine = lines.filter((l) => (JSON.parse(l) as { trialKey?: string }).trialKey === key());
+    writeFileSync(path, `${[...lines, ...mine].join("\n")}\n`);
+    // The runner's own loader refuses a duplicate start first (`findAttempt`'s count check is a
+    // second, defensive line behind it).
+    expect(codeOf(() => pilotProofInput(dir, key()))).toBe("PROOF_PILOT_PROGRESS");
+  });
+
   it("a trial key that is not a closed id is never joined into a path", () => {
     for (const bad of ["../run", "a/b", "..", "", "x y", "C:run"])
       expect(
         codeOf(() => pilotProofInput(plain.dir, bad)),
         bad,
       ).toBe("PROOF_PILOT_TRIAL");
+  });
+
+  it("a ledger whose trial key climbs out of trials/ is refused before any file is read", () => {
+    // The ledger names `../outside` and a directory with valid evidence waits there: without the
+    // closed-id check the export would read it and succeed.
+    const dir = copyRun(plain.dir);
+    const bad = "../outside";
+    const path = join(dir, PROGRESS_FILE);
+    const lines = readFileSync(path, "utf8").trim().split("\n");
+    const edited = lines.map((l) => {
+      const v = JSON.parse(l) as {
+        event?: string;
+        trialKey?: string;
+        runId?: string;
+        armRow?: object | null;
+      };
+      if (v.trialKey !== key()) return l;
+      return JSON.stringify({
+        ...v,
+        trialKey: bad,
+        ...(v.event === "start" ? { runId: "outside" } : {}),
+        ...(v.armRow ? { armRow: { ...v.armRow, trialKey: bad } } : {}),
+      });
+    });
+    writeFileSync(path, `${edited.join("\n")}\n`);
+    cpSync(join(dir, "trials", key()), join(dir, "outside"), { recursive: true });
+    expect(codeOf(() => pilotProofInput(dir, bad))).toBe("PROOF_PILOT_TRIAL");
   });
 
   it("a trial key the progress ledger does not have", () => {
