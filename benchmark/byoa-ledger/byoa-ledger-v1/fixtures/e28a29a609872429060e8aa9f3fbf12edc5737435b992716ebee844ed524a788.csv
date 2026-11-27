@@ -1,0 +1,26 @@
+id,date,payee,amount,category
+312,2026-04-05,Pine Insurance,1569.57,office
+708,2026-02-26,Spark Telecom,1231.65,bills
+924,2026-02-14,Elm Florist,948.89,gifts
+1980,2026-01-15,Acme Rent,1799.70,health
+2013,2026-07-22,Wave Internet,817.82,health
+2152,2026-07-23,Oak Hardware,826.38,bills
+2591,2026-08-07,Lake Gym,1146.70,health
+2715,2026-08-19,Pine Insurance,463.02,home
+2913,2026-09-09,Acme Rent,295.62,home
+3061,2026-06-14,Elm Florist,783.16,travel
+3504,2026-11-08,Acme Rent,567.13,gifts
+3733,2026-02-21,Wave Internet,1908.93,home
+4305,2026-01-06,Metro Transit,554.29,gifts
+4528,2026-07-02,Wave Internet,1020.31,gifts
+4841,2026-06-26,Metro Transit,295.48,gifts
+6346,2026-04-24,Star Cinema,1862.33,health
+6363,2026-07-09,Wave Internet,700.26,food
+7048,2026-09-01,Elm Florist,1286.79,travel
+7889,2026-11-03,Oak Hardware,209.54,bills
+7919,2026-09-24,Wave Internet,1320.83,food
+8326,2026-01-08,Elm Florist,1738.13,home
+8423,2026-08-04,Oak Hardware,315.94,office
+8763,2026-03-21,City Utility,1070.52,home
+8915,2026-04-14,Metro Transit,594.14,food
+#rows,24

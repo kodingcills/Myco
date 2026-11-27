@@ -1,0 +1,29 @@
+id,date,payee,amount,category
+250,2026-08-12,River Cafe,405.66,gifts
+306,2026-07-22,River Cafe,62.71,office
+743,2026-04-18,Oak Hardware,16.81,home
+1088,2026-02-22,Book Nook,1406.35,health
+2033,2026-05-28,Lake Gym,383.02,gifts
+2034,2026-10-13,Wave Internet,307.12,travel
+2845,2026-03-05,Acme Rent,1564.37,gifts
+3240,2026-03-02,Acme Rent,825.09,home
+3473,2026-03-20,Wave Internet,1874.43,food
+3482,2026-05-15,Spark Telecom,590.61,gifts
+3674,2026-08-25,Wave Internet,1245.92,health
+3965,2026-06-22,Hill Pharmacy,1872.56,gifts
+5229,2026-08-07,River Cafe,681.13,travel
+5312,2026-04-15,Metro Transit,1520.28,health
+5555,2026-09-01,City Utility,1479.30,gifts
+5958,2026-02-21,Hill Pharmacy,1442.57,health
+6592,2026-09-02,Book Nook,255.35,bills
+6677,2026-03-16,Elm Florist,1792.76,leisure
+6974,2026-09-07,Book Nook,1462.25,food
+6978,2026-02-03,Book Nook,250.93,food
+7305,2026-06-11,Metro Transit,1158.65,office
+7391,2026-03-22,Oak Hardware,429.68,gifts
+7833,2026-08-12,Bright Dental,30.87,bills
+8689,2026-08-27,Metro Transit,831.09,travel
+9123,2026-11-12,Oak Hardware,1705.27,bills
+9313,2026-04-05,Acme Rent,398.05,gifts
+9762,2026-12-17,Wave Internet,324.65,bills
+#rows,27

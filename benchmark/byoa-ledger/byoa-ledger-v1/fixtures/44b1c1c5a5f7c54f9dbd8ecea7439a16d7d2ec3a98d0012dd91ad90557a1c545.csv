@@ -1,0 +1,32 @@
+id,date,payee,amount,category
+264,2026-06-26,Spark Telecom,715.60,leisure
+376,2026-11-05,Star Cinema,1552.71,travel
+513,2026-07-15,Corner Grocer,1626.86,gifts
+665,2026-10-19,Book Nook,1685.26,health
+690,2026-09-22,City Utility,30.26,gifts
+1006,2026-05-10,Star Cinema,1203.69,food
+1605,2026-04-04,North Bakery,1137.64,office
+1805,2026-08-28,River Cafe,1388.47,home
+2321,2026-12-07,Pine Insurance,1899.97,food
+2600,2026-03-10,Corner Grocer,1273.24,home
+3128,2026-05-22,River Cafe,497.21,office
+3144,2026-07-01,North Bakery,1896.84,leisure
+3339,2026-07-02,Bright Dental,1090.21,gifts
+3344,2026-11-22,Wave Internet,1923.95,home
+3420,2026-02-20,River Cafe,339.96,food
+3886,2026-05-01,Lake Gym,1906.65,leisure
+3978,2026-02-12,Metro Transit,904.00,health
+4478,2026-09-09,Spark Telecom,1937.31,office
+4785,2026-02-13,Oak Hardware,43.03,food
+4879,2026-05-07,Spark Telecom,1183.07,gifts
+6129,2026-07-24,Spark Telecom,1945.86,travel
+7500,2026-11-20,Wave Internet,192.61,home
+7532,2026-03-12,Book Nook,874.78,leisure
+7985,2026-10-09,City Utility,1464.27,health
+8393,2026-11-10,Star Cinema,1208.43,gifts
+8655,2026-01-22,Corner Grocer,1398.51,travel
+9047,2026-09-18,Pine Insurance,771.34,food
+9144,2026-02-09,Corner Grocer,338.24,leisure
+9681,2026-02-13,River Cafe,475.41,gifts
+9949,2026-10-28,Metro Transit,61.09,health
+#rows,30
