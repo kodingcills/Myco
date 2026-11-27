@@ -335,7 +335,7 @@ describe("R1 launch with every precondition and fakes reaches the live driver", 
     expect(ends.map((e) => e.outcome)).toEqual(["decided", "decided"]);
     for (const e of ends) {
       expect(e.armRow?.plannerModelId).toBe(cfg.model);
-      expect(e.armRow?.gate.verdict).toBe("verified");
+      expect(e.armRow?.gate?.verdict).toBe("verified");
     }
     // The heartbeat: finished, the exit code, cost labelled a token-derived estimate.
     const status = JSON.parse(readFileSync(join(out, LIVE_STATUS_FILE), "utf8"));
@@ -372,7 +372,7 @@ describe("the capture comes from the host's read of the guest, never from the ag
     expect(end?.armRow?.persistedSha256).toBe(sha256(fixture));
     expect(end?.armRow?.persistedSha256).not.toBe(sha256(forged));
     // ... so the agent's DONE is refuted, not accepted.
-    expect(end?.armRow?.gate.verdict).toBe("refuted");
+    expect(end?.armRow?.gate?.verdict).toBe("refuted");
     expect(end?.armRow?.accepted).toBe(false);
     // The vault holds the guest bytes and the host's provenance record.
     const vaultRun = join(out, "vault", "r1p-fc-v1-001-a1", "captured");
