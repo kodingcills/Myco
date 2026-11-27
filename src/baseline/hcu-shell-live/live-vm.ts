@@ -169,6 +169,16 @@ export function liveEnvironment(
         const converted = await deps.convertFixture(agent, fixture, workDir);
         releases.push(() => converted.cleanup());
         const xlsxPath = converted.xlsxPath;
+        // Seed read-back (as #598): the harness reads the seeded document before the agent runs,
+        // and records its hash in the host-capture provenance. Unreadable or empty fails closed.
+        let seeded: Buffer;
+        try {
+          seeded = await agent.readFile(xlsxPath);
+        } catch {
+          throw new LiveTrialError("seed-readback-failed");
+        }
+        if (seeded.length === 0) throw new LiveTrialError("seed-readback-failed");
+        const seededSha256 = sha256(seeded);
         const pid = await deps.openCalc(agent, xlsxPath, target.cellRef);
         const docDir = xlsxPath.replaceAll("/", "\\").replace(/\\[^\\]+$/, "");
         const shellPolicy = createShellPolicy({
@@ -180,25 +190,24 @@ export function liveEnvironment(
         });
 
         // Probe HCU once; the same session then serves the trial (one process per trial).
-        let gui: HcuGui | null = null;
+        // An unreachable HCU is a HARNESS fault with its own code (round-2 verifier D3): the
+        // attempt fails before the agent or the planner runs, nothing is counted, and the
+        // runner's repeat rule aborts on the second one. It never produces a row.
         let hcu: ReturnType<LiveDeps["openHcu"]> | null = null;
-        let diagnostic: string | undefined;
+        let gui: HcuGui;
         try {
           hcu = deps.openHcu(hcuGuestCommand);
+          releases.push(async () => hcu?.close());
           gui = await connectHcuGui(hcu.mcp);
           await gui.screenshot();
-        } catch (error) {
-          diagnostic = (error as { code?: string }).code ?? "hcu-unreachable";
-          gui = null;
-          hcu?.close();
-          hcu = null;
+        } catch {
+          throw new LiveTrialError("hcu-unreachable");
         }
         const driver: DriverPrecondition = {
           hostVersion: "hcu",
-          guestVersion: gui === null ? "" : "hcu",
-          pipeReachable: gui !== null,
-          sessionIdentityMatches: gui !== null,
-          ...(diagnostic === undefined ? {} : { diagnostic }),
+          guestVersion: "hcu",
+          pipeReachable: true,
+          sessionIdentityMatches: true,
         };
         const judged = deps.judge(agent, xlsxPath, params, pid);
         const prepared: PreparedHcuShell = {
@@ -211,7 +220,6 @@ export function liveEnvironment(
           loadAvg1: host.loadAvg1,
           shellPolicy,
           async connectGui() {
-            if (gui === null) throw new LiveTrialError("hcu-unreachable");
             return gui;
           },
           shell: sshGuestShell(deps.guest, scratchDir, GUEST_SHELL_SCRIPT),
@@ -227,7 +235,14 @@ export function liveEnvironment(
             return bytes.length > 0 ? { format: "xlsx", bytes: new Uint8Array(bytes) } : null;
           },
         };
-        return { prepared, params, target, bootClass, release };
+        return {
+          prepared,
+          params,
+          target,
+          bootClass,
+          capture: { guestPath: xlsxPath, seededSha256 },
+          release,
+        };
       } catch (error) {
         await release();
         throw error;
@@ -258,33 +273,81 @@ function run(
 /** Window titles that mean a dialog is up over the document. */
 const DIALOG = /keep current format|save|confirm|error/i;
 
+/**
+ * The reset's stdio: stdin ignored, stdout and stderr piped, FDs 3-8 closed, and FD 9 passed
+ * through. The CLI runs under `scripts/vm-session.sh`, which holds the VM flock on FD 9; the
+ * reset script accepts that lock only from a process carrying the same FD 9
+ * (`vm_lock_owned_by_parent`, TIF-210). The runner itself must be started with
+ * `node --import tsx` (a Node launcher such as `npx` replaces FD 9; round-2 verifier D4).
+ */
+export const RESET_STDIO: readonly ("ignore" | "pipe" | number)[] = [
+  "ignore",
+  "pipe",
+  "pipe",
+  "ignore",
+  "ignore",
+  "ignore",
+  "ignore",
+  "ignore",
+  "ignore",
+  9,
+];
+
+/** A reset that has not exited after this long is killed and reported as failed. */
+export const RESET_TIMEOUT_MS = 20 * 60_000;
+
+/**
+ * Run the reset with `RESET_STDIO` (FD 9 passed through) and a kill deadline. Exported so a
+ * test proves, with a stub script under a real `exec 9>lock`, that the lock descriptor reaches
+ * the reset process.
+ */
+export function spawnReset(
+  command: string,
+  args: readonly string[],
+  timeoutMs: number = RESET_TIMEOUT_MS,
+  echo: (d: Buffer) => void = (d) => process.stderr.write(d),
+): Promise<{ code: number | null; stderr: string; ms: number }> {
+  const t0 = performance.now();
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, [...args], { stdio: [...RESET_STDIO] });
+    } catch {
+      resolve({ code: null, stderr: "", ms: 0 });
+      return;
+    }
+    let stderr = "";
+    let done = false;
+    const end = (code: number | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(deadline);
+      resolve({ code, stderr, ms: Math.round(performance.now() - t0) });
+    };
+    const deadline = setTimeout(() => {
+      child.kill("SIGKILL");
+      end(null);
+    }, timeoutMs);
+    child.stdout?.on("data", (d: Buffer) => echo(d));
+    child.stderr?.on("data", (d: Buffer) => {
+      stderr += d.toString("utf8");
+      echo(d);
+    });
+    child.on("error", () => end(null));
+    child.on("close", (c) => end(c));
+  });
+}
+
 export function defaultLiveDeps(repoRoot: string): LiveDeps {
+  // A test must never reach the VM (as #598's `realVmBackend`): refused, not skipped.
+  if (process.env.VITEST !== undefined)
+    throw new Error("defaultLiveDeps is never built under a test runner: inject fake LiveDeps");
   const vmDir = join(os.homedir(), "VMs/myco-win11");
   const vssh = join(vmDir, "scripts/vssh");
   const sshArgs = ["-F", join(vmDir, "ssh_config"), "-o", "LogLevel=ERROR", "myco-win11"];
   return {
-    async reset(snapshot) {
-      // The CLI runs under scripts/vm-session.sh, which holds the VM flock on FD 9. The reset
-      // script accepts that lock only from a process that carries the same FD 9
-      // (vm_lock_owned_by_parent, TIF-210), so FD 9 is passed through explicitly.
-      const t0 = performance.now();
-      const stdio: ("ignore" | "pipe" | number)[] = ["ignore", "pipe", "pipe"];
-      for (let fd = 3; fd < 9; fd++) stdio.push("ignore");
-      stdio.push(9);
-      const child = spawn("bash", [join(repoRoot, "scripts/reset-trial-vm.sh"), snapshot], {
-        stdio,
-      });
-      let stderr = "";
-      child.stdout?.on("data", (d: Buffer) => process.stderr.write(d));
-      child.stderr?.on("data", (d: Buffer) => {
-        stderr += d.toString("utf8");
-        process.stderr.write(d);
-      });
-      const code = await new Promise<number | null>((resolve) => {
-        child.on("error", () => resolve(null));
-        child.on("close", (c) => resolve(c));
-      });
-      return { code, stderr, ms: Math.round(performance.now() - t0) };
+    reset(snapshot) {
+      return spawnReset("bash", [join(repoRoot, "scripts/reset-trial-vm.sh"), snapshot]);
     },
     async startAgent() {
       // As the C1 sweep: start myco-agent in the interactive session, then tunnel to it.

@@ -19,12 +19,18 @@
  *    CLI found an API credential somewhere we cannot see (a settings file, a helper), and we
  *    stop rather than spend on it.
  *
- * Errors from the CLI are classified by the myco-gate arm's transport classifier
- * (`interpretResult` in `src/pilot/claude-transport.ts`, reused, not copied): an auth fault
- * halts with `planner-auth`, a credit, billing, quota or usage-limit fault halts with
- * `planner-quota`. A halt is final for the run (no retry loop): the runner stops, writes the
- * code to its progress file, and exits. Any other CLI fault is a `PlannerFailure` for this
- * trial only, with a code the runner's two-identical-failures rule counts.
+ * Whether a call completed normally is decided by the myco-gate arm's transport classifier
+ * (`interpretResult`, reused, not copied). A call that did not is classed by
+ * `./subscription-faults.ts` (#598 round 2's vocabulary, matched exactly; round-2 verifier
+ * D1), and every class halts the run except the explicit per-trial list:
+ *  - `auth` halts `planner-auth`; `billing` (credit, billing, quota, HTTP 402) halts
+ *    `planner-billing`; the subscription's usage quota halts `planner-usage-limit` (lead
+ *    ruling 02:18Z: its own exit code, no retry, no attempt spent, reported to the lead);
+ *  - a transient 429 / 529 / overloaded is a `PlannerTransient`: the runner backs off, bounded;
+ *  - an unclassified error result or unreadable output is a `SubscriptionPlannerFailure` for
+ *    this trial only, with a code the runner's two-identical-failures rule counts.
+ * A halt is final for the run (no retry loop). An `apiKeySource` other than `none` on ANY
+ * message halts `planner-api-key-path`, whatever the call's outcome (as #598).
  *
  * Settings parity with the myco-gate arm (`src/pilot/config.ts` `ARGV_TEMPLATE`): the same
  * model (`PILOT_MODEL`), `--setting-sources ""` (no user/project settings, hooks or
@@ -60,6 +66,12 @@ import {
 } from "../hcu-shell/decision.ts";
 import type { HcuShellPlanner } from "../hcu-shell/trial.ts";
 import type { Usage } from "../index.ts";
+import {
+  failedCallClass,
+  PER_TRIAL_CLASSES,
+  reportsApiKeySource,
+  type SubscriptionFaultClass,
+} from "./subscription-faults.ts";
 
 /** The planner model: the myco-gate arm's, so the head-to-head compares one model. */
 export const HCU_PLANNER_MODEL = PILOT_MODEL;
@@ -109,8 +121,17 @@ export type PlannerHaltCode =
   | "planner-api-key-path"
   | "planner-auth-source-unknown"
   | "planner-auth"
-  | "planner-quota"
-  | "planner-model-mismatch";
+  | "planner-billing"
+  | "planner-usage-limit"
+  | "planner-model-mismatch"
+  | "planner-fault-unknown";
+
+/** The halt code of each halting fault class; a class missing here halts `planner-fault-unknown`. */
+const HALT_CODE: Readonly<Partial<Record<SubscriptionFaultClass, PlannerHaltCode>>> = {
+  auth: "planner-auth",
+  billing: "planner-billing",
+  "usage-limit": "planner-usage-limit",
+};
 
 /** A refusal or halt: the run stops with this code and is never retried automatically. */
 export class PlannerHalt extends Error {
@@ -132,6 +153,25 @@ export class SubscriptionPlannerFailure extends Error {
     super(`${code}: ${message}`);
     this.name = "SubscriptionPlannerFailure";
   }
+}
+
+/**
+ * A transient limit (HTTP 429 / 529, overloaded, "rate limit", "too many requests") with no
+ * usage-quota wording. The runner backs off and re-runs the trial at most
+ * `MAX_TRANSIENT_RETRIES_PER_TRIAL` times per invocation, never spending an attempt.
+ */
+export class PlannerTransient extends Error {
+  readonly code = "planner-rate-limit";
+  constructor(message: string) {
+    super(`planner-rate-limit: ${message}`);
+    this.name = "PlannerTransient";
+  }
+}
+
+/** A planner whose in-flight calls the runner can stop when a trial's deadline passes. */
+export interface CancellablePlanner extends HcuShellPlanner {
+  /** Stop every in-flight call now (SIGTERM, then SIGKILL after the grace); idempotent. */
+  cancel?(): void;
 }
 
 export interface SubscriptionPlannerOptions {
@@ -206,24 +246,33 @@ export function readPlannerCall(
   price: (tokens: TokenUsage) => number | null,
 ): { text: string; usage: Usage } {
   const messages = parseStream(stdout);
-  // Classification first, on the gate arm's own classifier (it reads arrays of messages).
+  const all = messages ?? [];
+  // An API-key session is never spent on, whatever the call's outcome (as #598).
+  if (reportsApiKeySource(all))
+    throw new PlannerHalt(
+      "planner-api-key-path",
+      "the CLI authenticated with an API credential, not the subscription",
+    );
+  // Did the call complete normally? The gate arm's own rule (it reads arrays of messages).
+  let completed = true;
   try {
     interpretResult(messages === null ? stdout : JSON.stringify(messages), stderr, code);
   } catch (error) {
-    if (error instanceof HarnessFault) {
-      if (error.harnessClass === "auth")
-        throw new PlannerHalt("planner-auth", "the CLI reported an authentication fault");
-      if (error.harnessClass === "rate-limit")
-        throw new PlannerHalt(
-          "planner-quota",
-          "the CLI reported a credit, billing, quota or usage-limit fault",
-        );
-      throw new SubscriptionPlannerFailure(`planner-${error.harnessClass}`, error.message);
-    }
-    throw new SubscriptionPlannerFailure("planner-transport-error", "unreadable CLI output");
+    if (!(error instanceof HarnessFault)) throw error;
+    completed = false;
   }
-  // A clean result: interpretResult accepted it, so `messages` parsed.
-  const all = messages ?? [];
+  if (!completed) {
+    const results = all.filter((m) => m.type === "result");
+    const cls = failedCallClass(all, results[results.length - 1] ?? null, stderr);
+    if (PER_TRIAL_CLASSES.has(cls))
+      throw new SubscriptionPlannerFailure(`planner-${cls}`, `the CLI call failed (${cls})`);
+    if (cls === "rate-limit")
+      throw new PlannerTransient("the CLI reported a transient rate limit or overload");
+    throw new PlannerHalt(
+      HALT_CODE[cls] ?? "planner-fault-unknown",
+      `the CLI reported a ${cls} fault; no retry`,
+    );
+  }
   const init = all.find((m) => m.type === "system" && m.subtype === "init");
   if (init === undefined || typeof init.apiKeySource !== "string")
     throw new PlannerHalt(
@@ -261,7 +310,9 @@ export function readPlannerCall(
  * measured, as a token-derived estimate at frozen rates (`src/pilot/cost.ts`), the same
  * convention as the myco-gate pilot. Nothing is billed per token on the subscription.
  */
-export function createSubscriptionPlanner(opts: SubscriptionPlannerOptions): HcuShellPlanner {
+export function createSubscriptionPlanner(
+  opts: SubscriptionPlannerOptions,
+): CancellablePlanner {
   const pre = subscriptionPreflight(Object.keys(opts.env));
   if (!pre.ok)
     throw new PlannerHalt(
@@ -270,6 +321,8 @@ export function createSubscriptionPlanner(opts: SubscriptionPlannerOptions): Hcu
     );
   const env = { ...childEnv(opts.env, CHILD_ENV_ALLOWLIST), ...PLANNER_FIXED_ENV };
   const timeoutMs = opts.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+  // The in-flight calls' expiry, so the runner's trial deadline can stop them (`cancel`).
+  const inFlight = new Set<() => void>();
 
   async function call(
     input: string,
@@ -291,14 +344,17 @@ export function createSubscriptionPlanner(opts: SubscriptionPlannerOptions): Hcu
       let timedOut = false;
       let exited = false;
       let killTimer: ReturnType<typeof setTimeout> | undefined;
-      const deadline = setTimeout(() => {
+      const expire = () => {
+        if (timedOut || exited) return;
         timedOut = true;
         child.kill("SIGTERM");
         killTimer = setTimeout(() => {
           if (!exited) child.kill("SIGKILL");
         }, opts.killGraceMs ?? 10_000);
         killTimer.unref?.();
-      }, timeoutMs);
+      };
+      inFlight.add(expire);
+      const deadline = setTimeout(expire, timeoutMs);
       deadline.unref?.();
       child.stdout?.on("data", (d: Buffer) => {
         stdout += d.toString("utf8");
@@ -308,12 +364,14 @@ export function createSubscriptionPlanner(opts: SubscriptionPlannerOptions): Hcu
       });
       child.on("error", () => {
         exited = true;
+        inFlight.delete(expire);
         clearTimeout(deadline);
         clearTimeout(killTimer);
         reject(new SubscriptionPlannerFailure("planner-spawn-failed", "claude failed to start"));
       });
       child.on("close", (code) => {
         exited = true;
+        inFlight.delete(expire);
         clearTimeout(deadline);
         clearTimeout(killTimer);
         if (timedOut)
@@ -329,6 +387,9 @@ export function createSubscriptionPlanner(opts: SubscriptionPlannerOptions): Hcu
 
   return {
     paid: true,
+    cancel() {
+      for (const expire of [...inFlight]) expire();
+    },
     async act(turn) {
       const ran = await call(plannerInput(turn));
       const { text, usage } = readPlannerCall(ran.stdout, ran.stderr, ran.code, opts.price);
