@@ -73,7 +73,7 @@ describe("track C boundaries", () => {
     expect(specifiers(readFileSync(LABEL, "utf8"))).toEqual([]);
   });
 
-  it("outside src/agent-checks, only the two ledger checks import it, and only its label", () => {
+  it("outside src/agent-checks, only the three ledger checks import it, and only its label", () => {
     const importers: string[] = [];
     for (const f of tsFiles(SRC)) {
       if (f.startsWith(AGENT)) continue;
@@ -83,6 +83,7 @@ describe("track C boundaries", () => {
     }
     expect(importers.sort()).toEqual([
       "src/benchmark/check.ts -> src/agent-checks/label.ts",
+      "src/m2/ab-pack.ts -> src/agent-checks/label.ts",
       "src/m2/evidence.ts -> src/agent-checks/label.ts",
     ]);
   });

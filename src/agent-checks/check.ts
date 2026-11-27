@@ -86,21 +86,30 @@ const unpredictable = (): string => randomBytes(9).toString("hex");
  * its case's intent and name, so only a document's content tells it from the clean copy.
  */
 function calcSelfTestCases(task: AgentCheckTask): SelfTestCase<unknown>[] {
-  const ext = task.fileName.slice(task.fileName.lastIndexOf("."));
-  const random = Array.from({ length: RANDOM_CASES }, () => {
-    const params = generateParameterSets([unpredictable()]);
-    return calcCasesFor(
-      [params[randomInt(params.length)] as CalcRecordEditParams],
-      `${unpredictable()}${ext}`,
-    );
-  }).flat();
-  const own = calcCasesFor([task.intent], task.fileName);
-  // An intent that changes nothing has no edit to check (and no clean copy to tell apart).
+  // A case whose clean copy equals one of its corruptions (an intent that changes nothing)
+  // has no edit to check and no clean copy to tell apart.
   const same = (a: SavedDocument, b: SavedDocument) =>
     a.bytes !== null && b.bytes !== null && Buffer.from(a.bytes).equals(Buffer.from(b.bytes));
-  if (own.some((c) => c.corruptions.some((x) => same(x.doc, c.correct))))
-    throw new Error("the intent changes nothing");
-  return [...own, ...random];
+  const sound = (c: SelfTestCase<unknown>) => !c.corruptions.some((x) => same(x.doc, c.correct));
+  const own = calcCasesFor([task.intent], task.fileName);
+  if (!own.every(sound)) throw new Error("the intent changes nothing");
+  const ext = task.fileName.slice(task.fileName.lastIndexOf("."));
+  const randomCase = (): SelfTestCase<unknown> => {
+    // A random pick can, rarely, be unusable (a no-op value, or a value the generator
+    // rejects); draw again rather than fail an honest proposal.
+    for (let attempt = 0; attempt < 32; attempt++) {
+      try {
+        const params = generateParameterSets([unpredictable()]);
+        const pick = params[randomInt(params.length)] as CalcRecordEditParams;
+        const [c] = calcCasesFor([pick], `${unpredictable()}${ext}`);
+        if (c !== undefined && sound(c)) return c;
+      } catch {
+        // draw again
+      }
+    }
+    throw new Error("no usable random self-test case");
+  };
+  return [...own, ...Array.from({ length: RANDOM_CASES }, randomCase)];
 }
 
 /**
@@ -112,6 +121,17 @@ const FAMILY_CASES = {
 } as const satisfies Record<string, (task: AgentCheckTask) => SelfTestCase<unknown>[]>;
 export type AgentCheckFamily = keyof typeof FAMILY_CASES;
 export const AGENT_CHECK_FAMILIES = Object.keys(FAMILY_CASES) as AgentCheckFamily[];
+
+/**
+ * The host-owned cases one proposal is self-tested on (fresh on every call). Host side only:
+ * exported so the tests can show no two proposals share a seed or a name.
+ */
+export function agentCheckSelfTestCases(
+  family: AgentCheckFamily,
+  task: AgentCheckTask,
+): SelfTestCase<unknown>[] {
+  return FAMILY_CASES[family](task);
+}
 
 /** Classes whose corruption provably fails the postcondition (`refuted`). */
 export const VALUE_CLASSES: readonly CorruptionClass[] = CORRUPTION_CLASSES.filter(
@@ -288,7 +308,7 @@ export function proposeAgentCheck(
     ]);
   let cases: SelfTestCase<unknown>[];
   try {
-    cases = FAMILY_CASES[binding.family](bound);
+    cases = agentCheckSelfTestCases(binding.family, bound);
   } catch {
     return refuse("AGENT_CHECK_TASK_INVALID", [
       "the intent names no record and column, or changes nothing",
