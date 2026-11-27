@@ -11,7 +11,8 @@ import { validateEpisode } from "./validate.ts";
 export const USAGE = `usage:
   myco-episodes export --from <store> [--from <store> ...] --out <dir> (--real | --simulated)
                        [--task-set <v>] [--arm <arm>] [--outcome <o>] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
-  myco-episodes validate (--dataset <dir> | --store <dir>)
+                       [--identity-file <file>]
+  myco-episodes validate (--dataset <dir> | --store <dir>) [--identity-file <file>]
   myco-episodes import --dataset <dir> --into <store>
 
 exit: 0 ok, 1 invalid or refused, 3 usage
@@ -68,7 +69,14 @@ export async function main(
           since: one(flags, "--since"),
           until: one(flags, "--until"),
         };
-        const manifest = exportDataset({ stores, out, simulated, filter });
+        const identityFile = one(flags, "--identity-file");
+        const manifest = exportDataset({
+          stores,
+          out,
+          simulated,
+          filter,
+          ...(identityFile === null ? {} : { identity: { identityFile } }),
+        });
         io.stdout.write(
           `exported ${manifest.counts.episodes} episode(s), ${manifest.counts.blobs} blob(s); dataset ${manifest.datasetSha256}\n`,
         );
@@ -80,8 +88,14 @@ export async function main(
         if ((dataset === null) === (store === null))
           throw new UsageError("validate needs exactly one of --dataset / --store");
         let problems: string[];
-        if (dataset !== null) problems = validateDataset(dataset);
-        else {
+        if (dataset !== null) {
+          const identityFile = one(flags, "--identity-file");
+          problems = validateDataset(
+            dataset,
+            undefined,
+            identityFile === null ? {} : { identityFile },
+          );
+        } else {
           const kind = EpisodeStore.readKind(store as string);
           const { episodes, blobs } = readStoreDir(store as string);
           problems = episodes.flatMap((ep) => [
