@@ -410,6 +410,24 @@ describe("refusals inside the runner", () => {
   });
 });
 
+describe("task parity (#491)", () => {
+  it("a trial that did not run the published fixture fails and writes no row", async () => {
+    const dir = tmp();
+    const fake = fakeRun();
+    const env: TrialEnvironment = {
+      simulated: true,
+      async prepare(task, key) {
+        const t = await fake.env.prepare(task, key);
+        return { ...t, prepared: { ...t.prepared, fixtureSha256: "e".repeat(64) } };
+      },
+    };
+    const r = await run(dir, { ...fake, env }, { maxTrials: 1 });
+    expect(r).toMatchObject({ decided: 0, failed: 1 });
+    expect(readLedger(dir).at(-1)).toMatchObject({ type: "failed", code: "trial-error" });
+    expect(existsSync(join(dir, "rows", `sim-hcu-shell-${TASKS[0]?.taskId}.json`))).toBe(false);
+  });
+});
+
 describe("the pack re-checks evidence from disk", () => {
   it("refuses a row edited after it was decided", async () => {
     const dir = tmp();
