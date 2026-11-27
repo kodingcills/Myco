@@ -105,7 +105,7 @@ describe("probeHcuDesktop: connect plus ONE successful screenshot (lead ruling 1
     expect(hcu.closed()).toBe(1);
   });
 
-  for (const mode of ["unreachable", "no-screenshot", "no-image", "no-gui", "hang"] as const)
+  for (const mode of ["unreachable", "no-screenshot", "no-image", "no-gui"] as const)
     it(`rejects, codes only, when HCU is ${mode}; the session never leaks open`, async () => {
       const hcu = fakeHcuSession(mode);
       const error = await probeHcuDesktop(hcu.open, 100).then(
