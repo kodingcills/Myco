@@ -477,6 +477,37 @@ jobs:
       - name: Checker tests (fixture packs, every failure mode)
         run: pnpm exec vitest run test/m2
 
+  # Track G (#613, #612 N2): the public false-completion release, reproduced from the
+  # archive alone. Builds the release twice from the checked-out commit (allowlisted files
+  # only, leak scan, plain ustar with no xattrs or owner names) and requires the two archives
+  # to be byte-identical, then unpacks one into an empty directory with no clone and no
+  # node_modules and runs the bundled verifier, sha256sum -c and the bundled grader with plain
+  # Node: the regraded rows must equal the bundle's expected rows. Not required. No VM, no
+  # model, no secrets.
+  benchmark-release:
+    name: benchmark release (bundle alone)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build the release twice
+        run: |
+          pnpm exec tsx scripts/benchmark-release-package.ts --out "$RUNNER_TEMP/release-a"
+          pnpm exec tsx scripts/benchmark-release-package.ts --out "$RUNNER_TEMP/release-b"
+      - name: Archives are byte-identical
+        run: cmp "$RUNNER_TEMP/release-a/myco-false-completion-fc-v1.tar" "$RUNNER_TEMP/release-b/myco-false-completion-fc-v1.tar"
+      - name: Reproduce the grader from the archive alone
+        run: scripts/benchmark-release-repro.sh "$RUNNER_TEMP/release-a/myco-false-completion-fc-v1.tar"
+
   # Track L2: strict per-trial isolation (strict-linux-ns). Ubuntu 24.04 restricts
   # unprivileged user namespaces through AppArmor, so the job lifts that sysctl first;
   # MYCO_STRICT_NS_REQUIRED=1 makes the namespace suite FAIL instead of skip when the
@@ -598,6 +629,44 @@ jobs:
         with:
           name: newcomer-path
           path: ${{ runner.temp }}/newcomer-path
+          if-no-files-found: ignore
+
+  # TIF-265 track D: the newcomer path on macOS (#672). The same live test on a clean macOS
+  # runner with only the documented prerequisites (Node 24, pnpm 10; no LibreOffice, which
+  # init skips off Linux): setup.md's `macos` clone block, the setup.md quickstart and the
+  # README quickstart as written, with a fresh HOME; then a simulated df-s01 task on the mock
+  # desktop must get verified / refuted through the written .mcp.json. Timed, same budget.
+  # $0: no model, no secrets, no VM. Not required; same plan condition as the Linux job.
+  newcomer-path-macos:
+    name: newcomer path (macos-latest)
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || (needs.plan.outputs.mode != 'targeted' && needs.plan.outputs.mode != 'docs' && needs.plan.outputs.mode != 'affected') || needs.plan.outputs.linux_path != 'false') }}
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      MYCO_NEWCOMER_PATH_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      # The harness side only (vitest, the MCP client). The product under test is the fresh
+      # clone the test makes and installs from its own docs.
+      - name: Install the harness
+        run: pnpm install --frozen-lockfile
+      - name: Newcomer path (fresh clone, documented commands only, timed)
+        env:
+          MYCO_NEWCOMER_REPORT: ${{ runner.temp }}/newcomer-path-macos/report.json
+        run: pnpm exec vitest run test/init/newcomer-path.test.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: newcomer-path-macos
+          path: ${{ runner.temp }}/newcomer-path-macos
           if-no-files-found: ignore
 
   # Track L (safe parallelism): N disposable Linux desktops in parallel on the unprivileged

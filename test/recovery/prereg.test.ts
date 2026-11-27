@@ -7,11 +7,17 @@
  *  P2 canonical JSON: key order and whitespace do not change it; values it cannot write
  *     canonically are refused.
  *  P3 any edit is caught: a field without a new hash, a pinned file, the spec's K section.
- *  P4 the open lead questions (§6: step budget 80, ms-long-v1 size 40) and the unbuilt
- *     manifest are listed as pending and the file is not frozen; a draft never claims them.
- *  P5 the frozen rules: nothing pending, status frozen, manifest SHA-256 set and matching.
+ *  P4 the lead's 06:21Z rulings are recorded (step budget 80 for both arms; ms-long-v1 n = 90,
+ *     confirmatory, with the n = 40 exploratory fallback); what stays pending is the unbuilt
+ *     manifest and the pre-freeze size check, and the file is not frozen.
+ *  P5 the frozen rules: nothing pending, no lead ruling pending, status frozen, manifest
+ *     SHA-256 set and matching.
  *  P6 the file agrees with the code it names: the bar's values, the arms, the fault kinds,
  *     the grader and renderer versions, and the pilot's model id.
+ *  P7 `leadRulingsPending`: a lead-pending item, a "lead ruling pending" reason, an unruled
+ *     §6 field or a malformed list each count as an open ruling.
+ *  P8 designation and size: confirmatory at 90, exploratory at 40, nothing else.
+ *  P9 the VM-hours estimate: required, and its arithmetic and step budget are checked.
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -26,6 +32,7 @@ import {
   K_PREREG_PATH,
   K_SPEC_PATH,
   type KPrereg,
+  leadRulingsPending,
   type PreregFiles,
   preregHash,
   specSection,
@@ -55,6 +62,17 @@ function rehashed(patch: (p: Record<string, unknown>) => void): Record<string, u
 }
 
 const problemsOf = (p: unknown, files: PreregFiles = disk) => checkKPrereg(p, files).problems;
+
+/** A patch that sets the value at a dotted path (arrays and objects alike). */
+const set =
+  (path: string, value: unknown) =>
+  (p: Record<string, unknown>): void => {
+    const keys = path.split(".");
+    const last = keys.pop() as string;
+    let at = p;
+    for (const k of keys) at = at[k] as Record<string, unknown>;
+    at[last] = value;
+  };
 
 describe("P1: the committed pre-registration", () => {
   it("passes the check and is a draft, not frozen", () => {
@@ -125,6 +143,11 @@ describe("P3: any edit is caught", () => {
       "src/recovery/prereg.ts",
       "src/tasks/multi-step-text.ts",
       "src/benchmark/grade/multi-step.ts",
+      // #647 round 1, N5: the transitive dependencies of the analysis and the grader.
+      "src/recovery/trial.ts",
+      "src/benchmark/grade/grade.ts",
+      "src/benchmark/grade/sheet.ts",
+      "src/benchmark/grade/zip.ts",
     ]) {
       const files: PreregFiles = {
         ...disk,
@@ -169,18 +192,51 @@ describe("P3: any edit is caught", () => {
   });
 });
 
-describe("P4: the open lead questions are pending, not ratified", () => {
-  it("lists the step budget, the task set size and the manifest as pending", () => {
+describe("P4: the lead's 06:21Z rulings are recorded; the manifest stays pending", () => {
+  it("records both rulings at 06:21Z, each naming the fields it settles", () => {
+    expect(PREREG.leadRulings.map((r) => r.at)).toEqual(["2026-11-27T06:21Z", "2026-11-27T06:21Z"]);
+    const [budget, size] = PREREG.leadRulings;
+    expect(budget?.fields).toEqual(["stepBudget"]);
+    expect(budget?.ruling).toMatch(/step budget 80, the same for both arms/);
+    expect(size?.fields).toContain("taskSet.size");
+    expect(size?.ruling).toMatch(/n = 90 under the J rule/);
+    expect(size?.ruling).toMatch(/fall back to n = 40 pre-registered as EXPLORATORY/);
+    for (const r of PREREG.leadRulings) expect(r.source).toMatch(/PR #647, comment 7211428927/);
+    expect(PREREG.leadRulingPending).toEqual([]);
+    expect(leadRulingsPending(PREREG)).toEqual([]);
+  });
+
+  it("applies them: budget 80, n = 90 with 45 faulted, confirmatory, the spec section amended", () => {
+    expect(PREREG.stepBudget).toBe(80);
+    expect(PREREG.taskSet).toMatchObject({ size: 90, faultedTasks: 45 });
+    expect(PREREG.designation).toBe("confirmatory");
+    expect(PREREG.spec.amendedBy).toMatch(/^leadRulings: .*step budget is 80.*size is 90/);
+  });
+
+  it("pending is the unbuilt manifest and the pre-freeze size check, and nothing lead-pending", () => {
     expect(PREREG.pending.map((x) => x.field)).toEqual([
-      "stepBudget",
-      "taskSet.size",
       "taskSet.manifestSha256",
+      "sizeRule.applied",
     ]);
-    for (const x of PREREG.pending.slice(0, 2)) {
-      expect(x.reason).toMatch(/lead ruling pending \(capability-spec §6\)/);
-      expect(x.reason).toMatch(/not ratified/);
-    }
+    for (const x of PREREG.pending) expect(x.reason).not.toMatch(/lead ruling pending/i);
     expect(PREREG.taskSet.manifestSha256).toBeNull();
+    expect(PREREG.status).toBe("draft");
+  });
+
+  it("the VM-hours estimate: 180 trials at 600 s is 30 VM-hours; 102 at the timeout; 13.3 at n = 40", () => {
+    expect(PREREG.vmHoursEstimate).toMatchObject({
+      stepBudget: 80,
+      tasks: 90,
+      trials: 180,
+      secondsPerTrial: 600,
+      vmHours: 30,
+      atTrialTimeout: { secondsPerTrial: 2040, vmHours: 102 },
+      atFallback: { tasks: 40, trials: 80, vmHours: 13.3 },
+    });
+    expect(PREREG.vmHoursEstimate.basis).toMatch(/docs\/baseline\/screenshot-agent\.md/);
+    expect(PREREG.vmHoursEstimate.basis).toMatch(/cold reset 140 s/);
+    expect(PREREG.vmHoursEstimate.basis).toMatch(/80 x 4\.5 = 360 s/);
+    expect(PREREG.sizeRule.rule).toMatch(/never reports the bar as shown/);
   });
 
   it("a draft that lists nothing pending, or drops the manifest item, is refused", () => {
@@ -233,6 +289,133 @@ describe("P5: the frozen rules", () => {
     });
     expect(problemsOf(nullManifest).join("|")).toMatch(/needs the task set's manifest SHA-256/);
   });
+
+  it("frozen with a lead ruling pending is refused, even with pending empty", () => {
+    const lead = rehashed((p) => {
+      p.status = "frozen";
+      p.pending = [];
+      p.leadRulingPending = [{ field: "stepBudget", reason: "re-opened" }];
+      (p.taskSet as Record<string, unknown>).manifestSha256 = MANIFEST;
+    });
+    const check = checkKPrereg(lead, withManifest);
+    expect(check.problems).toEqual(["a frozen pre-registration has no lead ruling pending"]);
+    expect(check.frozen).toBe(false);
+  });
+});
+
+describe("P7: leadRulingsPending", () => {
+  const base = structuredClone(PREREG) as unknown as Record<string, unknown>;
+  const withPatch = (patch: (p: Record<string, unknown>) => void) => {
+    const p = structuredClone(base);
+    patch(p);
+    return leadRulingsPending(p);
+  };
+  it("is empty for the committed file", () => {
+    expect(leadRulingsPending(base)).toEqual([]);
+  });
+  it("counts each kind of open ruling", () => {
+    expect(
+      withPatch((p) => {
+        p.leadRulingPending = [{ field: "k", reason: "x" }];
+      }),
+    ).toEqual(["k"]);
+    expect(
+      withPatch((p) => {
+        (p.pending as unknown[]).push({ field: "seeds", reason: "LEAD RULING PENDING (§6)" });
+      }),
+    ).toEqual(["seeds"]);
+    expect(
+      withPatch((p) => {
+        (p.pending as unknown[]).push({ field: "seeds" });
+      }),
+    ).toEqual(["seeds"]);
+    expect(
+      withPatch((p) => {
+        p.leadRulings = [];
+      }),
+    ).toEqual(["stepBudget", "taskSet.size"]);
+    expect(
+      withPatch((p) => {
+        (p.leadRulings as { fields: string[] }[])[0]!.fields = ["other"];
+      }),
+    ).toEqual(["stepBudget"]);
+    expect(
+      withPatch((p) => {
+        p.leadRulings = "all";
+      }),
+    ).toEqual(["stepBudget", "taskSet.size"]);
+  });
+  it("fails closed on malformed lists and a non-object", () => {
+    expect(
+      withPatch((p) => {
+        p.leadRulingPending = undefined;
+      }),
+    ).toEqual(["leadRulingPending (not a list)"]);
+    expect(
+      withPatch((p) => {
+        p.pending = "none";
+      }),
+    ).toEqual(["pending (not a list)"]);
+    expect(
+      withPatch((p) => {
+        p.leadRulingPending = [7];
+      }),
+    ).toEqual(["(malformed item)"]);
+    expect(leadRulingsPending(null)).toEqual(["(not a pre-registration)"]);
+  });
+});
+
+describe("P8: designation and size", () => {
+  const sized = (designation: string, size: number) =>
+    rehashed((p) => {
+      p.designation = designation;
+      const ts = p.taskSet as Record<string, unknown>;
+      ts.size = size;
+      ts.faultedTasks = size / 2;
+      const vm = p.vmHoursEstimate as Record<string, unknown>;
+      vm.tasks = size;
+      vm.trials = size * 2;
+      vm.vmHours = (size * 2 * 600) / 3600;
+      (vm.atTrialTimeout as Record<string, unknown>).vmHours = (size * 2 * 2040) / 3600;
+    });
+  it("exploratory at 40 passes; confirmatory at 90 is the committed file", () => {
+    expect(problemsOf(sized("exploratory", 40))).toEqual([]);
+    expect(problemsOf(sized("confirmatory", 90))).toEqual([]);
+  });
+  for (const [d, n] of [
+    ["exploratory", 90],
+    ["confirmatory", 40],
+    ["confirmatory", 60],
+    ["pilot", 90],
+  ] as const)
+    it(`refuses ${d} at ${n}`, () => {
+      expect(problemsOf(sized(d, n)).join("|")).toMatch(
+        /designation and size must be confirmatory at 90/,
+      );
+    });
+});
+
+describe("P9: the VM-hours estimate", () => {
+  const cases: [string, (p: Record<string, unknown>) => void, RegExp][] = [
+    ["missing", (p) => delete p.vmHoursEstimate, /vmHoursEstimate is required/],
+    ["no basis", set("vmHoursEstimate.basis", ""), /basis must state/],
+    ["another budget", set("vmHoursEstimate.stepBudget", 30), /pre-registered step budget/],
+    ["trials for one arm", set("vmHoursEstimate.trials", 90), /trials must be/],
+    ["tasks not the size", set("vmHoursEstimate.tasks", 40), /trials must be/],
+    ["zero seconds", set("vmHoursEstimate.secondsPerTrial", 0), /positive number/],
+    ["wrong VM-hours", set("vmHoursEstimate.vmHours", 20), /vmHours must be trials x/],
+    ["VM-hours off by 0.1", set("vmHoursEstimate.vmHours", 30.1), /vmHours must be trials x/],
+    ["fallback off by 0.1", set("vmHoursEstimate.atFallback.vmHours", 13.4), /atFallback/],
+    ["wrong timeout hours", set("vmHoursEstimate.atTrialTimeout.vmHours", 50), /atTrialTimeout/],
+    ["no timeout", set("vmHoursEstimate.atTrialTimeout", null), /atTrialTimeout/],
+    ["fallback at 30", set("vmHoursEstimate.atFallback.tasks", 30), /atFallback/],
+    ["fallback trials", set("vmHoursEstimate.atFallback.trials", 40), /atFallback/],
+    ["fallback hours", set("vmHoursEstimate.atFallback.vmHours", 30), /atFallback/],
+  ];
+  for (const [name, patch, re] of cases)
+    it(`refuses: ${name}`, () => {
+      expect(problemsOf(rehashed(patch)).join("|")).toMatch(re);
+    });
 });
 
 describe("P6: the file agrees with the code it names", () => {
@@ -244,17 +427,24 @@ describe("P6: the file agrees with the code it names", () => {
     expect(PREREG.modelId).toBe(PILOT_MODEL);
   });
 
-  /** A patch that sets the value at a dotted path (arrays and objects alike). */
-  const set =
-    (path: string, value: unknown) =>
-    (p: Record<string, unknown>): void => {
-      const keys = path.split(".");
-      const last = keys.pop() as string;
-      let at = p;
-      for (const k of keys) at = at[k] as Record<string, unknown>;
-      at[last] = value;
-    };
   const cases: [string, (p: Record<string, unknown>) => void, RegExp][] = [
+    ["no amendment note", set("spec.amendedBy", "as written"), /spec\.amendedBy/],
+    ["grader modules dropped", set("grader.modules", []), /grader\.modules must include/],
+    [
+      "trial.ts unpinned",
+      (p) => {
+        const a = p.analysis as { modules: { path: string }[] };
+        a.modules = a.modules.filter((m) => m.path !== "src/recovery/trial.ts");
+      },
+      /analysis\.modules must include/,
+    ],
+    ["a ruling without minutes", set("leadRulings.0.at", "2026-11-27"), /a lead ruling needs at/],
+    ["a ruling settling nothing", set("leadRulings.1.fields", []), /a lead ruling needs at/],
+    ["a ruling without a source", set("leadRulings.0.source", ""), /a lead ruling needs at/],
+    ["rulings not a list", set("leadRulings", {}), /leadRulings must be a list/],
+    ["lead-pending not a list", set("leadRulingPending", "none"), /leadRulingPending must be/],
+    ["no size rule", set("sizeRule", null), /sizeRule needs/],
+    ["an empty applied", set("sizeRule.applied", ""), /sizeRule needs/],
     ["alpha 0.10", set("bar.alpha", 0.1), /alpha/],
     ["two-sided", set("bar.sided", "two-sided"), /one-sided/],
     ["4 discordant", set("bar.minDiscordant", 4), /discordant/],

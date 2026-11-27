@@ -22,10 +22,11 @@ nothing is skipped or fails for lack of one.
 | `ci.yml` | `myco-agent tests (macos-latest)` | pushes to `main`; PRs that change `agent/` or `.github/` | no |
 | `ci.yml` | `runtime guest agent tests (ubuntu-latest)` | yes | yes |
 | `ci.yml` | `linux path (ubuntu-latest)` | yes, when the plan says so | no |
-| `ci.yml` | `newcomer path (ubuntu-latest)` | yes, when the plan says so (same condition as `linux path`) | no |
+| `ci.yml` | `newcomer path (ubuntu-latest)`, `newcomer path (macos-latest)` | yes, when the plan says so (same condition as `linux path`) | no |
 | `ci.yml` | `safe parallelism (ubuntu-latest)` | yes (every PR; not gated by the plan) | no |
 | `ci.yml` | `m2 evidence and scorecard` | yes, when the plan says so | no |
 | `ci.yml` | `strict isolation (ubuntu-latest)` | yes | no |
+| `ci.yml` | `benchmark release (bundle alone)` | yes (every PR; not gated by the plan) | no |
 | `ci.yml` | `viewer verdict budget (…)` | only with the `perf` label | no |
 | `tif-170-race-diagnostics.yml` | `race x1` | only when the PR touches its paths | no |
 
@@ -52,6 +53,14 @@ nothing is skipped or fails for lack of one.
   namespaces, then runs `test/isolation` as the runner user with
   `MYCO_STRICT_NS_REQUIRED=1`, so a host that cannot start the strict backend fails the
   suite instead of skipping it. See `docs/product/strict-isolation.md` (track L2).
+- **Benchmark release.** Track G (#613). Builds the public false-completion release
+  twice with `scripts/benchmark-release-package.ts` and requires byte-identical archives,
+  then `scripts/benchmark-release-repro.sh` reads the archive's raw tar headers (refusing pax,
+  GNU and every other non-regular entry, owners, modes, and entries `SHA256SUMS` does not
+  list), unpacks it into an empty directory (no clone,
+  no `node_modules`) and runs `sha256sum -c`, the bundled task-set verifier and the bundled
+  grader with plain Node; the regraded rows must equal the bundle's expected rows. See
+  `docs/benchmark/release.md`.
 - **Viewer verdict budget.** A timing gate that is noisy on shared runners, so it runs
   on pushes to `main` and on PRs a maintainer labels `perf`. Only people with triage
   access or above can add labels, and a labelled fork PR still runs under
