@@ -27,7 +27,12 @@ import { datasetManifestSchema, datasetRecordSchema } from "../../schemas/datase
 import { validateSchema } from "../../schemas/validate.ts";
 import { type ColumnType, GRADER_VERSION, grade, sha256 } from "../../src/benchmark/grade/grade.ts";
 import { draftEpisode, episodeMirrorSchema } from "../../src/dataset/episode.ts";
-import { type ExportCandidate, ExportRefused, exportDataset } from "../../src/dataset/export.ts";
+import {
+  type ExportCandidate,
+  ExportRefused,
+  exportDataset,
+  validateContainer,
+} from "../../src/dataset/export.ts";
 import { forbiddenStringsFromFiles, leaksIn, scanForLeaks } from "../../src/dataset/hygiene.ts";
 import { type FleetOutcome, type FleetTrial, runFleet } from "../../src/desktops/fleet.ts";
 import { LocalProcessBackend } from "../../src/desktops/local-process.ts";
@@ -225,7 +230,6 @@ function writtenFiles(outDir: string): string[] {
     "manifest.json",
     "schema.json",
     ...readdirSync(join(outDir, "episodes")).map((f) => join("episodes", f)),
-    ...readdirSync(join(outDir, "blobs")).map((f) => join("blobs", f)),
   ].map((f) => readFileSync(join(outDir, f), "utf8"));
 }
 
@@ -340,16 +344,14 @@ describe("track U end-to-end: fleet -> real gate + real grader -> episodes -> da
         expect(ep.groundTruth.status).toBe("fail");
       }
       expect(ep.actions.items.length).toBeGreaterThanOrEqual(2);
-      // R2-D1: every exported episode passes #542's OWN validateEpisode at the pinned head,
-      // with the container's blobs (the graded document is observed and carried).
-      const blobs = new Map<string, Uint8Array>(
-        readdirSync(join(outDir, "blobs"))
-          .map((f) => `blobs/${f}`)
-          .filter((f) => ep.observations.items.some((o: { file?: string }) => o.file === f))
-          .map((f) => [f, readFileSync(join(outDir, f))]),
-      );
-      expect(blobs.size).toBe(1);
-      expect(validateEpisode(ep, { blobs })).toEqual([]);
+      // R2-D1: every exported episode passes #542's OWN validateEpisode at the pinned head. The
+      // graded document is observed by digest and size, never carried (digest-only, 20:3xZ).
+      expect(
+        ep.observations.items.filter(
+          (o: { kind: string; label?: string }) => o.kind === "state" && o.label === "persisted",
+        ),
+      ).toHaveLength(1);
+      expect(validateEpisode(ep)).toEqual([]);
       // Codes only: the gate's human-readable reasons are never exported.
       expect(Object.keys(ep.gate).sort()).toEqual(["accepted", "oracle", "reasonCodes", "verdict"]);
     }
@@ -362,10 +364,11 @@ describe("track U end-to-end: fleet -> real gate + real grader -> episodes -> da
       expect(scanForLeaks(JSON.parse(doc))).toEqual([]);
     for (const text of [manifestText!, schemaText!])
       expect(scanForLeaks(JSON.parse(text))).toEqual([]);
-    // Episodes are JSON; blobs (the captured CSV documents) are scanned as text.
-    for (const text of rest)
-      expect(scanForLeaks(text.startsWith("{") ? JSON.parse(text) : text)).toEqual([]);
-    expect(manifest.blobs.length).toBeGreaterThanOrEqual(1);
+    for (const text of rest) expect(scanForLeaks(JSON.parse(text))).toEqual([]);
+    // Digest-only: the container carries no blobs, and validates.
+    expect(manifest.blobs).toEqual([]);
+    expect(existsSync(join(outDir, "blobs"))).toBe(false);
+    expect(validateContainer(outDir)).toEqual([]);
     // The claim text the agent handed the gate is not part of the episode.
     expect(written).not.toContain("Done. Set");
   }, 60_000);
