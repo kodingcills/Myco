@@ -499,7 +499,7 @@ describe("a human's decision is never the agent's outcome", () => {
 
   it("live-operator rows never reach the guardrails or the scripted counts", () => {
     const base = run(P, 30);
-    let live = run(P, 0).map((r) => ({
+    let live: HoBarTrial[] = run(P, 0).map((r) => ({
       ...r,
       stratum: "live-operator" as const,
       trialKey: `live-${r.trialKey}`,
