@@ -373,7 +373,7 @@ describe("the gate and its OSWorld DONE hook are independent of the upstream eva
     [...code.matchAll(/^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))/gm)].map(
       (m) => (m[1] ?? m[2]) as string,
     );
-  const PY_STDLIB_ALLOWED = new Set(["json", "subprocess"]);
+  const PY_STDLIB_ALLOWED = new Set(["json", "re", "shlex", "subprocess", "time"]);
   /** Anything that names the upstream evaluator, its outputs, its gold files or Myco's upstream modules. */
   const EVALUATOR =
     /desktop_env|evaluators|\bmetrics\b|\bgetters\b|result\.txt|cloud_file|run_upstream_metric|benchmark\/upstream|r1-grade|evaluate\.ts|upstream-metric-mock|osworld-desktopenv-evaluate/;
@@ -395,8 +395,64 @@ describe("the gate and its OSWorld DONE hook are independent of the upstream eva
     expect(gateFiles.length).toBeGreaterThan(20);
   });
 
-  it("no gate or hook file imports or names the upstream evaluator, its output or gold files; the hook imports only json and subprocess", () => {
+  it("no gate or hook file imports or names the upstream evaluator, its output or gold files; the hook imports only json, re, shlex, subprocess and time", () => {
     expect(gateFiles.flatMap(problemsIn)).toEqual([]);
+  });
+
+  /**
+   * N3 (lead ruling 15:26Z): the self-check arm reads nothing but the instruction and the guest
+   * home directory through the controller's run_bash_script. The hook's code (comments and
+   * docstrings stripped, the probe text included) names no environment, evaluator, task
+   * configuration, gold, fixture, oracle or score-file access, and calls no controller method
+   * but run_bash_script. The runtime half is test/benchmark/osworld-gate-hook.test.ts.
+   */
+  const SELF_CHECK_FORBIDDEN =
+    /\.env\b|\bevaluat|get_file|setup_controller|cache_dir|task_config|\bexample\b|\bgold\b|expected|fixture|oracle|result\.txt|evaluation_examples|\bopen\(|os\.|glob|urllib|requests|socket/;
+  const selfCheckProblems = (file: string) => {
+    const raw = readFileSync(file, "utf8");
+    const probe = raw.match(/SELF_CHECK_PROBE = r"""([\s\S]*?)"""/)?.[1] ?? "";
+    const code = `${stripComments(raw)}\n${probe}`;
+    const out: string[] = [];
+    const hit = code.match(SELF_CHECK_FORBIDDEN);
+    if (hit) out.push(`${relative(ROOT, file)} names ${hit[0]}`);
+    for (const m of code.matchAll(/controller\(\)\.(\w+)/g))
+      if (m[1] !== "run_bash_script")
+        out.push(`${relative(ROOT, file)} calls controller().${m[1]}`);
+    if (!/self\.controller\(\)\.run_bash_script\(/.test(code)) out.push("no run_bash_script call");
+    if (!probe) out.push("no probe");
+    return out;
+  };
+
+  it("N3: the self-check names no environment, evaluator, task config, gold, fixture, oracle or score file, and calls only run_bash_script on the controller", () => {
+    expect(hookPy.flatMap(selfCheckProblems)).toEqual([]);
+  });
+
+  it("N3: the self-check checks bite: a planted gold read, evaluator call and other controller call are reported", () => {
+    const dir = mkdtempSync(join(tmpdir(), "self-check-bite-"));
+    try {
+      const base = readFileSync(hookPy[0] as string, "utf8");
+      const plant = (from: string, to: string) => {
+        const f = join(dir, `p${Math.random().toString(36).slice(2)}.py`);
+        expect(base).toContain(from);
+        writeFileSync(f, base.replace(from, to));
+        return selfCheckProblems(f);
+      };
+      const call = "            result = self.controller().run_bash_script(";
+      expect(plant(call, `            open(self.task_id + "/gold.xlsx").close()\n${call}`)).toEqual(
+        [expect.stringMatching(/ names (open\(|gold)$/)],
+      );
+      expect(plant(call, `            self.agent.env.evaluate()\n${call}`)).toEqual([
+        expect.stringContaining("names .env"),
+      ]);
+      expect(
+        plant(call, `            self.controller().get_file("/home/user/x")\n${call}`),
+      ).toEqual(expect.arrayContaining([expect.stringContaining("calls controller().get_file")]));
+      expect(plant("printf 'END\\n'", "cat ~/../../tmp/result.txt\nprintf 'END\\n'")).toEqual([
+        expect.stringContaining("names result.txt"),
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("nothing under src/benchmark/upstream names the gate, the hook or its module", () => {

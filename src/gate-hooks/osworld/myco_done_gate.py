@@ -3,60 +3,118 @@
 Lead ruling 2026-11-27 ~13:55Z: the public R1 runs in OSWorld's OWN environment, action
 server (the in-VM controller) and evaluator, with Claude via OSWorld's standard runner
 (``scripts/python/run_multienv_claude.py`` at the pinned commit). Myco adds only the
-completion gate before "done" is accepted. This module is that addition and nothing else.
+completion gate before "done" is accepted. This module is that addition, plus the
+self-check baseline arm the lead ruled at 15:26Z (#741 comment 7222035806, N3).
 
 How it hooks in: ``DoneGate`` wraps the runner's agent object (``AnthropicAgent``). The
 runner's loop (``lib_run_single.run_single_example``) calls ``agent.predict(instruction,
 obs)`` and passes each returned action to ``env.step``. ``DoneGate.predict`` returns the
-inner agent's actions unchanged, object for object, except in arm ``gate-before-done`` when
-an action is upstream's ``DONE`` special action:
+inner agent's actions unchanged, object for object, except when an action is upstream's
+``DONE`` special action in arm ``gate-before-done`` or ``self-check``:
 
-* it calls ``myco.gate/v1`` (tool ``myco_gate_check``) with ``taskId``, ``runId`` and
-  ``claim`` only;
-* on ``verified`` with ``accepted: true`` the DONE goes through unchanged;
-* otherwise (refuted, uncertain, malformed reply, gate unreachable: fail closed) the DONE is
-  replaced by upstream's own ``WAIT`` special action, which the controller treats as a
-  no-op in the guest, and the next ``predict`` first appends one user message to the agent
-  telling it the verdict and reason CODES (never the gate's prose, never corrections).
-  Actions after a refused DONE in the same batch are dropped (upstream ends the episode at
-  DONE, so none would have run).
+* arm ``gate-before-done`` calls ``myco.gate/v1`` (tool ``myco_gate_check``) with
+  ``taskId``, ``runId`` and ``claim`` only; on ``verified`` with ``accepted: true`` the DONE
+  goes through unchanged; anything else (refuted, uncertain, malformed reply, gate
+  unreachable: fail closed) is a refused DONE;
+* arm ``self-check`` (the stronger honest baseline, 15:26Z) has no gate, no oracle and no
+  Myco verdict. It runs one fixed, task-agnostic shell probe of the saved end state
+  (``SELF_CHECK_PROBE``) through upstream's own controller (``PythonController.
+  run_bash_script``, the controller every arm's actions go through). The probe reads only
+  the user's home directory in the guest and the task instruction the agent itself was
+  given. If the probe finds a problem, or cannot run (fail closed, as the gate), the DONE is
+  refused exactly as the gate arm refuses one;
+* a refused DONE is replaced by upstream's own ``WAIT`` special action, which the
+  controller treats as a no-op in the guest, and the next ``predict`` first appends one
+  user message to the agent with the verdict and reason CODES only (never the gate's prose,
+  never corrections; for the self-check, a fixed message with the probe's codes). Actions
+  after a refused DONE in the same batch are dropped (upstream ends the episode at DONE, so
+  none would have run).
 
-The hook never sees the environment, the controller or the evaluator: it takes only the
-agent, so the action layer and the observation path are the runner's own in every arm.
-Arms ``no-gate`` and ``self-check`` bypass the gate by configuration (no gate client is
-accepted); ``self-check`` sets upstream's own ``system_prompt_suffix`` attribute to the
-pre-registered self-verification text. The step budget is the runner's ``--max_steps`` in
-every arm: a refused DONE uses the step it was emitted in, as any other turn does.
+Budget parity: the step budget is the runner's ``--max_steps`` in every arm. A refused DONE
+uses the turn it was emitted in, in both arms, and the check itself (gate call or probe)
+runs inside that turn: it costs no step and no model tokens, and its time counts against
+the shared wall-clock cap. One check is allowed ``CHECK_TIMEOUT_S`` in both arms: the gate
+client's subprocess timeout, and for the probe its script timeout plus the controller's own
+fixed HTTP margin. Arm ``no-gate`` checks nothing.
+
+The hook never sees the environment or the evaluator. Arm ``gate-before-done`` takes no
+controller; arm ``self-check`` takes a zero-argument callable returning the environment's
+controller and calls only its ``run_bash_script``. Arms are chosen by configuration only.
 
 Independence: this file imports only the Python standard library. It never imports
-``desktop_env`` (the evaluator, getters, metrics), never reads evaluator output or gold
-files, and Myco's MOCK metric runner and R1 grader never import it
-(test/benchmark/independence.test.ts).
+``desktop_env`` (the evaluator, getters, metrics), never reads evaluator output, gold
+files, fixtures or the task configuration, and Myco's MOCK metric runner and R1 grader
+never import it (test/benchmark/independence.test.ts).
 
 Wiring: the pinned runner constructs ``AnthropicAgent`` inline. Using this hook needs a
-3-line change there (see ``docs/benchmark/upstream/gate-hook.md``, "Patch surface"); this
+small change there (see ``docs/benchmark/upstream/gate-hook.md``, "Patch surface"); this
 repository does not vendor or modify upstream code, so that patch is documented, not
 applied, until a run is approved.
 """
 
 import json
+import re
+import shlex
 import subprocess
+import time
 
 GATE_API_VERSION = "myco.gate/v1"
 GATE_TOOL = "myco_gate_check"
 ARMS = ("no-gate", "gate-before-done", "self-check")
 CLAIM_LIMIT = 4000
 
-# The pre-registered prompt-level self-verification for arm (c). Appended through
-# AnthropicAgent's own ``system_prompt_suffix`` attribute; the budget is unchanged.
-SELF_CHECK_SUFFIX = (
-    "Before you finish, verify your own work. Take a screenshot and check every "
-    "requirement of the task against what is actually on screen and in the saved file: the "
-    "exact values, the cells, text or slides the task names, nothing else changed, and the "
-    "document saved under the requested name, location and format. If anything is wrong or "
-    "unsaved, fix it and check again. Only stop calling tools when you have checked that the "
-    "task is fully complete."
-)
+# One DONE check's time allowance, the same in both checking arms.
+CHECK_TIMEOUT_S = 120
+# PythonController.run_bash_script adds this fixed margin to the script timeout for its HTTP
+# request (desktop_env/controllers/python.py at the pin), so a probe's allowance is
+# PROBE_SCRIPT_TIMEOUT_S + CONTROLLER_HTTP_MARGIN_S = CHECK_TIMEOUT_S.
+CONTROLLER_HTTP_MARGIN_S = 100
+PROBE_SCRIPT_TIMEOUT_S = CHECK_TIMEOUT_S - CONTROLLER_HTTP_MARGIN_S
+
+# Document extensions the self-check recognises in the instruction and in the home directory.
+DOC_EXTENSIONS = ("xlsx", "xls", "csv", "ods", "docx", "doc", "odt", "rtf", "txt",
+                  "pptx", "ppt", "odp", "pdf")
+NAMED_FILE = re.compile(
+    r"(?<![\w.\-])([\w\-.]+\.(?:%s))(?!\w)" % "|".join(DOC_EXTENSIONS), re.IGNORECASE)
+NAMED_FILE_LIMIT = 10
+
+# The self-check probe: a fixed bash script, the same for every task. Only the two lines it
+# is given differ: the seconds since the episode started and the file names the instruction
+# mentions. It reads the user's home directory in the guest (never a hidden directory), and
+# prints one record per finding; ``assess_probe`` turns the records into codes. Its SHA-256
+# is pinned in the pre-registration (arms[2].selfCheck.probeSha256).
+SELF_CHECK_PROBE = r"""#!/bin/bash
+elapsed=__ELAPSED__
+names=(__NAMES__)
+root="${HOME:?}"
+start=$(( $(date +%s) - elapsed ))
+fmt() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    *.xlsx|*.docx|*.pptx) python3 -m zipfile -l "$1" 2>/dev/null | grep -q '^\[Content_Types\]\.xml ' ;;
+    *.ods|*.odt|*.odp) python3 -m zipfile -l "$1" 2>/dev/null | grep -q '^mimetype ' ;;
+    *.pdf) [ "$(head -c 5 "$1" 2>/dev/null)" = "%PDF-" ] ;;
+    *) [ -r "$1" ] ;;
+  esac
+}
+report() {
+  if fmt "$1"; then printf 'FORMAT_OK\t%s\n' "$1"; else printf 'FORMAT_BAD\t%s\n' "$1"; fi
+}
+for n in "${names[@]}"; do
+  p=$(find "$root" -xdev -maxdepth 4 -type f -iname "$n" -not -path '*/.*' -print -quit 2>/dev/null)
+  if [ -z "$p" ]; then printf 'MISSING\t%s\n' "$n"; else report "$p"; fi
+done
+saved=0
+while IFS= read -r p; do
+  saved=$((saved + 1))
+  report "$p"
+done < <(find "$root" -xdev -maxdepth 4 -type f \( -iname '*.xlsx' -o -iname '*.xls' -o -iname '*.csv' -o -iname '*.ods' -o -iname '*.docx' -o -iname '*.doc' -o -iname '*.odt' -o -iname '*.rtf' -o -iname '*.txt' -o -iname '*.pptx' -o -iname '*.ppt' -o -iname '*.odp' -o -iname '*.pdf' \) -not -path '*/.*' -newermt "@$start" -print 2>/dev/null | head -n 50)
+printf 'SAVED\t%d\n' "$saved"
+printf 'END\n'
+"""
+
+# The self-check's codes, in the order they are reported.
+SELF_CHECK_CODES = ("SAVED_FILE_MISSING", "SAVED_FILE_FORMAT_MISMATCH", "NOTHING_SAVED",
+                    "RECHECK_UNAVAILABLE")
 
 
 class GateError(Exception):
@@ -101,6 +159,57 @@ def feedback_text(verdict, codes):
     )
 
 
+def self_check_feedback_text(codes):
+    """The fixed, oracle-free re-check result message: the probe's codes and nothing else."""
+    return (
+        "Self-check: your DONE was not accepted. A re-check of the saved files in your home "
+        "directory found a problem (codes %s). Continue working; when you believe the task "
+        "is done, finish again." % ", ".join(codes)
+    )
+
+
+def named_files(instruction):
+    """File names (with a document extension) the instruction mentions, in order, deduplicated."""
+    out = []
+    for name in NAMED_FILE.findall(instruction if isinstance(instruction, str) else ""):
+        if name.lower() not in [n.lower() for n in out]:
+            out.append(name)
+    return out[:NAMED_FILE_LIMIT]
+
+
+def probe_script(names, elapsed):
+    """The probe as sent: SELF_CHECK_PROBE with its two inputs filled in, shell-quoted."""
+    return SELF_CHECK_PROBE.replace("__ELAPSED__", str(int(elapsed))).replace(
+        "__NAMES__", " ".join(shlex.quote(n) for n in names))
+
+
+def assess_probe(result):
+    """Map the controller's run_bash_script result to self-check codes; [] means no problem.
+
+    Fails closed: no result, a non-zero exit, or output without the final END and SAVED
+    records is RECHECK_UNAVAILABLE.
+    """
+    if not isinstance(result, dict) or result.get("returncode") != 0:
+        return ["RECHECK_UNAVAILABLE"]
+    output = result.get("output")
+    if not isinstance(output, str):
+        return ["RECHECK_UNAVAILABLE"]
+    lines = output.splitlines()
+    if not lines or lines[-1] != "END":
+        return ["RECHECK_UNAVAILABLE"]
+    saved = [line.split("\t", 1)[1] for line in lines if line.startswith("SAVED\t")]
+    if len(saved) != 1 or not saved[0].isdigit():
+        return ["RECHECK_UNAVAILABLE"]
+    codes = []
+    if any(line.startswith("MISSING\t") for line in lines):
+        codes.append("SAVED_FILE_MISSING")
+    if any(line.startswith("FORMAT_BAD\t") for line in lines):
+        codes.append("SAVED_FILE_FORMAT_MISMATCH")
+    if int(saved[0]) == 0:
+        codes.append("NOTHING_SAVED")
+    return codes
+
+
 def append_user_message(agent, text):
     """Default feedback channel: one user turn in AnthropicAgent's own ``messages`` list."""
     agent.messages.append({"role": "user", "content": [{"type": "text", "text": text}]})
@@ -109,7 +218,8 @@ def append_user_message(agent, text):
 class DoneGate:
     """Wraps the runner's agent. Only DONE handling differs between arms."""
 
-    def __init__(self, agent, arm, gate=None, task_id=None, run_id=None, feedback=None):
+    def __init__(self, agent, arm, gate=None, task_id=None, run_id=None, feedback=None,
+                 controller=None, clock=time.monotonic):
         if arm not in ARMS:
             raise ValueError("unknown arm: %r" % (arm,))
         if arm == "gate-before-done":
@@ -117,18 +227,22 @@ class DoneGate:
                 raise ValueError("arm gate-before-done needs a gate, a task id and a run id")
         elif gate is not None:
             raise ValueError("arm %s takes no gate" % arm)
+        if arm == "self-check":
+            if not callable(controller):
+                raise ValueError("arm self-check needs the controller")
+        elif controller is not None:
+            raise ValueError("arm %s takes no controller" % arm)
         self.agent = agent
         self.arm = arm
         self.gate = gate
+        self.controller = controller
         self.task_id = task_id
         self.run_id = run_id
         self.feedback = feedback or append_user_message
+        self.clock = clock
+        self.started = clock()
         self.decisions = []
         self._pending = None
-        if arm == "self-check":
-            existing = getattr(agent, "system_prompt_suffix", "") or ""
-            if SELF_CHECK_SUFFIX not in existing:  # the runner reuses one agent across tasks
-                agent.system_prompt_suffix = (existing + " " + SELF_CHECK_SUFFIX).strip()
 
     def __getattr__(self, name):
         return getattr(self.agent, name)
@@ -136,6 +250,7 @@ class DoneGate:
     def reset(self, *args, **kwargs):
         self.decisions = []
         self._pending = None
+        self.started = self.clock()
         return self.agent.reset(*args, **kwargs)
 
     def predict(self, instruction, obs=None, *args, **kwargs):
@@ -143,20 +258,29 @@ class DoneGate:
             self.feedback(self.agent, self._pending)
             self._pending = None
         response, actions = self.agent.predict(instruction, obs, *args, **kwargs)
-        if self.arm != "gate-before-done":
+        if self.arm == "no-gate":
             return response, actions
         out = []
         for action in actions:
             if not is_done(action):
                 out.append(action)
                 continue
-            accepted, verdict, codes = self._check(response)
-            self.decisions.append({"verdict": verdict, "accepted": accepted, "reasonCodes": codes})
+            if self.arm == "gate-before-done":
+                accepted, verdict, codes = self._check(response)
+                self.decisions.append(
+                    {"verdict": verdict, "accepted": accepted, "reasonCodes": codes})
+                pending = feedback_text(verdict, codes)
+            else:
+                codes = self._self_check(instruction)
+                accepted = not codes
+                self.decisions.append({"selfCheck": "ok" if accepted else "problem",
+                                       "accepted": accepted, "reasonCodes": codes})
+                pending = self_check_feedback_text(codes)
             if accepted:
                 out.append(action)
             else:
                 out.append({"action_type": "WAIT"} if isinstance(action, dict) else "WAIT")
-                self._pending = feedback_text(verdict, codes)
+                self._pending = pending
             break
         return response, out
 
@@ -167,6 +291,16 @@ class DoneGate:
             return False, "uncertain", ["GATE_UNAVAILABLE"]
         return decide(reply)
 
+    def _self_check(self, instruction):
+        """Run the probe through the controller; any failure fails closed."""
+        try:
+            elapsed = int(self.clock() - self.started) + 1
+            script = probe_script(named_files(instruction), elapsed)
+            result = self.controller().run_bash_script(script, timeout=PROBE_SCRIPT_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 - any controller failure fails closed
+            return ["RECHECK_UNAVAILABLE"]
+        return assess_probe(result)
+
 
 class StdioGateClient:
     """Calls the ``myco-gate`` MCP server (src/gate/mcp-server.ts) over stdio.
@@ -176,7 +310,7 @@ class StdioGateClient:
     environment here; the server reads its own operator config.
     """
 
-    def __init__(self, argv, timeout=120.0):
+    def __init__(self, argv, timeout=CHECK_TIMEOUT_S):
         self.argv = list(argv)
         self.timeout = timeout
 
@@ -208,11 +342,13 @@ class StdioGateClient:
         raise GateError("GATE_NO_REPLY")
 
 
-def wrap_agent(agent, arm, gate_argv=None, task_id=None, run_id=None):
+def wrap_agent(agent, arm, gate_argv=None, task_id=None, run_id=None, controller=None):
     """Entry point for the runner patch, called once per task (the gate is bound to one trial).
 
     ``gate_argv`` is the operator's server command; ``{taskId}`` and ``{runId}`` in it are
-    replaced with this trial's ids. Arms no-gate and self-check build no client.
+    replaced with this trial's ids. ``controller`` is a zero-argument callable returning the
+    environment's controller; only arm self-check receives it. Arms no-gate and self-check
+    build no gate client.
     """
     gate = None
     if arm == "gate-before-done":
@@ -221,4 +357,6 @@ def wrap_agent(agent, arm, gate_argv=None, task_id=None, run_id=None):
         gate = StdioGateClient(
             [a.replace("{taskId}", task_id or "").replace("{runId}", run_id or "") for a in gate_argv]
         )
-    return DoneGate(agent, arm, gate=gate, task_id=task_id, run_id=run_id)
+    if arm != "self-check":
+        controller = None
+    return DoneGate(agent, arm, gate=gate, task_id=task_id, run_id=run_id, controller=controller)

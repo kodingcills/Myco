@@ -89,7 +89,8 @@ run_mutant K1d-grader-accepts-unpatched-runner "$R" 'const digest = OSWORLD_HARN
 run_mutant K1e-analysis-counts-mock-runner-rows "$P" 'if (rows.some((r) => r.graderVersion !== OSWORLD_EVALUATE_GRADER))' 'if (false)' "$TP"
 run_mutant K1f-prereg-grader-not-upstream "$J" '"version": "osworld-desktopenv-evaluate@0ad41bee56565efe7bb3c3a5ebc67590a1b8276f"' '"version": "upstream-metric-mock/1"' "$TP"
 # K2 an arm with a different action layer passes the identical-layer tests.
-run_mutant K2a-self-check-arm-alters-actions "$H" '            return response, actions' '            return response, (actions + [{"action_type": "WAIT"}]) if self.arm == "self-check" else actions' "$TH"
+run_mutant K2a-self-check-arm-alters-actions "$H" '                codes = self._self_check(instruction)' '                codes = self._self_check(instruction)
+                out.append({"action_type": "WAIT"})' "$TH"
 run_mutant K2b-gate-arm-rewrites-non-done-action "$H" '                out.append(action)
                 continue' '                out.append(dict(action, command="pyautogui.sleep(0)"))
                 continue' "$TH"
@@ -121,7 +122,6 @@ run_mutant G6-no-gate-arm-accepts-gate "$H" '        elif gate is not None:' '  
 run_mutant G7-refused-done-dropped-not-wait "$H" '                out.append({"action_type": "WAIT"} if isinstance(action, dict) else "WAIT")' '                pass' "$TH"
 run_mutant G8-batch-continues-after-refusal "$H" '            break
         return response, out' '        return response, out' "$TH"
-run_mutant G9-self-check-suffix-missing "$H" '                agent.system_prompt_suffix = (existing + " " + SELF_CHECK_SUFFIX).strip()' '                pass' "$TH"
 run_mutant G10-selection-adds-multi-apps "$I" 'domains: ["libreoffice_calc", "libreoffice_writer", "libreoffice_impress"],' 'domains: ["libreoffice_calc", "libreoffice_writer", "libreoffice_impress", "multi_apps"],' "$TI"
 
 # Round 2 (#741): the retarget to the Myco fleet (14:05Z), its scope (14:37Z), the UTM parity
@@ -173,7 +173,7 @@ run_mutant SR2-uncommitted-prereg-accepted "$P" 'reasons.push("PREREG_NOT_COMMIT
 # N1, N2: the stdio transport fails closed; the runId reaches the gate through wrap_agent.
 run_mutant V3-stdio-no-reply-accepts "$H" '        raise GateError("GATE_NO_REPLY")' '        return {"apiVersion": GATE_API_VERSION, "verdict": "verified", "accepted": True, "reasonCodes": ["ORACLE_PASS"]}' "$TH"
 run_mutant V4-stdio-non-object-accepts "$H" '                    raise GateError("GATE_REPLY_MALFORMED")' '                    return {"apiVersion": GATE_API_VERSION, "verdict": "verified", "accepted": True, "reasonCodes": ["ORACLE_PASS"]}' "$TH"
-run_mutant V5-wrap-agent-run-id-is-task-id "$H" '    return DoneGate(agent, arm, gate=gate, task_id=task_id, run_id=run_id)' '    return DoneGate(agent, arm, gate=gate, task_id=task_id, run_id=task_id)' "$TH"
+run_mutant V5-wrap-agent-run-id-is-task-id "$H" '    return DoneGate(agent, arm, gate=gate, task_id=task_id, run_id=run_id, controller=controller)' '    return DoneGate(agent, arm, gate=gate, task_id=task_id, run_id=task_id, controller=controller)' "$TH"
 # B1(a): the image without the a11y stack or pyautogui/python-xlib (behavioural tests only).
 run_mutant FA1-image-without-gtk3-plugin "$DF" ' libreoffice-gtk3 python3-uno' ' python3-uno' "$TF" "$IMG"
 run_mutant FA2-image-x11-plugin "$DF" '    SAL_USE_VCLPLUGIN=gtk3 \' '    SAL_USE_VCLPLUGIN=x11 \' "$TF" "$IMG"
@@ -210,7 +210,55 @@ run_mutant FD2-guard-free-pct-ignored "$MS" 'if [ "$pct" -lt "$HOST_FREE_PCT_MIN
 run_mutant FD3-guard-step-2gib "$MS" 'MAX_STEP_ADD_MIB=1024 ' 'MAX_STEP_ADD_MIB=2048 ' "$TF" "$MEAS"
 run_mutant FD4-unlabelled-host-measured "$MS" 'if [ -z "${HOST_LABEL:-}" ]; then' 'if false; then' "$TF" "$MEAS"
 
-if ! git diff --quiet -- src/benchmark/upstream benchmark/upstream src/gate-hooks src/gate docs/benchmark/upstream; then
+# Round 2 addendum, N3 (lead ruling 15:26Z): the self-check arm is a structural re-check of the
+# end state through the controller. It must never read gold or evaluator output, never get a
+# larger budget, and a found problem must turn DONE into a continue.
+RULES="the probe's pre-registered rules"
+HOME_ONLY="the probe reads only the guest home directory"
+if [ "$(uname -s)" = "Linux" ]; then
+  for name in "$RULES" "$HOME_ONLY"; do
+    out=$(timeout 300 pnpm exec vitest run "$TH" -t "$name" 2>&1)
+    if [ $? -ne 0 ] || ! sed "s/\x1b\[[0-9;]*m//g" <<<"$out" | grep -qE "Tests +[1-9][0-9]* passed"; then
+      echo "BASELINE FAILED for filter: $name"
+      survived=1
+    fi
+  done
+  run_mutant SC1-self-check-reads-gold "$H" '            elapsed = int(self.clock() - self.started) + 1' '            open("cache/%s/%s" % (self.task_id, "report_go" + "ld.xlsx"), "rb").close()
+            elapsed = int(self.clock() - self.started) + 1' "$TH"
+  run_mutant SC2a-self-check-asks-evaluator "$H" '            elapsed = int(self.clock() - self.started) + 1' '            if getattr(self.agent.env, "evalu" + "ate")() < 1.0:
+                return ["NOTHING_SAVED"]
+            elapsed = int(self.clock() - self.started) + 1' "$TH"
+  run_mutant SC2b-self-check-reads-evaluator-output "$H" '            elapsed = int(self.clock() - self.started) + 1' '            open(self.run_id + "/" + "result" + ".txt").close()
+            elapsed = int(self.clock() - self.started) + 1' "$TH"
+  run_mutant SC3a-self-check-free-model-turn "$H" '                pending = self_check_feedback_text(codes)' '                pending = self_check_feedback_text(codes)
+                if codes:
+                    self.feedback(self.agent, pending)
+                    return self.agent.predict(instruction, obs, *args, **kwargs)' "$TH"
+  run_mutant SC3b-self-check-longer-time-allowance "$H" 'PROBE_SCRIPT_TIMEOUT_S = CHECK_TIMEOUT_S - CONTROLLER_HTTP_MARGIN_S' 'PROBE_SCRIPT_TIMEOUT_S = CHECK_TIMEOUT_S' "$TH"
+  run_mutant SC4-problem-does-not-continue "$H" '                accepted = not codes' '                accepted = True' "$TH"
+  run_mutant SC5-self-check-fails-open "$H" '            return ["RECHECK_UNAVAILABLE"]
+        return assess_probe(result)' '            return []
+        return assess_probe(result)' "$TH"
+  run_mutant SC6-probe-reads-outside-home "$H" "printf 'SAVED\\t%d\\n' \"\$saved\"" "cat /tmp/osworld/cache/* >/dev/null 2>&1
+printf 'SAVED\\t%d\\n' \"\$saved\"" "$TH" "$HOME_ONLY"
+  run_mutant SC7-probe-reads-hidden-dirs "$H" "-iname '*.pdf' \\) -not -path '*/.*' -newermt" "-iname '*.pdf' \\) -newermt" "$TH" "$RULES"
+  run_mutant SC8-probe-format-rule-off "$H" '*.pdf) [ "$(head -c 5 "$1" 2>/dev/null)" = "%PDF-" ] ;;' '*.pdf) true ;;' "$TH" "$RULES"
+  run_mutant SC9-nothing-saved-ignored "$H" '    if int(saved[0]) == 0:' '    if False:' "$TH"
+  run_mutant SC10-self-check-other-controller-call "$H" '            result = self.controller().run_bash_script(script, timeout=PROBE_SCRIPT_TIMEOUT_S)' '            self.controller().get_file("/home/user/Desktop/report.xlsx")
+            result = self.controller().run_bash_script(script, timeout=PROBE_SCRIPT_TIMEOUT_S)' "$TH"
+fi
+run_mutant SC11-patch-hands-hook-task-config src/gate-hooks/osworld/run_multienv_claude.gate.patch '+                            controller=lambda: env.controller),' '+                            controller=lambda: (env.controller, example)),' "$TH"
+run_mutant SC12-prereg-self-check-unchecked "$P" 'out.push("SELF_CHECK_NOT_RULED");' '' "$TP"
+run_mutant SC13-prereg-may-not-read-unchecked "$P" '    !SELF_CHECK_MAY_NOT_READ.every((k) => mayNotRead.some((m) => m.includes(k)))' '    false' "$TP"
+run_mutant SC14-prereg-suffix-arm-kept "$J" '"promptSuffix": null,
+      "selfCheck"' '"promptSuffix": "Verify first.",
+      "selfCheck"' "$TP"
+run_mutant SC15-prereg-stale-pending-unchecked "$P" 'out.push("STALE_SELF_CHECK_PENDING");' '' "$TP"
+run_mutant SC16-prereg-1526-ruling-not-required "$P" '  "2026-11-27T15:26Z",
+] as const;' '] as const;' "$TP"
+run_mutant SC17-prereg-prompt-unchecked "$P" 'if (a.promptSuffix !== null)' 'if (false)' "$TP"
+run_mutant SC18-static-guard-allows-other-calls "$TX" 'if (m[1] !== "run_bash_script")' 'if (false)' "$TX"
+if ! git diff --quiet -- src/benchmark/upstream benchmark/upstream src/gate-hooks src/gate docs/benchmark/upstream test/benchmark; then
   echo "FILES LEFT MODIFIED"
   survived=1
 fi

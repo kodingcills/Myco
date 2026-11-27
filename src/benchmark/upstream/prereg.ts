@@ -2,7 +2,7 @@
  * Shape check and analysis gate for the confirmatory R1 on the public OSWorld subset (draft
  * pre-registration docs/benchmark/upstream/r1-public-prereg.json), under the lead's
  * 2026-11-27 rulings: 13:55Z harness (#700 comment 7220110528), 14:05Z retarget to the Myco
- * Linux fleet, 14:37Z scope and 15:21Z UTM parity reference (#741).
+ * Linux fleet, 14:37Z scope, 15:21Z UTM parity reference and 15:26Z N3 self-check arm (#741).
  *
  * `preregProblems` checks the record states what the rulings require: OSWorld's own harness
  * at the pinned commit on the `myco-fleet` provider (adapter, image, image digest field), its
@@ -37,12 +37,34 @@ export const PARITY_RULE_PHRASE = "Parity must pass before any live run";
 export const PARITY_SAMPLE_PATH = "docs/benchmark/upstream/r1-parity-sample.json";
 export const PARITY_HARNESS_PATH = "src/benchmark/upstream/fleet/osworld_parity.py";
 export const PARITY_REFERENCE_HYPERVISOR = "UTM (QEMU with HVF)";
-/** The lead rulings the record must cite, by time (#700 13:55Z; #741 14:05Z, 14:37Z, 15:21Z). */
+/** The lead rulings the record must cite, by time (#700 13:55Z; #741 14:05Z, 14:37Z, 15:21Z, 15:26Z). */
 export const REQUIRED_RULINGS = [
   "2026-11-27T13:55Z",
   "2026-11-27T14:05Z",
   "2026-11-27T14:37Z",
   "2026-11-27T15:21Z",
+  "2026-11-27T15:26Z",
+] as const;
+
+/** N3 (lead ruling 15:26Z): the self-check arm is a structural re-check on DONE, not a prompt. */
+export const SELF_CHECK_ARM = "self-check";
+export const SELF_CHECK_FORM = "structural-recheck";
+export const SELF_CHECK_RULING = "2026-11-27T15:26Z";
+export const SELF_CHECK_CODES = [
+  "SAVED_FILE_MISSING",
+  "SAVED_FILE_FORMAT_MISMATCH",
+  "NOTHING_SAVED",
+  "RECHECK_UNAVAILABLE",
+] as const;
+/** What the self-check must never read; each must be named in `selfCheck.mayNotRead`. */
+export const SELF_CHECK_MAY_NOT_READ = [
+  "oracle",
+  "task configuration",
+  "gold",
+  "fixtures",
+  "ground truth",
+  "evaluator code",
+  "result.txt",
 ] as const;
 
 export const R1_ARMS = ["no-gate", "gate-before-done", "self-check"] as const;
@@ -104,7 +126,8 @@ const obj = (v: unknown): Record<string, unknown> =>
 
 /**
  * Codes for every way the record misses what the rulings require (13:55Z harness, 14:05Z
- * retarget to the fleet, 14:37Z scope, 15:21Z UTM reference). `paritySampleSha256` is the hash
+ * retarget to the fleet, 14:37Z scope, 15:21Z UTM reference, 15:26Z self-check arm: no arm
+ * changes the prompt, and arm (c) is the pre-registered structural re-check). `paritySampleSha256` is the hash
  * of the committed parity sample (docs/benchmark/upstream/r1-parity-sample.json).
  */
 export function preregProblems(
@@ -147,7 +170,26 @@ export function preregProblems(
     if (a.budget !== "shared") out.push(`ARM_BUDGET_DIFFERS:${String(a.id)}`);
     if (a.provider !== "shared") out.push(`ARM_PROVIDER_DIFFERS:${String(a.id)}`);
     if ((a.gate === true) !== (a.id === GATED_ARM)) out.push(`ARM_GATE_WRONG:${String(a.id)}`);
+    // N3: no arm changes the prompt (the prompt-suffix variant is not an arm).
+    if (a.promptSuffix !== null) out.push(`ARM_PROMPT_DIFFERS:${String(a.id)}`);
   }
+  // N3 (15:26Z): the self-check arm is the structural re-check, pre-registered with its probe
+  // pin, its budget parity and what it may never read.
+  const selfCheck = obj(arms.find((a) => a.id === SELF_CHECK_ARM)?.selfCheck);
+  const mayNotRead = Array.isArray(selfCheck.mayNotRead) ? selfCheck.mayNotRead.map(String) : [];
+  if (
+    selfCheck.form !== SELF_CHECK_FORM ||
+    selfCheck.ruling !== SELF_CHECK_RULING ||
+    !/^[0-9a-f]{64}$/.test(String(selfCheck.probeSha256)) ||
+    canonicalJson(selfCheck.codes) !== canonicalJson(SELF_CHECK_CODES) ||
+    typeof selfCheck.budgetParity !== "string" ||
+    typeof selfCheck.onProblem !== "string" ||
+    !Array.isArray(selfCheck.mayRead) ||
+    !SELF_CHECK_MAY_NOT_READ.every((k) => mayNotRead.some((m) => m.includes(k)))
+  )
+    out.push("SELF_CHECK_NOT_RULED");
+  if (prereg.leadRulingPending.some((p) => /^self-check-form\b/.test(p)))
+    out.push("STALE_SELF_CHECK_PENDING");
   const gi = obj(prereg.gateInterception);
   if (
     canonicalJson(gi.request) !== canonicalJson(["taskId", "runId", "claim"]) ||

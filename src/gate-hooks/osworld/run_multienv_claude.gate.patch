@@ -27,7 +27,7 @@
  
      # example config
      parser.add_argument("--domain", type=str, default="all")
-@@ -312,7 +317,10 @@
+@@ -312,7 +317,11 @@
                  os.makedirs(example_result_dir, exist_ok=True)
                  try:
                      lib_run_single.run_single_example(
@@ -35,7 +35,8 @@
 +                        myco_wrap_agent(
 +                            agent, args.myco_arm,
 +                            shlex.split(args.myco_gate_cmd) if args.myco_gate_cmd else None,
-+                            task_id=example_id, run_id=f"{args.myco_run_prefix}-{example_id}"),
++                            task_id=example_id, run_id=f"{args.myco_run_prefix}-{example_id}",
++                            controller=lambda: env.controller),
                          env,
                          example,
                          args.max_steps,

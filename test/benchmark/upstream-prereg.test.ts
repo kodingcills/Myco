@@ -2,7 +2,8 @@
  * The draft public-R1 pre-registration under the lead's rulings: 13:55Z (OSWorld's own task
  * configs, controller, evaluator and Claude runner; Myco adds only the DONE gate), 14:05Z
  * (retarget to the Myco Linux fleet with one provider for every arm; parity before any live
- * run), 14:37Z (scope) and 15:21Z (UTM reference, a stated deviation). It states all of that;
+ * run), 14:37Z (scope), 15:21Z (UTM reference, a stated deviation) and 15:26Z (N3: the self-check
+ * arm is a structural re-check of the end state on DONE, not a prompt). It states all of that;
  * its hash is recomputable; and the analysis refuses "shown" while anything is pending, without
  * a passed parity assessment, on a pre-registration that is not committed, on any non-LIVE or
  * simulated row, or unless every arm covers exactly the n tasks (#652 rule). Rows and parity
@@ -174,6 +175,49 @@ describe("draft public-R1 pre-registration: the rulings' fields", () => {
     );
   });
 
+  it("N3 (15:26Z): arm (c) is the structural re-check, with its probe pin, budget parity and what it may never read; no prompt-suffix arm or ablation", () => {
+    const arms = PREREG.arms as Obj[];
+    expect(arms.map((a) => a.promptSuffix)).toEqual([null, null, null]);
+    const sc = at(PREREG, "arms", 2, "selfCheck") as Record<string, unknown>;
+    expect(sc).toMatchObject({
+      form: "structural-recheck",
+      ruling: "2026-11-27T15:26Z",
+      codes: [
+        "SAVED_FILE_MISSING",
+        "SAVED_FILE_FORMAT_MISMATCH",
+        "NOTHING_SAVED",
+        "RECHECK_UNAVAILABLE",
+      ],
+    });
+    expect(sc.transport).toMatch(
+      /^desktop_env\/controllers\/python\.py#PythonController\.run_bash_script/,
+    );
+    expect(sc.onProblem).toMatch(/^DONE becomes upstream's own WAIT special action/);
+    expect(sc.budgetParity).toMatch(
+      /counted exactly as the gate arm's check is counted: it runs inside the turn of the DONE it checks, a refused DONE uses that turn \(one step\), the probe itself costs no step and no model tokens/,
+    );
+    expect(sc.budgetParity).toMatch(
+      /20 s script timeout plus the controller's fixed 100 s HTTP margin is 120 s, the gate client's timeout/,
+    );
+    const never = (sc.mayNotRead as string[]).join(" | ");
+    for (const k of [
+      "oracle",
+      "task configuration",
+      "gold files",
+      "fixtures",
+      "ground truth",
+      "evaluator code",
+      "result.txt",
+      "DesktopEnv.evaluate",
+      "run_bash_script",
+    ])
+      expect(never).toContain(k);
+    expect(sc.ablation).toMatch(
+      /^None\. The earlier prompt-suffix variant .* 117 more trials .* it is dropped/,
+    );
+    expect(PREREG.leadRulingPending.join("\n")).not.toMatch(/self-check/);
+  });
+
   it("has a parity section: parity before any live run, the committed sample by hash, the fleet against OSWorld's guest image in UTM as a stated deviation (15:21Z)", () => {
     const parity = PREREG.parity as Obj;
     expect(parity.rule).toMatch(/^Parity must pass before any live run\./);
@@ -193,21 +237,23 @@ describe("draft public-R1 pre-registration: the rulings' fields", () => {
     expect(parity.status).toMatch(/^Not run\./);
   });
 
-  it("cites the 13:55Z, 14:05Z, 14:37Z and 15:21Z rulings with their timestamps and comment links", () => {
+  it("cites the 13:55Z, 14:05Z, 14:37Z, 15:21Z and 15:26Z rulings with their timestamps and comment links", () => {
     const rulings = PREREG.rulings as { at: string; ref: string }[];
     expect(rulings.map((r) => r.at)).toEqual([
       "2026-11-27T13:55Z",
       "2026-11-27T14:05Z",
       "2026-11-27T14:37Z",
       "2026-11-27T15:21Z",
+      "2026-11-27T15:26Z",
     ]);
     expect(rulings.map((r) => r.ref.split("issuecomment-")[1])).toEqual([
       "7220110528",
       "7220313158",
       "7220987945",
       "7221935698",
+      "7222035806",
     ]);
-    for (const t of ["13:55Z", "14:05Z", "14:37Z", "15:21Z"])
+    for (const t of ["13:55Z", "14:05Z", "14:37Z", "15:21Z", "15:26Z"])
       expect(PREREG.ruling as string).toContain(t);
   });
 
@@ -235,7 +281,7 @@ describe("draft public-R1 pre-registration: the rulings' fields", () => {
     );
   });
 
-  it("keeps the truly open rulings pending (the parity reference run and the self-check form among them) and drops the settled host and harness items", () => {
+  it("keeps the truly open rulings pending (the parity reference run among them) and drops the settled host, harness and self-check-form items", () => {
     const ids = PREREG.leadRulingPending.map((p) => p.split(":")[0]);
     expect(ids).toEqual([
       "asset-license",
@@ -245,7 +291,6 @@ describe("draft public-R1 pre-registration: the rulings' fields", () => {
       "pass-threshold",
       "gate-oracle",
       "parity-reference-run",
-      "self-check-form",
       "model-access",
     ]);
     expect(PREREG.gateOracle).toMatch(/^PENDING/);
@@ -318,6 +363,38 @@ describe("draft public-R1 pre-registration: the rulings' fields", () => {
       ],
       ["RULINGS_NOT_CITED", (p) => (p.rulings = (p.rulings as unknown[]).slice(0, 1))],
       ["RULINGS_NOT_CITED", (p) => (p.ruling = "Lead ruling 2026-11-27 ~13:55Z only.")],
+      [
+        "RULINGS_NOT_CITED",
+        (p) => (p.rulings = (p.rulings as Obj[]).filter((r) => r.at !== "2026-11-27T15:26Z")),
+      ],
+      // N3 (15:26Z): the self-check arm is the structural re-check, pre-registered in full.
+      ["SELF_CHECK_NOT_RULED", (p) => delete at(p, "arms", 2).selfCheck],
+      ["SELF_CHECK_NOT_RULED", (p) => (at(p, "arms", 2, "selfCheck").form = "prompt-suffix")],
+      ["SELF_CHECK_NOT_RULED", (p) => (at(p, "arms", 2, "selfCheck").ruling = "2026-11-27T15:21Z")],
+      ["SELF_CHECK_NOT_RULED", (p) => (at(p, "arms", 2, "selfCheck").probeSha256 = "PENDING")],
+      ["SELF_CHECK_NOT_RULED", (p) => delete at(p, "arms", 2, "selfCheck").budgetParity],
+      ["SELF_CHECK_NOT_RULED", (p) => delete at(p, "arms", 2, "selfCheck").onProblem],
+      ["SELF_CHECK_NOT_RULED", (p) => delete at(p, "arms", 2, "selfCheck").mayRead],
+      [
+        "SELF_CHECK_NOT_RULED",
+        (p) => (at(p, "arms", 2, "selfCheck").codes = ["NOTHING_SAVED", "ORACLE_FAIL"]),
+      ],
+      ...["oracle", "task configuration", "gold", "fixtures", "evaluator code", "result.txt"].map(
+        (k) =>
+          [
+            "SELF_CHECK_NOT_RULED",
+            (p: Obj) =>
+              (at(p, "arms", 2, "selfCheck").mayNotRead = (
+                at(p, "arms", 2, "selfCheck").mayNotRead as string[]
+              ).map((m) => m.replaceAll(k, "x"))),
+          ] as [string, (p: Obj) => void],
+      ),
+      ["ARM_PROMPT_DIFFERS:self-check", (p) => (at(p, "arms", 2).promptSuffix = "Verify first.")],
+      ["ARM_PROMPT_DIFFERS:no-gate", (p) => delete at(p, "arms", 0).promptSuffix],
+      [
+        "STALE_SELF_CHECK_PENDING",
+        (p) => (p.leadRulingPending as string[]).push("self-check-form: suffix or re-check"),
+      ],
     ];
     for (const [code, mutate] of cases) {
       const p = clone();

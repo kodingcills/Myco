@@ -53,7 +53,7 @@ export const OSWORLD_HARNESS = {
    * self-check bypass the gate by configuration. A run stamp must carry this digest for the
    * runner file and the upstream digest for every other harness file.
    */
-  patchedAgentRunnerSha256: "45e5fea1bc57de6948280f9da8dc3f73ab06b1b021fb5ed43a92346cdea63006",
+  patchedAgentRunnerSha256: "f1cf97c61b433896f2890ade19db70bdc97307f8232333c230ed1d91f037470e",
   /**
    * Every harness file a run uses patched, with its patched SHA-256: the runner (gate hook
    * plus the `myco-fleet` provider choice) and the two files the provider registration patch
@@ -63,7 +63,7 @@ export const OSWORLD_HARNESS = {
    */
   patchedFiles: {
     "scripts/python/run_multienv_claude.py":
-      "45e5fea1bc57de6948280f9da8dc3f73ab06b1b021fb5ed43a92346cdea63006",
+      "f1cf97c61b433896f2890ade19db70bdc97307f8232333c230ed1d91f037470e",
     "desktop_env/desktop_env.py":
       "383fc1e64c5aaa22de779645ab7911180878242379413d38fb59e002ed75340d",
     "desktop_env/providers/__init__.py":
