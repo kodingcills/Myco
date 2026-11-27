@@ -1,0 +1,36 @@
+{
+  "schema": "myco.upstream.taskset/1",
+  "taskSetVersion": "waa-office-v1",
+  "upstream": {
+    "name": "WindowsAgentArena",
+    "repo": "https://github.com/microsoft/WindowsAgentArena",
+    "commit": "eb220c4dcf64babefc1bfc287edda91ab04132ed",
+    "license": "MIT",
+    "licenseFile": "LICENSE",
+    "licenseSha256": "9906940f61b1f0b533fa7d99baf55178b2808fbe113ea51dfbfad8572ccd5f2b"
+  },
+  "selectionRule": "Every task id listed in evaluation_examples_windows/test_all.json under libreoffice_calc, libreoffice_writer, notepad and file_explorer (WAA's office apps are LibreOffice on Windows; it has no Microsoft Office tasks). No task is dropped for difficulty, feasibility, evaluator type or placement.",
+  "counts": {
+    "total": 64,
+    "perDomain": {
+      "libreoffice_calc": 24,
+      "libreoffice_writer": 19,
+      "notepad": 2,
+      "file_explorer": 19
+    },
+    "perPlacement": {
+      "windows-vm": 64
+    }
+  },
+  "evaluatorFiles": {
+    "src/win-arena-container/client/desktop_env/evaluators/metrics/chrome.py": "9372fbb4cc62f992beba875fcecd3afb3b34e757d34a6650c002661da9f1121b",
+    "src/win-arena-container/client/desktop_env/evaluators/metrics/docs.py": "65052a7bd6970224bf6fefe52441e09851ed3b8a56c9ce85d8436125123a07f7",
+    "src/win-arena-container/client/desktop_env/evaluators/metrics/general.py": "e3f75e5d601626ecd09ae0cd7a0727b8b8bf1687924bd039faf2529a6682ab9e",
+    "src/win-arena-container/client/desktop_env/evaluators/metrics/slides.py": "d72cfff09d302e46b68463d262d665e223ac05c7a7db8f03ac6f273da5a5d0b9",
+    "src/win-arena-container/client/desktop_env/evaluators/metrics/table.py": "412824b442c0c23db731afbd3fe6ea328532bcd216ff335bdab7339b168fdb88",
+    "src/win-arena-container/client/desktop_env/evaluators/metrics/utils.py": "fb12b5e8ccc6244ed8dfc38a38005fb2582658ed09c03279a6760a3394817ae0",
+    "src/win-arena-container/client/desktop_env/evaluators/metrics/vlc.py": "bb7082fd2b7a0ca196d03b0222b730406712de4732ed3bb6d520e3f96c275859",
+    "src/win-arena-container/client/desktop_env/evaluators/metrics/vscode.py": "73e5ed8c975758598624bd05fa69d4db73c67d0197734386b2feeced8ccb2b75"
+  },
+  "tasksSha256": "25342f23813af0d182dfb2e27dff91c41cc4a818cab7747deb3ae4eb305b191b"
+}
