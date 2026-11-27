@@ -27,7 +27,8 @@ export type GateVerdict = "verified" | "refuted" | "uncertain";
 /**
  * Stable reason codes. Exactly one of the `ORACLE_*` or input/state codes explains the
  * verdict; `CLAIM_RECORDED` may accompany any of them, and the detail codes
- * `TARGET_MISMATCH` / `DOCUMENT_COLLATERAL` may accompany `ORACLE_FAIL` only.
+ * `TARGET_MISMATCH` / `DOCUMENT_COLLATERAL` / `SHEET_SET_MISMATCH` may accompany
+ * `ORACLE_FAIL` only.
  */
 export const REASON_CODES = [
   /** The oracle ran on persisted state and passed. The only code that goes with `verified`. */
@@ -93,6 +94,11 @@ export const REASON_CODES = [
    * must equal pristine + intent, so a correct target with collateral damage is refuted.
    */
   "DOCUMENT_COLLATERAL",
+  /**
+   * Detail for ORACLE_FAIL (TIF-274 prerequisite): the saved workbook's sheet set is not
+   * the fixture's (one sheet), e.g. a sheet added. Accompanies ORACLE_FAIL only.
+   */
+  "SHEET_SET_MISMATCH",
 ] as const;
 
 export type ReasonCode = (typeof REASON_CODES)[number];
@@ -101,7 +107,11 @@ export type ReasonCode = (typeof REASON_CODES)[number];
  * Reason codes an oracle may attach to a `refuted` output to say why (TIF-270). The gate
  * refuses any other code, and any of these on a non-refuted output, as malformed.
  */
-export const ORACLE_DETAIL_CODES = ["TARGET_MISMATCH", "DOCUMENT_COLLATERAL"] as const;
+export const ORACLE_DETAIL_CODES = [
+  "TARGET_MISMATCH",
+  "DOCUMENT_COLLATERAL",
+  "SHEET_SET_MISMATCH",
+] as const;
 export type OracleDetailCode = (typeof ORACLE_DETAIL_CODES)[number];
 
 /** One checkpoint's verdict in a multi-step task (TIF-270). Checkpoints are numbered from 1. */
@@ -308,6 +318,10 @@ export const ORACLE_INPUT_FIELDS: readonly string[] = [
   "fixtureFile",
   "fixtureSha256",
   "fixtureCsv",
+  // Persisted format (TIF-274 prerequisite): which format the gate reads is the operator's.
+  "persistedFormat",
+  "format",
+  "fixtureXlsx",
 ];
 
 /** Ids are path segments, so they are restricted to a safe alphabet and never `.`/`..`. */

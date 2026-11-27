@@ -330,25 +330,25 @@ describe("policy: opt-in per family, refused when it cannot be honoured", () => 
     }) as never;
 
   it("absent or not naming the task's family: off", () => {
-    expect(correctionsEnabled(undefined, task("calc-record-edit", "2"))).toBe(false);
+    expect(correctionsEnabled(undefined, task("calc-record-edit", "3"))).toBe(false);
     expect(
-      correctionsEnabled({ families: ["calc-multi-step"] }, task("calc-record-edit", "2")),
+      correctionsEnabled({ families: ["calc-multi-step"] }, task("calc-record-edit", "3")),
     ).toBe(false);
     expect(
-      correctionsEnabled({ families: ["calc-record-edit"] }, task("calc-record-edit", "2")),
+      correctionsEnabled({ families: ["calc-record-edit"] }, task("calc-record-edit", "3")),
     ).toBe(true);
   });
 
   it("a family without correction support (todo-items, unknown) is refused", () => {
     for (const family of ["todo-items", "bogus"])
       expect(() =>
-        correctionsEnabled({ families: [family] }, task("calc-record-edit", "2")),
+        correctionsEnabled({ families: [family] }, task("calc-record-edit", "3")),
       ).toThrow(/^invalid gate corrections: family/);
   });
 
   it("a family version corrections do not mirror is refused (the rule must be the oracle's)", () => {
     expect(() =>
-      correctionsEnabled({ families: ["calc-record-edit"] }, task("calc-record-edit", "3")),
+      correctionsEnabled({ families: ["calc-record-edit"] }, task("calc-record-edit", "2")),
     ).toThrow(/not the version corrections mirror/);
   });
 
@@ -356,7 +356,7 @@ describe("policy: opt-in per family, refused when it cannot be honoured", () => 
     expect(() =>
       correctionsEnabled(
         { families: ["calc-record-edit"] },
-        task("calc-record-edit", "2", { persistedFormat: "xlsx" }),
+        task("calc-record-edit", "3", { persistedFormat: "xlsx" }),
       ),
     ).toThrow(/corrections read CSV only/);
   });
