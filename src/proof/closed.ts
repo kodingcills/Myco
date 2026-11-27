@@ -32,6 +32,7 @@
  * the guess. That is the price of keeping equality checkable; it is stated in the doc.
  */
 import { REASON_CODES } from "../gate/api.ts";
+import { POLICY_AGENT_CODES, POLICY_DECISION_CODES } from "../policy/codes.ts";
 import { HASHED_SOURCE, hashedId, hashValue, RESERVED_PREFIX, textDigest } from "./hashed.ts";
 import type { IdentityGuard } from "./identity.ts";
 import { closedApp, closedSubject, closedTool, isClosedKeys } from "./vocab.ts";
@@ -54,7 +55,7 @@ export const HEX64 = new RegExp(HEX64_SOURCE);
  * the policy and handoff codes the repo's own policy paths emit (`src/schedule/scheduler.ts`,
  * `src/schedule/runtime.ts`, `src/handoff/policy.ts`). Any other value, however code-like, is
  * replaced by its hashed form. Adding a member is a reviewed change (`allowlist.test.ts` pins
- * this list). Track O's own enum replaces the policy half when it lands.
+ * this list). Track O's closed enums (`src/policy/codes.ts`) are appended as is.
  */
 export const POLICY_REASON_CODES = [
   ...REASON_CODES,
@@ -68,6 +69,9 @@ export const POLICY_REASON_CODES = [
   "HANDOFF_TIMEOUT",
   "HANDOFF_CANCELLED",
   "ATTEMPT_ENDED",
+  // Track O (src/policy/codes.ts): the policy log's decision codes and the agent-facing codes.
+  ...POLICY_DECISION_CODES,
+  ...POLICY_AGENT_CODES,
 ] as const;
 /**
  * The media types an evidence record may carry AS IS: a CLOSED ENUM, never a grammar.
