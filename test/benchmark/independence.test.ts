@@ -5,7 +5,15 @@
  * if it leaves `src/benchmark/grade/`, or reaches a process launcher (the gate's persisted
  * check runs `soffice`).
  */
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -225,5 +233,107 @@ describe("plugins never share code with the benchmark grader (track T)", () => {
   it("no plugin module names the grader", () => {
     for (const file of files)
       expect(readFileSync(file, "utf8"), relative(ROOT, file)).not.toMatch(/benchmark\/grade/);
+  });
+});
+
+/**
+ * Public benchmarks (#682): the upstream-evaluator grader under src/benchmark/upstream/ is
+ * ground truth for osworld-office-v1 and waa-office-v1. It never reaches gate-side code, and no
+ * other src/ module (the gate, the verifier, the pilot) reaches it. It may launch a process:
+ * that process is the upstream evaluator itself, run under `python3 -I` with no host env.
+ */
+describe("the upstream-evaluator grader is independent of the gate, both ways (#682)", () => {
+  const UPSTREAM = join(ROOT, "src", "benchmark", "upstream");
+  const SRC = join(ROOT, "src");
+  const ALLOWED = new Set(["node:crypto", "node:child_process", "node:fs", "node:os", "node:path"]);
+  const tsUnder = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory()
+        ? tsUnder(join(dir, e.name))
+        : e.name.endsWith(".ts")
+          ? [join(dir, e.name)]
+          : [],
+    );
+  const upstreamFiles = tsUnder(UPSTREAM);
+  /** Every module an entry reaches outside src/benchmark/upstream, and every disallowed builtin. */
+  const escapes = (entry: string) =>
+    [...walk(entry)].flatMap(([mod, specs]) => [
+      ...(mod.startsWith(`${UPSTREAM}/`) ? [] : [`${relative(ROOT, mod)} reached`]),
+      ...specs
+        .filter((s) => !s.startsWith(".") && !ALLOWED.has(s))
+        .map((s) => `${relative(ROOT, mod)} imports ${s}`),
+    ]);
+  /**
+   * Like `walk`, but resolves `./x.js` specifiers to `./x.ts` (some src/ modules use the NodeNext
+   * spelling) and records an unresolvable relative import instead of throwing.
+   */
+  const walkSrc = (entry: string, seen = new Set<string>()): Set<string> => {
+    if (seen.has(entry)) return seen;
+    seen.add(entry);
+    for (const spec of specifiers(readFileSync(entry, "utf8"))) {
+      if (!spec.startsWith(".")) continue;
+      const target = resolve(dirname(entry), spec);
+      const candidates = [target, target.replace(/\.js$/, ".ts"), `${target}.ts`];
+      const hit = candidates.find((c) => existsSync(c) && statSync(c).isFile());
+      if (hit) walkSrc(hit, seen);
+      else seen.add(`UNRESOLVED:${target}`);
+    }
+    return seen;
+  };
+  /** Every src/ module outside src/benchmark/upstream that reaches it. */
+  const reachers = (files: string[]) =>
+    files
+      .filter((f) => !f.startsWith(`${UPSTREAM}/`))
+      .filter((f) =>
+        [...walkSrc(f)].some((m) => m.replace(/^UNRESOLVED:/, "").startsWith(UPSTREAM)),
+      )
+      .map((f) => relative(ROOT, f));
+
+  it("has the grader modules to check", () => {
+    expect(upstreamFiles.map((f) => relative(UPSTREAM, f)).sort()).toEqual(
+      expect.arrayContaining(["evaluate.ts", "import.ts", "pins.ts", "placement-report.ts"]),
+    );
+  });
+
+  it("its transitive imports stay inside src/benchmark/upstream/ (no gate, verifier, task generator or grade code)", () => {
+    for (const f of upstreamFiles) expect(escapes(f), relative(ROOT, f)).toEqual([]);
+  });
+
+  it("no other src/ module reaches it: the gate never imports or trusts the upstream verdict", () => {
+    expect(reachers(tsUnder(SRC))).toEqual([]);
+  });
+
+  it("neither the TS grader nor the Python driver names a gate module", () => {
+    const forbidden =
+      /uno-verifier|filepersist|src\/gate|gate\/|core\/verify|src\/verify|tasks\/(intent|fixture)/;
+    for (const name of [...upstreamFiles, join(UPSTREAM, "run_upstream_metric.py")]) {
+      const code = readFileSync(name, "utf8").replace(/^\s*(\/\/|\*|\/\*\*|#).*$/gm, "");
+      expect(code, relative(ROOT, name)).not.toMatch(forbidden);
+    }
+  });
+
+  it("the checks bite: a planted gate import and a planted reacher are both reported", () => {
+    const dir = mkdtempSync(join(tmpdir(), "upstream-bite-"));
+    try {
+      const rel = (from: string, p: string) => relative(dirname(from), p).split(sep).join("/");
+      const gateSideReacher = join(dir, "reacher.ts");
+      writeFileSync(
+        gateSideReacher,
+        `import "${rel(gateSideReacher, join(UPSTREAM, "evaluate.ts"))}";\n`,
+      );
+      expect(reachers([gateSideReacher])).toEqual([relative(ROOT, gateSideReacher)]);
+      const planted = join(dir, "planted.ts");
+      writeFileSync(
+        planted,
+        `import "${rel(planted, join(ROOT, "src", "gate", "gate.ts"))}";\nimport "node:net";\n`,
+      );
+      const found = escapes(planted);
+      expect(found).toEqual(
+        expect.arrayContaining([expect.stringContaining("src/gate/gate.ts reached")]),
+      );
+      expect(found).toEqual(expect.arrayContaining([expect.stringContaining("imports node:net")]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

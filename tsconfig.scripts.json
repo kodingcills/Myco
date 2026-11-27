@@ -38,6 +38,7 @@
     "scripts/m2-corrections-ab.ts",
     "scripts/myco-schedule.ts",
     "scripts/ci-required-green.ts",
-    "scripts/myco-record.ts"
+    "scripts/myco-record.ts",
+    "scripts/upstream-import.ts"
   ]
 }
