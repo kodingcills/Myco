@@ -53,9 +53,28 @@ fault with a fixed, code-only message, never an agent outcome):
 - **Agent.** Headless Claude Code (`claude -p`), model `claude-sonnet-5-5` (the hcu+shell
   arm's model, so a later R2 pairing keeps the same planner), on Tiffany's Claude
   subscription. There is no API-key path.
-- **What the agent can reach.** One MCP server, `myco-gate`, bound to the trial's one task
-  and run, and one tool, `mcp__myco-gate__myco_gate_check`. No built-in tools
-  (`--tools ""`), `--strict-mcp-config` with the trial's own `mcp.json`,
+- **What the agent can reach (#732).** Two MCP servers, kept separate: the agent acts with
+  the action tools and asks the gate only to verify.
+  - **Action tools: `myco-hcu`** (`scripts/myco-hcu.ts`, `src/pilot/hcu-actuator.ts`). It
+    grants `mcp__myco-hcu__screenshot`, `__click`, `__type_text` and `__press_key`. This is
+    the `hcu+shell` arm's desktop reach. It is the same Microsoft HCU in the guest, reached
+    over the trial VM's SSH channel (`~/VMs/myco-win11/ssh_config`, host `myco-win11`) with
+    the arm's HCU guest command, `C:\myco\bin\computer-use.exe mcp`. The actions are C1's
+    pixel actions, sent through the arm's own HCU client one action per call. The budget is
+    30 actions per trial, the arm's `STEP_BUDGET`; a screenshot spends none. The tools take
+    no path, task or run, and the agent gets codes back, never HCU's text. Before #732 the
+    agent had only the gate check and could not open, edit or save the document. All 5
+    trials of `r1-pilot-20261127b` ended gate-refuted, NOT DONE, and none of them is
+    evidence.
+  - **The gate: `myco-gate`**, bound to the trial's one task and run, with one tool,
+    `mcp__myco-gate__myco_gate_check`. It is unchanged.
+  - **Live preconditions (not yet met).** HCU must be in the trial base, serving the
+    interactive desktop (`docs/benchmark/hcu-shell-runbook.md` §1 item 3). The SSH setup
+    must work with the agent's allowlisted environment (`HOME`, `PATH`, ...; no
+    `SSH_AUTH_SOCK`).
+
+  No built-in tools
+  (`--tools ""`: no shell, no host file), `--strict-mcp-config` with the trial's own `mcp.json`,
   `--permission-mode dontAsk`, and `--setting-sources ""` so no user, project or local
   settings file (permission rules, hooks, `apiKeyHelper`, MCP servers) reaches the trial.
   Every trial's plan passes the existing launch audit (`src/integrity/launch.ts`) before it
@@ -256,6 +275,12 @@ npx tsx scripts/benchmark-check.ts --arm runs/r1-pilot-dry-export/arm.jsonl \
 
 # Real launch (lead-approved). Needs the flag AND the configSha256 `plan` printed, under the
 # VM session lock. It prints the plan, then starts real trials or refuses with every reason.
+# The plan hash at the default pacing, since #732 added the action tools (pinned by
+# test/pilot/config.test.ts):
+#   configSha256 b9b69348988acd24f33c63cdde45064017186faa5c4aaa5c285437c3d5e05f30
+# It was 8d774329... before #732. A run directory started under the old plan cannot be
+# resumed under the new one, so start a fresh --out. The A/B arms' hashes change too: stage 0's
+# planSha256 is now 1dbc1deadf964fca4e06f61404b0b073949799abb18dfe1dee876fc0a50acb1c.
 scripts/vm-session.sh -- node --import tsx scripts/m2-r1-pilot.ts launch --out runs/r1-pilot \
   --launch-real-trials --plan-sha256 <configSha256 from plan>
 

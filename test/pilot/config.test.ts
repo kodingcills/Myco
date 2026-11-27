@@ -1,14 +1,16 @@
 /**
  * Track E: the reviewed pilot config. The committed file is the one the runner uses, it
  * cannot drift from the code, every trial's launch passes the existing launch audit, and the
- * agent gets the myco-gate MCP server only.
+ * agent gets the myco-gate MCP server plus the separate myco-hcu actuator (#732).
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { GATE_SERVER_CLASS } from "../../src/gate/gated-trial.ts";
 import { auditAgentLaunch, parseAgentArgv } from "../../src/integrity/launch.ts";
+import { abPlanSha256, loadPrereg } from "../../src/pilot/ab.ts";
 import {
+  ACTUATOR_GRANTS,
   backoffS,
   checkPacing,
   configSha256,
@@ -62,7 +64,7 @@ describe("pilot config (track E)", () => {
     expect(new Set(tasks.map((t) => t.taskId)).size).toBe(30);
   });
 
-  it("every trial's launch passes the launch audit, with the myco-gate MCP only and the gate tool only", () => {
+  it("every trial's launch passes the launch audit, with the actuator's action tools and the gate tool (#732)", () => {
     const c = config();
     for (const task of selectPilotTasks(PUBLISHED)) {
       const runId = `r1p-${task.taskId}-a1`;
@@ -75,9 +77,9 @@ describe("pilot config (track E)", () => {
       );
       const audit = auditAgentLaunch(plan, { runId, extraServers: GATE_SERVER_CLASS });
       expect(audit.ok, JSON.stringify(audit.violations)).toBe(true);
-      expect(Object.keys(plan.mcpServers)).toEqual(["myco-gate"]);
-      expect(audit.granted).toEqual([GATE_GRANT]);
-      expect(audit.effective).toEqual([GATE_GRANT]);
+      expect(Object.keys(plan.mcpServers)).toEqual(["myco-gate", "myco-hcu"]);
+      expect(audit.granted).toEqual([...ACTUATOR_GRANTS, GATE_GRANT]);
+      expect(audit.effective).toEqual([...ACTUATOR_GRANTS, GATE_GRANT]);
       const parsed = parseAgentArgv(plan.argv);
       expect(parsed.strictMcpConfig).toBe(true);
       expect(parsed.builtins).toEqual([]);
@@ -103,6 +105,16 @@ describe("pilot config (track E)", () => {
     expect([1, 2, 3, 4, 5, 9].map((n) => backoffS(DEFAULT_PACING, n))).toEqual([
       300, 600, 1200, 2400, 3600, 3600,
     ]);
+  });
+
+  it("#732: the new plan hashes (R1 and A/B stage 0) are the ones the runbook states", () => {
+    const r1 = configSha256(config());
+    const ab0 = abPlanSha256(loadPrereg(ROOT), 0, PUBLISHED);
+    expect(r1).toBe("b9b69348988acd24f33c63cdde45064017186faa5c4aaa5c285437c3d5e05f30");
+    expect(ab0).toBe("1dbc1deadf964fca4e06f61404b0b073949799abb18dfe1dee876fc0a50acb1c");
+    const runbook = readFileSync(join(ROOT, "docs/benchmark/pilot-runbook.md"), "utf8");
+    expect(runbook).toContain(`configSha256 ${r1}`);
+    expect(runbook).toContain(`planSha256 is now ${ab0}`);
   });
 
   it("the config hash changes with pacing (a pacing override is a new run, never a resume)", () => {

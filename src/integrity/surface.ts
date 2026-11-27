@@ -183,9 +183,33 @@ export function stateWithheldListValid(raw: string | undefined): boolean {
   );
 }
 
+/**
+ * The R1 / A/B live agent's actuator (#732), served as `mcp__myco-hcu__<tool>` by
+ * `scripts/myco-hcu.ts` (`src/pilot/hcu-actuator.ts`). Each tool is one C1 pixel action (or a
+ * screenshot) sent to Microsoft HCU's `GUI` tool in the trial guest through the `hcu+shell`
+ * arm's own client (`connectHcuGui`), so both R2 arms act through one code path. Guest reach
+ * only: no path, no host file, no command; the server is separate from the gate.
+ * `test/pilot/hcu-actuator.test.ts` pins these names to the server's own tool list.
+ */
+export const MYCO_HCU_MCP_TOOLS: Readonly<Record<string, ToolClass>> = {
+  screenshot: {
+    reach: "guest",
+    note: "one screenshot of the guest desktop through HCU's GUI tool",
+  },
+  click: { reach: "guest", note: "one pixel click in the guest through HCU's GUI tool" },
+  type_text: {
+    reach: "guest",
+    note: "click a guest pixel, then type at most 256 characters through HCU's GUI tool",
+  },
+  press_key: { reach: "guest", note: "one key chord in the guest through HCU's GUI tool" },
+};
+
+export const HCU_ACTUATOR_SERVER_NAME = "myco-hcu";
+
 /** MCP servers by the name a harness registers them under. */
 export const MCP_SERVERS: Readonly<Record<string, Readonly<Record<string, ToolClass>>>> = {
   "myco-rt": MYCO_RT_MCP_TOOLS,
+  [HCU_ACTUATOR_SERVER_NAME]: MYCO_HCU_MCP_TOOLS,
 };
 
 const ALLOWED: ReadonlySet<Reach> = new Set<Reach>(["guest", "gate", "agent-local", "app-state"]);
