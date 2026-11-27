@@ -324,8 +324,10 @@ remedy is to put every name that may appear (other accounts, other machines, ful
 identity file before exporting; once configured, each is caught in all its joined forms and by
 each word of 3 or more characters. A test pins this behaviour so this section stays true
 (`test/episode/identity-words.test.ts`, "O4 residual"). The same limit applies to the track U
-container and to Q bundles. The README published beside a dataset states it too
-([`docs/data/README.md`](README.md)).
+container and to Q bundles. The dataset README states it too
+([`docs/data/README.md`](README.md)); no exporter writes that README, so publishing it with a
+dataset is a manual release step, and this limit reaches a dataset's users only if the release
+includes it.
 
 ## 6. How tracks U and Q consume it
 

@@ -18,9 +18,16 @@
  *    looked for alone (it would match nearly every id).
  *
  * Words are split on whitespace only: a host name or account (`my-box`, `j.smith`) is one word
- * and is matched whole, as before. The generic-account exclusions (#560's list) apply to the
- * account source on each surface and are unchanged; a word of a configured full name is never
- * exempted (a false refusal at worst, never a leak).
+ * and is matched whole, as before. A word of a configured full name is never exempted (a false
+ * refusal at worst, never a leak).
+ *
+ * WHAT IS SHARED AND WHAT IS NOT. The fold and the single-word rule above are identical on all
+ * three surfaces. The whole-string rule is not: Q is stricter. Q matches a whole configured
+ * string from 2 folded characters (`MIN_IDENTITY`; the episode export and track U from 3), also
+ * matches the first dotted label of a configured string (`first` of `first.last`,
+ * `src/proof/identity.ts`), and has no generic-account exemption. The episode export and track U
+ * exempt #560's generic accounts (`runner`, `root`, ...) from the account source; that list is
+ * unchanged by this module.
  *
  * Imports nothing outside `src/export-guard` (and nothing from `src/benchmark`).
  */
@@ -67,15 +74,28 @@ export function identityNeedles(raw: string, wholeMin: number): string[] {
 export type IdentityPair = readonly [string, string];
 
 /**
- * The needles of each entry of one entry list, computed once per list and wholeMin. Keyed on
- * the list object (a WeakMap): nothing outlives the caller's list.
+ * The needles of each entry of one entry list, computed once per list and wholeMin. Looked up
+ * by the list object (a WeakMap: nothing outlives the caller's list) but VALID ONLY FOR THE
+ * CONTENT it was built from: the configured strings are kept beside the needles and compared on
+ * every use, so a list mutated after first use (an entry pushed, replaced or removed) is
+ * recomputed, never matched against stale needles (round-1 nit 1 on #603).
  */
-const NEEDLES = new WeakMap<readonly IdentityPair[], { min: number; needles: string[][] }>();
+const NEEDLES = new WeakMap<
+  readonly IdentityPair[],
+  { min: number; raws: string[]; needles: string[][] }
+>();
 function needlesOf(entries: readonly IdentityPair[], wholeMin: number): string[][] {
   const hit = NEEDLES.get(entries);
-  if (hit !== undefined && hit.min === wholeMin) return hit.needles;
-  const needles = entries.map(([, raw]) => identityNeedles(raw, wholeMin));
-  NEEDLES.set(entries, { min: wholeMin, needles });
+  if (
+    hit !== undefined &&
+    hit.min === wholeMin &&
+    hit.raws.length === entries.length &&
+    hit.raws.every((r, i) => r === entries[i]?.[1])
+  )
+    return hit.needles;
+  const raws = entries.map(([, raw]) => raw);
+  const needles = raws.map((raw) => identityNeedles(raw, wholeMin));
+  NEEDLES.set(entries, { min: wholeMin, raws, needles });
   return needles;
 }
 

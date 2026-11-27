@@ -1,8 +1,10 @@
 # Myco episode datasets: README
 
-This README is published beside every exported Myco dataset: the episode export
+This is the README to publish with an exported Myco dataset: the episode export
 (`myco.episode/1`, `src/episode/export.ts`), the track U container (`src/dataset/export.ts`) and
-Q proof bundles (`src/proof/bundle.ts`). The formats are described in
+Q proof bundles (`src/proof/bundle.ts`). No exporter writes it: publishing it beside the data is
+a manual step of the release. Its "Known limits" section reaches the people who use a dataset
+only if the release includes this file. The formats are described in
 [`episode-format.md`](episode-format.md), [`../product/linux-scale.md`](../product/linux-scale.md)
 §6 and [`../architecture/replayable-proof.md`](../architecture/replayable-proof.md).
 
@@ -21,7 +23,12 @@ given (full names, other accounts). The check folds case and accents and ignores
 configured `First Last` is caught as `FirstLast`, `first.last`, `First-Last`, and by each word of
 3 or more characters alone (`<first>_trial`, `<Last>2`, `xx<first>`). An id or token holding one
 is written as a digest (`h-` and 60 hex digits); any other closed field holding one refuses the
-export. The rule is the same on all three surfaces.
+export. The single-word rule (and the fold) is identical on all three surfaces. For whole
+strings, Q proof bundles are stricter: they also match a configured string of 2 characters
+(the episode export and track U start at 3) and the first dotted label of a configured string
+(`first` of `first.last`), and they exempt no account name. The episode export and track U
+exempt a short list of generic account names (`runner`, `root` and the like) from the host
+account check.
 
 ## Known limits (accepted residual risk)
 

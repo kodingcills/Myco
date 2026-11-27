@@ -239,8 +239,10 @@ set's declared fixture digest, and U's desktop facts. It writes one directory:
   run id) and a dotted, path-like id with an unconfigured name (`Users.<name>.Documents` in
   `task.id` or `taskSetVersion`) are both written as is. Free text is always digested. The
   remedy is to list every name that may appear in the identity file before exporting. A test
-  pins this (`test/dataset/identity-words.test.ts`, "O4 residual"); the README published beside
-  a dataset states it ([`docs/data/README.md`](../data/README.md)).
+  pins this (`test/dataset/identity-words.test.ts`, "O4 residual"). The dataset README states
+  it too ([`docs/data/README.md`](../data/README.md)); no exporter writes that README, so
+  publishing it with a container is a manual release step, and this limit reaches the
+  container's users only if the release includes it.
 - **`validateContainer`** never throws. Every problem is `CODE location`, with a fixed code from
   `CONTAINER_PROBLEM_CODES`. A location never echoes foreign text: a foreign entry name appears
   only as `h-<12 hex>`, a JSON key that is not a plain identifier, or that holds an identity,
