@@ -1,9 +1,10 @@
 /**
  * The host-side policy trigger (capability track N; the interface track O implements).
  *
- * Track O (policies) is building in parallel and is not merged, so this module defines the seam
- * and nothing of O's logic. A policy sees each action the agent proposes BEFORE the actuator
- * forwards it, and may force a handoff:
+ * This module defines the seam and nothing of O's logic (O's engine and guard live in
+ * `src/policy/`). A policy sees each action the agent proposes BEFORE the actuator forwards it,
+ * and may refuse it outright (a `PolicyDenial`: `deny` with `POLICY_DENIED`, no handoff) or force
+ * a handoff:
  *
  *   const decision = await guardAction(policy, broker.policyTrigger(), action);
  *   if (decision.kind === "proceed") forward(action);
@@ -28,10 +29,28 @@ export interface ProposedAction {
   readonly args: Readonly<Record<string, unknown>>;
 }
 
-/** Track O implements this. Return a pause request to force a handoff, or null to let it pass. */
+/**
+ * Track O's outright refusal: the action is not forwarded and no handoff opens. The agent sees
+ * `POLICY_DENIED` only; `policyId` is for the host record, never echoed to the agent here.
+ */
+export interface PolicyDenial {
+  readonly deny: true;
+  readonly policyId: string;
+}
+
+export type PolicyVerdict = PolicyPauseRequest | PolicyDenial | null;
+
+/**
+ * Track O implements this (`src/policy/guard.ts`). Return a pause request to force a handoff, a
+ * denial to refuse the action, or null to let it pass.
+ */
 export interface HandoffPolicy {
   readonly id: string;
-  evaluate(action: ProposedAction): PolicyPauseRequest | null | Promise<PolicyPauseRequest | null>;
+  evaluate(action: ProposedAction): PolicyVerdict | Promise<PolicyVerdict>;
+}
+
+function isDenial(v: PolicyPauseRequest | PolicyDenial): v is PolicyDenial {
+  return (v as PolicyDenial).deny === true;
 }
 
 export type ActionDecision =
@@ -50,13 +69,16 @@ export async function guardAction(
 ): Promise<ActionDecision> {
   const gate = await trigger.awaitClear();
   if (gate === "ended") return { kind: "ended", code: "ATTEMPT_ENDED" };
-  let request: PolicyPauseRequest | null;
+  let verdict: PolicyVerdict;
   try {
-    request = await policy.evaluate(action);
+    verdict = await policy.evaluate(action);
   } catch {
     return { kind: "deny", handoffId: null, code: "POLICY_ERROR" };
   }
-  if (request === null) return { kind: "proceed", handoffId: null };
+  if (verdict === null) return { kind: "proceed", handoffId: null };
+  if (typeof verdict !== "object") return { kind: "deny", handoffId: null, code: "POLICY_ERROR" };
+  if (isDenial(verdict)) return { kind: "deny", handoffId: null, code: "POLICY_DENIED" };
+  const request = verdict;
   const status = await trigger.forcePause(request);
   switch (status.status) {
     case "resumed":
