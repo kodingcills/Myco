@@ -26,7 +26,7 @@ import { virtualClock } from "../../src/pilot/dry-run.ts";
 import { trialLaunchPlan } from "../../src/pilot/launch.ts";
 import { loadLedger, PROGRESS_FILE } from "../../src/pilot/ledger.ts";
 import { HarnessFault, runPilot } from "../../src/pilot/runner.ts";
-import { config, PUBLISHED, ROOT, SOURCES, tmp } from "./helpers.ts";
+import { config, PUBLISHED, ROOT, SOURCES, tmp, USAGE_LIMIT_PHRASES } from "./helpers.ts";
 
 interface Call {
   command: string;
@@ -143,10 +143,10 @@ describe("headless Claude Code transport (fake spawn)", () => {
 
   it("classifies each limit and login message from the round-1 verdict as a harness fault on a run that did not complete normally", () => {
     const probes: [string, string][] = [
-      ["Claude AI usage limit reached|1700000000", "rate-limit"],
-      ["Sonnet limit reached · resets 3pm", "rate-limit"],
-      ["5-hour limit reached ∙ resets 3pm", "rate-limit"],
-      ["Weekly limit reached ∙ resets Mon", "rate-limit"],
+      ["Claude AI usage limit reached|1700000000", "usage-limit"],
+      ["Sonnet limit reached · resets 3pm", "usage-limit"],
+      ["5-hour limit reached ∙ resets 3pm", "usage-limit"],
+      ["Weekly limit reached ∙ resets Mon", "usage-limit"],
       ["Invalid API key · Please run /login", "auth"],
     ];
     for (const [text, cls] of probes) {
@@ -305,17 +305,18 @@ describe("headless Claude Code transport (fake spawn)", () => {
   });
 
   it("pins the text-fallback vocabulary", () => {
+    // Transient limits only (lead ruling, round 2, D3): these back off.
     for (const t of [
-      "Claude AI usage limit reached|1700000000",
       "API Error: 429 rate_limit_error",
       "API Error: 529 overloaded_error",
       "Too many requests",
-      "Opus limit reached ∙ resets 11pm",
-      "Your limit will reset at 5pm",
-      "Weekly limit reached",
-      "daily limit exceeded",
+      "Rate limit exceeded",
+      "rate_limit reached, retry later",
+      "Overloaded",
     ])
       expect([t, classOfText(t)]).toEqual([t, "rate-limit"]);
+    // The subscription's usage quota: stops at once with its own code (D3).
+    for (const t of USAGE_LIMIT_PHRASES) expect([t, classOfText(t)]).toEqual([t, "usage-limit"]);
     // TIF-274 live driver: credit, billing and quota wording stops the run (fail closed).
     for (const t of [
       "You're out of extra usage",
@@ -337,6 +338,53 @@ describe("headless Claude Code transport (fake spawn)", () => {
       expect([t, classOfText(t)]).toEqual([t, "auth"]);
     for (const t of ["I edited cell B2 to 42.", "The document is saved.", "Opened the sheet."])
       expect([t, classOfText(t)]).toEqual([t, null]);
+  });
+
+  // Lead ruling, PR #598 round 2, D3: the subscription's quota stops; only transient limits back off.
+  it("every quota phrasing is usage-limit on each failed-run path; a structured limit is refined by it", () => {
+    for (const t of USAGE_LIMIT_PHRASES) {
+      expect([t, faultOf(() => interpretResult(result(t, { is_error: true }), "", 1))]).toEqual([
+        t,
+        "usage-limit",
+      ]);
+      expect([t, faultOf(() => interpretResult("", t, 1))]).toEqual([t, "usage-limit"]);
+      // Claude Code reports the quota through the structured rate_limit class / HTTP 429 too.
+      for (const s of [{ error: "rate_limit" }, { api_error_status: 429 }]) {
+        const v = JSON.stringify([
+          { type: "assistant", message: { content: [] }, ...s },
+          JSON.parse(result(t, { is_error: true })),
+        ]);
+        expect([t, s, faultOf(() => interpretResult(v, "", 1))]).toEqual([t, s, "usage-limit"]);
+        expect([t, s, faultOf(() => interpretResult(JSON.stringify(s), t, 1))]).toEqual([
+          t,
+          s,
+          "usage-limit",
+        ]);
+      }
+      // Still never applied to a clean, completed run (round 2, D4 of the earlier PR).
+      expect(faultOf(() => interpretResult(result(t), "", 0))).toBe("none");
+    }
+    // A structured transient limit with no quota wording stays transient.
+    for (const s of [{ error: "rate_limit" }, { error: "overloaded" }, { api_error_status: 529 }]) {
+      const v = JSON.stringify([
+        { type: "assistant", message: { content: [] }, ...s },
+        JSON.parse(result("API Error: Too many requests", { is_error: true })),
+      ]);
+      expect([s, faultOf(() => interpretResult(v, "", 1))]).toEqual([s, "rate-limit"]);
+    }
+  });
+
+  // Round-1 verdict N3: the text-fallback order is auth, billing, usage-limit, rate-limit.
+  it("pins the classification order: auth before billing before usage-limit before rate-limit", () => {
+    expect(classOfText("Credit balance is too low · Please run /login")).toBe("auth");
+    expect(classOfText("Weekly limit reached; billing will resume")).toBe("billing");
+    expect(classOfText("429 rate_limit_error: usage limit reached")).toBe("usage-limit");
+    const both = JSON.stringify([
+      { type: "assistant", message: { content: [] }, error: "billing_error" },
+      { type: "assistant", message: { content: [] }, error: "authentication_failed" },
+      JSON.parse(result("x", { is_error: true })),
+    ]);
+    expect(faultOf(() => interpretResult(both, "", 1))).toBe("auth");
   });
 
   it("classifies rate limits, unreadable output and spawn failures as harness faults", async () => {

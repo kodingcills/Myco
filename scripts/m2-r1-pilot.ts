@@ -19,7 +19,8 @@
  * persisted document host-side over the SSH tunnel (`src/pilot/vm-capture.ts`). Re-run the
  * same command to resume; `<out>/live-status.json` is the watchdog heartbeat.
  * Exit: 0 ok / complete, 1 run failed, 2 usage, 3 refused, 4 paused or incomplete,
- * 5 fail-closed stop (auth, billing/credit/quota, API key), 6 two identical failures in a row.
+ * 5 fail-closed stop (auth, billing/credit/quota, API key), 6 two identical failures in a row,
+ * 7 the subscription's usage limit (stops at once; take it to the lead before resuming).
  */
 import { join, resolve } from "node:path";
 import { configSha256, type PacingConfig } from "../src/pilot/config.ts";

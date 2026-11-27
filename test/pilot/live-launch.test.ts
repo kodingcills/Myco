@@ -10,7 +10,7 @@
 import { type ChildProcess, type SpawnOptions, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -21,7 +21,14 @@ import { CHILD_ENV_ALLOWLIST, configSha256, type PilotConfig } from "../../src/p
 import { COST_BASIS } from "../../src/pilot/cost.ts";
 import { fakeDriver, PILOT_DRY_RUN_PLANNER, virtualClock } from "../../src/pilot/dry-run.ts";
 import { trialLaunchPlan } from "../../src/pilot/launch.ts";
-import { loadLedger, PROGRESS_FILE } from "../../src/pilot/ledger.ts";
+import {
+  AttemptLedger,
+  faultSignature,
+  loadLedger,
+  PROGRESS_FILE,
+  resumeFaultSignature,
+  taskStatus,
+} from "../../src/pilot/ledger.ts";
 import {
   EXIT,
   exitCodeFor,
@@ -30,6 +37,7 @@ import {
   LiveStatus,
   launchAbLive,
   launchR1Live,
+  USAGE_LIMIT_REPORT,
 } from "../../src/pilot/live-launch.ts";
 import { HarnessFault, runPilot } from "../../src/pilot/runner.ts";
 import {
@@ -43,7 +51,7 @@ import {
   VM_FAULT,
   type VmBackend,
 } from "../../src/pilot/vm-capture.ts";
-import { config, PUBLISHED, ROOT, SOURCES, tmp } from "./helpers.ts";
+import { config, PUBLISHED, ROOT, SOURCES, tmp, USAGE_LIMIT_PHRASES } from "./helpers.ts";
 
 const sha256 = (b: Uint8Array | string) => createHash("sha256").update(b).digest("hex");
 
@@ -865,6 +873,8 @@ describe("the real CLIs, with the trap claude first on PATH", () => {
       cwd: ROOT,
       env: env(),
       encoding: "utf8",
+      timeout: 45_000,
+      killSignal: "SIGKILL",
     });
 
   it("R1: the flag and the right plan hash, outside vm-session.sh: refused, nothing run", {
@@ -909,6 +919,232 @@ describe("the real CLIs, with the trap claude first on PATH", () => {
     expect(r.stderr).not.toMatch(/no live driver is wired/);
     expect(existsSync(join(out, "stage0", LIVE_STATUS_FILE))).toBe(false);
     expect(existsSync(TRAP_MARK)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// PR #598 round 2
+// ---------------------------------------------------------------------------------------------
+
+const notJson = { stdout: "not json", code: 1 };
+const decided = { stdout: resultJson("x\nDONE") };
+const attemptsOf = (out: string, taskId: string) =>
+  loadLedger(join(out, PROGRESS_FILE)).byTask.get(taskId) ?? [];
+
+describe("round 2, D1: the repeat-failure rule survives --resume", () => {
+  it("the verifier's repro: resume with the same failure stops after ONE spawn, no next trial", async () => {
+    const out = tmp();
+    const cfg = twoTrials();
+    const first = fakeClaude(() => notJson);
+    const r1 = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), first));
+    expect(r1.exitCode).toBe(EXIT.repeatFailure);
+    expect(first.calls).toHaveLength(2);
+    // The fault's message is in the ledger.
+    expect(ledgerEnds(out).map((e) => e.faultMessage)).toEqual([
+      "claude exited 1 without a JSON result (stderr 0 bytes)",
+      "claude exited 1 without a JSON result (stderr 0 bytes)",
+    ]);
+    const vm2 = fakeVm();
+    const second = fakeClaude(() => notJson);
+    const r2 = await launchR1Live(r1Opts(cfg, out), deps(vm2, second));
+    expect(r2.exitCode).toBe(EXIT.repeatFailure);
+    expect(r2.result?.stopCode).toBe("repeat-failure");
+    expect(second.calls).toHaveLength(1);
+    expect(vm2.events.filter((e) => e === "reset")).toHaveLength(1);
+    expect(attemptsOf(out, "fc-v1-002")).toHaveLength(0);
+  });
+
+  it("a fault, then a crash, then the identical fault after resume: still aborts", async () => {
+    const out = tmp();
+    const cfg = twoTrials();
+    // Run 1: one fault, then the operator's PAUSE stops new starts.
+    const first = fakeClaude(
+      () => notJson,
+      () => writeFileSync(join(out, "PAUSE"), ""),
+    );
+    const r1 = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), first));
+    expect(r1.exitCode).toBe(EXIT.paused);
+    expect(first.calls).toHaveLength(1);
+    // The runner then dies mid-trial in attempt 2: a start with no end.
+    const path = join(out, PROGRESS_FILE);
+    new AttemptLedger(path, false).start({
+      taskId: "fc-v1-001",
+      attempt: 2,
+      trialKey: "r1p-fc-v1-001-a2",
+      runId: "r1p-fc-v1-001-a2",
+      supersedes: "r1p-fc-v1-001-a1",
+    });
+    rmSync(join(out, "PAUSE"));
+    const second = fakeClaude(() => notJson);
+    const r2 = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), second));
+    expect(r2.exitCode).toBe(EXIT.repeatFailure);
+    expect(second.calls).toHaveLength(1);
+    expect(attemptsOf(out, "fc-v1-001").map((a) => a.end?.harnessClass)).toEqual([
+      "transport-error",
+      "crash",
+      "transport-error",
+    ]);
+    expect(attemptsOf(out, "fc-v1-002")).toHaveLength(0);
+  });
+
+  it("after resume a DIFFERENT failure does not abort; a decided trial before the stop clears the seed", async () => {
+    const out = tmp();
+    const cfg = twoTrials();
+    const first = fakeClaude(
+      () => notJson,
+      () => writeFileSync(join(out, "PAUSE"), ""),
+    );
+    await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), first));
+    rmSync(join(out, "PAUSE"));
+    const outputs = [{ stdout: "not json", stderr: "boom", code: 1 }, decided, decided];
+    const second = fakeClaude((n) => outputs[n - 1] as (typeof outputs)[0]);
+    const r2 = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), second));
+    expect(r2.exitCode).toBe(EXIT.complete);
+    expect(second.calls).toHaveLength(3);
+  });
+
+  it("resumeFaultSignature: last counted fault in file order; decided clears; exempt and recovered ends skipped", () => {
+    const end = (o: Record<string, unknown>) =>
+      ({
+        schema: "myco.pilot.attempt/1",
+        event: "end",
+        trialKey: "k",
+        recovered: false,
+        armRow: null,
+        cost: null,
+        at: "",
+        outcome: "harness-fault",
+        ...o,
+      }) as unknown as Parameters<typeof resumeFaultSignature>[0][number];
+    const te = end({ harnessClass: "transport-error", faultMessage: "m" });
+    const sig = faultSignature("transport-error", "m");
+    expect(resumeFaultSignature([])).toBeNull();
+    expect(resumeFaultSignature([te])).toBe(sig);
+    expect(resumeFaultSignature([te, end({ outcome: "decided", harnessClass: null })])).toBeNull();
+    for (const cls of ["rate-limit", "auth", "billing", "usage-limit"])
+      expect(resumeFaultSignature([te, end({ harnessClass: cls, faultMessage: "z" })])).toBe(sig);
+    expect(
+      resumeFaultSignature([
+        te,
+        end({ harnessClass: "crash", recovered: true, faultMessage: "c" }),
+      ]),
+    ).toBe(sig);
+    expect(resumeFaultSignature([te, end({ harnessClass: "timeout" })])).toBeNull();
+    expect(resumeFaultSignature([te, end({ harnessClass: "timeout", faultMessage: "m" })])).toBe(
+      faultSignature("timeout", "m"),
+    );
+  });
+});
+
+describe("round 2, D3: the subscription's usage limit stops; transient limits back off, bounded", () => {
+  it("each quota phrasing stops at once: exit 7, one spawn, zero attempts spent, report for the lead", async () => {
+    for (const phrase of USAGE_LIMIT_PHRASES) {
+      for (const output of [
+        { stdout: "", stderr: phrase, code: 1 },
+        { stdout: resultJson(phrase, { is_error: true }), code: 1 },
+      ]) {
+        const out = tmp();
+        const cfg = twoTrials(config({ maxAttemptsPerTrial: 1 }));
+        const vm = fakeVm();
+        const claude = fakeClaude(() => output);
+        const d = deps(vm, claude);
+        const r = await launchR1Live(r1Opts(cfg, out), d);
+        expect([phrase, r.exitCode]).toEqual([phrase, EXIT.usageLimit]);
+        expect(r.result?.stopCode).toBe("usage-limit");
+        expect(r.result?.reason).toMatch(/must go to the lead/);
+        expect(d.lines).toContain(USAGE_LIMIT_REPORT);
+        expect(claude.calls).toHaveLength(1);
+        expect(vm.events.filter((e) => e === "reset")).toHaveLength(1);
+        const list = attemptsOf(out, "fc-v1-001");
+        expect(list.map((a) => a.end?.harnessClass)).toEqual(["usage-limit"]);
+        // Zero attempts consumed: even with a budget of 1 the trial is still open.
+        expect(taskStatus(list, 1)).toMatchObject({ kind: "open", nextAttempt: 2 });
+        const status = JSON.parse(readFileSync(join(out, LIVE_STATUS_FILE), "utf8"));
+        expect(status.exitCode).toBe(EXIT.usageLimit);
+      }
+    }
+    expect(exitCodeFor({ status: "paused", stopCode: "usage-limit" })).toBe(7);
+  });
+
+  it("a transient 429/529/overloaded backs off within bounds and keeps the attempt budget", async () => {
+    for (const fault of [
+      { stdout: "", stderr: "API Error: 429 rate_limit_error", code: 1 },
+      { stdout: "", stderr: "API Error: 529 overloaded_error", code: 1 },
+      {
+        stdout: JSON.stringify([
+          { type: "assistant", error: "overloaded", message: { content: [] } },
+          JSON.parse(resultJson("API Error", { is_error: true })),
+        ]),
+        code: 1,
+      },
+    ]) {
+      const out = tmp();
+      const cfg = twoTrials(config({ maxAttemptsPerTrial: 1, interTrialDelayS: 0 }));
+      const vm = fakeVm();
+      const outputs = [fault, decided, decided];
+      const claude = fakeClaude((n) => outputs[n - 1] as (typeof outputs)[0]);
+      const clock = virtualClock(Date.parse("2026-11-27T00:00:00Z"));
+      const r = await launchR1Live(
+        r1Opts(cfg, out),
+        deps(vm, claude, { sleep: clock.sleep, now: clock.now }),
+      );
+      expect(r.exitCode).toBe(EXIT.complete);
+      expect(r.result).toMatchObject({ status: "complete", ran: 2, faulted: 1, stopCode: null });
+      // Re-run once, after the back-off: within [rateLimitBackoffS, rateLimitBackoffMaxS].
+      const backoff = clock.waits.filter((w) => w > 0);
+      expect(backoff.length).toBeGreaterThan(0);
+      expect(Math.max(...backoff)).toBeLessThanOrEqual(cfg.pacing.rateLimitBackoffMaxS * 1000);
+      expect(backoff.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(
+        cfg.pacing.rateLimitBackoffS * 1000,
+      );
+      // The trial's budget of ONE attempt was not spent by the limit: attempt 2 decided it.
+      expect(attemptsOf(out, "fc-v1-001").map((a) => a.end?.outcome)).toEqual([
+        "harness-fault",
+        "decided",
+      ]);
+      // One extra cold reset for the limited trial, none for the other.
+      expect(vm.events.filter((e) => e === "reset")).toHaveLength(3);
+    }
+  });
+
+  it("a second transient limit on the same trial pauses instead of a further cold reset", async () => {
+    const out = tmp();
+    const cfg = twoTrials();
+    expect(cfg.pacing.maxConsecutiveRateLimits).toBeGreaterThan(2);
+    const vm = fakeVm();
+    const claude = fakeClaude(() => ({ stdout: "", stderr: "API Error: 429", code: 1 }));
+    const r = await launchR1Live(r1Opts(cfg, out), deps(vm, claude));
+    expect(r.exitCode).toBe(EXIT.paused);
+    expect(r.result).toMatchObject({ status: "paused", stopCode: null, exhausted: [] });
+    expect(r.result?.reason).toMatch(/no further cold reset/);
+    expect(claude.calls).toHaveLength(2);
+    expect(vm.events.filter((e) => e === "reset")).toHaveLength(2);
+    const list = attemptsOf(out, "fc-v1-001");
+    expect(taskStatus(list, cfg.pacing.maxAttemptsPerTrial).kind).toBe("open");
+    // Resume is the operator's call and re-runs the trial in place.
+    const again = fakeClaude(() => decided);
+    const r2 = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), again));
+    expect(r2.exitCode).toBe(EXIT.complete);
+    expect(again.calls[0]?.options.cwd?.toString()).toMatch(/r1p-fc-v1-001-a3$/);
+  });
+});
+
+describe("round 2, D4: same class, different message is not a repeat", () => {
+  it("two transport-errors with different messages, then success: completes", async () => {
+    const outputs = [notJson, { stdout: "not json", stderr: "boom", code: 1 }, decided, decided];
+    const claude = fakeClaude((n) => outputs[n - 1] as (typeof outputs)[0]);
+    const out = tmp();
+    const r = await launchR1Live(r1Opts(twoTrials(), out), deps(fakeVm(), claude));
+    expect(r.exitCode).toBe(EXIT.complete);
+    expect(r.result).toMatchObject({ status: "complete", ran: 2, faulted: 2, stopCode: null });
+    const ends = attemptsOf(out, "fc-v1-001").map((a) => a.end);
+    expect(ends[0]?.harnessClass).toBe(ends[1]?.harnessClass);
+    expect(ends[0]?.faultMessage).not.toBe(ends[1]?.faultMessage);
+    // ... and the same two identical ones do stop.
+    const same = fakeClaude((n) => (n <= 2 ? notJson : decided));
+    const r2 = await launchR1Live(r1Opts(twoTrials(), tmp()), deps(fakeVm(), same));
+    expect(r2.exitCode).toBe(EXIT.repeatFailure);
+    expect(same.calls).toHaveLength(2);
   });
 });
 

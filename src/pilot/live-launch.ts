@@ -21,7 +21,9 @@
  * `heartbeatMs` and on every log line), so a detached run (`nohup ... &`) can be watched.
  *
  * Exit codes: 0 complete, 3 refused, 4 paused / incomplete / halted, 5 fail-closed stop on the
- * subscription (`auth`, `billing`, `api-key`), 6 two identical harness failures in a row.
+ * subscription (`auth`, `billing`, `api-key`), 6 two identical harness failures in a row,
+ * 7 the subscription's usage limit (`usage-limit`; stops at once, no retry, no attempt spent;
+ * the report says it must go to the lead).
  */
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -52,13 +54,19 @@ export const EXIT = {
   paused: 4,
   subscriptionStop: 5,
   repeatFailure: 6,
+  usageLimit: 7,
 } as const;
+
+/** What the operator sees on a usage-limit stop (stderr and the heartbeat), besides exit 7. */
+export const USAGE_LIMIT_REPORT =
+  "USAGE LIMIT: the subscription's usage limit stopped the run (exit 7; no retry, no attempt spent). This must go to the lead: do not resume until the lead decides.";
 
 /** The CLI exit code for a run result (see the header). */
 export function exitCodeFor(r: {
   readonly status: string;
   readonly stopCode: StopCode | null;
 }): number {
+  if (r.stopCode === "usage-limit") return EXIT.usageLimit;
   if (r.stopCode === "repeat-failure") return EXIT.repeatFailure;
   if (r.stopCode !== null) return EXIT.subscriptionStop;
   return r.status === "complete" ? EXIT.complete : EXIT.paused;
@@ -209,6 +217,10 @@ export async function launchR1Live(
       },
     });
     const exitCode = exitCodeFor(result);
+    if (exitCode === EXIT.usageLimit) {
+      status.log(USAGE_LIMIT_REPORT);
+      deps.log(USAGE_LIMIT_REPORT);
+    }
     const progress = pilotStatus(loadLedger(join(opts.outDir, PROGRESS_FILE)));
     status.finish({ exitCode, result, costEstimate: progress.costEstimate });
     return { exitCode, refusals: [], result };
@@ -277,6 +289,10 @@ export async function launchAbLive(
       },
     });
     const exitCode = exitCodeFor(result);
+    if (exitCode === EXIT.usageLimit) {
+      status.log(USAGE_LIMIT_REPORT);
+      deps.log(USAGE_LIMIT_REPORT);
+    }
     status.finish({ exitCode, result });
     return { exitCode, refusals: [], result };
   } catch (error) {

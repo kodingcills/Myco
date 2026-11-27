@@ -10,8 +10,9 @@
  * Subscription only (TIF-274): an API-path credential name in the agent's environment
  * allowlist refuses the driver (`apiKeyPathRefusal`), and an `apiKeySource` other than `none`
  * in the CLI's output is an `ApiKeyPathFault` that stops the run (code `api-key`). Credit,
- * billing and quota errors are class `billing` and, like a lost login (`auth`), stop the run
- * at once with a code: never a back-off or retry loop.
+ * billing and quota errors are class `billing` and, like a lost login (`auth`) and the
+ * subscription's usage limit (`usage-limit`, its own code, for the lead), stop the run at once
+ * with a code: never a back-off or retry loop. Only a transient 429 / 529 / overloaded backs off.
  *
  * What it does, in the order the gated harness requires (`GatedTrialTransport`):
  *  - writes `mcpConfigJson(plan)` to `plan.mcpConfigPath` (the audit pinned the argv to that
@@ -71,7 +72,8 @@ export const DEFAULT_KILL_GRACE_MS = 10_000;
 
 /**
  * Claude Code's structured error classes (the SDK assistant message's `error` field), mapped
- * to the pilot's harness classes. Limits and overload back off; a lost or refused login and a
+ * to the pilot's harness classes. Limits and overload back off (unless the run's text names the
+ * subscription's usage quota: `refineLimit`); a lost or refused login and a
  * credit, billing or quota error stop the run at once (fail closed, no retry loop); anything
  * else (including an unknown future class) is an unclassified error result.
  */
@@ -97,13 +99,22 @@ export function classOfStatus(status: number): PilotHarnessClass {
 /**
  * Text fallback, only for a run that did NOT complete normally (no result event, an error
  * result, a non-zero exit) and carries no structured class; never for a clean result, whose
- * text is the agent's (fc-v1 fixtures hold qty values 401, 403 and 429). Subscription limit
- * wording varies by plan and version ("usage limit reached", "5-hour limit reached ∙ resets
- * 3pm", "Weekly limit reached", "Opus limit reached", API 429/529 bodies), so the
- * vocabulary is broad; `test/pilot/claude-transport.test.ts` pins it.
+ * text is the agent's (fc-v1 fixtures hold qty values 401, 403 and 429).
+ *
+ * Two kinds of limit (lead ruling, PR #598 round 2, D3):
+ *  - `USAGE_LIMIT_TEXT`, the subscription's own quota ("usage limit reached", "5-hour limit
+ *    reached ∙ resets 3pm", "Weekly limit reached", "Opus limit reached", "resets at 5pm"):
+ *    class `usage-limit`, which stops the run at once with its own code (no retry, no attempt
+ *    spent) and goes to the lead. It wins over the transient wording when both appear.
+ *  - `RATE_LIMIT_TEXT`, a transient API limit (429 / 529 bodies, "rate limit", "too many
+ *    requests", "overloaded"): class `rate-limit`, bounded back-off.
+ * The wording varies by plan and version, so the vocabulary is broad;
+ * `test/pilot/claude-transport.test.ts` pins it.
  */
-export const RATE_LIMIT_TEXT =
-  /rate[ _-]?limit|usage[ _-]?limit|limit (?:reached|exceeded|hit)|limit (?:will )?resets?|\bresets? (?:at |on |in )?(?:\d|mon|tue|wed|thu|fri|sat|sun|tomorrow)|too many requests|\b429\b|\b529\b|overloaded|(?:weekly|daily|monthly|hourly|session|\d+[ -]?hour|five[ -]hour|opus|sonnet|haiku|fable) limit/i;
+export const USAGE_LIMIT_TEXT =
+  /usage[ _-]?limit|(?<!rate[ _-]?)limit (?:reached|exceeded|hit)|limit (?:will )?resets?|\bresets? (?:at |on |in )?(?:\d|mon|tue|wed|thu|fri|sat|sun|tomorrow)|(?:weekly|daily|monthly|hourly|session|\d+[ -]?hour|five[ -]hour|opus|sonnet|haiku|fable) limit/i;
+
+export const RATE_LIMIT_TEXT = /rate[ _-]?limit|too many requests|\b429\b|\b529\b|overloaded/i;
 
 /**
  * Credit, billing and quota wording ("Credit balance is too low", "out of extra usage", "quota
@@ -117,12 +128,26 @@ export const BILLING_TEXT =
 export const AUTH_TEXT =
   /invalid (?:api )?key|api key|\/login|not logged in|log ?in again|please (?:log|sign) ?in|authenticat|unauthori[sz]ed|oauth|\b401\b|\b403\b|forbidden|credential|account (?:is )?on hold|verification required|token (?:has )?expired/i;
 
-/** The text-fallback class of an error message, or null when it names neither. */
+/**
+ * The text-fallback class of an error message, or null when it names none. The order is
+ * pinned (`test/pilot/claude-transport.test.ts`): a lost login first, then billing, then the
+ * subscription's usage quota, then a transient limit.
+ */
 export function classOfText(text: string): PilotHarnessClass | null {
   if (AUTH_TEXT.test(text)) return "auth";
   if (BILLING_TEXT.test(text)) return "billing";
+  if (USAGE_LIMIT_TEXT.test(text)) return "usage-limit";
   if (RATE_LIMIT_TEXT.test(text)) return "rate-limit";
   return null;
+}
+
+/**
+ * A structured limit (`rate_limit`, `overloaded`, HTTP 429 / 529) is transient unless the
+ * failed run's own text names the subscription's quota: Claude Code reports both through the
+ * same structured class, and the quota must stop the run, not back off (D3).
+ */
+function refineLimit(cls: PilotHarnessClass, text: string): PilotHarnessClass {
+  return cls === "rate-limit" && USAGE_LIMIT_TEXT.test(text) ? "usage-limit" : cls;
 }
 
 export function parseClaim(text: string): AgentReport["claim"] {
@@ -219,7 +244,7 @@ export function interpretResult(stdout: string, stderr: string, code: number | n
   if (apiKey !== null) throw new ApiKeyPathFault(apiKey, usage);
   const structured = structuredClass(messages);
   if (result === null) {
-    const cls = structured ?? classOfText(stderr);
+    const cls = structured === null ? classOfText(stderr) : refineLimit(structured, stderr);
     if (cls !== null)
       fault(cls, `claude exited ${String(code)} with a ${cls} signal and no result`);
     fault(
@@ -232,7 +257,8 @@ export function interpretResult(stdout: string, stderr: string, code: number | n
   const errored =
     r.is_error !== false || r.subtype !== "success" || code !== 0 || structured !== null;
   if (errored) {
-    const cls = structured ?? classOfText(`${text}\n${errors.join("\n")}\n${stderr}`);
+    const failedText = `${text}\n${errors.join("\n")}\n${stderr}`;
+    const cls = structured === null ? classOfText(failedText) : refineLimit(structured, failedText);
     fault(
       cls ?? "error-result",
       `claude returned an error result (subtype ${String(r.subtype)}, exit ${String(code)}${cls === null ? ", unclassified" : ""})`,

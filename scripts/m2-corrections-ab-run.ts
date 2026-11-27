@@ -21,7 +21,8 @@
  * (`liveAbRefusals`, plus the VM session lock and concurrency 1) and refuses with the reasons;
  * when all hold it runs the stage on the live VM driver (`src/pilot/live-launch.ts`).
  * Exit: 0 ok / complete, 1 failed, 2 usage, 3 refused, 4 paused / incomplete / halted,
- * 5 fail-closed stop (auth, billing/credit/quota, API key), 6 two identical failures in a row.
+ * 5 fail-closed stop (auth, billing/credit/quota, API key), 6 two identical failures in a row,
+ * 7 the subscription's usage limit (stops at once; take it to the lead before resuming).
  * `analyze` exits with #547's code once it ran, 3 when the pack, the pre-registered command or
  * #547 itself is refused.
  */

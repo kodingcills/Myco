@@ -4,7 +4,7 @@
  * flag + the printed plan's hash, then a refusal). These tests never run `claude` or a model.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CHILD_ENV_ALLOWLIST } from "../../src/pilot/config.ts";
@@ -17,13 +17,35 @@ import {
 import { ROOT, tmp } from "./helpers.ts";
 
 const CLI = join(ROOT, "scripts", "m2-r1-pilot.ts");
+
+// PR #598 round 2, D2: these tests run the real CLI, so they must never be able to start a
+// real trial or call a model, even if a launch guard regressed. Three locks, in every call:
+//  - a TRAP `claude` first on PATH: it records any invocation (the last test fails) and exits 97;
+//  - VITEST=1, so `realVmBackend` refuses to be built (no reset script, no guest channel);
+//  - a spawnSync timeout, so a regression fails fast instead of sleeping through pacing.
+const TRAP_DIR = tmp("myco-guard-trap-");
+const TRAP_MARK = join(TRAP_DIR, "INVOKED");
+writeFileSync(
+  join(TRAP_DIR, "claude"),
+  `#!/bin/sh\necho "trap claude invoked: $*" >> "${TRAP_MARK}"\nexit 97\n`,
+);
+chmodSync(join(TRAP_DIR, "claude"), 0o755);
+const CLI_TIMEOUT_MS = 45_000;
+
 /** A minimal child environment: no inherited variable can stand in for a credential. */
 const baseEnv = () => ({
-  PATH: process.env.PATH ?? "/usr/bin:/bin",
+  PATH: `${TRAP_DIR}:${process.env.PATH ?? "/usr/bin:/bin"}`,
   HOME: tmp("myco-pilot-home-"),
+  VITEST: "1",
 });
 const cli = (args: string[], env: Record<string, string>) =>
-  spawnSync("npx", ["tsx", CLI, ...args], { cwd: ROOT, env, encoding: "utf8" });
+  spawnSync("npx", ["tsx", CLI, ...args], {
+    cwd: ROOT,
+    env,
+    encoding: "utf8",
+    timeout: CLI_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+  });
 
 describe("subscription preflight (names only)", () => {
   it("refuses when any API-path credential name is configured, even empty", () => {
@@ -117,6 +139,26 @@ describe("the runner CLI refuses a real launch unless every precondition holds",
     expect(right.status).toBe(3);
     expect(right.stderr).toMatch(/the VM session lock is not held/);
     expect(right.stderr).not.toMatch(/--launch-real-trials and --plan-sha256/);
+    expect(existsSync(TRAP_MARK)).toBe(false);
+  });
+
+  it("every CLI call here carries the three locks: trap first on PATH, VITEST=1, a timeout", () => {
+    const env = baseEnv();
+    expect(env.PATH.split(":")[0]).toBe(TRAP_DIR);
+    expect(env.VITEST).toBe("1");
+    expect(CLI_TIMEOUT_MS).toBeLessThan(60_000);
+    // The trap is what `claude` resolves to under that PATH, and it fails if run.
+    const which = spawnSync("sh", ["-c", "command -v claude"], {
+      env,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    expect(which.stdout.trim()).toBe(join(TRAP_DIR, "claude"));
+    // No other spawnSync in this file: every CLI run goes through `cli` (a timeout each).
+    const src = readFileSync(join(ROOT, "test", "pilot", "launch-guard.test.ts"), "utf8");
+    const calls = src.match(/spawnSync\(/g) ?? [];
+    expect(calls.length).toBe(2); // `cli` and the `command -v` probe above, each with a timeout
+    expect(src.match(/timeout: CLI_TIMEOUT_MS,/g)?.length).toBe(2); // `cli`, and this line
   });
 
   it("the CLI wires no live transport and spawns no process", () => {
@@ -134,5 +176,11 @@ describe("the runner CLI refuses a real launch unless every precondition holds",
     const transport = readFileSync(join(dir, "claude-transport.test.ts"), "utf8");
     // Type-only imports are fine; a value import could spawn a real process.
     expect(transport).not.toMatch(/^import (?!type )[^;]*from "node:child_process"/m);
+  });
+});
+
+describe("the guard's trap claude was never run", () => {
+  it("no CLI run in this file invoked a `claude` binary", () => {
+    expect(existsSync(TRAP_MARK)).toBe(false);
   });
 });

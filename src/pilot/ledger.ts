@@ -53,6 +53,13 @@ export const PILOT_HARNESS_CLASSES = [
    * the trial.
    */
   "billing",
+  /**
+   * The subscription's own usage quota ("usage limit reached", "5-hour limit", "Weekly limit
+   * reached", "resets at 3pm"; lead ruling, PR #598 round 2, D3). It does not clear by a short
+   * wait: it stops the run at once with its own code (`usage-limit`, exit 7), never a back-off
+   * or retry, and spends no attempt. The operator takes it to the lead before resuming.
+   */
+  "usage-limit",
 ] as const;
 export type PilotHarnessClass = (typeof PILOT_HARNESS_CLASSES)[number];
 
@@ -68,7 +75,32 @@ export const BUDGET_EXEMPT_CLASSES: ReadonlySet<PilotHarnessClass> = new Set([
   "rate-limit",
   "auth",
   "billing",
+  "usage-limit",
 ]);
+
+/** The repeat-failure rule's identity of a harness fault: its class and its message. */
+export function faultSignature(harnessClass: PilotHarnessClass, message: string): string {
+  return `${harnessClass}\u0000${message}`;
+}
+
+/**
+ * The repeat-failure signature a resumed run starts from (PR #598 round 2, D1): the last
+ * harness fault in the ledger, in file order, that the rule counts, unless a decided attempt
+ * came after it. Mirrors the live rule: budget-exempt faults (rate limits, which back off, and
+ * the immediate stops) neither set nor clear it, and an `end` appended on resume for a crashed
+ * attempt (`recovered`) is the runner's own death, not a failure of the trial, so it is skipped
+ * too. A fault end written before `faultMessage` was recorded seeds nothing (null).
+ */
+export function resumeFaultSignature(ends: readonly EndLine[]): string | null {
+  let sig: string | null = null;
+  for (const e of ends) {
+    if (e.outcome === "decided") sig = null;
+    else if (e.harnessClass !== null && !e.recovered && !BUDGET_EXEMPT_CLASSES.has(e.harnessClass))
+      sig =
+        typeof e.faultMessage === "string" ? faultSignature(e.harnessClass, e.faultMessage) : null;
+  }
+  return sig;
+}
 
 export interface HeaderLine {
   readonly schema: typeof HEADER_SCHEMA;
@@ -99,6 +131,12 @@ export interface EndLine {
   readonly recovered: boolean;
   readonly armRow: BenchmarkArmRow | null;
   readonly cost: CostEstimate | null;
+  /**
+   * A harness fault's message, as the harness wrote it (never agent text, never a credential),
+   * so the repeat-failure rule survives `--resume` (PR #598 round 2, D1). Absent on decided
+   * ends, on crash closures and on ledgers written before it existed.
+   */
+  readonly faultMessage?: string;
   readonly at: string;
 }
 
@@ -117,6 +155,8 @@ export interface LedgerState {
   readonly header: HeaderLine | null;
   /** Attempts by task id, in attempt order. */
   readonly byTask: ReadonlyMap<string, readonly AttemptRecord[]>;
+  /** Every `end` line, in file order (the order the attempts finished). */
+  readonly ends: readonly EndLine[];
   /** The file ends mid-line (a torn write); the next append must close it first. */
   readonly torn: boolean;
 }
@@ -126,7 +166,7 @@ export const PROGRESS_FILE = "pilot-progress.jsonl";
 export const R1_ATTEMPT_LEDGER_FILE = "attempts.jsonl";
 
 export function loadLedger(path: string): LedgerState {
-  if (!existsSync(path)) return { header: null, byTask: new Map(), torn: false };
+  if (!existsSync(path)) return { header: null, byTask: new Map(), ends: [], torn: false };
   const text = readFileSync(path, "utf8");
   const torn = text.length > 0 && !text.endsWith("\n");
   const lines = text.split("\n");
@@ -134,6 +174,7 @@ export function loadLedger(path: string): LedgerState {
   let header: HeaderLine | null = null;
   const byTask = new Map<string, AttemptRecord[]>();
   const byKey = new Map<string, { task: string; index: number }>();
+  const ends: EndLine[] = [];
   const fail = (i: number, why: string): never => {
     throw new Error(`${path}:${i + 1}: ${why}`);
   };
@@ -200,11 +241,12 @@ export function loadLedger(path: string): LedgerState {
       if (e.outcome === "decided" && (e.armRow === null || e.harnessClass !== null))
         fail(i, `${e.trialKey}: a decided attempt carries its arm row and no harness class`);
       list[idx] = { start: rec.start, end: e };
+      ends.push(e);
       continue;
     }
     fail(i, `unknown event ${String(line.event)}`);
   }
-  return { header, byTask, torn };
+  return { header, byTask, ends, torn };
 }
 
 /** Append one line (closing a torn last line first, never rewriting it). */

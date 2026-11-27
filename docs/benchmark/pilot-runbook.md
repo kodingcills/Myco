@@ -21,7 +21,8 @@ fault with a fixed, code-only message, never an agent outcome):
    `--token-file PATH`; read at the point of use, never printed). It writes the task's committed
    fixture (sha-checked against `fixtureSha256`) to `C:\myco\pilot\<trialKey>\doc.csv`, then
    reads it back and compares. That path comes from the trial key alone, so the agent cannot
-   name it.
+   name it. fc-v1's tasks declare `persistedFormat: "xlsx"`, but the live step seeds and
+   captures `doc.csv`: that matches the pilot's CSV-only row mapping and gate state.
 4. **Agent.** Headless Claude Code on the subscription, with the audited argv and allowlisted
    environment names only (`claudeDriver`).
 5. **Capture.** After the agent stopped, the host reads the guest document back over the same
@@ -61,12 +62,12 @@ fault with a fixed, code-only message, never an agent outcome):
 |---|---|---|
 | `concurrency` | 1 (max 3) | the pilot holds one subscription session; builder and verifier sessions keep the rest |
 | `interTrialDelayS` | 90 | spreads the pilot's use across the rate window instead of bursting (one global spacing across all workers) |
-| `rateLimitBackoffS` / `rateLimitBackoffMaxS` | 300 / 3600 | on a rate- or usage-limit signal, every worker waits 5 min, doubling to 60 min |
-| `maxConsecutiveRateLimits` | 4 | then the run pauses (exit 4); re-run the same command later. A lost login (`auth`) or a credit, billing or quota error (`billing`) stops it at once (exit 5) |
+| `rateLimitBackoffS` / `rateLimitBackoffMaxS` | 300 / 3600 | on a **transient** limit (HTTP 429 / 529, "rate limit", "overloaded"), every worker waits 5 min, doubling to 60 min. On a live run a trial re-runs after at most one transient limit per invocation (one extra cold reset); a second one on the same trial pauses the run (exit 4) |
+| `maxConsecutiveRateLimits` | 4 | then the run pauses (exit 4); re-run the same command later. A lost login (`auth`) or a credit, billing or quota error (`billing`) stops it at once (exit 5); the subscription's usage limit (`usage-limit`) stops it at once with exit 7 and goes to the lead |
 | `trialTimeoutS` | 1800 | a longer trial is stopped and recorded as a harness `timeout` |
 | `maxAttemptsPerTrial` | 3 | attempts per trial that end in a harness fault **other than** a rate limit or a lost login; once spent, the trial is closed for this run directory and the run reports `incomplete` |
 
-Rate-limit, `auth` and `billing` faults never spend `maxAttemptsPerTrial`: they back off, pause or stop, and a
+Rate-limit, `usage-limit`, `auth` and `billing` faults never spend `maxAttemptsPerTrial`: they back off, pause or stop, and a
 resume re-runs the trial. So a limit spell on the shared subscription can never strand a trial,
 and recovering from one needs no config change (and so no new run directory).
 
@@ -76,7 +77,7 @@ is bounded (3 attempts, `interTrialDelayS` apart) and safe for the data, but it 
 trial. Recovering an `exhausted` trial: there is no in-place reset; start a **new run
 directory** (`--out` to a fresh path) once the cause is understood, and keep the old directory
 as the record of the faulted attempts. If the cause was an unrecognised limit message, add its
-wording to `RATE_LIMIT_TEXT` (with a test) before the new run.
+wording to `USAGE_LIMIT_TEXT` (a quota: stops) or `RATE_LIMIT_TEXT` (transient: backs off), with a test, before the new run.
 
 At the defaults, 30 trials take at least 43.5 minutes of spacing (29 gaps of 90 s) plus the
 trials themselves.
@@ -95,11 +96,23 @@ start hitting limits, raise `--delay-s`. Override per invocation with `--concurr
   such as "Credit balance is too low", "out of extra usage", "quota exceeded"), and an API-key
   path (`apiKeySource` other than `none` in the CLI's output; recorded as `auth`). The run
   exits **5** with `stopCode` `auth`, `billing` or `api-key`. These do not spend the attempt
-  budget; fix the account, then re-run the same command to resume.
+  budget; fix the account, then re-run the same command to resume. The `apiKeySource` check
+  is defence in depth only: under the reviewed argv (`--output-format json`, no `--verbose`)
+  the CLI emits no init message, so it never fires; the active guards are the environment
+  preflight (no API-path name) and the agent's environment allowlist.
+- **The subscription's usage limit (lead ruling, round 2):** wording such as "usage limit
+  reached", "5-hour limit reached", "Weekly limit reached", "Opus limit reached" or "resets at
+  3pm" (`USAGE_LIMIT_TEXT`; also when it comes with the structured `rate_limit` class or HTTP
+  429) is class `usage-limit`. The run stops at once with exit **7** (`stopCode`
+  `usage-limit`): no retry, no back-off, no attempt spent. The CLI prints `USAGE LIMIT: ...
+  This must go to the lead`; take it to the lead and do not resume until the lead decides.
 - **Two identical failures:** on a live run, two harness faults in a row with the same class
   and message (no decided trial between) stop the run with exit **6** (`stopCode`
-  `repeat-failure`), before a third attempt. Rate limits are excluded (they back off).
-- **Re-run in place:** a harness fault before a decision: `rate-limit` (backs off),
+  `repeat-failure`), before a third attempt. Rate limits are excluded (they back off). The
+  fault's message is in the ledger (`faultMessage`), so the rule holds across a resume: a
+  fault before a stop or crash plus the identical fault after the resume stops at once.
+- **Re-run in place:** a harness fault before a decision: `rate-limit` (a transient 429 / 529
+  / overloaded: backs off; on a live run at most once per trial per invocation, then pauses),
   `error-result`, `timeout`, `spawn-failed`, `transport-error`, or `crash` (the runner died
   mid-trial). Classification reads structured fields first (the
   assistant message's `error` class such as `rate_limit` / `authentication_failed`,
@@ -334,7 +347,7 @@ from each A/B arm config (`liveExperimentRefusals`), so no caller can skip them:
 2. The lead's GO is committed as `docs/benchmark/corrections-ab-go.json`, with the stage(s) in
    `stages` and this pre-registration's sha256 in `preregSha256`.
 3. The integrity fixes have landed. The gate reads the tasks' format: fc-v1 persists xlsx, and
-   the gate reads CSV until the xlsx replacement for #503. #546's cold-boot guard is merged: the
+   the A/B format check (`GATE_STATE_FILE`) and the pilot row mapping are still CSV-only, although the xlsx gate (#576) has merged. #546's cold-boot guard is merged: the
    trial-ops schema has `resetBootClass`, and the live transport reports a cold boot per trial.
 4. #518's attempt-event vocabulary names the pilot's harness classes. Until then, a fault it
    cannot name stays open in `attempts.jsonl` and is recorded with its exact class in
@@ -353,7 +366,7 @@ What the operator must still provide before a real A/B launch:
 - **The GO file.** `docs/benchmark/corrections-ab-go.json`, committed by the lead, naming the
   stage and this pre-registration's sha256 (item 2). This change does not write it.
 - **The open preconditions (items 3 and 4).** As of this change they still refuse a real run:
-  the gate reads CSV and fc-v1 persists xlsx (#503's replacement), and #518's vocabulary cannot
+  the A/B format check and the pilot row mapping are CSV-only while fc-v1 persists xlsx, and #518's vocabulary cannot
   name the pilot's harness classes (now also `billing`). `launch` lists them. They are fixed in
   their own changes, never by an ack or a flag.
 - **The VM side.** The same as the pilot's preflight item 6: a restorable `trial-base-v3`, and
@@ -361,7 +374,8 @@ What the operator must still provide before a real A/B launch:
 
 A credit, billing, quota, login or API-key error stops the stage with exit 5; two identical
 harness failures in a row stop it with exit 6. Either way the run is resumable once the cause
-is fixed (re-run the same command).
+is fixed (re-run the same command). The subscription's usage limit stops it with exit 7; that
+goes to the lead before any resume.
 
 ### Pause and resume
 
