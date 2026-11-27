@@ -272,6 +272,37 @@ describe("K10. fail closed: the harness checks the gate's answer before believin
     expect(record.attempts[0]?.harnessCodes).toEqual(["EVIDENCE_NOT_FRESH"]);
   });
 
+  it("D6: a REFUTED result that read another trial's document is EVIDENCE_NOT_FRESH, and no retry runs on it", async () => {
+    for (const bend of [
+      (e: GateResult["evidenceRefs"][number]) => ({ ...e, runId: "other-run" }),
+      (e: GateResult["evidenceRefs"][number]) => ({ ...e, sha256: "0".repeat(64) }),
+    ]) {
+      const record = await tamper((r) => ({ ...r, evidenceRefs: r.evidenceRefs.map(bend) }))(
+        pristine,
+      );
+      expect(record.attempts[0]?.gateVerdict).toBe("refuted");
+      expect(record.attempts[0]?.harnessCodes).toEqual(["EVIDENCE_NOT_FRESH"]);
+      expect(record.verdict).toBe("uncertain");
+      // K has a retry budget; a stale document must not seed its checkpoint or corrections.
+      expect(record.attempts).toHaveLength(1);
+    }
+  });
+
+  it("D6: one fresh ref does not excuse a stale ref beside it", async () => {
+    for (const agent of [good, pristine]) {
+      const record = await tamper((r) => ({
+        ...r,
+        evidenceRefs: [
+          ...r.evidenceRefs,
+          ...r.evidenceRefs.map((e) => ({ ...e, runId: "other-run" })),
+        ],
+      }))(agent);
+      expect(record.attempts[0]?.harnessCodes).toEqual(["EVIDENCE_NOT_FRESH"]);
+      expect(record.accepted).toBe(false);
+      expect(record.attempts).toHaveLength(1);
+    }
+  });
+
   it("a harness step that throws is a logged harness fault, uncertain, with no gate call after it", async () => {
     const cases = [
       ["handedDocument", "RESTORE_FAILED"],
