@@ -38,6 +38,12 @@
     "scripts/parallel-run.ts",
     "scripts/m2-corrections-ab.ts",
     "scripts/myco-schedule.ts",
-    "scripts/myco-record.ts"
+    "scripts/ci-required-green.ts",
+    "scripts/myco-record.ts",
+    "scripts/benchmark-release-package.ts",
+    "scripts/benchmark-release-check-archive.ts",
+    "scripts/r-v1-analysis.ts",
+    "scripts/s-v1-freeze.ts",
+    "scripts/s-v1-analysis.ts"
   ]
 }

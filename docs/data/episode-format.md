@@ -229,7 +229,7 @@ the closed-schema pattern of #553:
 | Field kind | Fields | Exported as |
 |---|---|---|
 | Closed value | enums, digests, timestamps, blob file names, reason codes, versions, fault codes, and the arm (a known arm, `myco-gate` or `hcu+shell`, optionally with a `:variant` of lower-case letters, digits and hyphens, such as the multi-step demo's `myco-gate:retry`) | as is when it matches its grammar; anything else **refuses the export**, naming the field, never the value |
-| Id | `task.id`, `harness.plannerModelId`, `provenance.runId`, `provenance.trialKey` | as is when it matches `CLOSED_ID` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`), else `h-<60 hex>` |
+| Id | `task.id`, `harness.plannerModelId`, `provenance.runId`, `provenance.trialKey` | as is when it matches `CLOSED_ID` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`) and does not start like a hash, else `h-<60 hex>`: an id starting `h-` or `H-` that is not exactly `h-<60 hex>` (`H-<60 HEX>`, `h-<64 hex>`, `h-<59 hex>`) is always re-hashed, and `validateDataset` refuses one (#612 D2, `src/export-guard/hash-like.ts`, the rule track U's container already had) |
 | Free text | `task.instruction`, typed text, shell commands, UI status | always `h-<60 hex>` of the raw value |
 | Key and app names (F1, lead ruling 22:18Z) | `keys`, `app` (schema cap 64) | as is ONLY from a closed vocabulary: a known key or key combination (`KNOWN_KEYS`: up to three modifiers plus a named key, any case) or a registered app id (`REGISTERED_APPS`: `localc`, `lowriter`, `soffice`, `libreoffice`, `scalc`, `swriter`); anything else `h-<60 hex>` |
 
@@ -252,6 +252,13 @@ not reveal its input, but someone who guesses the exact input can confirm the gu
 episode can hold is listed in `FIELD_TREATMENT`. A string at any other path refuses the
 export, so a new field is a reviewed change. `episodeId` is recomputed over the closed content.
 The export filter is closed too (it is written to the manifest).
+
+**Identity checks never skip a closed-pattern value** (#612 D1): the identity check skips an
+exact `h-<60 hex>` only in a field the export hashes (an id, a key or app name). In a closed
+pattern field (`task.family`, `task.taskSetVersion`, `task.faultClass`, `gate.oracle.family`)
+and in the filter, the export never hashes, so a value shaped like `h-<60 hex>` there is checked
+like any other value: a hex-letter identity inside it refuses the export, and `validateDataset`
+reports it. Track U's container applies the same rule (`src/export-guard/hash-like.ts`).
 
 Why: `redactText` rewrites host paths by pattern, and patterns miss path forms. #553's probe
 corpus (spaced folders, `Documents and Settings`, 8.3 short names, UNC, mixed separators,

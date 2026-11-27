@@ -575,13 +575,30 @@ export class R1AttemptSink implements AttemptSink {
   }
 }
 
-const readJsonl = (path: string): unknown[] =>
-  existsSync(path)
-    ? readFileSync(path, "utf8")
-        .split("\n")
-        .filter((l) => l.trim() !== "")
-        .map((l) => JSON.parse(l) as unknown)
-    : [];
+/** The operator-readable code a JSONL record that does not parse is refused with (#572 N1). */
+export const TORN_JSONL = "AB_TORN_JSONL";
+
+/**
+ * Every record of a JSONL file (none when it is absent). A line that is not JSON (a crash
+ * mid-append leaves a torn last line) is refused with `TORN_JSONL`, the file and the line
+ * number, never a raw parser error: still fail-closed, nothing is repaired automatically.
+ */
+const readJsonl = (path: string): unknown[] => {
+  if (!existsSync(path)) return [];
+  const out: unknown[] = [];
+  const lines = readFileSync(path, "utf8").split("\n");
+  for (const [i, l] of lines.entries()) {
+    if (l.trim() === "") continue;
+    try {
+      out.push(JSON.parse(l) as unknown);
+    } catch {
+      throw new AbRefusal(
+        `${TORN_JSONL}: ${path} line ${i + 1} is not a JSON record (a crash mid-append leaves a torn last line); nothing was changed: review the file, remove the partial line by hand, then re-run`,
+      );
+    }
+  }
+  return out;
+};
 
 interface AbTrialRecord {
   readonly schema: "myco.pilot.ab-trial/1";
@@ -1407,6 +1424,9 @@ export function exportAbPack(
   // The run configs #547 compares: re-derived from the committed pre-registration, and
   // refused unless they are exactly the configs the arms' ledgers were written under.
   const committed = loadPrereg(repoRoot);
+  // Not redundant with the config re-derivation below (#572, V8): that check derives the
+  // configs from the COMMITTED pre-registration, so a header whose `preregSha256` alone was
+  // edited still matches it, and only this check stops the edited hash reaching the manifest.
   if (committed.markdownSha256 !== header.preregSha256)
     throw new AbRefusal(
       `the run recorded pre-registration ${header.preregSha256}, the committed one is ${committed.markdownSha256}: refused`,
@@ -1434,7 +1454,9 @@ export function exportAbPack(
   }));
   if (incidents.length > 0) {
     mkdirSync(join(packDir, "incidents"), { recursive: true });
-    for (const f of readdirSync(incidentsDir(root)))
+    // A `.tmp` there is a leftover of an interrupted atomic write (`writeAtomic`), not a
+    // record: it never goes into the pack (#572 N2).
+    for (const f of readdirSync(incidentsDir(root)).filter((f) => !f.endsWith(".tmp")))
       copyFileSync(join(incidentsDir(root), f), join(packDir, "incidents", f));
   }
   const manifest: AbPackManifest = {

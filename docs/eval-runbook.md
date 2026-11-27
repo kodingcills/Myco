@@ -1677,6 +1677,13 @@ orphans a child that keeps the lock held after the sweep exits.
 The result is one artifact for the whole arm: rescoring a resumed run needs no merge, and the
 row count is the manifest's, not the sum of attempts.
 
+### 7.6 The `hcu+shell` head-to-head arm (TIF-268)
+
+R2's other arm runs on the same VM, lock and cold reset as the myco-gate arm, with headless
+Claude Code on the operator's Claude subscription as its planner. There is no API-key path.
+The runbook, including exactly what the operator must provide (HCU in the trial base, `claude`
+logged in to the subscription, the lead's GO), is `docs/benchmark/hcu-shell-runbook.md`.
+
 ## 8. Evidence
 
 ### 8.1 Layout

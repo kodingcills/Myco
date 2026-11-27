@@ -589,6 +589,305 @@ class Sources(unittest.TestCase):
         self.assertEqual(with_guard(["docs/x/guide.md"], sources).mode, "full")
 
 
+def draft(files, sources=None, labels=(), title="", body="", event="pull_request"):
+    srcs = {**GUARD, **SAFE, **(sources or {})}
+    return cp.plan(event, list(files), list(labels), title, body, srcs, draft=True)
+
+
+SAFE = {"test/gate/g.test.ts": "it('x')"}
+
+
+class AffectedMode(unittest.TestCase):
+    """CI speed (#678): a draft PR runs `affected` unless it touches CI tooling, carries
+    `full-ci`, or its diff cannot be read. Outside a draft, nothing changes."""
+
+    def test_a_draft_is_affected_whatever_its_tier(self):
+        for files in (
+            ["src/watch/server.ts"],
+            ["viewer/src/app.tsx", "test/watch/x.test.ts", "docs/x.md"],
+            ["src/gate/gate.ts"],
+            ["src/benchmark/check.ts", "test/benchmark/x.test.ts"],
+            ["scripts/x.ts"],
+            ["schemas/x.json"],
+            ["agent/myco_agent/x.py"],
+            ["fixtures/a.json"],
+            ["docs/product/vision.md"],
+            ["test/tasks/intent.test.ts"],
+        ):
+            p = draft(files)
+            self.assertEqual(p.mode, "affected", files)
+            self.assertIn("required check jobs are skipped", p.reasons[0])
+        for kw in ({"labels": ["tier-2"]}, {"body": "Tier: 2"}, {"title": "Tier 2: x"}):
+            self.assertEqual(draft(["src/watch/server.ts"], **kw).mode, "affected", kw)
+
+    def test_the_same_changes_outside_a_draft_are_unchanged(self):
+        srcs = {**GUARD, **SAFE}
+        p = cp.plan("pull_request", ["src/watch/server.ts"], [], "", "", srcs)
+        self.assertEqual((p.mode, classify_reason(p)), ("full", "source"))
+        self.assertEqual(cp.plan("pull_request", ["src/gate/gate.ts"], [], "", "", srcs).mode, "full")
+        self.assertEqual(cp.plan("pull_request", ["test/tasks/intent.test.ts"], [], "", "", srcs).mode, "targeted")
+        self.assertEqual(cp.plan("pull_request", ["test/x.test.ts"], ["tier-2"], "", "", srcs).mode, "full")
+
+    def test_tooling_full_ci_unknown_diffs_and_non_pr_events_stay_full_in_a_draft(self):
+        for files in (
+            ["src/watch/server.ts", ".github/workflows/ci.yml"],
+            ["src/watch/server.ts", "package.json"],
+            ["pnpm-lock.yaml"],
+            ["vitest.config.ts"],
+            ["tsconfig.json"],
+            ["biome.json"],
+            ["test/setup/yield-to-event-loop.ts"],
+            ["test/ci-hygiene/test_ci_plan.py"],
+            [".githooks/pre-commit"],
+            [f"src/f{i}.ts" for i in range(cp.MAX_FILES + 1)],
+            [],
+        ):
+            p = draft(files)
+            self.assertEqual(p.mode, "full", files[:2])
+        self.assertEqual(draft(["src/watch/server.ts"], labels=["full-ci"]).mode, "full")
+        self.assertEqual(draft(["src/watch/server.ts"], event="push").mode, "full")
+        self.assertEqual(cp.plan("pull_request", None, [], "", "", GUARD, draft=True).mode, "full")
+        self.assertEqual(cp.plan("pull_request", ["src/a.ts"], [], "", "", {"src/a.ts": ""}, draft=True).mode, "full")
+
+    def test_a_spawned_script_or_a_doc_a_script_reads_pulls_in_its_tests(self):
+        # Outside a draft these force full; in a draft the tests that spawn the script run.
+        sources = {
+            "scripts/check-doc.ts": 'readFileSync(join(ROOT, "docs", "eval-runbook.md"))',
+            "test/check-doc.test.ts": 'spawnSync("tsx", [join(ROOT, "scripts", "check-doc.ts")])',
+        }
+        p = draft(["docs/eval-runbook.md"], sources)
+        self.assertEqual(p.mode, "affected")
+        self.assertIn("test/check-doc.test.ts", p.related)
+        p = draft(["scripts/check-doc.ts"], sources)
+        self.assertIn("test/check-doc.test.ts", p.related)
+
+    def test_too_many_related_tests_runs_the_whole_suite_still_affected(self):
+        sources = {
+            f"test/w/t{i}.test.ts": 'import { s } from "../../src/watch/s.ts";' for i in range(cp.AFFECTED_MAX_TESTS + 1)
+        }
+        sources["src/watch/s.ts"] = "export const s = 1;"
+        p = draft(["src/watch/s.ts"], sources)
+        self.assertEqual((p.mode, p.affected_all), ("affected", True))
+        self.assertEqual(p.outputs()["affected_all"], "true")
+        self.assertIn("whole suite", p.reasons[0])
+        sources.pop("test/w/t0.test.ts")
+        p = draft(["src/watch/s.ts"], sources)
+        self.assertEqual((p.mode, p.affected_all), ("affected", False))
+        self.assertEqual(len(p.related), cp.AFFECTED_MAX_TESTS)
+        # Every other mode leaves it off.
+        self.assertEqual(pr(["docs/product/vision.md"]).outputs()["affected_all"], "false")
+
+    def test_affected_lists_related_safety_and_direct_scanners(self):
+        sources = {
+            "src/watch/s.ts": "export const s = 1;",
+            "test/watch/s.test.ts": 'import { s } from "../../src/watch/s.ts";',
+            "test/other.test.ts": "it('y')",
+        }
+        p = draft(["src/watch/s.ts"], sources)
+        self.assertEqual(p.related, ["test/watch/s.test.ts"])
+        self.assertIn("test/gate/g.test.ts", p.safety)
+        self.assertIn("test/guard.test.ts", p.scanners)
+        self.assertNotIn("test/other.test.ts", p.related + p.safety + p.scanners)
+
+    def test_affected_scanners_do_not_follow_product_source_but_narrow_modes_do(self):
+        # A test that reaches readdir only through a product module is a scanner for the
+        # required-check modes (unchanged), not for affected (never merged on).
+        sources = {
+            "src/runs/list.ts": "export const l = (d) => readdirSync(d);",
+            "test/runs/list.test.ts": 'import { l } from "../../src/runs/list.ts";',
+            "test/helper.ts": "export const h = () => readdirSync(ROOT);",
+            "test/via-helper.test.ts": 'import { h } from "./helper.ts";',
+        }
+        srcs = {**GUARD, **SAFE, **sources}
+        full_set = cp.scanning_tests(srcs)
+        direct = cp.scanning_tests(srcs, through_source=False)
+        self.assertIn("test/runs/list.test.ts", full_set)
+        self.assertNotIn("test/runs/list.test.ts", direct)
+        for f in ("test/via-helper.test.ts", "test/guard.test.ts"):
+            self.assertIn(f, direct)
+        self.assertIn("test/runs/list.test.ts", with_guard(["test/z.test.ts"], {**sources, "test/z.test.ts": ""}).scanners)
+        # ...and the draft plan itself uses the direct set.
+        p = draft(["src/other.ts"], {**sources, "src/other.ts": ""})
+        self.assertEqual(p.mode, "affected")
+        self.assertNotIn("test/runs/list.test.ts", p.scanners)
+        self.assertIn("test/via-helper.test.ts", p.scanners)
+
+    def test_the_real_repo_guards_are_direct_scanners(self):
+        # The pinned repo guards (REPO_GUARDS) scan the repo themselves, so affected mode runs
+        # them too; and so does every test that lists a directory itself (independent detector).
+        srcs = cp.read_sources(REPO_ROOT)
+        direct = set(cp.scanning_tests(srcs, through_source=False))
+        for f in REPO_GUARDS:
+            self.assertTrue(f in direct or f in cp.SMOKE, f)
+        listing = {f for f, text in srcs.items() if cp.is_test(f) and DIRECT_SCAN.search(text)}
+        self.assertEqual(listing - direct, set())
+
+
+class RelatedTests(unittest.TestCase):
+    def rel(self, changed, sources):
+        return cp.related_tests(changed, sources)
+
+    def test_import_chains_are_followed(self):
+        sources = {
+            "src/a.ts": "export const a = 1;",
+            "src/b.ts": 'import { a } from "./a.ts";',
+            "src/c.ts": 'export * from "./b.js";',
+            "test/c.test.ts": 'const { c } = await import("../src/c.ts");',
+            "test/x.test.ts": "it('x')",
+        }
+        self.assertEqual(self.rel(["src/a.ts"], sources), ["test/c.test.ts"])
+
+    def test_a_test_spawning_a_script_that_imports_the_change_is_found(self):
+        sources = {
+            "src/a.ts": "export const a = 1;",
+            "scripts/run-a.ts": 'import { a } from "../src/a.ts";',
+            "test/spawn.test.ts": 'spawnSync("tsx", [join(ROOT, "scripts", "run-a.ts")]);',
+        }
+        self.assertEqual(self.rel(["src/a.ts"], sources), ["test/spawn.test.ts"])
+
+    def test_a_child_helper_named_from_its_own_directory_is_found(self):
+        sources = {
+            "src/a.ts": "export const a = 1;",
+            "test/gate/child.ts": 'import { a } from "../../src/a.ts";',
+            "test/gate/fifo.test.ts": 'fork(join(__dirname, "child.ts"));',
+        }
+        self.assertEqual(self.rel(["src/a.ts"], sources), ["test/gate/fifo.test.ts"])
+
+    def test_source_comments_naming_a_file_add_nothing(self):
+        # A product module mentioning another in a comment is not a spawn; following it
+        # pulled 287 of 318 test files into one draft run.
+        sources = {
+            "src/watch/demo.ts": "export const d = 1;",
+            "src/gate/multi.ts": "// like src/watch/demo.ts, but\nexport const m = 2;",
+            "test/gate/multi.test.ts": 'import { m } from "../../src/gate/multi.ts";',
+        }
+        self.assertEqual(self.rel(["src/watch/demo.ts"], sources), [])
+        # ...but a product module naming a script is a spawn.
+        sources = {
+            "scripts/tool.sh": "echo hi",
+            "src/run.ts": 'spawn(join(ROOT, "scripts", "tool.sh"));',
+            "test/run.test.ts": 'import { r } from "../src/run.ts";',
+        }
+        self.assertEqual(self.rel(["scripts/tool.sh"], sources), ["test/run.test.ts"])
+
+    def test_a_bare_file_name_from_another_directory_needs_its_directory(self):
+        sources = {
+            "src/pilot/runner.ts": "export const r = 1;",
+            "test/a.test.ts": 'expect(log).toContain("runner.ts")',
+            "test/b.test.ts": 'readFileSync(join(ROOT, "src", "pilot", "runner.ts"))',
+        }
+        self.assertEqual(self.rel(["src/pilot/runner.ts"], sources), ["test/b.test.ts"])
+
+    def test_tests_are_leaves(self):
+        # A guard test naming another test file does not pull in what imports that guard.
+        sources = {
+            "src/a.ts": "export const a = 1;",
+            "test/a.test.ts": 'import { a } from "../src/a.ts";',
+            "test/list.test.ts": 'const ALL = ["test/a.test.ts"];',
+            "test/helper.ts": 'export const files = ["test/list.test.ts"];',
+            "test/z.test.ts": 'import { files } from "./helper.ts";',
+        }
+        self.assertEqual(self.rel(["src/a.ts"], sources), ["test/a.test.ts"])
+        # A changed test is still a start point.
+        self.assertIn("test/a.test.ts", self.rel(["test/a.test.ts"], sources))
+
+    def test_real_repo_draft_examples_stay_narrow(self):
+        srcs = cp.read_sources(REPO_ROOT)
+        for f in ("src/watch/server.ts", "src/pilot/runner.ts", "src/recording/compile.ts"):
+            if f in srcs:
+                n = len(cp.related_tests([f], srcs))
+                self.assertLessEqual(n, 40, f)
+
+
+class SafetySet(unittest.TestCase):
+    """#678 / approved audit: gate integrity, R5 oracle mutation, fault injection and
+    security tests run in every narrow mode."""
+
+    def test_every_narrow_mode_lists_the_safety_set(self):
+        sources = {**SAFE, "test/watch/server-security.test.ts": ""}
+        for p in (with_guard(["docs/product/vision.md"], sources), with_guard(["test/tasks/intent.test.ts"], sources), draft(["src/watch/server.ts"], sources)):
+            self.assertIn(p.mode, ("docs", "targeted", "affected"))
+            self.assertIn("test/gate/g.test.ts", p.safety, p.mode)
+            self.assertIn("test/watch/server-security.test.ts", p.safety, p.mode)
+            self.assertIn(" test/gate/g.test.ts", " " + p.outputs()["safety"])
+
+    def test_a_new_safety_test_joins_by_its_name(self):
+        for name in ("test/x/forged-claim.test.ts", "test/x/secret-scan.test.ts", "test/y/fault-z.test.ts", "test/z/token-leak.test.ts", "viewer/test/sandbox.test.tsx"):
+            self.assertIn(name, cp.safety_tests({name: ""}), name)
+        self.assertEqual(cp.safety_tests({"test/x/plain.test.ts": "", "test/gate/helpers.ts": ""}), [])
+
+    def test_the_real_safety_set(self):
+        tracked = set(tracked_files())
+        for prefix in cp.SAFETY_DIRS:
+            self.assertTrue(any(f.startswith(prefix) and cp.is_test(f) for f in tracked), prefix)
+        for f in cp.SAFETY_FILES:
+            self.assertIn(f, tracked, f)
+        got = set(cp.safety_tests(cp.read_sources(REPO_ROOT)))
+        # Every gate, R5, fault and security test in the repo today.
+        must = {
+            "test/gate/gate.test.ts",
+            "test/gate/security-review.test.ts",
+            "test/gate/caller-isolation.test.ts",
+            "test/integrity/isolation.test.ts",
+            "test/oracle-selftest/selftest.test.ts",
+            "test/agent-checks/propose.test.ts",
+            "test/agent-checks/predictable-selftest.test.ts",
+            "test/fault-classes/injection.test.ts",
+            "test/fault-classes/tamper.test.ts",
+            "test/faults.test.ts",
+            "test/foundry/faults.test.ts",
+            "test/foundry/guard.test.ts",
+            "test/baseline/secret-file.test.ts",
+            "test/plugins/sandbox.test.ts",
+            "test/watch/server-security.test.ts",
+            "test/export-guard/seal.test.ts",
+        }
+        self.assertEqual(must - got, set())
+
+    def test_the_safety_set_is_documented(self):
+        with open(os.path.join(REPO_ROOT, "docs", "ci.md"), encoding="utf-8") as fh:
+            doc = fh.read()
+        for entry in cp.SAFETY_DIRS + cp.SAFETY_FILES:
+            self.assertTrue(f"`{entry}`" in doc, entry)
+
+
+class AgentMacos(unittest.TestCase):
+    def test_the_agent_macos_job_follows_agent_and_workflow_paths(self):
+        p = with_guard(["src/watch/server.ts"], {})
+        self.assertFalse(p.agent_macos)
+        self.assertEqual(p.outputs()["agent_macos"], "false")
+        for files in (["agent/myco_agent/x.py"], ["src/a.ts", ".github/workflows/ci.yml"]):
+            self.assertTrue(with_guard(files, {}).agent_macos, files)
+        for event in ("push", "", "workflow_dispatch"):
+            self.assertTrue(cp.plan(event, ["src/a.ts"], [], "", "", GUARD).agent_macos, event)
+        self.assertTrue(cp.plan("pull_request", None, [], "", "", GUARD).agent_macos)
+        many = [f"src/f{i}.ts" for i in range(cp.MAX_FILES + 1)]
+        self.assertTrue(cp.plan("pull_request", many, [], "", "", GUARD).agent_macos)
+        # Docs-only and labelled runs leave it off unless agent/ changed.
+        self.assertFalse(with_guard(["docs/product/vision.md"], {}).agent_macos)
+        self.assertFalse(cp.plan("pull_request", ["src/a.ts"], ["tier-2"], "", "", GUARD).agent_macos)
+
+
+class DraftFlag(unittest.TestCase):
+    def run_main(self, *extra, env=None):
+        out = subprocess.run(
+            [sys.executable, SCRIPT, "--event", "pull_request", "--files", "src/watch/server.ts", *extra],
+            cwd=REPO_ROOT,
+            env={"PATH": os.environ.get("PATH", ""), **(env or {})},
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+
+    def test_only_exactly_true_is_a_draft(self):
+        self.assertEqual(self.run_main("--draft", "true")["mode"], "affected")
+        self.assertEqual(self.run_main(env={"PR_DRAFT": "true"})["mode"], "affected")
+        for value in ("false", "", "True", "1", "yes", "true "):
+            self.assertEqual(self.run_main("--draft", value)["mode"], "full", value)
+        self.assertEqual(self.run_main()["mode"], "full")
+
+
 # A small evaluator for the GitHub expression subset ci.yml uses in `if:` (contexts,
 # string literals, == != ! && || and parentheses, cancelled()). Anything else raises, so
 # a condition the tests cannot evaluate fails loudly instead of passing unchecked.
@@ -703,7 +1002,7 @@ def check_names(jobs):
 
 
 LAUNCHER_STEP = "Test (s0 launcher, forked)"
-SMOKE_STEP = "Test (core smoke, directory-scanning tests and doc tests)"
+SMOKE_STEP = "Test (core smoke, safety set, directory-scanning tests and doc tests)"
 
 
 class Workflow(unittest.TestCase):
@@ -721,10 +1020,130 @@ class Workflow(unittest.TestCase):
         missing = REQUIRED - set(self.names)
         self.assertEqual(missing, set())
 
+    def test_the_launch_gate_reads_the_same_required_set(self):
+        # scripts/ci-required-green.ts (the R1 pilot launch gate, #678) reads this file.
+        import json
+
+        with open(os.path.join(REPO_ROOT, "scripts", "ci-required-checks.json"), encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        self.assertEqual(set(cfg["required"]), REQUIRED)
+        self.assertEqual(len(cfg["required"]), len(REQUIRED))
+        self.assertEqual(cfg["workflow"], ".github/workflows/ci.yml")
+
     def test_required_jobs_never_skip_at_job_level(self):
-        for key in self.required_jobs():
+        # Every required job but `check` is unconditional. `check` may skip only on a
+        # successful plan whose mode is exactly `affected` (#678): evaluated, not grepped.
+        for key in self.required_jobs() - {"check"}:
             cond = self.jobs[key].get("if")
             self.assertIn(cond, (None, "${{ !cancelled() }}"), key)
+        cond = self.jobs["check"]["if"]
+        for result in PLAN_RESULTS:
+            for mode in PLAN_MODES + ("affected", "Affected", "affected "):
+                ctx = {"needs.plan.result": result, "needs.plan.outputs.mode": mode}
+                skip = result == "success" and mode.lower() == "affected"  # GitHub compares strings case-insensitively
+                self.assertEqual(gh_eval(cond, ctx), not skip, (result, mode))
+        self.assertFalse(gh_eval(cond, {"cancelled": True}))
+
+    def test_an_affected_run_never_reports_a_required_check(self):
+        # The guarantee behind affected mode (#678): in it, `check` is skipped, and a skipped
+        # matrix job reports under its unexpanded name, which is not required; the job that
+        # runs instead has a name outside the required set; it runs only then.
+        self.assertNotIn("name", self.jobs["check"])
+        self.assertEqual(self.jobs["check"]["strategy"]["matrix"]["os"], ["macos-latest", "ubuntu-latest"])
+        aff = self.jobs["check-affected"]
+        self.assertEqual(aff["name"], "check affected (ubuntu-latest)")
+        self.assertNotIn(aff["name"], REQUIRED)
+        self.assertEqual(aff["runs-on"], "ubuntu-latest")
+        self.assertNotIn("strategy", aff)
+        for result in PLAN_RESULTS:
+            for mode in PLAN_MODES + ("affected", "Affected", "affected "):
+                ctx = {"needs.plan.result": result, "needs.plan.outputs.mode": mode}
+                runs = result == "success" and mode.lower() == "affected"
+                self.assertEqual(gh_eval(aff["if"], ctx), runs, (result, mode))
+                # Exactly one of the two check jobs runs, whatever the plan did.
+                self.assertNotEqual(gh_eval(self.jobs["check"]["if"], ctx), runs, (result, mode))
+        # The unexpanded name a skipped `check` reports is not a required name either.
+        self.assertNotIn("check (${{ matrix.os }})", REQUIRED)
+
+    def test_affected_steps_run_the_planned_commands(self):
+        steps = {s.get("name"): s for s in self.jobs["check-affected"]["steps"]}
+        guard = steps["Plan lists the guards"]
+        for scanners, safety, ok in (("a", "b", True), ("", "b", False), ("a", "", False), ("", "", False)):
+            if ok:
+                run_step(guard, {"SCANNERS": scanners, "SAFETY": safety})
+            else:
+                with self.assertRaises(subprocess.CalledProcessError, msg=(scanners, safety)):
+                    run_step(guard, {"SCANNERS": scanners, "SAFETY": safety})
+        self.assertEqual(self.jobs["check-affected"]["steps"][0], guard, "the guard check runs first")
+        t = steps["Test (affected, files related to the change by vitest's import graph)"]
+        self.assertIn('--changed "$BASE_SHA"', t["run"])
+        self.assertIn(f"--exclude {cp.LAUNCHER_TEST}", t["run"])
+        big = steps["Test (core smoke, safety set, directory-scanning, related and doc tests)"]
+        self.assertIn("pnpm exec vitest run $SMOKE $SAFETY $SCANNERS $RELATED $DOC_TESTS", big["run"])
+        for var, out in (("SMOKE", "smoke"), ("SAFETY", "safety"), ("SCANNERS", "scanners"), ("RELATED", "related")):
+            self.assertEqual(big["env"][var], f"${{{{ needs.plan.outputs.{out} }}}}", var)
+        # Which steps run, narrowed or whole suite (ALL = affected_all == 'true').
+        self.assertEqual(
+            self.jobs["check-affected"]["env"]["ALL"], "${{ needs.plan.outputs.affected_all == 'true' }}"
+        )
+        common = {
+            "Plan lists the guards",
+            "actions/checkout",
+            "actions/setup-node",
+            "Install pnpm",
+            "Install dependencies",
+            "Allow user namespaces (plugin sandbox network layer)",
+            "Typecheck",
+            "Lint",
+            "Build",
+        }
+        narrow = common | {
+            "Test (affected, files related to the change by vitest's import graph)",
+            LAUNCHER_STEP,
+            "Test (core smoke, safety set, directory-scanning, related and doc tests)",
+            "Schema validate",
+        }
+        whole = common | {"Test (whole suite, ubuntu only)"}
+        for all_, launcher_out, want in (
+            ("false", "true", narrow),
+            ("false", "false", narrow - {LAUNCHER_STEP}),
+            ("true", "true", whole),
+            ("true", "false", whole),
+        ):
+            ran = set()
+            for s in self.jobs["check-affected"]["steps"]:
+                ctx = {"env.ALL": all_, "needs.plan.outputs.launcher": launcher_out}
+                if s.get("if") is None or gh_eval(s["if"], ctx):
+                    ran.add(s.get("name") or s.get("uses", "").split("@")[0])
+            self.assertEqual(ran, want, (all_, launcher_out))
+        self.assertEqual(steps["Test (whole suite, ubuntu only)"]["run"], "pnpm test")
+        # The whole-suite flavour needs no lists; the narrowed one does.
+        run_step(guard, {"SCANNERS": "", "SAFETY": "", "ALL": "true"})
+        with self.assertRaises(subprocess.CalledProcessError):
+            run_step(guard, {"SCANNERS": "", "SAFETY": "", "ALL": "false"})
+        launcher = steps["Test (s0 launcher, forked)"]
+        check_launcher = next(s for s in self.jobs["check"]["steps"] if s.get("name") == LAUNCHER_STEP)
+        self.assertEqual(launcher["run"], check_launcher["run"])
+
+    def test_agent_macos_is_off_the_pr_path_unless_the_plan_says_otherwise(self):
+        # #678 (b): the agent's macOS job is its own, non-required job; the required ubuntu
+        # job is unconditional and has a static runner.
+        agent = self.jobs["agent"]
+        self.assertEqual(agent["name"], "myco-agent tests (ubuntu-latest)")
+        self.assertEqual(agent["runs-on"], "ubuntu-latest")
+        mac = self.jobs["agent-macos"]
+        self.assertEqual(mac["name"], "myco-agent tests (macos-latest)")
+        self.assertNotIn(mac["name"], REQUIRED)
+        self.assertEqual(mac["runs-on"], "macos-latest")
+        for result in PLAN_RESULTS:
+            for value in ("true", "false", "", "garbage"):
+                ctx = {"needs.plan.result": result, "needs.plan.outputs.agent_macos": value}
+                skip = result == "success" and value == "false"
+                self.assertEqual(gh_eval(mac["if"], ctx), not skip, (result, value))
+        self.assertFalse(gh_eval(mac["if"], {"cancelled": True}))
+        # Same test commands as the ubuntu job.
+        runs = lambda job: [s["run"] for s in job["steps"] if s.get("name") in ("Install", "Test")]  # noqa: E731
+        self.assertEqual(runs(mac), runs(agent))
 
     def test_secret_scan_is_independent_of_the_plan(self):
         job = self.jobs[self.names["secret scan (gitleaks)"]]
@@ -746,9 +1165,15 @@ class Workflow(unittest.TestCase):
     def plan_step(self, key):
         return next(s for s in self.jobs[key]["steps"] if s.get("name") == "CI plan")
 
-    def check_env(self, result, mode, launcher="true", scanners="test/guard.test.ts"):
+    def check_env(self, result, mode, launcher="true", scanners="test/guard.test.ts", safety="test/gate/x.test.ts"):
         step = self.plan_step("check")
-        env = {"PLAN_RESULT": result, "PLAN_MODE": mode, "PLAN_LAUNCHER": launcher, "PLAN_SCANNERS": scanners}
+        env = {
+            "PLAN_RESULT": result,
+            "PLAN_MODE": mode,
+            "PLAN_LAUNCHER": launcher,
+            "PLAN_SCANNERS": scanners,
+            "PLAN_SAFETY": safety,
+        }
         return run_step(step, env)
 
     def steps_that_run(self, key, env):
@@ -777,6 +1202,15 @@ class Workflow(unittest.TestCase):
             self.assertEqual(self.check_env("success", mode)["MODE"], mode, mode)
         self.assertEqual(self.check_env("success", "full", scanners="")["MODE"], "full")
 
+    def test_check_runs_full_when_a_narrow_plan_lists_no_safety_tests(self):
+        # #678: the safety set runs in every narrow mode; a plan that lists none does not narrow.
+        self.assertEqual(self.plan_step("check")["env"]["PLAN_SAFETY"], "${{ needs.plan.outputs.safety }}")
+        for mode in ("targeted", "docs"):
+            self.assertEqual(self.check_env("success", mode, safety="")["MODE"], "full", mode)
+            self.assertEqual(self.check_env("success", mode)["MODE"], mode, mode)
+        # `affected` is not a mode `check` knows: if it ever runs in that mode, it runs full.
+        self.assertEqual(self.check_env("success", "affected")["MODE"], "full")
+
     def test_check_launcher_is_on_unless_the_plan_says_false(self):
         for value, want in (("false", "false"), ("true", "true"), ("", "true"), ("garbage", "true")):
             self.assertEqual(self.check_env("success", "targeted", value)["LAUNCHER"], want, value)
@@ -787,7 +1221,7 @@ class Workflow(unittest.TestCase):
         for key in ("agent", "runtime-agent-linux"):
             step = self.plan_step(key)
             for result in PLAN_RESULTS:
-                for mode in PLAN_MODES:
+                for mode in PLAN_MODES + ("affected",):
                     env = run_step(step, {"PLAN_RESULT": result, "PLAN_MODE": mode})
                     skip = result == "success" and mode in ("targeted", "docs")
                     self.assertEqual(env["RUN"], "false" if skip else "true", (key, result, mode))
@@ -841,9 +1275,10 @@ class Workflow(unittest.TestCase):
         self.assertIn('--changed "$BASE_SHA"', t["run"])
         self.assertEqual(t["env"]["BASE_SHA"], "${{ github.event.pull_request.base.sha }}")
         smoke = steps[SMOKE_STEP]
-        self.assertIn("pnpm exec vitest run $SMOKE $SCANNERS $DOC_TESTS", smoke["run"])
+        self.assertIn("pnpm exec vitest run $SMOKE $SAFETY $SCANNERS $DOC_TESTS", smoke["run"])
         self.assertEqual(smoke["env"]["SMOKE"], "${{ needs.plan.outputs.smoke }}")
         self.assertEqual(smoke["env"]["SCANNERS"], "${{ needs.plan.outputs.scanners }}")
+        self.assertEqual(smoke["env"]["SAFETY"], "${{ needs.plan.outputs.safety }}")
         self.assertEqual(smoke["env"]["DOC_TESTS"], "${{ needs.plan.outputs.doc_tests }}")
         # The launcher rerun is the same command `pnpm test` uses for that file.
         with open(os.path.join(REPO_ROOT, "package.json"), encoding="utf-8") as fh:
@@ -863,17 +1298,17 @@ class Workflow(unittest.TestCase):
             self.assertEqual(outputs.get(key), f"${{{{ steps.plan.outputs.{key} }}}}", key)
 
     def test_side_jobs_run_unless_the_plan_succeeded_and_says_no(self):
-        for key, flag in (("m2-scorecard", "m2"), ("linux-path", "linux_path")):
+        for key, flag in (("m2-scorecard", "m2"), ("linux-path", "linux_path"), ("newcomer-path", "linux_path")):
             cond = self.jobs[key]["if"]
             for result in PLAN_RESULTS:
-                for mode in PLAN_MODES:
+                for mode in PLAN_MODES + ("affected",):
                     for value in ("true", "false", ""):
                         ctx = {
                             "needs.plan.result": result,
                             "needs.plan.outputs.mode": mode,
                             f"needs.plan.outputs.{flag}": value,
                         }
-                        skip = result == "success" and mode in ("targeted", "docs") and value == "false"
+                        skip = result == "success" and mode in ("targeted", "docs", "affected") and value == "false"
                         self.assertEqual(gh_eval(cond, ctx), not skip, (key, result, mode, value))
             self.assertFalse(gh_eval(cond, {"cancelled": True}))
 
@@ -901,7 +1336,7 @@ class Workflow(unittest.TestCase):
         on = self.doc.get("on") or self.doc.get(True)
         self.assertEqual(
             set(on["pull_request"]["types"]),
-            {"opened", "synchronize", "reopened", "labeled", "unlabeled"},
+            {"opened", "synchronize", "reopened", "labeled", "unlabeled", "ready_for_review"},
         )
 
 

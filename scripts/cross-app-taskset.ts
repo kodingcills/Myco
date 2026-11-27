@@ -1,21 +1,29 @@
 /**
- * Build (or check) the frozen cross-app task set xa-v1 (capability track P).
+ * Build (or check) a frozen cross-app task set (capability track P): xa-v1 (default) or xa-v2.
  *
- *   npx tsx scripts/cross-app-taskset.ts [--out benchmark/cross-app/xa-v1] [--check]
+ *   npx tsx scripts/cross-app-taskset.ts [--set xa-v1|xa-v2] [--out <dir>] [--check]
  *
- * Deterministic: the same code writes byte-identical files. With --check, it writes
- * nothing and exits 1 if any committed file differs, is missing, or is extra.
+ * `--out` defaults to `benchmark/cross-app/<set>`. Deterministic: the same code writes
+ * byte-identical files. With --check, it writes nothing and exits 1 if any committed file
+ * differs, is missing, or is extra.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { renderXaBundle } from "../src/tasks/cross-app-taskset.ts";
+import { renderXaBundle, XA_SETS, XA_V1 } from "../src/tasks/cross-app-taskset.ts";
 
 const args = process.argv.slice(2);
+const setIndex = args.indexOf("--set");
+const setName = setIndex >= 0 ? (args[setIndex + 1] as string) : XA_V1.version;
+const set = Object.hasOwn(XA_SETS, setName) ? XA_SETS[setName] : undefined;
+if (set === undefined) {
+  process.stderr.write(`unknown task set ${setName}; known: ${Object.keys(XA_SETS).join(", ")}\n`);
+  process.exit(2);
+}
 const outIndex = args.indexOf("--out");
-const out = outIndex >= 0 ? (args[outIndex + 1] as string) : "benchmark/cross-app/xa-v1";
+const out = outIndex >= 0 ? (args[outIndex + 1] as string) : `benchmark/cross-app/${set.version}`;
 const check = args.includes("--check");
 
-const files = renderXaBundle();
+const files = renderXaBundle(set);
 
 function listFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];

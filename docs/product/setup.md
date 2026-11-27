@@ -5,6 +5,7 @@ It checks the Linux desktop path, starts the gate once to prove it launches, and
 the `myco-gate` MCP server entry for Claude Code and Codex into your **project**
 directory. It writes nothing outside the project unless you ask for that twice.
 
+<!-- newcomer-path: setup -->
 ```sh
 pnpm install --frozen-lockfile        # once, in the Myco checkout (the full install: see below)
 cd /path/to/your/project
@@ -169,6 +170,92 @@ myco init: project mode
 ...
 myco init: done
 ```
+
+## The Linux path in one command
+
+The default config binds the gate to the built-in `df-s01`. To bind it to the Linux Calc
+path instead ([linux-path.md](linux-path.md)), point init at the task file the checkout
+ships, [`examples/linux-path/tasks.json`](../../examples/linux-path/tasks.json) (task
+`linux-calc-edit`: set record `EMP-0007`, column `name`, to `REVISED-269269` in
+`saved.csv`, the same edit `pnpm myco-linux --demo` makes). From your project:
+
+<!-- newcomer-path: linux -->
+```sh
+/path/to/Myco/bin/myco init --task linux-calc-edit --tasks /path/to/Myco/examples/linux-path/tasks.json
+```
+
+This replaces the `myco-gate` entry the quickstart wrote (same splice, backup first). The
+gate then judges `<project>/.myco/evidence/local/saved.csv`: the file Calc saves, never the
+agent's claim.
+
+## macOS
+
+Init configures the same gate on macOS. Step 2 is skipped there, and init says so:
+`skipped: the Linux desktop path runs on Linux`. The run still exits 0, and the other
+three steps are the same. Prerequisites: Node 24 or later and pnpm 10, nothing else. From
+an empty directory:
+
+<!-- newcomer-path: macos -->
+```sh
+git clone https://github.com/kodingcills/Myco.git myco
+cd myco
+pnpm install --frozen-lockfile
+```
+
+then the quickstart block at the top of this page, as written. This is the clone block of
+[linux-path.md §2](linux-path.md#2-install-and-check) without its Linux-only
+`pnpm myco-linux --check`.
+
+## The newcomer path in CI
+
+The `newcomer path (ubuntu-latest)` job (not a required check) follows these docs on a
+clean runner, with nothing but the documented prerequisites installed (Node 24, pnpm 10 and
+the LibreOffice line above). `test/init/newcomer-path.test.ts` runs, in order and as
+written, every command of the blocks marked `<!-- newcomer-path: ... -->`:
+
+1. [linux-path.md §2](linux-path.md#2-install-and-check): `git clone`, `cd myco`,
+   `pnpm install --frozen-lockfile`, `pnpm myco-linux --check`. The only rewrite is the
+   clone URL, which points at the commit under test;
+2. the quickstart block at the top of this page (`--dry-run` must write nothing; the real
+   run must print the four steps of the table above and write exactly `.mcp.json` and
+   `.codex/config.toml`);
+3. the README's [Quickstart: one command](../../README.md#quickstart-one-command) block,
+   whose commands must all appear in step 2's block; run a second time, it must change no
+   byte (the idempotency promise above);
+4. the Linux path block above, then a **simulated** task: scripted agents (`honest`,
+   `skips-save`) drive a real headless Calc on the file under the written evidence root,
+   and the official MCP client, spawned exactly from the written `.mcp.json`, must get
+   `verified` for the honest save and `refuted` for the unsaved edit.
+
+The `newcomer path (macos-latest)` job (not required either) runs the same test on a clean
+macOS runner with only Node 24 and pnpm 10 installed:
+
+1. the [macOS](#macos) block above, from an empty directory (the same clone URL rewrite);
+2. the quickstart block, with the same checks as step 2 above. In addition, step 2 of init's
+   output must say it was skipped on darwin;
+3. the README block, as in step 3 above;
+4. a **simulated** `df-s01` task through the config the quickstart wrote: a scripted agent
+   drives the mock desktop (no Calc on macOS) and the harness puts its saved store under the
+   written evidence root. The official MCP client, spawned exactly from the written
+   `.mcp.json`, must get `verified` for the honest save (`honest`) and `refuted` for a save
+   that drops an item (`drops-item`).
+
+Each command runs with `PATH` and a fresh empty `HOME` (plus the documented `MYCO_PYTHON` /
+`MYCO_SOFFICE` overrides and proxy settings, if set), so nothing outside the docs helps it.
+The documented placeholders `/path/to/Myco` and `/path/to/your/project` are the only
+substitutions; any other `/path/to/...`, a command that exits non-zero, or a missing step
+fails the job: that is a manual step the docs did not write down. Every command is timed,
+and the run fails if clone to the first verified verdict takes longer than
+`MYCO_NEWCOMER_BUDGET_S` (default 600 s). The timings are uploaded as the
+`newcomer-path` artifact. The verdicts are SIMULATED (a scripted agent, no model, $0) and
+are never evidence.
+
+`test/init/newcomer-docs.test.ts` runs on every PR and catches drift without a clone:
+every marked block exists and parses as init flags; the README quickstart is a subset of
+this page's; the LibreOffice install line is the same in init, this page, linux-path.md and
+the CI job; the Node and pnpm versions agree between `package.json`, the README,
+linux-path.md and the CI job; this page's step table matches init's step headers; and the
+shipped task file is the Linux demo task.
 
 ## End to end on the Linux path
 

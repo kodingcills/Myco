@@ -1,0 +1,25 @@
+{
+  "schema": "myco.schedule.conformance-manifest/1",
+  "corpusVersion": "trg-v1",
+  "counts": {
+    "total": 92,
+    "inScope": 88,
+    "outOfScope": 4,
+    "perKind": {
+      "cron": 20,
+      "inbox": 21,
+      "manual": 19,
+      "webhook": 26,
+      "service": 6
+    }
+  },
+  "deferred": [
+    {
+      "scenario": "vm-lock-held",
+      "reason": "S-live (the live VM executor's VM-lock and critical-path check) is not built (TO FILE on #536); the case enters the corpus version that ships S-live"
+    }
+  ],
+  "files": {
+    "cases.jsonl": "15432e3895bb7533fdc6282380c92b991b772ed774c7e42bf44df219de871a3c"
+  }
+}

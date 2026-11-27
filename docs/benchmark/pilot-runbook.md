@@ -17,20 +17,32 @@ fault with a fixed, code-only message, never an agent outcome):
 2. **Cold reset.** `scripts/reset-trial-vm.sh` (default snapshot `trial-base-v3`) runs with the
    session's lock descriptor. Its `boot class=` line (#546) becomes the attempt's
    `resetBootClass`. A failed reset is `spawn-failed`.
-3. **Seed.** The host opens the SSH tunnel to the in-guest agent (the deploy's token file, or
-   `--token-file PATH`; read at the point of use, never printed). It writes the task's committed
+3. **Deploy (#691).** `trial-base-v3` holds no in-guest agent, so every reset wipes it. After
+   each reset, on every attempt (first attempts, re-runs in place and after `--resume`), the
+   driver runs the M1 sweep's verified deploy, `agent/bootstrap/deploy-to-vm.sh`. That deploy
+   copies the agent tree and checks it, installs the agent and its scheduled task, checks
+   `ping`, and writes a fresh per-deploy token to the host token file. It is bounded at 400 s,
+   as in `scripts/m1-sweep.sh`. It succeeds only on exit 0 with its `DEPLOY OK` line. A failed
+   deploy is `transport-error` ("the in-guest agent deploy failed after the reset"): the
+   attempt is kept, the channel is not opened, and the trial re-runs in place under the usual
+   rules (two identical faults in a row stop the run with exit 6).
+4. **Seed.** The host opens the SSH tunnel to the in-guest agent. It reads the token from the
+   token file the deploy just wrote: `--token-file PATH` if given, else `MYCO_TOKEN_OUT`, else
+   `~/.myco-token`. That is one path for both steps, and an exported `MYCO_AGENT_TOKEN` is not
+   used, because the deploy has just rotated the token. The token is read at the point of use
+   and never printed. The host then writes the task's committed
    fixture (sha-checked against `fixtureSha256`) to `C:\myco\pilot\<trialKey>\doc.csv`, then
    reads it back and compares. That path comes from the trial key alone, so the agent cannot
    name it. fc-v1's tasks declare `persistedFormat: "xlsx"`, but the live step seeds and
    captures `doc.csv`: that matches the pilot's CSV-only row mapping and gate state.
-4. **Agent.** Headless Claude Code on the subscription, with the audited argv and allowlisted
+5. **Agent.** Headless Claude Code on the subscription, with the audited argv and allowlisted
    environment names only (`claudeDriver`).
-5. **Capture.** After the agent stopped, the host reads the guest document back over the same
+6. **Capture.** After the agent stopped, the host reads the guest document back over the same
    channel. Those bytes are `persisted/doc.csv` in the sealed vault, with a host provenance
    record (`host-capture.json`: guest path, sha256, the seed's sha256, boot class). Nothing on
    the host that the agent can write (its trial directory, transcript or gate evidence root) is
    read. An unreadable document is a `transport-error` fault, never an empty document.
-6. The harness's own post-stop check decides on that capture, as before.
+7. The harness's own post-stop check decides on that capture, as before.
 
 ## What the pilot is
 
@@ -41,9 +53,85 @@ fault with a fixed, code-only message, never an agent outcome):
 - **Agent.** Headless Claude Code (`claude -p`), model `claude-sonnet-5-5` (the hcu+shell
   arm's model, so a later R2 pairing keeps the same planner), on Tiffany's Claude
   subscription. There is no API-key path.
-- **What the agent can reach.** One MCP server, `myco-gate`, bound to the trial's one task
-  and run, and one tool, `mcp__myco-gate__myco_gate_check`. No built-in tools
-  (`--tools ""`), `--strict-mcp-config` with the trial's own `mcp.json`,
+- **What the agent can reach (#732).** Two MCP servers, kept separate: the agent acts with
+  the action tools and asks the gate only to verify.
+  - **Action tools: `myco-hcu`** (`scripts/myco-hcu.ts`, `src/pilot/hcu-actuator.ts`). It
+    grants `mcp__myco-hcu__screenshot`, `__click`, `__type_text` and `__press_key`. This is
+    the `hcu+shell` arm's desktop reach. It is the same Microsoft HCU in the guest, reached
+    over the trial VM's SSH channel (`~/VMs/myco-win11/ssh_config`, host `myco-win11`) with
+    the HCU guest command in its **attach form**:
+    `C:\myco\bin\computer-use.exe mcp --attach C:\Users\myco\AppData\Local\Temp\hcu--1\desktop-default.sock`
+    (`HCU_GUEST_COMMAND`, `src/pilot/hcu-actuator.ts`; it is in the reviewed config and the
+    plan hash). The actions are C1's
+    pixel actions, sent through the arm's own HCU client one action per call. The budget is
+    30 actions per trial, the arm's `STEP_BUDGET`; a screenshot spends none. The tools take
+    no path, task or run, and the agent gets codes back, never HCU's text. Before #732 the
+    agent had only the gate check and could not open, edit or save the document. All 5
+    trials of `r1-pilot-20261127b` ended gate-refuted, NOT DONE, and none of them is
+    evidence.
+  - **Why the attach form (VM-owner finding on #733, lead ruling 14:00Z).** An SSH session
+    runs in Windows session 0, where a bare `computer-use.exe mcp` sees no desktop. The trial
+    base (#734) registers a logon task, `MycoHCU`, that starts HCU's interactive-session
+    daemon in the `myco` user's logon session; `mcp --attach <session socket>` reaches it.
+    **Dependency on #734 (round 2 addendum, lead ruling 15:44Z):** the attach target is the
+    socket the trial base actually provides, which the VM owner found at
+    `C:\Users\myco\AppData\Local\Temp\hcu--1\desktop-default.sock` (`HCU_SESSION_SOCKET`).
+    It is the daemon's own default path for the first interactive session of user `myco`; if
+    #734's trial base ever serves elsewhere (another user, another session, a `--socket`
+    override), change `HCU_SESSION_SOCKET` in code: that regenerates the reviewed config and
+    re-pins the plan hash below; it is never an operator flag. The socket must be an absolute
+    `.sock` path (`isHcuAttachCommand`: no `..`, no chaining, no extra flag). The bare session-0
+    form is refused three times over: by `scripts/myco-hcu.ts` at start (exit 2), by the
+    launch audit (`auditAgentLaunch` pins the actuator's command and args, #733 N3), and by
+    the probe's SSH channel (`src/pilot/hcu-ssh.ts`).
+  - **The pre-agent HCU check (lead ruling 13:38Z, B1).** On every attempt, after the reset,
+    the deploy and the seed, and before `claude` starts, the VM step opens the actuator's own
+    channel (same SSH host, same attach command), initialises HCU (its `GUI` tool must be
+    served) and needs ONE screenshot to succeed, within 60 s. A freshly booted guest's first
+    screenshot can time out inside HCU (VM-owner findings on #733), so the check allows a
+    bounded **warm-up** (round 2 addendum, lead ruling 15:44Z): at most 3 screenshot attempts,
+    10 s apart (`HCU_WARMUP_ATTEMPTS`, `HCU_WARMUP_SPACING_MS`; fixed in code, no flag or
+    config field), all inside the same 60 s bound. Each attempt writes one code line to the
+    run log, `<trial key>: hcu-probe: warm-up screenshot <n>/3 ok|failed` (never HCU's text). A
+    failed connect or initialise is not retried. If HCU is unreachable, or all 3 screenshots
+    fail, the attempt fails as a harness
+    fault (`transport-error`, message `hcu-unreachable: ...`, fixed and code-only). The agent
+    is never started, no row is decided or counted, and the attempt re-runs in place under the
+    usual rules: a second identical fault in a row stops the run (exit 6). It is never the
+    agent's NOT DONE. Code: `VmTrialStep.prepare` (`src/pilot/vm-capture.ts`) and
+    `probeHcuDesktop` (`src/pilot/hcu-ssh.ts`).
+  - **Recorded loop-policy asymmetries with `hcu+shell` (#733 N1; behaviour unchanged by
+    lead ruling 2026-11-27T14:23Z on #733; alignment is #742).** Budget, vocabulary, HCU client and HCU executable match. These differ:
+    1. `routing-refused`: the `hcu+shell` loop ends the trial on it
+       (`src/baseline/hcu-shell/trial.ts`); the actuator returns it as a code and the agent
+       may go on.
+    2. Malformed actions: the `hcu+shell` loop ends the trial on an invalid action; the
+       actuator refuses it with `INVALID_ACTION`, spends nothing, and the agent may retry
+       without limit.
+    3. Screenshots: the `hcu+shell` planner gets one screenshot per step; the agent may take
+       screenshots on demand, without limit, and they spend no action.
+    4. Gate calls spend no action, where `hcu+shell`'s shell calls spend steps. The gate's
+       mid-run answer is always `uncertain` (STATE_MISSING), so it gives no information.
+    5. The HCU command: the actuator uses the attach form; the `hcu+shell` arm's default
+       (`DEFAULT_HCU_GUEST_COMMAND`) is still the bare form, and its runbook asks for a relay
+       passed with `--hcu-command`. For parity an `hcu+shell` R2 run should pass this same
+       attach command; the lead's GO names it.
+    Together these make the gate arm somewhat more lenient. The lead's 14:23Z ruling on #733:
+    record each difference here and do not change the behaviour in #733. Aligning the two is
+    #742 (Tier 2), which must merge before any measured Windows-path trial.
+  - **The gate: `myco-gate`**, bound to the trial's one task and run, with one tool,
+    `mcp__myco-gate__myco_gate_check`. It is unchanged.
+  - **Live preconditions (not yet met).** HCU must be in the trial base, serving the
+    interactive desktop through `MycoHCU` on the socket above (#734;
+    `docs/benchmark/hcu-shell-runbook.md` §1 item 3). The SSH setup
+    must work with the agent's allowlisted environment (`HOME`, `PATH`, ...; no
+    `SSH_AUTH_SOCK`). Mid-trial HCU loss (after the agent started) is still an agent outcome
+    (`delivered-stalled` / `ACTUATOR_UNAVAILABLE`); that is #743 (#733 N5;
+    Tier 2, out of scope here by the lead's 14:23Z ruling), which must land before any
+    measured Windows-path trial.
+
+  No built-in tools
+  (`--tools ""`: no shell, no host file), `--strict-mcp-config` with the trial's own `mcp.json`,
   `--permission-mode dontAsk`, and `--setting-sources ""` so no user, project or local
   settings file (permission rules, hooks, `apiKeyHelper`, MCP servers) reaches the trial.
   Every trial's plan passes the existing launch audit (`src/integrity/launch.ts`) before it
@@ -72,7 +160,8 @@ resume re-runs the trial. So a limit spell on the shared subscription can never 
 and recovering from one needs no config change (and so no new run directory).
 
 `error-result` (an error result the classifier cannot name, including a limit message worded in
-a way the vocabulary does not know) **does** spend `maxAttemptsPerTrial`, with no backoff. That
+a way the vocabulary does not know; an unmapped structured error whose text names a quota,
+billing, auth or transient fault is classified by that text instead, #607 round 3) **does** spend `maxAttemptsPerTrial`, with no backoff. That
 is bounded (3 attempts, `interTrialDelayS` apart) and safe for the data, but it can exhaust a
 trial. Recovering an `exhausted` trial: there is no in-place reset; start a **new run
 directory** (`--out` to a fresh path) once the cause is understood, and keep the old directory
@@ -101,11 +190,22 @@ start hitting limits, raise `--delay-s`. Override per invocation with `--concurr
   the CLI emits no init message, so it never fires; the active guards are the environment
   preflight (no API-path name) and the agent's environment allowlist.
 - **The subscription's usage limit (lead ruling, round 2):** wording such as "usage limit
-  reached", "5-hour limit reached", "Weekly limit reached", "Opus limit reached" or "resets at
-  3pm" (`USAGE_LIMIT_TEXT`; also when it comes with the structured `rate_limit` class or HTTP
-  429) is class `usage-limit`. The run stops at once with exit **7** (`stopCode`
-  `usage-limit`): no retry, no back-off, no attempt spent. The CLI prints `USAGE LIMIT: ...
-  This must go to the lead`; take it to the lead and do not resume until the lead decides.
+  reached", "5-hour limit reached", "Weekly limit reached", "Opus limit reached", "resets at
+  3pm" or "You've hit your limit" (`USAGE_LIMIT_TEXT`; also when it comes with the structured
+  `rate_limit` class or HTTP 429) is class `usage-limit`. The run stops at once with exit
+  **7** (`stopCode` `usage-limit`): no retry, no back-off, no attempt spent. The CLI prints
+  `USAGE LIMIT: ... This must go to the lead`; take it to the lead and do not resume until
+  the lead decides. The usage vocabulary has no bare numbers. "You've hit your limit" (any
+  apostrophe, or "you have", "hit" or "reached", optional "usage") was added in #607 round 2.
+- **Folding before any text match (#606 S2, #607 round 2):** every vocabulary (auth, billing,
+  usage limit, transient limit) is matched on folded text (`vocabularyForms`), on every path:
+  stderr, plain stdout, error results, structured limits and the clean-result exception
+  below. Hyphen variants U+2010-U+2015 become "-"; Unicode format characters (zero-width
+  space U+200B-U+200D, word joiner U+2060, U+FEFF, U+180E) are tried both removed and as a
+  space; then every whitespace run (no-break space U+00A0, U+2000-U+200A, U+202F, U+3000,
+  tabs, newlines, repeated spaces) becomes one space. So "Credit balance is too low" with
+  no-break spaces stops as `billing`, as it does with ASCII spaces. The broad auth, billing and
+  transient vocabulary is still never applied to a clean result.
 - **Two identical failures:** on a live run, two harness faults in a row with the same class
   and message (no decided trial between) stop the run with exit **6** (`stopCode`
   `repeat-failure`), before a third attempt. Rate limits are excluded (they back off). The
@@ -125,9 +225,23 @@ start hitting limits, raise `--delay-s`. Override per invocation with `--concurr
   structured error), never to a clean result: fc-v1's fixtures hold values such as qty 401,
   403 and 429, so a clean result with no `DONE`/`NOT DONE` line is the agent's "no claim",
   decided and never re-run. One narrow, fail-closed exception (PR #598 round 3): a clean
-  result with no claim line whose text matches the usage-limit vocabulary (no bare numbers)
-  is `usage-limit` (exit 7, nothing counted); a clean result with a claim line is never
-  reclassified. Under the
+  result with no claim line whose text **or stderr** matches the usage-limit vocabulary (no
+  bare numbers; stderr since #606 S1, lead ruling 03:58Z) is `usage-limit` (exit 7, nothing
+  counted); a clean result with a claim line is never reclassified, whatever stderr says.
+  Since #607 round 3 (L1, lead rule 04:52Z) the same exception covers a narrow, numberless
+  set of exact CLI billing and auth phrases, folded like the rest: "credit balance is too
+  low" and "out of extra usage" (`billing`), "please run /login", "not logged in", "invalid
+  api key" and "oauth token has expired" (`auth`). A claimless clean result matching one
+  stops with exit 5 and its class, nothing counted and no attempt spent; the broad words
+  ("billing", "quota", "credential", "forbidden", bare 401/403/429) are still never applied to
+  a clean result. **Unmapped structured errors (#607 round 3, B2):** when the only structured
+  class is one the classifier does not map (an `error` string such as `invalid_request`,
+  `server_error` or `unknown`, or an `api_error_status` other than 401/402/403/429/529, e.g.
+  400 or 500), the text vocabulary still decides: quota, billing, auth or transient wording
+  stops or backs off as its class and does not spend the attempt. With no such wording it
+  stays `error-result`. A mapped structured class (auth, billing, rate limit) still wins over
+  the text. `AUTH_TEXT` also matches "log-in again" (hyphenated) since round 3 (F-E).
+  Under the
   topped-up-run ruling (lead, 2026-11-26 12:22Z) the faulted attempt stays in the ledger with
   its arm row (cause `harness`) and its cost estimate, and the re-run's `start` line names it
   in `supersedes`. Its cost counts toward R7.
@@ -151,11 +265,43 @@ faulted ones included); the denominator is the graded verified count from `bench
 `costPerVerifiedTask` sums `arm.jsonl` only (it leaves out the faulted attempts in
 `faulted-attempts.jsonl`), so neither is R7 by itself.
 
+## Launch gate: the commit's required checks are green (default)
+
+Launch only from a commit on `main` whose CI run from the push to `main` passed all five
+**required** checks. This is the default launch gate (CI speed, #678):
+
+```sh
+sha=$(git rev-parse HEAD)            # the commit you are about to launch from, on main
+scripts/ci-required-green.sh "$sha"  # 0: launch; anything else: do not
+```
+
+It looks up that commit's `ci.yml` run from the push to `main` (the newest one, if there was
+a re-run) through `gh api` (read-only, your existing `gh` login; it never reads or prints a
+token). It exits 0 only when each of these jobs finished with conclusion `success`:
+`check (macos-latest)`, `check (ubuntu-latest)`, `myco-agent tests (ubuntu-latest)`,
+`runtime guest agent tests (ubuntu-latest)`, `secret scan (gitleaks)` (the list is
+`scripts/ci-required-checks.json`, the same one `docs/ci.md` and branch protection use).
+
+It ignores every non-required job. A red `viewer verdict budget (…)` timing job,
+`linux path`, the macOS agent tests and similar jobs do not block a launch. The run's overall
+conclusion is ignored for the same reason.
+
+| Exit | Meaning | What to do |
+| --- | --- | --- |
+| 0 | `REQUIRED_GREEN <sha> run <id>` | Launch. |
+| 1 | `NOT_GREEN`: no main push run for the commit (`RUN_NOT_FOUND`), or a required check is missing, failed, skipped, cancelled or still running (`MISSING <name>`, `NOT_SUCCESS <name>=<state>`) | Do not launch. Wait for a running check, or fix main. |
+| 2 | Usage: the commit must be a full 40-hex sha | Pass `git rev-parse HEAD`. |
+| 3 | Lookup failed: `gh` failed, or its answer was unreadable or truncated | Do not launch. Check `gh auth status` (it prints no token), then retry. |
+
+It prints one line per required check plus the verdict, all codes and check names. Tests:
+`test/ci-required-green.test.ts`.
+
 ## Preflight checklist (before a real launch)
 
 `launch` checks items 2, 8 and 9 itself and refuses (exit 3, every reason listed) before any VM,
 guest channel or `claude` process is touched. The other items are the operator's.
 
+0. The launch gate above exits 0 for the commit you launch from.
 1. The lead has approved the pilot launch. The R1 runner has no GO file of its own; the
    approval is the lead's word. The corrections A/B does need its committed GO file (below).
 2. No API-path credential is configured. The runner checks variable **names only** and refuses
@@ -173,15 +319,19 @@ guest channel or `claude` process is touched. The other items are the operator's
    refuses a committed config whose launch surface drifted from the code).
 5. The dry run passes: `npx vitest run test/pilot` and the dry run below.
 6. **The VM side (wired by TIF-274, the operator provides the rest).** Wired: the per-trial
-   cold reset, the seed and the host-side capture over the SSH tunnel (above), and the boot
-   class per trial. You still provide:
+   cold reset, the in-guest agent deploy after every reset (#691), the seed and the host-side
+   capture over the SSH tunnel (above), and the boot class per trial. You still provide:
    - a working trial VM: `trial-base-v3` restorable with `scripts/reset-trial-vm.sh` (run it
      once by hand under `scripts/vm-session.sh` and see `boot class=cold`), and guest egress
-     closed (the reset checks it);
-   - the in-guest agent answering `ping` through the tunnel after a reset onto that snapshot. A
-     verified deploy (`agent/bootstrap/deploy-to-vm.sh`, eval-runbook §4) writes the token
-     file, `~/.myco-token`, or pass `--token-file PATH`. The live step waits up to 2 min
-     (24 pings, 5 s apart) after each reset, then records `transport-error`;
+     closed (the reset checks it, and the deploy refuses without it);
+   - what the per-trial deploy (`agent/bootstrap/deploy-to-vm.sh`, eval-runbook §4) needs on
+     the host: the VM's ssh config, `nc`, `openssl`, the guest wheels (cached, or
+     `MYCO_GUEST_WHEELS`), and a writable directory for the token file. The token file is
+     `--token-file PATH`, else `MYCO_TOKEN_OUT`, else `~/.myco-token`. The snapshot does not
+     need to hold an agent: the driver deploys it after each reset, writes a fresh token to that
+     file, and opens the channel only after the deploy reported `DEPLOY OK`. Run one deploy by
+     hand after a reset first, to see it pass. After a good deploy, the live step still waits up
+     to 2 min (24 pings, 5 s apart), then records `transport-error`;
    - the guest load gate (no trial starts at host 1-minute load >= 10; eval-runbook §7.3).
 7. A fresh run directory outside `docs/research/experiments` (the runner refuses that path).
 8. **The VM session lock.** Run `launch` under `scripts/vm-session.sh` and start the runner
@@ -214,6 +364,15 @@ npx tsx scripts/benchmark-check.ts --arm runs/r1-pilot-dry-export/arm.jsonl \
 
 # Real launch (lead-approved). Needs the flag AND the configSha256 `plan` printed, under the
 # VM session lock. It prints the plan, then starts real trials or refuses with every reason.
+# The plan hash at the default pacing, since #732 added the action tools and #733 round 2
+# moved HCU to the attach form, and its addendum moved the attach socket to the trial base's
+# (pinned by test/pilot/config.test.ts):
+#   configSha256 9238160613410c3beb9f0864af596cf519a8b109de09107458f143e934c50882
+# It was 8d774329... before #732, then b9b69348... with the bare session-0 HCU command, then
+# 2127d5b1... with the C:\myco\run socket (stage 0 planSha256 251b7a9f... then). A run
+# directory started under an older plan cannot be resumed under the new one, so start a fresh
+# --out. The A/B arms' hashes change too: stage 0's
+# planSha256 is now e044098d58c460a18fcff5cba6b7c8c8000d1a37694bf12688ad70943ab91803.
 scripts/vm-session.sh -- node --import tsx scripts/m2-r1-pilot.ts launch --out runs/r1-pilot \
   --launch-real-trials --plan-sha256 <configSha256 from plan>
 
@@ -377,7 +536,8 @@ What the operator must still provide before a real A/B launch:
   name the pilot's harness classes (now also `billing`). `launch` lists them. They are fixed in
   their own changes, never by an ack or a flag.
 - **The VM side.** The same as the pilot's preflight item 6: a restorable `trial-base-v3`, and
-  the in-guest agent reachable after a reset.
+  what the per-trial agent deploy needs on the host. The A/B shares the live driver, so each of
+  its trials also deploys the in-guest agent after its reset, before the channel opens (#691).
 
 A credit, billing, quota, login or API-key error stops the stage with exit 5; two identical
 harness failures in a row stop it with exit 6. Either way the run is resumable once the cause

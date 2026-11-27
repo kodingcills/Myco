@@ -1,0 +1,135 @@
+{
+  "schema": "myco.capability-prereg/1",
+  "preregistration": {
+    "track": "S",
+    "version": "s-v1",
+    "capability": "Scheduled and triggered runs",
+    "status": "frozen before any conformance run; the bar is the spec's proposal, lead ruling pending (not ratified)",
+    "spec": {
+      "source": "docs/product/capability-spec-2.md §2 S",
+      "sharedRules": [
+        "docs/product/capability-spec.md §1 (shared rules), §3 (pre-registration), §4 (constraints)",
+        "docs/product/capability-spec-2.md §1.1 (property bars), §1.5 (labels), §4 (evidence)"
+      ],
+      "barKind": "property"
+    },
+    "bar": {
+      "text": "**Pre-registered bar (property, all must hold).**\n1. **0 bypasses:** every triggered run has a policy decision, a gate bound to exactly one trial,\n   its budget checks and one chained ledger row (the MAC-chained integrity ledger today;\n   mirrored into #518's attempt ledger once it merges).\n2. Triggers never bypass policy: policies are required and applied to every source; a throwing\n   or malformed policy denies.\n3. Exactly-once: one run or one recorded skip per trigger; 0 double runs (the claim is durable\n   before the run), 0 runs while paused, missed slots handled by the declared policy (`skip` or\n   `run-latest`) and recorded.\n4. Fail closed: an unsigned or replayed webhook, an unreadable secret, a corrupt claims file or\n   an unknown config key refuses with a code; a row is `accepted` only for `verified` +\n   `accepted` + `ORACLE_PASS` for that run id.\n5. No secrets: planted markers appear in no response, row, claim, notification, diagnostic, CLI\n   output or state file.\n6. Mutation table: every guard above broken in turn; every mutant killed.",
+      "sha256": "b80de00fb3d9fd0d73494c8d0afa261d0c82b34c4348ee204739ec5bfe58e59a",
+      "passRule": [
+        "Every in-scope trg-v1 case matches its expected outcome: 100%, with the case count stated; one counterexample fails the bar.",
+        "Every out-of-scope trg-v1 case matches its stated outcome (the limit is tested, not hidden); a mismatch fails the bar.",
+        "0 bypasses over the in-scope runs; 0 double runs, 0 runs while paused, 0 accepted rows without verified + ORACLE_PASS, 0 evidence rows, 0 concurrency overruns, 0 ledger chain failures and 0 planted-marker leaks in every case.",
+        "The mutation report lists exactly 56 mutants with unique labels, and every one is killed.",
+        "Anything else reads 'not shown', with codes; input that cannot be analysed is refused, never analysed."
+      ]
+    },
+    "primaryMetric": "Bypasses: in-scope triggered runs that started without an allow from every policy, without a gate bound to exactly one trial, without passing their budget checks, or without exactly one chained ledger row; over all in-scope runs.",
+    "secondary": [
+      "Schedule latency (reported, not gating).",
+      "Skipped and missed counts (reported, not gating).",
+      "Failure-notification recall (reported; the expected notification count is also checked per case)."
+    ],
+    "corpus": {
+      "version": "trg-v1",
+      "manifest": {
+        "path": "benchmark/schedule/trg-v1/manifest.json",
+        "sha256": "0f669d271ccfa59231b8a71ad379adad1158205f4bcaa64ce84592b625ff690c"
+      },
+      "manifestSha256": "e6f7df616b631e3173e1df367b126ac2314cb06904346a0a865313d87bffc3ef",
+      "cases": {
+        "path": "benchmark/schedule/trg-v1/cases.jsonl",
+        "sha256": "15432e3895bb7533fdc6282380c92b991b772ed774c7e42bf44df219de871a3c"
+      },
+      "counts": {
+        "total": 92,
+        "inScope": 88,
+        "outOfScope": 4,
+        "perKind": {
+          "cron": 20,
+          "inbox": 21,
+          "manual": 19,
+          "webhook": 26,
+          "service": 6
+        }
+      },
+      "deferred": [
+        {
+          "scenario": "vm-lock-held",
+          "reason": "S-live (the live VM executor's VM-lock and critical-path check) is not built (TO FILE on #536); the case enters the corpus version that ships S-live"
+        }
+      ],
+      "builder": {
+        "path": "src/schedule/conformance/trg-v1.ts",
+        "sha256": "8dbc4cbb5e0c3b5e38bcaf7b3be47f4f908827cbcf6a34407234e6b5448f3440"
+      }
+    },
+    "seeds": {
+      "caseOrder": "s-v1-case-order-2026-11-27-q7Tn",
+      "marker": "s-v1-marker-2026-11-27-Lw3c",
+      "taskBuild": null,
+      "assignment": null,
+      "bootstrap": null,
+      "note": "caseOrder fixes the order the runner executes cases in (one shuffled pass, to expose state leaking between cases); marker derives the planted marker values; the corpus build has no randomness, so there is no task-build seed. capability-spec §3.1's assignment and bootstrap seeds do not apply: a property bar has no arms to assign and no statistic to bootstrap (every case must hold)."
+    },
+    "stepBudget": null,
+    "stepBudgetNote": "Not applicable: a property bar has no agent arm (spec-2 §2 S, Arms: none). The scripted executor takes no agent steps.",
+    "modelId": null,
+    "modelIdNote": "Not applicable: conformance runs use the $0 scripted executor, no model. The secondary unattended-completion experiment (#536 P1/P2), if the lead orders it, is pre-registered separately with its model id.",
+    "executor": "The scripted executor only (src/schedule/executor.ts scripted transport, through the real gate on fc-v1 tasks): $0, no model, no VM, no VM lock. Never a real trial.",
+    "analysis": {
+      "script": {
+        "path": "scripts/s-v1-analysis.ts",
+        "sha256": "084f88ef72ba9a5534342abb410e9bdd15a78cfa95f2b10391a5407c1ccb2115"
+      },
+      "modules": [
+        {
+          "path": "src/schedule/conformance/analysis.ts",
+          "sha256": "c181b2337e59c96e4154fd9962d869ecfec44f16be8cc296bea30f62101273c7"
+        },
+        {
+          "path": "src/schedule/conformance/canonical.ts",
+          "sha256": "9a1de644c5bd27fac659f0afb39c9504847ae0593c5dc6f465940e6c582d2872"
+        },
+        {
+          "path": "src/schedule/conformance/prereg.ts",
+          "sha256": "7bcbc957ccb782a66c7e8bb965f8ddb3cb57028435e2f30a9232a13b25dccf2b"
+        }
+      ],
+      "command": "npx tsx scripts/s-v1-analysis.ts --results <results.json> --mutation-log <mutation-proof output>"
+    },
+    "mutationProof": {
+      "script": {
+        "path": "scripts/schedule-mutation-proof.py",
+        "sha256": "1a4ff020ee64922f2e0c8a43e2e6d12e6e7ee8d1711783917f29c13dbb306d6e"
+      },
+      "mutants": 56,
+      "command": "python3 scripts/schedule-mutation-proof.py > <mutation-proof output>"
+    },
+    "evidence": {
+      "evidence": false,
+      "simulated": true,
+      "r1Evidence": false,
+      "note": "Property-bar rows come from scripted runs: they prove the mechanism, never agent capability, are never mixed into a capability statistic and never count as R1 evidence (spec-2 §1.1, §1.5; capability-spec §3.4-3.5)."
+    },
+    "constraints": [
+      "No real trial, no Windows VM, no VM lock: a trigger never starts a Windows VM run on its own; S-live must check the VM lock and the critical-path window and record a skip.",
+      "$0 Anthropic API: no Messages-API calls, no API key.",
+      "Gate guarantees unchanged: myco.gate/v1 takes taskId, runId and claim only; agent-facing reasons stay codes only.",
+      "Changes after the first conformance run make s-v2; runs under s-v1 stay reported under s-v1 (capability-spec §3.3)."
+    ],
+    "notPreregisteredHere": [
+      "#536's P1/P2 unattended-completion experiment (spec-2 §2 S: a secondary experiment, not this bar).",
+      "The vm-lock-held case: deferred to the corpus version that ships S-live."
+    ],
+    "leadRulings": [],
+    "leadRulingsNote": "No lead ruling was posted on the freeze PR (#637) before this freeze, so every item below is still pending and the analysis reports LEAD_RULING_PENDING ('not shown') until a ruling moves it here.",
+    "leadRulingPending": [
+      "Ratification of S's property bar itself (spec-2 status: every bar is a proposal).",
+      "Spec-2 §6: property bar for S, with #536's P1/P2 as a secondary experiment rather than part of S's decision.",
+      "Proposed here: an out-of-scope case that does not match its stated outcome fails the bar (stricter than 'reported').",
+      "Proposed here: the ledger-write-fails case is out of scope for bar item 1 (no chained row can be written when storage fails); its fail-closed report is still checked."
+    ]
+  },
+  "preregSha256": "40a4f66e0bc83fafdf3e3d78361da28ccf5632cf7102171153dcc387a25b59e2"
+}

@@ -30,7 +30,147 @@ export const USAGE_LIMIT_PHRASES = [
   "Limit resets at 9am",
   "daily limit exceeded",
   "usage_limit_reached",
+  // #607 round 2, B1: none of these matched before the phrase was added.
+  "You've hit your limit",
+  "You\u2019ve hit your limit",
+  "YOU'VE HIT YOUR LIMIT",
+  "You have reached your limit",
 ] as const;
+
+/**
+ * Whitespace the quota wording may carry in place of an ASCII space (#606 S2): NBSP, figure
+ * space, narrow NBSP, U+2000-U+200A, ideographic space, a tab, a newline, repeated spaces.
+ * Spelled by code point, so no invisible character sits in the source.
+ */
+const cp = (code: number): [string, string] => [
+  `U+${code.toString(16).toUpperCase().padStart(4, "0")}`,
+  String.fromCharCode(code),
+];
+export const UNICODE_SPACES: readonly (readonly [string, string])[] = [
+  cp(0x00a0), // NBSP
+  cp(0x2007), // figure space
+  cp(0x202f), // narrow NBSP
+  ...Array.from({ length: 11 }, (_, i) => cp(0x2000 + i)), // U+2000-U+200A
+  cp(0x3000), // ideographic space
+  ["tab", "\t"],
+  ["newline", "\n"],
+  ["repeated spaces", "   "],
+];
+
+const ch = (code: number) => String.fromCharCode(code);
+
+/**
+ * Quota wording with a Unicode format character (`\p{Cf}`) or a hyphen variant inside it
+ * (#607 round 2, F-A). None matches the vocabulary on its raw text; each matches once folded.
+ */
+export const FOLDED_USAGE_PHRASES: readonly (readonly [string, string])[] = [
+  ["ZWSP U+200B before a space", `Claude usage${ch(0x200b)} limit`],
+  ["word joiner U+2060 as the space", `limit${ch(0x2060)}reached`],
+  ["ZWSP U+200B in a contraction", `You${ch(0x200b)}'ve hit your limit`],
+  ["ZWNJ U+200C before a space", `session${ch(0x200c)} limit`],
+  ["ZWJ U+200D as the space", `Opus${ch(0x200d)}limit`],
+  ["Mongolian vowel separator U+180E as the space", `weekly${ch(0x180e)}limit`],
+  ["non-breaking hyphen U+2011", `5${ch(0x2011)}hour limit`],
+  ["hyphen U+2010", `five${ch(0x2010)}hour limit`],
+  ["en dash U+2013", `5${ch(0x2013)}hour limit`],
+  // #607 round 3, N3: the top of the hyphen range, and a phrase that needs a format character
+  // removed AND a whitespace fold together.
+  ["em dash U+2014", `5${ch(0x2014)}hour limit`],
+  ["horizontal bar U+2015", `five${ch(0x2015)}hour limit`],
+  ["ZWSP U+200B inside a word plus NBSP as the space", `us${ch(0x200b)}age${ch(0x00a0)}limit`],
+];
+
+/**
+ * Structured error fields the classifier does not map, so its class is `error-result` (#607
+ * round 3, B2): unknown `error` strings and API statuses other than 401/402/403/429/529.
+ */
+export const UNMAPPED_STRUCTURED: readonly (readonly [string, Record<string, unknown>])[] = [
+  ["api_error_status 400", { api_error_status: 400 }],
+  ["api_error_status 500", { api_error_status: 500 }],
+  ["error unknown", { error: "unknown" }],
+  ["error invalid_request", { error: "invalid_request" }],
+  ["error server_error", { error: "server_error" }],
+];
+
+/** Quota, billing, auth and transient wording, each with the class its text names (B2). */
+export const FAULT_WORDING: readonly (readonly [string, string])[] = [
+  ["You've hit your limit", "usage-limit"],
+  ["Claude usage limit reached", "usage-limit"],
+  ["Your credit balance is too low to access the API", "billing"],
+  ["You're out of extra usage", "billing"],
+  ["Not logged in · Please run /login", "auth"],
+  ["OAuth token has expired", "auth"],
+  ["rate limit reached", "rate-limit"],
+];
+
+/**
+ * The narrow, numberless billing and auth phrases that stop a claimless clean result (#607
+ * round 3, L1), each with its class.
+ */
+export const CLEAN_RESULT_FAULT_PHRASES: readonly (readonly [string, string])[] = [
+  ["Credit balance is too low", "billing"],
+  ["You're out of extra usage", "billing"],
+  ["Please run /login", "auth"],
+  ["Not logged in", "auth"],
+  ["Invalid API key", "auth"],
+  ["OAuth token has expired", "auth"],
+];
+
+/** Task data that shares words with the billing / auth vocabulary; always the agent's (L1). */
+export const CLEAN_RESULT_TASK_DATA = [
+  "billing address updated",
+  "qty 429; HTTP 401",
+  "credential field cleared",
+  "Fixed the quota column and the forbidden flag; 403 rows left.",
+  "Set the API key column and the OAuth login field; credit unchanged.",
+] as const;
+
+/**
+ * Claim lines with a Unicode space, a tab, a format character or surrounding whitespace in
+ * them (#611), each with the claim it is read as. Spelled by code point.
+ */
+export const FOLDED_CLAIM_LINES: readonly (readonly [string, string, "done" | "not-done"])[] = [
+  ["NOT<NBSP>DONE", `NOT${ch(0x00a0)}DONE`, "not-done"],
+  ["NOT<U+2009>DONE", `NOT${ch(0x2009)}DONE`, "not-done"],
+  ["NOT<TAB>DONE", "NOT\tDONE", "not-done"],
+  ["N<ZWSP>OT DONE", `N${ch(0x200b)}OT DONE`, "not-done"],
+  ["DONE<NBSP>", `DONE${ch(0x00a0)}`, "done"],
+  ["NOT<U+202F>DONE", `NOT${ch(0x202f)}DONE`, "not-done"],
+  ["NOT<U+3000>DONE", `NOT${ch(0x3000)}DONE`, "not-done"],
+  ["NOT<WJ U+2060>DONE", `NOT${ch(0x2060)}DONE`, "not-done"],
+  ["NOT<two spaces>DONE", "NOT  DONE", "not-done"],
+  ["<TAB>NOT DONE<NBSP><TAB>", `\tNOT DONE${ch(0x00a0)}\t`, "not-done"],
+  ["DONE<ZWSP>", `DONE${ch(0x200b)}`, "done"],
+  ["<BOM U+FEFF>DONE", `${ch(0xfeff)}DONE`, "done"],
+  ["D<SHY U+00AD>ONE", `D${ch(0x00ad)}ONE`, "done"],
+];
+
+/** Last lines that are still not a claim once folded (#611): no new words, no case folding. */
+export const NON_CLAIM_LINES = [
+  "DONE.",
+  "done",
+  "Done",
+  "not done",
+  "NOT-DONE",
+  `NOT${ch(0x2011)}DONE`,
+  "NOTDONE",
+  `NOT${ch(0x200b)}DONE.`,
+  "NOT DONE yet",
+  "DONE!",
+  "N0T DONE",
+] as const;
+
+/** Thin space (U+2009). */
+export const THIN_SPACE = ch(0x2009);
+
+/** ZWSP (U+200B). */
+export const ZWSP = ch(0x200b);
+
+/** NBSP (U+00A0). */
+export const NBSP = String.fromCharCode(0x00a0);
+
+/** `phrase` with every ASCII space replaced by `space`. */
+export const spaced = (phrase: string, space: string) => phrase.replaceAll(" ", space);
 
 export const tmp = (prefix = "myco-pilot-") => mkdtempSync(join(tmpdir(), prefix));
 

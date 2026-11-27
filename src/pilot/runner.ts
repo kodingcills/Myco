@@ -59,6 +59,7 @@ import { type AgentLaunchPlan, auditAgentLaunch } from "../integrity/launch.ts";
 import type { CaptureInput } from "../integrity/vault.ts";
 import { newVaultKey, VerdictVault } from "../integrity/vault.ts";
 import { AB_EXPERIMENT, loadPrereg, realRunRefusals } from "./ab-prereg.ts";
+import { ApiKeyPathFault, HarnessFault } from "./claude-cli.ts";
 import { backoffS, configSha256, correctionPolicy, type PilotConfig } from "./config.ts";
 import { estimateCost, type TokenUsage } from "./cost.ts";
 import { trialLaunchPlan } from "./launch.ts";
@@ -85,30 +86,11 @@ import {
  */
 export type StopCode = "auth" | "billing" | "api-key" | "repeat-failure" | "usage-limit";
 
-/** A fault of the harness, not the agent: the only kind of attempt that is ever re-run. */
-export class HarnessFault extends Error {
-  readonly harnessClass: PilotHarnessClass;
-  /** Tokens the agent used before the fault, when the transport measured them. */
-  readonly usage: TokenUsage | null;
-  constructor(harnessClass: PilotHarnessClass, message: string, usage: TokenUsage | null = null) {
-    super(message);
-    this.name = "HarnessFault";
-    this.harnessClass = harnessClass;
-    this.usage = usage;
-  }
-}
-
 /**
- * The CLI ran (or would run) on an API key instead of the operator's subscription. Recorded as
- * an `auth` fault, and it stops the run at once with code `api-key`: never retried, never an
- * agent outcome.
+ * `HarnessFault` and `ApiKeyPathFault` are defined in `claude-cli.ts` (dependency-free,
+ * TIF-268), so the hcu+shell arm throws the very same fault classes; re-exported unchanged.
  */
-export class ApiKeyPathFault extends HarnessFault {
-  constructor(message: string, usage: TokenUsage | null = null) {
-    super("auth", message, usage);
-    this.name = "ApiKeyPathFault";
-  }
-}
+export { ApiKeyPathFault, HarnessFault };
 
 /** The fail-closed stop a fault demands, or null when the fault is re-run in place. */
 export function stopCodeOf(fault: HarnessFault): Exclude<StopCode, "repeat-failure"> | null {
