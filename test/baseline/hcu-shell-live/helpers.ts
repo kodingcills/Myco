@@ -69,6 +69,29 @@ export function fakeClaude(
 
 export const MODEL = "claude-sonnet-5-5";
 
+/** #598's `USAGE_LIMIT_PHRASES` (test/pilot/helpers.ts @ fc01e69a, unchanged since 13fccd96). */
+export const USAGE_LIMIT_PHRASES = [
+  "Claude AI usage limit reached|1700000000",
+  "Claude usage limit reached. Your limit will reset at 3pm (America/New_York).",
+  "5-hour limit reached ∙ resets 3pm",
+  "5 hour limit reached",
+  "Weekly limit reached ∙ resets Mon",
+  "weekly limit reached",
+  "Opus limit reached ∙ resets 11pm",
+  "Sonnet limit reached · resets 3pm",
+  "Your limit will reset at 5pm",
+  "Limit resets at 9am",
+  "daily limit exceeded",
+  "usage_limit_reached",
+] as const;
+
+/** The round-2 verdict's exact N1 / N2 probe texts. */
+export const VERDICT_QUOTA_TEXTS = [
+  "Claude usage limit reached. Your limit will reset at 3pm (America/Los_Angeles).",
+  "5-hour limit reached ∙ resets 3pm",
+  "Weekly limit reached",
+] as const;
+
 export const init = (extra: Record<string, unknown> = {}) => ({
   type: "system",
   subtype: "init",

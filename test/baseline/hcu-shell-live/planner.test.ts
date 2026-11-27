@@ -244,8 +244,10 @@ describe("auth, credit, billing, quota and usage-limit faults fail closed (round
     );
     expect(codeOf(e)).toBe("planner-api-key-path");
   });
-  it("the text vocabulary never applies to a clean call (fc-v1 holds qty 401, 402-like text)", async () => {
-    for (const text of ["qty 402 billing quota", "Weekly limit column", "429"]) {
+  it("the broad vocabulary never applies to a clean call (fc-v1 holds qty 401, 402-like text)", async () => {
+    // Round 3 (N1): only the usage-quota wording, on a clean result with NO decision, stops the
+    // run; "Weekly limit column" moved to the N1 tests below (it names the quota).
+    for (const text of ["qty 402 billing quota", "429", "401 forbidden credential", "403"]) {
       const r = readPlannerCall(stream(init(), result(text)), "", 0, price);
       expect(r.text).toBe(text);
     }
