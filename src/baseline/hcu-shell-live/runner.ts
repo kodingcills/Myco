@@ -37,7 +37,6 @@ import {
   writeSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { canonicalJson } from "../../pilot/config.ts";
 import type { CalcRecordEditParams } from "../../tasks/intent.ts";
 import { OUTPUT_CEILING } from "../hcu-shell/decision.ts";
 import {
@@ -62,6 +61,17 @@ import {
   PLANNER_FIXED_ENV,
   PlannerHalt,
 } from "./planner.ts";
+
+/** Canonical JSON (sorted keys), the same encoding the pilot hashes its plan with. */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object")
+    return `{${Object.keys(value)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`)
+      .join(",")}}`;
+  return JSON.stringify(value);
+}
 
 export const RUN_PLAN_SCHEMA = "myco.hcu-shell.run-plan/1" as const;
 export const LEDGER_FILE = "ledger.jsonl";
