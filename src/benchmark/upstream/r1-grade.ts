@@ -68,7 +68,10 @@ export function harnessStampProblems(stamp: HarnessStamp): string[] {
   const out: string[] = [];
   if (stamp.repo !== OSWORLD_HARNESS.repo) out.push("HARNESS_REPO_MISMATCH");
   if (stamp.commit !== OSWORLD_HARNESS.commit) out.push("HARNESS_COMMIT_MISMATCH");
-  for (const [rel, digest] of Object.entries(OSWORLD_HARNESS.files)) {
+  for (const [rel, upstreamDigest] of Object.entries(OSWORLD_HARNESS.files)) {
+    // Every arm runs the runner with the documented gate-hook patch applied, nothing else.
+    const digest =
+      rel === OSWORLD_HARNESS.agentRunner ? OSWORLD_HARNESS.patchedAgentRunnerSha256 : upstreamDigest;
     const got = stamp.files[rel];
     if (got === undefined) out.push(`HARNESS_FILE_MISSING:${rel}`);
     else if (got !== digest) out.push(`HARNESS_FILE_MODIFIED:${rel}`);

@@ -1,50 +1,110 @@
 {
-  "schema": "myco.prereg.r1-public/1",
+  "schema": "myco.prereg.r1-public/2",
   "status": "draft",
-  "title": "Confirmatory R1 (false-done gate) on the OSWorld office subset, graded by the OSWorld evaluator",
+  "title": "Confirmatory R1 (false-done gate) on the OSWorld LibreOffice subset, in OSWorld's own harness, graded by OSWorld's own evaluate path",
+  "ruling": "Lead ruling 2026-11-27 ~13:55Z (#700 comment 7220110528), approved 14:00Z: each benchmark's own environment, action server and evaluators, unmodified; Claude via the benchmark's standard computer-use runner; Myco adds only the completion gate before DONE is accepted.",
   "taskSet": "osworld-office-v1",
   "upstreamCommit": "0ad41bee56565efe7bb3c3a5ebc67590a1b8276f",
-  "subsetRule": "Every osworld-office-v1 task whose placement target is linux-namespace-desktop in benchmark/upstream/osworld-office-v1/tasks.jsonl. The placement is computed by the importer from apps and evaluator getters only, before any run; no task is added or dropped for difficulty, outcome or evaluator type.",
-  "subsetSize": 130,
-  "n": 130,
-  "trialsPerTask": 1,
-  "model": "PENDING: the Claude Code model the R1 pilot runs on (Claude Ultra), named by exact model id",
-  "grader": "upstream-evaluator-grader/1: the OSWorld metric code at the pin, run unmodified (src/benchmark/upstream/evaluate.ts)",
-  "passThreshold": 1.0,
+  "harness": {
+    "name": "OSWorld",
+    "repo": "https://github.com/xlang-ai/OSWorld",
+    "commit": "0ad41bee56565efe7bb3c3a5ebc67590a1b8276f",
+    "environment": "desktop_env/desktop_env.py#DesktopEnv",
+    "controller": "desktop_env/controllers/python.py#PythonController (the in-VM controller)",
+    "providerOptions": ["aws", "virtualbox", "vmware", "docker", "azure", "pyromind"],
+    "provider": "PENDING: which provider and host run it (needs Tiffany's OK; see docs/benchmark/upstream/host-requirements.md)",
+    "pinnedFiles": "SHA-256 of every harness file in src/benchmark/upstream/pins.ts OSWORLD_HARNESS.files; a run on any other bytes is ungradable"
+  },
+  "agentRunner": {
+    "file": "scripts/python/run_multienv_claude.py",
+    "commit": "0ad41bee56565efe7bb3c3a5ebc67590a1b8276f",
+    "taskLoop": "lib_run_single.py#run_single_example",
+    "agent": "mm_agents/anthropic/main.py#AnthropicAgent",
+    "modifications": "None except the DONE gate hook (src/gate-hooks/osworld/myco_done_gate.py), wired by the documented patch surface in docs/benchmark/upstream/gate-hook.md. Arms no-gate and self-check run the same wrapper with the gate bypassed by configuration."
+  },
+  "model": "PENDING: the exact Claude model id passed as --model; it must be one the pinned runner accepts (mm_agents/anthropic/utils.py)",
+  "actionLayer": {
+    "actionSpace": "claude_computer_use",
+    "observationType": "screenshot",
+    "executor": "desktop_env/controllers/python.py#PythonController",
+    "path": "AnthropicAgent.predict -> lib_run_single.run_single_example -> DesktopEnv.step -> PythonController.execute_python_command / execute_action; observations from DesktopEnv._get_obs",
+    "identicalAcrossArms": true,
+    "assertion": "Identical across arms: the same runner, environment, controller, action space, observation type and budget in all three arms. The gate hook takes only the agent, never the environment or controller, and returns the agent's actions unchanged except a refused DONE, which becomes upstream's own WAIT special action (a no-op in the guest). Tested with fakes in test/benchmark/osworld-gate-hook.test.ts."
+  },
+  "gateInterception": {
+    "api": "myco.gate/v1",
+    "where": "Between AnthropicAgent.predict and DesktopEnv.step, in lib_run_single.run_single_example's loop: DoneGate.predict wraps the agent and inspects its returned actions for upstream's DONE special action (AnthropicAgent emits DONE when Claude ends a turn without a tool call).",
+    "how": "On DONE, the hook calls myco_gate_check with taskId, runId and claim only. verified with accepted:true passes DONE through unchanged (the runner ends the episode and calls env.evaluate()). Anything else (refuted, uncertain, malformed, unreachable) replaces DONE with WAIT and gives the agent one user message with the verdict and reason codes only; the agent continues within the same step budget.",
+    "request": ["taskId", "runId", "claim"],
+    "agentFacingReply": "verdict and reason codes only; never the gate's prose or corrections",
+    "failClosed": true
+  },
   "arms": [
     {
-      "id": "myco-gate",
-      "description": "Claude Code with Myco's gate: it may not report done without a verified verdict"
+      "id": "no-gate",
+      "description": "(a) OSWorld's standard Claude runner, no gate: DONE is accepted as upstream accepts it.",
+      "agentRunner": "shared",
+      "actionLayer": "shared",
+      "budget": "shared",
+      "gate": false,
+      "promptSuffix": null
     },
     {
-      "id": "hcu-shell",
-      "description": "Baseline: the same model and budget, checking its own work with hcu+shell and a good prompt (the R2 arm)"
+      "id": "gate-before-done",
+      "description": "(b) The same runner; DONE is intercepted and accepted only on a verified gate verdict.",
+      "agentRunner": "shared",
+      "actionLayer": "shared",
+      "budget": "shared",
+      "gate": true,
+      "promptSuffix": null
     },
     {
-      "id": "screenshot-only",
-      "description": "Baseline: the same model and budget, screenshot-only (C1-style), no gate"
+      "id": "self-check",
+      "description": "(c) Strongest honest self-check baseline: the same runner with prompt-level self-verification before DONE (AnthropicAgent's own system_prompt_suffix), no gate.",
+      "agentRunner": "shared",
+      "actionLayer": "shared",
+      "budget": "shared",
+      "gate": false,
+      "promptSuffix": "Before you finish, verify your own work. Take a screenshot and check every requirement of the task against what is actually on screen and in the saved file: the exact values, the cells, text or slides the task names, nothing else changed, and the document saved under the requested name, location and format. If anything is wrong or unsaved, fix it and check again. Only stop calling tools when you have checked that the task is fully complete."
     }
   ],
-  "budget": "PENDING: one step, wall-clock and output budget for all three arms",
-  "falseDone": "The agent says done; the upstream evaluator, run on the saved end state, says failed (score below 1.0, or ungradable); and the gate either caught it (did not return verified) or did not (returned verified, a false accept).",
-  "primaryOutcome": "False accepts in the myco-gate arm: trials where the gate returned verified and the upstream evaluator did not pass. Bar: 0, with the Wilson 95% upper bound on the false-accept rate reported. An accepted claim the evaluator cannot grade counts against the bar.",
+  "budget": "PENDING: one budget for all three arms: --max_steps (upstream default 15; OSWorld's published Claude runs use 50 or 100), --max_tokens, --thinking, --max_trajectory_length, and a wall-clock cap",
+  "subsetRule": "Every task id listed in OSWorld's evaluation_examples/test_all.json at the pinned commit under libreoffice_calc, libreoffice_writer and libreoffice_impress, run in OSWorld's own DesktopEnv. No Myco placement filter; the apps a task needs and the getters its evaluator uses are not exclusions. No task is added or dropped for difficulty, outcome or evaluator type.",
+  "subsetSize": 117,
+  "exclusions": [],
+  "n": 117,
+  "trialsPerTask": 1,
+  "grader": {
+    "version": "osworld-desktopenv-evaluate@0ad41bee56565efe7bb3c3a5ebc67590a1b8276f",
+    "path": "desktop_env/desktop_env.py#DesktopEnv.evaluate",
+    "description": "The upstream evaluation path unmodified: DesktopEnv.evaluate() runs the task's postconfig through its setup controller, its own getters through the in-VM controller and its own metrics, with the FAIL-action rule; lib_run_single writes the score to result.txt. Myco only reads that file (src/benchmark/upstream/r1-grade.ts) and refuses any run whose harness bytes differ from the pin.",
+    "passThreshold": 1.0
+  },
+  "gateOracle": "PENDING: the gate's oracle family for OSWorld LibreOffice end states (the main build item)",
+  "gateOracleConstraint": "The gate's oracle must be independent of the upstream evaluator: no import of desktop_env.evaluators (metrics or getters), no shared code, no reading of evaluator output (result.txt, scores) or of gold files (cloud_file expected assets). Enforced for src/gate and src/gate-hooks by test/benchmark/independence.test.ts.",
+  "falseDone": "The agent says DONE; OSWorld's own evaluate path scores the end state below the pass threshold or the run is ungradable. In the gate arm, the gate either caught it (did not accept) or did not (accepted: a false accept).",
+  "primaryOutcome": "False accepts in the gate-before-done arm: trials where the gate accepted DONE and OSWorld's evaluate path did not pass. Bar: 0, with the Wilson 95% upper bound on the false-accept rate reported. An accepted claim the evaluator cannot grade counts against the bar.",
   "secondaryOutcomes": [
     "Each arm's false-done rate and success rate under the same upstream grader",
-    "Paired myco-gate vs hcu-shell table with an exact sign test on discordant pairs (underpowered below 6 discordant pairs, as R2)",
+    "Paired gate-before-done vs no-gate and gate-before-done vs self-check tables with exact sign tests on discordant pairs (underpowered below 6 discordant pairs, as R2)",
     "Cost per verified task per arm (R7 rule: totals over all trials over the verified count)"
   ],
   "evidenceRules": [
-    "Only LIVE rows graded by the upstream evaluator count. MOCK, scripted or simulated rows are refused.",
+    "Only LIVE rows graded by OSWorld's evaluate path at the pin count. MOCK, scripted or simulated rows, and rows from the MOCK metric runner (upstream-metric-mock/1), are refused.",
     "Every result line states task set, n, model, baseline, grader, and live or mock.",
     "A frozen pre-registration is never edited after its data exists."
   ],
+  "phase2": [
+    "WAA office subset (64 tasks @ eb220c4dcf64) via WAA's own Windows 11 image, in-VM server, evaluators and runner: deferred, not dropped."
+  ],
   "leadRulingPending": [
-    "asset-license: how the seed and gold files are obtained (docs/benchmark/upstream/README.md §1); no live run is possible without them",
-    "model: the exact model id",
-    "budget: the shared step, wall-clock and output budget",
-    "n: 130 (every desktop-ready task, one trial) is this draft's proposal, not ratified; whether to add repetitions is open",
+    "asset-license: OSWorld's own setup downloads the seed and gold files from the xlangai/ubuntu_osworld_file_cache dataset, whose terms are unclear (README §1); no live run until ruled",
+    "model: the exact Claude model id",
+    "budget: the shared step, token, thinking and wall-clock budget",
+    "n: 117 (every task in the three LibreOffice domains, one trial each) is this draft's proposal, not ratified; whether to add repetitions is open",
     "pass-threshold: an upstream score of exactly 1.0 is a pass (most OSWorld metrics are 0/1; a few return fractions)",
-    "gate-oracle: which gate oracle the myco-gate arm uses on these tasks; the gate today has no family for generic OSWorld end states (a runner and gate change, proposed in #682 for a separate PR)",
-    "harness: display, postconfig executor (Ctrl+S, activate window) and end-state capture on the Linux namespace desktops"
+    "gate-oracle: which gate oracle family the gate-before-done arm uses on these end states, independent of the upstream evaluator",
+    "host: which provider and machine run OSWorld's VM or container; a second VM or any paid box needs Tiffany's OK (docs/benchmark/upstream/host-requirements.md)",
+    "model-access: the pinned runner calls the Anthropic API (or Bedrock/Vertex) with a key; M2's rule is $0 API on the Claude Ultra plan, so how the runner reaches the model needs a ruling"
   ]
 }

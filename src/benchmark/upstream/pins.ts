@@ -46,6 +46,14 @@ export const OSWORLD_HARNESS = {
   environment: "desktop_env/desktop_env.py#DesktopEnv",
   controller: "desktop_env/controllers/python.py#PythonController",
   grader: "desktop_env/desktop_env.py#DesktopEnv.evaluate",
+  /**
+   * SHA-256 of the runner after src/gate-hooks/osworld/run_multienv_claude.gate.patch (the
+   * documented patch surface). All three arms run this same patched runner; arms no-gate and
+   * self-check bypass the gate by configuration. A run stamp must carry this digest for the
+   * runner file and the upstream digest for every other harness file.
+   */
+  patchedAgentRunnerSha256: "d08496bd4ae6b72c1c0a8d3f1b0b9100ef468512ffb58b6ca19c98a5489f8373",
+  patch: "src/gate-hooks/osworld/run_multienv_claude.gate.patch",
   /** Providers the pinned runner's --provider_name accepts. */
   providers: ["aws", "virtualbox", "vmware", "docker", "azure", "pyromind"],
   files: {
