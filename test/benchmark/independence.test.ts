@@ -78,6 +78,13 @@ describe("benchmark grader independence (TIF-267)", () => {
     }
   });
 
+  it("ledger-csv/1 (track T, #617): the ledger grader is walked like every grader module and names no plugin code", () => {
+    const file = join(GRADER, "ledger.ts");
+    expect(graderFiles).toContain(file);
+    const code = readFileSync(file, "utf8").replace(/^\s*(\/\/|\*|\/\*\*).*$/gm, "");
+    expect(code).not.toMatch(/plugins\/|csv-ledger|oracle-selftest\//);
+  });
+
   it("cross-app (track P): the gate's cross-app family never reaches the grader", () => {
     const gateFiles = ["cross-app.ts", "cross-app-demo.ts", "families.ts", "gate.ts"].map((f) =>
       join(ROOT, "src", "gate", f),
