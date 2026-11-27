@@ -75,7 +75,9 @@ class Draw {
   constructor(private readonly seed: string) {}
   /** Uniform integer in [0, bound). */
   int(bound: number): number {
-    const h = createHash("sha256").update(`${this.seed}#${this.n++}`, "utf8").digest();
+    const h = createHash("sha256")
+      .update(`${this.seed}#${this.n++}`, "utf8")
+      .digest();
     return h.readUInt32BE(0) % bound;
   }
   pick<T>(items: readonly T[]): T {
@@ -195,10 +197,9 @@ export function buildByoaTaskSet(): { tasks: ByoaTask[]; files: Map<string, stri
       while (used.has(r)) r = d.int(rowCount);
       used.add(r);
       const row = fixture.rows[r] as readonly string[];
-      const column =
-        BYOA_EDITABLE_COLUMNS[
-          (f * BYOA_SATISFIABLE_PER_FIXTURE + j) % BYOA_EDITABLE_COLUMNS.length
-        ] as ByoaColumn;
+      const column = BYOA_EDITABLE_COLUMNS[
+        (f * BYOA_SATISFIABLE_PER_FIXTURE + j) % BYOA_EDITABLE_COLUMNS.length
+      ] as ByoaColumn;
       const current = row[BYOA_HEADER.indexOf(column)] as string;
       add("satisfiable", {
         id: row[0] as string,
