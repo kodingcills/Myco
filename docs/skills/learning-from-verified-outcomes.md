@@ -187,6 +187,12 @@ makes the cell null, never 0. The cost is a token-derived ESTIMATE, never billed
 
 ## Proposed pre-registered measurement bar (for the capability spec)
 
+**Superseded.** The capability spec (§2 M) set track M's bar, and
+`docs/product/capability-prereg/m-v1/` now freezes it as proposed, with a lead ruling still
+pending. It uses the task set `rep-v1`, gate-less test rows and one base surface. It does not
+use `skills-rs-v1`, Bonferroni over two baselines, or gated warm rows. This section is kept
+as a record of the earlier proposal.
+
 Adopt this before any measured run. Measurement needs the integrity fixes (#518, the xlsx
 replacement for #503, the #494 follow-up) and the lead's GO, and runs on Claude Ultra only.
 

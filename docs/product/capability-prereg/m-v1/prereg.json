@@ -1,0 +1,159 @@
+{
+  "schema": "myco.capability-prereg/1",
+  "track": "M",
+  "version": "m-v1",
+  "capability": "Learning from verified outcomes",
+  "spec": "docs/product/capability-spec.md §2 M, under §1 (shared rules), §3 (pre-registration), §4 (constraints) and §5 (sequencing)",
+  "ratification": {
+    "status": "proposed",
+    "note": "Frozen as proposed. Not ratified: every item under pending awaits a lead ruling. The analysis refuses a real (non-simulated) pack until status is ratified, and ratifying changes this file and so the pre-registration hash, before any measurement run.",
+    "pending": [
+      {
+        "id": "n",
+        "proposed": "Keep n = 40 test units (20 repeat + 20 similar), as the spec states. capability-spec §6 asks whether to raise n for M: at n = 40 the power for a 10-15 point net gain is 0.26-0.49 (§1.5), so a not-shown result is not evidence of no effect."
+      },
+      {
+        "id": "learn-families",
+        "proposed": "rep-v1 is calc-record-edit only. The spec's learn split names calc-record-edit and calc-multi-step, but calc-multi-step has no published, graded task set yet (TIF-270); adding it is a new task-set version (rep-v2) and a new pre-registration version."
+      },
+      {
+        "id": "base-surface-both-shown",
+        "proposed": "If both I and J are shown, the base surface is the one with the higher grader-verified rate in its own measured run; a tie goes to I (measured first). If J has not run when M is measured, J is not a candidate."
+      },
+      {
+        "id": "model-id",
+        "proposed": "claude-sonnet-5-5, the trial run's planner model (PILOT_MODEL), on Claude Ultra."
+      },
+      {
+        "id": "advice-delivery",
+        "proposed": "Skills reach the agent as harness-side retrieval (the myco_skills_retrieve code path, callRetrieve) rendered into advice text before the first turn; the cold arm runs the same surface with an empty store, which renders no advice. The agent-callable skill tool waits for a reviewed change that lets a launch classify myco-skills."
+      }
+    ]
+  },
+  "hypothesis": "H1: on the rep-v1 test units, skills-on (the frozen learn-phase store) has a higher grader-verified rate than cold (the same surface with an empty store). H0: no increase. One-sided.",
+  "baseSurface": {
+    "rule": "best shown of I, J, else C1 (capability-spec §2 M, §5.4)",
+    "candidates": [
+      {
+        "capability": "I",
+        "surface": "C1+I"
+      },
+      {
+        "capability": "J",
+        "surface": "hcu+shell+J"
+      }
+    ],
+    "fallback": "C1",
+    "measurementOrder": ["I", "J", "M"],
+    "ordering": "M is measured only after I's bar is decided under I's committed pre-registration, and after J's if J has run. The pack records the surface and the I and J outcomes it was chosen from (status, grader-verified rate, pre-registration hash); the analysis re-applies the rule and reports not-shown if the pack's surface is not the rule's."
+  },
+  "arms": {
+    "treatment": "skills-on",
+    "control": "cold",
+    "definition": "Both arms run the base surface with the same tool list, harness, model, step budget, output ceiling, pacing and retry budget. skills-on retrieves from the store frozen after the learn phase (its head recorded in the pack and on every skills-on row); cold runs against an empty store (head = store GENESIS). Test-phase trials never write the store."
+  },
+  "phases": {
+    "learn": "The 20 learn tasks run cold, in the pre-registered order, before the test phase. The gate is called at the end of each learn trial because the store rule needs its verdict; learn rows are gated rows and never part of the bar. A skill is stored only from a learn trial that claimed done, that the gate verified and accepted, and that the independent grader graded pass on the same persisted bytes (admission, src/skills/admission.ts). A gate verdict alone never stores a skill.",
+    "test": "The 40 test units run in both arms in the pre-registered order (ABBA over units). Neither arm calls the gate; test rows are gate-less."
+  },
+  "verified": "capability-spec §1.1. Test rows: a done claim that the independent grader (src/benchmark/grade/) graded pass on the harness's capture. Learn rows: a done claim the gate verified and accepted and the grader graded pass, on the same bytes. A pass without a done claim is correct-not-claimed; ungradable or ungraded is never verified. The gate's verdict is never the measurement.",
+  "primaryMetric": "Grader-verified rate on the 40 rep-v1 test units, per arm.",
+  "taskSet": {
+    "version": "rep-v1",
+    "source": "fc-v1 (no-fault, satisfiable tasks)",
+    "manifest": "docs/product/capability-prereg/m-v1/rep-v1-manifest.json",
+    "manifestSha256": "058143fd490d8bea5f1b4c8416d0c8250aae451509de0d7537b5146783d38676",
+    "learn": 20,
+    "repeat": 20,
+    "similar": 20,
+    "testUnits": 40
+  },
+  "seeds": {
+    "taskBuild": "m-v1-build-2026-11-27-Rq7d",
+    "assignment": "m-v1-assign-2026-11-27-Wt3k",
+    "bootstrap": "m-v1-boot-2026-11-27-Hc8n"
+  },
+  "stepBudget": 30,
+  "wallClockBudget": null,
+  "retryBudget": 0,
+  "scoredAttemptsPerTrial": 1,
+  "modelId": "claude-sonnet-5-5",
+  "harness": "Claude Ultra (Claude Code), $0 Anthropic API, no Messages-API calls. The baseline surface must run on the Ultra harness (capability-spec §1.3, §5.4).",
+  "bar": {
+    "test": "exact McNemar (sign test on discordant test units)",
+    "sided": "one-sided",
+    "alpha": 0.05,
+    "minDiscordant": 5,
+    "direction": "skills-on better than cold",
+    "unit": "the rep-v1 test unit, paired across arms",
+    "statement": "Shown only if skills-on is better than cold with p <= 0.05 and at least 5 discordant units, every guardrail holds, parity and the schedule hold, and every scheduled trial is present."
+  },
+  "secondary": [
+    "Repeat and similar units separately: counts, rates with Wilson 95% intervals, and their own one-sided McNemar p. Reported, not part of the bar.",
+    "Per arm: steps, wall time and token-derived cost ESTIMATE per verified task, each over ALL trials; a null cost on any trial makes the cell null, never 0.",
+    "Per arm: false done (a done claim graded fail, ungradable or not graded)."
+  ],
+  "guardrails": [
+    "Zero stored skills from a learn trial that is not verified (done claim, gate verified and accepted, grader pass on the same bytes).",
+    "Every stored skill's source learn trial is graded pass by the grader; a source graded fail or ungradable is a breach.",
+    "A per-skill scan finds no fixture value or intent value of its source task, no host path and no digest (the skill content rules, src/skills/record.ts).",
+    "Every stored skill is the one its source row names, and the store head is the pack's head."
+  ],
+  "notShown": [
+    "p > 0.05, or the difference is not in the pre-registered direction",
+    "fewer than 5 discordant units, reported as underpowered at n with the discordant count",
+    "a guardrail breached",
+    "a parity, schedule or coverage check failed (no exclusions: a harness fault stays in the denominator as not verified)",
+    "the base surface is not the rule's"
+  ],
+  "refusals": [
+    "the pack's pre-registration hash does not match this file, or this file is not committed at the pack's recorded commit",
+    "an analysis file changed since the freeze",
+    "simulated and real rows mixed, or a simulated row in a real pack",
+    "a real pack while ratification.status is not ratified"
+  ],
+  "evidence": {
+    "r1": false,
+    "simulatedRowsCount": false,
+    "note": "Experiment rows (evidence never-r1), not myco.benchmark.arm-row/1. No measurement run happens until the integrity fixes land and the lead gives GO for track M (capability-spec §4)."
+  },
+  "rowSchema": "myco.skills.rep-row/1",
+  "packSchema": "myco.skills.rep-pack/1",
+  "analysis": {
+    "command": "npx tsx scripts/m-learning-analysis.ts --pack <pack-dir>",
+    "files": [
+      {
+        "path": "scripts/m-learning-analysis.ts",
+        "sha256": "bdc71b6d4135901f3d5a9bf05ce4bcad8642b2d1dcb6b30083a42eaf9de7f30c"
+      },
+      {
+        "path": "src/foundry/stats.ts",
+        "sha256": "3efa8f92d76c439c339bbd9637c4f207378d502d2392d690eef81f6071853582"
+      },
+      {
+        "path": "src/skills/m-analysis.ts",
+        "sha256": "4cc450b6037a8b1885f9cbec92919ee1e2a57cbc9be2ffd2e4d25e28c6847567"
+      },
+      {
+        "path": "src/skills/m-prereg.ts",
+        "sha256": "7c3c74299d7ef8cd55e8625cbb188de618ea403efbc09b9482dd60ca1786a807"
+      },
+      {
+        "path": "src/skills/record.ts",
+        "sha256": "62b6f0079dd2c406bec1bd0c73f9b2c258e34bb05b2ebc187567f849530b0b11"
+      },
+      {
+        "path": "src/skills/rep-row.ts",
+        "sha256": "65d764e7eeb9e54097b246a8c293df37d7da39e06005364e040e8e164bab2434"
+      },
+      {
+        "path": "src/skills/rep-taskset.ts",
+        "sha256": "e4861e65905f891e624af3785cd410d470f4144e084399cad0c6a9a83b270292"
+      },
+      {
+        "path": "src/skills/store.ts",
+        "sha256": "799028b6a6be43fab3c3fa249b8c31b646ec2f85ca32f391118b8e8d7bbb2721"
+      }
+    ]
+  }
+}
