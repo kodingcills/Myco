@@ -24,7 +24,7 @@ import {
   resolveBaseSurface,
 } from "../../src/skills/m-prereg.ts";
 import { canonicalJson } from "../../src/skills/record.ts";
-import { ROOT } from "./helpers.ts";
+import { ROOT, TASKS } from "./helpers.ts";
 
 const LOADED = readMPrereg(ROOT);
 const FILES = repoFileSha256(ROOT);
@@ -65,13 +65,49 @@ describe("m-v1 pre-registration", () => {
     expect(preregHash({ ...parsed, stepBudget: 31 })).not.toBe(LOADED.hash);
   });
 
-  it("is proposed, not ratified, with raise-n and every deviation flagged lead ruling pending", () => {
-    const r = LOADED.prereg.ratification;
-    expect(r.status).toBe("proposed");
-    expect(r.pending.map((x) => x.id)).toEqual(
-      expect.arrayContaining(["n", "learn-families", "base-surface-both-shown", "model-id"]),
-    );
-    expect(r.pending.find((x) => x.id === "n")?.proposed).toMatch(/n = 40/);
+  it("records the 06:21Z lead rulings; only n stays pending, so it is not ratified", () => {
+    const p = LOADED.prereg as unknown as {
+      ratification: { status: string; pending: { id: string; proposed: string }[] };
+      leadRulings: { id: string; time: string; ruling: string; applied: string }[];
+    };
+    expect(p.ratification.status).toBe("proposed");
+    expect(p.ratification.pending.map((x) => x.id)).toEqual(["n"]);
+    expect(p.ratification.pending[0]?.proposed).toMatch(/caps? n at 60/);
+    expect(p.leadRulings.map((r) => r.id).sort()).toEqual([
+      "advice-delivery",
+      "base-surface-both-shown",
+      "learn-families",
+      "model-id",
+      "n",
+    ]);
+    for (const r of p.leadRulings) expect(r.time).toBe("2026-11-27T06:21Z");
+    expect(p.leadRulings.find((r) => r.id === "n")?.applied).toMatch(/^Not yet/);
+  });
+
+  it("the n ceiling is real: rep-v1's rules allow at most 30 learn + 30 similar from fc-v1", () => {
+    const pool = TASKS.filter((t) => t.faultClass === "none" && t.satisfiable);
+    const seeds = new Set(pool.map((t) => t.fixtureSeed));
+    expect(pool.length).toBe(60);
+    expect(seeds.size).toBe(20);
+    // Learn and similar tasks come from disjoint fixture seeds; each seed has 3 tasks.
+    expect(Math.floor(seeds.size / 2) * 3).toBe(30);
+  });
+
+  it("the VM-hours estimate follows 375 s per trial, learn + 2 arms x test units", () => {
+    const v = (
+      LOADED.prereg as unknown as {
+        vmHoursEstimate: {
+          perTrialSeconds: number;
+          options: { learn: number; testUnits: number; trials: number; vmHours: number }[];
+        };
+      }
+    ).vmHoursEstimate;
+    expect(v.perTrialSeconds).toBe(375);
+    for (const o of v.options) {
+      expect(o.trials).toBe(o.learn + 2 * o.testUnits);
+      expect(o.vmHours).toBeCloseTo((o.trials * 375) / 3600, 1);
+    }
+    expect(v.options.map((o) => o.testUnits)).toEqual([90, 60, 40]);
   });
 
   it("records M's place after I and J", () => {

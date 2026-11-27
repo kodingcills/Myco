@@ -55,17 +55,29 @@ The analysis refuses a pack in each of these cases:
 
 A simulated pack is plumbing. Its result is `simulated`, never `shown`.
 
-## Pending lead rulings
+## Lead rulings (2026-11-27 06:21Z)
 
-`ratification.pending` lists five items, each written as proposed:
+The lead's rulings are recorded in `leadRulings`. Four are applied as they were proposed:
 
-1. Whether to raise n (spec §6).
-2. The learn split is `calc-record-edit` only, because `calc-multi-step` has no published,
-   graded task set yet.
-3. The tie-break when both I and J are shown.
-4. The model id.
-5. How advice reaches the agent.
+- `rep-v1`, `calc-record-edit` only;
+- the base-surface tie-break: whichever of I or J has the higher grader-verified rate, and a
+  tie goes to I;
+- the model, `claude-sonnet-5-5`;
+- harness-side advice delivery, with the cold arm on an empty store.
 
-When the lead rules, the ruling is written into `prereg.json` and its status becomes
-`ratified`. That changes the hash, and it must happen before the first run. Any change after
-the first run is a new version, `m-v2` (spec §3.3).
+One item is still pending: **n**. The lead ruled n = 90. But `rep-v1`, which the lead also
+accepted, allows at most n = 60. fc-v1 has 60 no-fault tasks on 20 fixture seeds, and a
+similar task may share no fixture seed with a learn task. The coordinator is asked to choose
+one of these options (`ratification.pending`):
+
+- **A:** add fc-v1's fault-class tasks;
+- **B:** n = 60;
+- **C:** a new task set with generated tasks;
+- **D:** n = 40, pre-registered as exploratory.
+
+`vmHoursEstimate` gives each option's VM hours at the repo's measured 375 s per trial: 23.4 h
+for n = 90, 15.6 h for n = 60, 10.4 h for n = 40. Until n is settled, the status stays
+`proposed`, and the analysis refuses every real pack.
+
+Ratifying changes the hash, and it must happen before the first run. Any change after the
+first run is a new version, `m-v2` (spec §3.3).
