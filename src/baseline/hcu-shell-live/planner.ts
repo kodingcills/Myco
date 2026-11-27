@@ -39,13 +39,18 @@
  * gate arm's one-shot `-p PROMPT` launch does not do.
  */
 import type { ChildProcess } from "node:child_process";
+import {
+  CHILD_ENV_ALLOWLIST,
+  childEnv,
+  HarnessFault,
+  interpretResult,
+  PILOT_MODEL,
+  parseUsage,
+  type SpawnFn,
+  subscriptionPreflight,
+} from "../../pilot/claude-cli.ts";
+import type { TokenUsage } from "../../pilot/cost.ts";
 import type { Screenshot } from "../c1.ts";
-import type { Usage } from "../index.ts";
-import { HarnessFault } from "../../pilot/runner.ts";
-import { interpretResult, parseUsage, type SpawnFn } from "../../pilot/claude-transport.ts";
-import { CHILD_ENV_ALLOWLIST, PILOT_MODEL } from "../../pilot/config.ts";
-import { estimateCost } from "../../pilot/cost.ts";
-import { childEnv, subscriptionPreflight } from "../../pilot/launch.ts";
 import {
   HCU_SHELL_PROMPT,
   type HcuShellDecision,
@@ -54,6 +59,7 @@ import {
   renderShellHistory,
 } from "../hcu-shell/decision.ts";
 import type { HcuShellPlanner } from "../hcu-shell/trial.ts";
+import type { Usage } from "../index.ts";
 
 /** The planner model: the myco-gate arm's, so the head-to-head compares one model. */
 export const HCU_PLANNER_MODEL = PILOT_MODEL;
@@ -135,6 +141,11 @@ export interface SubscriptionPlannerOptions {
   /** The parent environment: its NAMES are checked, and only allowlisted names are passed. */
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly cwd: string;
+  /**
+   * Prices one call's tokens as a token-derived ESTIMATE (the runner passes the pilot's frozen
+   * rates, `estimateCost`); null when unpriced. Injected so this module loads no cost tables.
+   */
+  readonly price: (tokens: TokenUsage) => number | null;
   /** One call's deadline; SIGTERM, then SIGKILL after `killGraceMs`. Default 180 s. */
   readonly callTimeoutMs?: number;
   readonly killGraceMs?: number;
@@ -153,7 +164,11 @@ export function plannerInput(turn: Parameters<HcuShellPlanner["act"]>[0]): strin
       content: [
         {
           type: "image",
-          source: { type: "base64", media_type: turn.screenshot.mimeType, data: turn.screenshot.data },
+          source: {
+            type: "base64",
+            media_type: turn.screenshot.mimeType,
+            data: turn.screenshot.data,
+          },
         },
         { type: "text", text },
       ],
@@ -188,6 +203,7 @@ export function readPlannerCall(
   stdout: string,
   stderr: string,
   code: number | null,
+  price: (tokens: TokenUsage) => number | null,
 ): { text: string; usage: Usage } {
   const messages = parseStream(stdout);
   // Classification first, on the gate arm's own classifier (it reads arrays of messages).
@@ -230,9 +246,10 @@ export function readPlannerCall(
   const tokens = parseUsage(result.usage);
   const usage: Usage = {};
   if (tokens !== null) {
-    usage.prompt = tokens.inputTokens + tokens.cacheReadInputTokens + tokens.cacheCreationInputTokens;
+    usage.prompt =
+      tokens.inputTokens + tokens.cacheReadInputTokens + tokens.cacheCreationInputTokens;
     usage.completion = tokens.outputTokens;
-    const estimate = estimateCost(HCU_PLANNER_MODEL, tokens).estimatedModelUsd;
+    const estimate = price(tokens);
     // Unmeasured stays absent (the runner turns that into a null cost, never 0).
     if (estimate !== null) usage.cost = estimate;
   }
@@ -254,7 +271,9 @@ export function createSubscriptionPlanner(opts: SubscriptionPlannerOptions): Hcu
   const env = { ...childEnv(opts.env, CHILD_ENV_ALLOWLIST), ...PLANNER_FIXED_ENV };
   const timeoutMs = opts.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
 
-  async function call(input: string): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  async function call(
+    input: string,
+  ): Promise<{ stdout: string; stderr: string; code: number | null }> {
     return new Promise((resolve, reject) => {
       let child: ChildProcess;
       try {
@@ -297,7 +316,8 @@ export function createSubscriptionPlanner(opts: SubscriptionPlannerOptions): Hcu
         exited = true;
         clearTimeout(deadline);
         clearTimeout(killTimer);
-        if (timedOut) reject(new SubscriptionPlannerFailure("planner-timeout", "call deadline passed"));
+        if (timedOut)
+          reject(new SubscriptionPlannerFailure("planner-timeout", "call deadline passed"));
         else resolve({ stdout, stderr, code });
       });
       child.stdin?.on("error", () => {
@@ -311,7 +331,7 @@ export function createSubscriptionPlanner(opts: SubscriptionPlannerOptions): Hcu
     paid: true,
     async act(turn) {
       const ran = await call(plannerInput(turn));
-      const { text, usage } = readPlannerCall(ran.stdout, ran.stderr, ran.code);
+      const { text, usage } = readPlannerCall(ran.stdout, ran.stderr, ran.code, opts.price);
       const calls = [{ model: HCU_PLANNER_MODEL, usage }];
       const decision: HcuShellDecision | undefined = parseHcuShellDecision(text.trim());
       return decision === undefined ? { calls } : { calls, decision };

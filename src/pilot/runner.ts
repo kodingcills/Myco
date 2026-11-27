@@ -49,6 +49,7 @@ import { type AgentLaunchPlan, auditAgentLaunch } from "../integrity/launch.ts";
 import type { CaptureInput } from "../integrity/vault.ts";
 import { newVaultKey, VerdictVault } from "../integrity/vault.ts";
 import { AB_EXPERIMENT, loadPrereg, realRunRefusals } from "./ab-prereg.ts";
+import { HarnessFault } from "./claude-cli.ts";
 import { backoffS, configSha256, correctionPolicy, type PilotConfig } from "./config.ts";
 import { estimateCost, type TokenUsage } from "./cost.ts";
 import { trialLaunchPlan } from "./launch.ts";
@@ -61,18 +62,8 @@ import {
   taskStatus,
 } from "./ledger.ts";
 
-/** A fault of the harness, not the agent: the only kind of attempt that is ever re-run. */
-export class HarnessFault extends Error {
-  readonly harnessClass: PilotHarnessClass;
-  /** Tokens the agent used before the fault, when the transport measured them. */
-  readonly usage: TokenUsage | null;
-  constructor(harnessClass: PilotHarnessClass, message: string, usage: TokenUsage | null = null) {
-    super(message);
-    this.name = "HarnessFault";
-    this.harnessClass = harnessClass;
-    this.usage = usage;
-  }
-}
+/** Defined in `claude-cli.ts` (dependency-free, TIF-268); re-exported unchanged. */
+export { HarnessFault };
 
 export interface AttemptContext {
   readonly task: BenchmarkTask;
