@@ -6,7 +6,7 @@
   "spec": "docs/product/capability-spec.md §2 M, under §1 (shared rules), §3 (pre-registration), §4 (constraints) and §5 (sequencing)",
   "ratification": {
     "status": "ratified",
-    "note": "Ratified by the lead rulings of 2026-11-27 06:21Z and 06:30Z, relayed by the coordinator (leadRulings). No ruling is pending. Any change after the first measurement run is a new version, m-v2 (capability-spec §3.3).",
+    "note": "Ratified by the lead rulings of 2026-11-27 06:21Z and 06:30Z, relayed by the coordinator (leadRulings). No ruling is pending. Re-frozen before merge and before any run, after round-1 verification on PR #646: exact learn-slot coverage, the gate audit-log guardrail, the LEAD_RULING_PENDING and simulated-flag refusals, and a Wilson interval on false done. Any change after the first measurement run is a new version, m-v2 (capability-spec §3.3).",
     "pending": []
   },
   "leadRulings": [
@@ -138,7 +138,7 @@
     "minDiscordant": 5,
     "direction": "skills-on better than cold",
     "unit": "the rep-v1 test unit, paired across arms",
-    "statement": "Shown only if skills-on is better than cold with p <= 0.05 and at least 5 discordant units, every guardrail holds, parity and the schedule hold, and every scheduled trial is present."
+    "statement": "Shown only if skills-on is better than cold with p <= 0.05 and at least 5 discordant units, every guardrail holds, parity and the schedule hold, and every scheduled trial is present exactly once (each learn slot's (scheduleIndex, taskId) and each test slot's (scheduleIndex, unit, arm) once; no exclusions, no retries)."
   },
   "secondary": [
     "Repeat and similar units separately: counts, rates with Wilson 95% intervals, and their own one-sided McNemar p. Reported, not part of the bar.",
@@ -149,7 +149,8 @@
     "Zero stored skills from a learn trial that is not verified (done claim, gate verified and accepted, grader pass on the same bytes).",
     "Every stored skill's source learn trial is graded pass by the grader; a source graded fail or ungradable is a breach.",
     "A per-skill scan finds no fixture value or intent value of its source task, no host path and no digest (the skill content rules, src/skills/record.ts).",
-    "Every stored skill is the one its source row names, and the store head is the pack's head."
+    "Every stored skill is the one its source row names, and the store head is the pack's head.",
+    "Zero stored skills from a non-verified gate verdict, checked against the gate audit log (capability-spec §2 M): the pack carries the learn phase's gate decision log (gate-audit.jsonl, myco-gate --audit), every logged decision for a stored skill's source run names that run's task, the last one is verified and accepted, and the source row's gate field agrees. A missing or unreadable log is not shown."
   ],
   "notShown": [
     "p > 0.05, or the difference is not in the pre-registered direction",
@@ -161,8 +162,9 @@
   "refusals": [
     "the pack's pre-registration hash does not match this file, or this file is not committed at the pack's recorded commit",
     "an analysis file changed since the freeze",
-    "simulated and real rows mixed, or a simulated row in a real pack",
-    "a real pack while ratification.status is not ratified"
+    "simulated and real rows mixed, or a simulated row in a real pack (a row or pack is real only when its simulated field is absent or exactly false and its planner is a model id)",
+    "a real pack while ratification.status is not ratified",
+    "a real pack while any lead ruling is pending (LEAD_RULING_PENDING)"
   ],
   "evidence": {
     "r1": false,
@@ -171,6 +173,7 @@
   },
   "rowSchema": "myco.skills.rep-row/1",
   "packSchema": "myco.skills.rep-pack/1",
+  "packFiles": ["pack.json", "rows.jsonl", "store/skills.jsonl", "gate-audit.jsonl"],
   "analysis": {
     "command": "npx tsx scripts/m-learning-analysis.ts --pack <pack-dir>",
     "files": [
@@ -184,7 +187,7 @@
       },
       {
         "path": "src/skills/m-analysis.ts",
-        "sha256": "73010921cf79aad17b8506d61fcd0bc7fc5a3d47b73999d5f75fdb5cfdb7dcec"
+        "sha256": "9c991fbc653ca4f42444136dd7551e5dfe915af4b36710a72ded0f851d0859ce"
       },
       {
         "path": "src/skills/m-prereg.ts",
@@ -200,7 +203,7 @@
       },
       {
         "path": "src/skills/rep-taskset.ts",
-        "sha256": "78386339579c709b984475c9ee6cc8c681523af662f21b04934e54ed9b9e8aa1"
+        "sha256": "6f8d861ac12398036caf8b922c8aa68cb7d4600bf7a58923d8dacfb43069a062"
       },
       {
         "path": "src/skills/store.ts",

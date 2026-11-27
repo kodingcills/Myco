@@ -16,6 +16,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { wilson } from "../../src/foundry/stats.ts";
 import { newVaultKey, VerdictVault } from "../../src/integrity/vault.ts";
 import { admit } from "../../src/skills/admission.ts";
 import { mcnemarOneSided } from "../../src/skills/arm.ts";
@@ -25,6 +26,7 @@ import {
   mcnemarExactOneSided,
   type RepPack,
   type RepPackMeta,
+  readRepPack,
 } from "../../src/skills/m-analysis.ts";
 import {
   type LoadedMPrereg,
@@ -70,6 +72,8 @@ let storeText: string;
 let storeHead: string;
 let skillId: string;
 let learnRows: RepRow[];
+/** The learn phase's gate decision log, as `myco-gate --audit` writes it (one GateResult a line). */
+let auditText: string;
 
 const common = (loaded: LoadedMPrereg) => ({
   preregHash: loaded.hash,
@@ -89,6 +93,7 @@ beforeAll(async () => {
   });
   const store = SkillStore.open(join(base, "store"));
   learnRows = [];
+  const audit: string[] = [];
   for (const [i, taskId] of SCHEDULE.learn.entries()) {
     const task = taskById(taskId);
     const runId = `learn-${i}`;
@@ -104,6 +109,7 @@ beforeAll(async () => {
       );
       if (run.outcome.status !== "decided") throw new Error("refused");
       const gate = run.outcome.result;
+      audit.push(JSON.stringify(gate));
       const persisted = (gate.evidenceRefs ?? []).find((r) => r.kind === "persisted-state");
       const admitted = store.add(
         admit(candidateFrom(task, runId, run, { plannerModelId: MODEL }), forbiddenFor(task)),
@@ -164,6 +170,7 @@ beforeAll(async () => {
   storeHead = snap.head;
   skillId = snap.skills[0]?.record.skillId as string;
   storeText = readFileSync(join(base, "store", STORE_FILE), "utf8");
+  auditText = `${audit.join("\n")}\n`;
 }, 60_000);
 afterAll(() => rmSync(base, { recursive: true, force: true }));
 
@@ -225,7 +232,12 @@ function pack(v: Verdicts, opts: { loaded?: LoadedMPrereg; simulated?: boolean }
     storeHead: opts.simulated ? GENESIS : storeHead,
     simulated: opts.simulated === true,
   };
-  return { meta, rows: [...learn, ...test], storeText: opts.simulated ? "" : storeText };
+  return {
+    meta,
+    rows: [...learn, ...test],
+    storeText: opts.simulated ? "" : storeText,
+    gateAuditText: auditText,
+  };
 }
 
 const units = COMMITTED.manifest.test.map((u) => u.unitId);
@@ -267,6 +279,7 @@ describe("the bar (exact one-sided McNemar, p <= 0.05, >= 5 discordant)", () => 
       storedFromNonVerified: 0,
       storedSourceNotPass: 0,
       scanHits: 0,
+      storedNotVerifiedInGateAudit: 0,
     });
     expect(r.r1Evidence).toBe(false);
   });
@@ -329,8 +342,63 @@ describe("refusals (capability-spec §3.2, §3.5)", () => {
   it("refuses a real pack under a pre-registration with a ruling still pending", () => {
     const r = analyze(pack(split(8, 1), { loaded: UNRATIFIED }), UNRATIFIED);
     expect(r.result).toBe("refused");
-    expect(r.refusals).toEqual(["PREREG_NOT_RATIFIED"]);
+    expect(r.refusals).toEqual(["PREREG_NOT_RATIFIED", "LEAD_RULING_PENDING: n"]);
     expect(r.primary).toBeNull();
+  });
+
+  it("LEAD_RULING_PENDING: never shown while a ruling is pending, even marked ratified", () => {
+    const prereg = structuredClone(COMMITTED.prereg) as unknown as Record<string, unknown>;
+    prereg.ratification = { status: "ratified", pending: [{ id: "late", proposed: "open" }] };
+    const loaded = {
+      ...COMMITTED,
+      prereg: prereg as unknown as LoadedMPrereg["prereg"],
+      hash: preregHash(prereg),
+    };
+    const r = analyze(pack(split(8, 1, 10), { loaded }), loaded);
+    expect(r.result).toBe("refused");
+    expect(r.refusals).toContain("LEAD_RULING_PENDING: late");
+    // An unreadable pending list is pending too.
+    const prereg2 = structuredClone(COMMITTED.prereg) as unknown as Record<string, unknown>;
+    prereg2.ratification = { status: "ratified" };
+    const loaded2 = {
+      ...COMMITTED,
+      prereg: prereg2 as unknown as LoadedMPrereg["prereg"],
+      hash: preregHash(prereg2),
+    };
+    const r2 = analyze(pack(split(8, 1, 10), { loaded: loaded2 }), loaded2);
+    expect(r2.refusals).toEqual(["LEAD_RULING_PENDING: unreadable"]);
+  });
+
+  it("a row is real only when `simulated` is absent or exactly false", () => {
+    const p = pack(split(8, 1, 10));
+    for (const flag of [true, "true", "false", 1, 0, null]) {
+      const rows = p.rows.map((r, i) =>
+        i === 40 ? ({ ...r, simulated: flag } as unknown as RepRow) : r,
+      );
+      expect(analyze({ ...p, rows }).refusals, String(flag)).toEqual([
+        "SIMULATED_ROWS_NEVER_COUNT",
+      ]);
+    }
+    // Absent is real: not refused as simulated (the row is still checked for its own fields).
+    const rows = p.rows.map((r, i) => {
+      if (i !== 40) return r;
+      const { simulated: _s, ...rest } = r;
+      return rest as unknown as RepRow;
+    });
+    expect(analyze({ ...p, rows }).refusals).toEqual([]);
+  });
+
+  it("a pack whose `simulated` is present and not exactly false is never shown", () => {
+    const p = pack(split(8, 1, 10));
+    for (const flag of ["false", 1, null]) {
+      const r = analyze({
+        ...p,
+        meta: { ...p.meta, simulated: flag as unknown as boolean },
+      });
+      expect(r.result, String(flag)).not.toBe("shown");
+    }
+    const { simulated: _s, ...absent } = p.meta;
+    expect(analyze({ ...p, meta: absent as RepPackMeta }).result).toBe("shown");
   });
 
   it("refuses a pack whose pre-registration hash does not match", () => {
@@ -441,12 +509,14 @@ describe("not shown: guardrails, schedule, coverage, parity, base surface", () =
       meta: { ...p.meta, storeHead: head },
       rows,
       storeText: forgedText,
+      gateAuditText: p.gateAuditText,
     });
     expect(res.guardrails).toEqual({
       storedSkills: 1,
       storedFromNonVerified: 0,
       storedSourceNotPass: 0,
       scanHits: 1,
+      storedNotVerifiedInGateAudit: 0,
     });
     expect(res.notShown).toEqual(["GUARDRAIL_SCAN: 1"]);
   });
@@ -456,6 +526,134 @@ describe("not shown: guardrails, schedule, coverage, parity, base surface", () =
     const res = analyze({ ...p, rows: p.rows.slice(0, -1) });
     expect(res.result).toBe("not-shown");
     expect(res.notShown).toContain("INCOMPLETE_TEST: 119 of 120");
+  });
+
+  it("B1: a re-run of one learn task in another's slot is caught (count alone is not enough)", () => {
+    const p = strong();
+    // Round-1 repro: replace the learn row at scheduleIndex 5 with a copy of the one at 3,
+    // under a new runId. 30 learn rows, every row matches its own index: still not shown.
+    const at3 = p.rows.find((r) => r.phase === "learn" && r.scheduleIndex === 3) as RepRow;
+    const rows = p.rows.map((r) =>
+      r.phase === "learn" && r.scheduleIndex === 5 ? { ...at3, runId: "learn-3-rerun" } : r,
+    );
+    const res = analyze({ ...p, rows });
+    expect(res.result).toBe("not-shown");
+    expect(res.notShown).toEqual(["DUPLICATE_LEARN_SLOT 3", "MISSING_LEARN_SLOT 5"]);
+  });
+
+  it("a learn row moved to an empty slot is caught by slot, not only by count", () => {
+    const p = strong();
+    // Drop slot 5 and give the copy of 3 the index 5: the SCHEDULE check fires on the task, and
+    // the missing slot is named.
+    const at3 = p.rows.find((r) => r.phase === "learn" && r.scheduleIndex === 3) as RepRow;
+    const rows = p.rows.map((r) =>
+      r.phase === "learn" && r.scheduleIndex === 5
+        ? { ...at3, runId: "learn-3-rerun", scheduleIndex: 5 }
+        : r,
+    );
+    expect(analyze({ ...p, rows }).notShown).toEqual(["SCHEDULE learn-3-rerun"]);
+  });
+
+  it("a duplicated test trial in another trial's place is caught (DUPLICATE_TRIAL)", () => {
+    const p = strong();
+    const test = p.rows.filter((r) => r.phase === "test");
+    const keep = test[0] as RepRow;
+    const lost = test[2] as RepRow;
+    const rows = p.rows.map((r) => (r === lost ? { ...keep, runId: "test-0-rerun" } : r));
+    const res = analyze({ ...p, rows });
+    expect(res.result).toBe("not-shown");
+    // (The lost trial's outcome also leaves the bar, so the p-value line may move too.)
+    expect(res.notShown).toEqual(
+      expect.arrayContaining([
+        `DUPLICATE_TRIAL ${keep.unitId} ${keep.arm}`,
+        `MISSING_TEST_SLOT ${lost.scheduleIndex}`,
+      ]),
+    );
+    expect(res.notShown.filter((x) => !x.startsWith("P_ABOVE_ALPHA"))).toHaveLength(2);
+  });
+
+  it("a test row whose kind is not its unit's is a task mismatch", () => {
+    const p = strong();
+    const i = p.rows.findIndex((r) => r.phase === "test");
+    const r0 = p.rows[i] as RepRow;
+    const other = r0.kind === "repeat" ? "similar" : "repeat";
+    const rows = p.rows.map((r, j) => (j === i ? rebuild(r, { kind: other }) : r));
+    expect(analyze({ ...p, rows }).notShown).toEqual([`TASK_MISMATCH ${r0.runId}`]);
+  });
+
+  it("false done counts a done claim that was not graded, with a Wilson interval", () => {
+    const p = strong();
+    // A cold false-done row becomes ungraded: still false done (49), never dropped.
+    const i = p.rows.findIndex((r) => r.arm === "cold" && r.outcome === "false-done");
+    const rows = p.rows.map((r, j) => (j === i ? rebuild(r, { grade: null }) : r));
+    expect(rows[i]?.outcome).toBe("ungraded");
+    const s = analyze({ ...p, rows }).secondary as NonNullable<
+      ReturnType<typeof analyze>["secondary"]
+    >;
+    expect(s.cold.falseDone).toBe(49);
+    expect(s.cold.falseDoneWilson95).toEqual(wilson(49, 60));
+    expect(s.cold.falseDoneWilson95?.[0]).toBeGreaterThan(0.69);
+  });
+
+  it("gate audit log: a missing or unreadable log is not shown", () => {
+    const p = strong();
+    expect(analyze({ ...p, gateAuditText: null }).notShown).toContain("GATE_AUDIT_UNREADABLE");
+    expect(analyze({ ...p, gateAuditText: "not json\n" }).notShown).toContain(
+      "GATE_AUDIT_UNREADABLE",
+    );
+    expect(analyze({ ...p, gateAuditText: "[1]\n" }).notShown).toContain("GATE_AUDIT_UNREADABLE");
+  });
+
+  it("gate audit log: a stored skill whose logged decision is not verified is a breach", () => {
+    const p = strong();
+    const lines = (p.gateAuditText as string).split("\n").filter((l) => l.length > 0);
+    const src = learnRows.find((r) => r.admittedSkillId === skillId) as RepRow;
+    const edit = (f: (d: Record<string, unknown>) => Record<string, unknown>) =>
+      `${lines
+        .map((l) => {
+          const d = JSON.parse(l);
+          return JSON.stringify(d.request?.runId === src.runId ? f(d) : d);
+        })
+        .join("\n")}\n`;
+    const breach = (text: string) => {
+      const res = analyze({ ...p, gateAuditText: text });
+      expect(res.result).toBe("not-shown");
+      expect(res.guardrails?.storedNotVerifiedInGateAudit).toBe(1);
+      expect(res.notShown).toEqual(["GUARDRAIL_GATE_AUDIT: 1"]);
+    };
+    // The log says refuted while the row says verified.
+    breach(edit((d) => ({ ...d, verdict: "refuted", accepted: false })));
+    // Verified but not accepted.
+    breach(edit((d) => ({ ...d, accepted: false })));
+    // Logged under another task.
+    breach(
+      edit((d) => ({
+        ...d,
+        request: { ...(d.request as Record<string, unknown>), taskId: "other-task" },
+      })),
+    );
+    // No decision logged for the source run.
+    breach(`${lines.filter((l) => JSON.parse(l).request?.runId !== src.runId).join("\n")}\n`);
+    // A later decision for the same run that is not verified: the last one counts.
+    const refuted = { ...JSON.parse(lines[0] as string), verdict: "uncertain", accepted: false };
+    refuted.request = { ...refuted.request, runId: src.runId, taskId: src.taskId };
+    breach(`${lines.join("\n")}\n${JSON.stringify(refuted)}\n`);
+    // An empty log: nothing logged for any stored skill (both skills breach).
+    expect(analyze({ ...p, gateAuditText: "" }).notShown).toEqual(["GUARDRAIL_GATE_AUDIT: 2"]);
+  });
+
+  it("gate audit log: the row's gate field must agree with the logged decision", () => {
+    const p = strong();
+    const lines = (p.gateAuditText as string).split("\n").filter((l) => l.length > 0);
+    // The log's verified decision is real; the row is forged to "uncertain" (it also stops
+    // being verified, which the other guardrail counts; this one counts the disagreement).
+    const rows = p.rows.map((r) =>
+      r.admittedSkillId === skillId && r.gate !== null
+        ? { ...r, gate: { ...r.gate, verdict: "uncertain" as const } }
+        : r,
+    );
+    const res = analyze({ ...p, rows, gateAuditText: `${lines.join("\n")}\n` });
+    expect(res.guardrails?.storedNotVerifiedInGateAudit).toBe(1);
   });
 
   it("a harness fault stays in the denominator as not verified", () => {
@@ -555,6 +753,20 @@ describe("CLI", () => {
     expect(report.result).toBe("refused");
     expect(report.refusals).toEqual(["PREREG_NOT_COMMITTED"]);
   }, 30_000);
+
+  it("reads gate-audit.jsonl from the pack, and null when the pack has none", () => {
+    const dir = join(base, "read-pack");
+    mkdirSync(join(dir, "store"), { recursive: true });
+    const p = pack(split(8, 1));
+    writeFileSync(join(dir, "pack.json"), JSON.stringify(p.meta));
+    writeFileSync(join(dir, "rows.jsonl"), `${p.rows.map((r) => JSON.stringify(r)).join("\n")}\n`);
+    writeFileSync(join(dir, "store", "skills.jsonl"), p.storeText);
+    expect(readRepPack(dir).gateAuditText).toBeNull();
+    expect(analyze(readRepPack(dir)).notShown).toContain("GATE_AUDIT_UNREADABLE");
+    writeFileSync(join(dir, "gate-audit.jsonl"), p.gateAuditText as string);
+    expect(readRepPack(dir).gateAuditText).toBe(p.gateAuditText);
+    expect(analyze(readRepPack(dir)).result).toBe("shown");
+  });
 
   it("git reads a committed file at a commit, and nothing for a non-sha", () => {
     const head = spawnSync("git", ["rev-parse", "HEAD"], {

@@ -8,7 +8,10 @@ Track M is "Learning from verified outcomes".
 | File | What it is |
 | --- | --- |
 | `prereg.json` | The pre-registration. Its SHA-256 over canonical JSON is the **pre-registration hash**, and every pack must record it. |
-| `rep-v1-manifest.json` | The `rep-v1` task set: 30 learn tasks, 30 repeat units and 30 similar units, all from fc-v1. The builder is `src/skills/rep-taskset.ts`, run with `seeds.taskBuild`. |
+| `rep-v1-manifest.json` | The `rep-v1` task set: 30 learn tasks, 30 repeat units and 30 similar units, all from fc-v1. The builder is `src/skills/rep-taskset.ts`, run with `seeds.taskBuild`. `taskSet.manifestSha256` is the SHA-256 of the manifest's **canonical JSON** (`repManifestSha256`), not of the file's bytes. |
+
+A pack is a directory: `pack.json`, `rows.jsonl`, `store/skills.jsonl` and `gate-audit.jsonl`
+(the learn phase's gate decision log, as `myco-gate --audit` writes it).
 
 ## What it fixes before any run
 
@@ -21,7 +24,8 @@ Track M is "Learning from verified outcomes".
   measured only after I's bar is decided, and after J's if J has run. The pack records the
   surface and the I and J outcomes it was chosen from. The analysis applies the rule again.
 - **Seeds.** One builds the task set, one sets the run order (ABBA blocks over test units),
-  and one is for bootstrap intervals.
+  and one is for bootstrap intervals. m-v1's analysis uses the exact test and Wilson intervals
+  only, so the bootstrap seed is recorded (as §3.1 asks) but not used.
 - **Run settings.** Step budget 30, retry budget 0, model `claude-sonnet-5-5`, all on Claude
   Ultra.
 - **The analysis.** `scripts/m-learning-analysis.ts` and the `src/skills` modules it runs.
@@ -41,7 +45,14 @@ these:
 - the grader graded it `pass`, on the same bytes.
 
 The gate's verdict alone never stores a skill (`src/skills/rep-row.ts`,
-`src/skills/admission.ts`).
+`src/skills/admission.ts`). The analysis also checks every stored skill against the gate's
+own decision log (`gate-audit.jsonl`): the last logged decision for its source run must be
+verified and accepted, for that run's task, and agree with the row. A pack without a readable
+log is not shown.
+
+Coverage is exact. Each learn slot (its schedule index and task) and each test slot (index,
+unit and arm) must appear exactly once. A re-run of one learn task in another's slot is not
+shown, even when the row count is right.
 
 ## What the analysis refuses
 
@@ -50,8 +61,10 @@ The analysis refuses a pack in each of these cases:
 - the pack's hash does not match `prereg.json`;
 - `prereg.json` is not committed at the pack's recorded commit;
 - an analysis file has changed since the freeze;
-- the pack mixes simulated and real rows;
-- the pack is real and `ratification.status` is not `ratified`.
+- the pack mixes simulated and real rows (a row or pack is real only when its `simulated`
+  field is absent or exactly `false`);
+- the pack is real and `ratification.status` is not `ratified`;
+- the pack is real and a lead ruling is pending (`LEAD_RULING_PENDING`).
 
 A simulated pack is plumbing. Its result is `simulated`, never `shown`.
 
@@ -80,5 +93,6 @@ tasks) adds a task-set build.
 `vmHoursEstimate` gives 150 trials, 15.6 VM-hours at the repo's measured 375 s per trial.
 The figure doubles if Ultra trials are twice as slow.
 
-Any change from now on, and any change after the first run, is a new version: `m-v2` (spec
-§3.3).
+This version was re-frozen once, before merge and before any run, to fix what round-1
+verification on PR #646 found (exact learn coverage, the audit-log guardrail). Any change
+from now on, and any change after the first run, is a new version: `m-v2` (spec §3.3).

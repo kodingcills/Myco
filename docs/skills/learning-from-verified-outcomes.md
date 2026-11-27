@@ -188,8 +188,8 @@ makes the cell null, never 0. The cost is a token-derived ESTIMATE, never billed
 ## Proposed pre-registered measurement bar (for the capability spec)
 
 **Superseded.** The capability spec (§2 M) set track M's bar, and
-`docs/product/capability-prereg/m-v1/` now freezes it as proposed, with a lead ruling still
-pending. It uses the task set `rep-v1`, gate-less test rows and one base surface. It does not
+`docs/product/capability-prereg/m-v1/` now freezes it, ratified by the lead rulings of
+2026-11-27 06:21Z and 06:30Z (no ruling pending). It uses the task set `rep-v1`, gate-less test rows and one base surface. It does not
 use `skills-rs-v1`, Bonferroni over two baselines, or gated warm rows. This section is kept
 as a record of the earlier proposal.
 
