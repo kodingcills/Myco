@@ -101,9 +101,7 @@ export function vmLaunchRefusals(
       "the VM session lock is not held: run the launch under scripts/vm-session.sh -- node --import tsx <runner> launch ... (FD 9 must reach the runner)",
     );
   if (config.pacing.concurrency !== 1)
-    out.push(
-      `a live VM run needs concurrency 1 (one trial VM), not ${config.pacing.concurrency}`,
-    );
+    out.push(`a live VM run needs concurrency 1 (one trial VM), not ${config.pacing.concurrency}`);
   return out;
 }
 

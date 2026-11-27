@@ -27,8 +27,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { BenchmarkTask } from "../benchmark/taskset.ts";
 import { GATE_STATE_FILE } from "../benchmark/gated-rows.ts";
+import type { BenchmarkTask } from "../benchmark/taskset.ts";
 import { resolveRunLiveToken } from "../integration/run-live-token.ts";
 import type { CaptureInput } from "../integrity/vault.ts";
 import { AgentClient, SshTunnel } from "../win/agent-client.ts";
@@ -71,7 +71,10 @@ export function guestTrialPaths(
   guestRoot: string,
   trialKey: string,
 ): { readonly dir: string; readonly persisted: string } {
-  if (!/^[A-Za-z]:\\(?:[A-Za-z0-9_.-]+\\)*[A-Za-z0-9_-]+$/.test(guestRoot) || guestRoot.includes(".."))
+  if (
+    !/^[A-Za-z]:\\(?:[A-Za-z0-9_.-]+\\)*[A-Za-z0-9_-]+$/.test(guestRoot) ||
+    guestRoot.includes("..")
+  )
     throw new Error(`bad guest root ${JSON.stringify(guestRoot)}: a plain absolute Windows path`);
   if (!/^[a-z0-9][a-z0-9-]{0,95}$/.test(trialKey))
     throw new Error(`bad trial key ${JSON.stringify(trialKey)} for a guest path`);
@@ -282,7 +285,18 @@ export function realVmBackend(opts: RealVmBackendOptions): VmBackend {
       return new Promise((resolve, reject) => {
         // stdio[9] = 9 passes the session's lock descriptor through; nothing else is inherited.
         const stdio = opts.inheritLockFd
-          ? (["ignore", "inherit", "pipe", "ignore", "ignore", "ignore", "ignore", "ignore", "ignore", 9] as const)
+          ? ([
+              "ignore",
+              "inherit",
+              "pipe",
+              "ignore",
+              "ignore",
+              "ignore",
+              "ignore",
+              "ignore",
+              "ignore",
+              9,
+            ] as const)
           : (["ignore", "inherit", "pipe"] as const);
         let child: ChildProcess;
         try {

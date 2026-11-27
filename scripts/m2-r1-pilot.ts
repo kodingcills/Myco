@@ -26,9 +26,9 @@ import { configSha256, type PacingConfig } from "../src/pilot/config.ts";
 import { COST_BASIS } from "../src/pilot/cost.ts";
 import { fakeDriver, PILOT_DRY_RUN_PLANNER, virtualClock } from "../src/pilot/dry-run.ts";
 import { preflightRefusal, subscriptionPreflight, trialLaunchPlan } from "../src/pilot/launch.ts";
-import { launchR1Live } from "../src/pilot/live-launch.ts";
-import { realLiveDeps } from "../src/pilot/live-deps.ts";
 import { loadLedger, PROGRESS_FILE, pilotStatus } from "../src/pilot/ledger.ts";
+import { realLiveDeps } from "../src/pilot/live-deps.ts";
+import { launchR1Live } from "../src/pilot/live-launch.ts";
 import { loadReviewedConfig, publishedTasks } from "../src/pilot/reviewed.ts";
 import { exportRun, runPilot } from "../src/pilot/runner.ts";
 
