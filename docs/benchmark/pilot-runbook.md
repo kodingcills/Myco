@@ -62,7 +62,7 @@ fault with a fixed, code-only message, never an agent outcome):
 |---|---|---|
 | `concurrency` | 1 (max 3) | the pilot holds one subscription session; builder and verifier sessions keep the rest |
 | `interTrialDelayS` | 90 | spreads the pilot's use across the rate window instead of bursting (one global spacing across all workers) |
-| `rateLimitBackoffS` / `rateLimitBackoffMaxS` | 300 / 3600 | on a **transient** limit (HTTP 429 / 529, "rate limit", "overloaded"), every worker waits 5 min, doubling to 60 min. On a live run a trial re-runs after at most one transient limit per invocation (one extra cold reset); a second one on the same trial pauses the run (exit 4) |
+| `rateLimitBackoffS` / `rateLimitBackoffMaxS` | 300 / 3600 | on a **transient** limit (HTTP 429 / 529, "rate limit", "overloaded"), every worker waits 5 min, doubling to 60 min. On a live run a trial re-runs after at most one transient limit **in total** (one extra cold reset, counted from the ledger, so a resume cannot reset it); a second one on the same trial pauses the run (exit 4), and later resumes do not start that trial again (`transientCapped` in the result; take it to the lead) |
 | `maxConsecutiveRateLimits` | 4 | then the run pauses (exit 4); re-run the same command later. A lost login (`auth`) or a credit, billing or quota error (`billing`) stops it at once (exit 5); the subscription's usage limit (`usage-limit`) stops it at once with exit 7 and goes to the lead |
 | `trialTimeoutS` | 1800 | a longer trial is stopped and recorded as a harness `timeout` |
 | `maxAttemptsPerTrial` | 3 | attempts per trial that end in a harness fault **other than** a rate limit or a lost login; once spent, the trial is closed for this run directory and the run reports `incomplete` |
@@ -112,17 +112,22 @@ start hitting limits, raise `--delay-s`. Override per invocation with `--concurr
   fault's message is in the ledger (`faultMessage`), so the rule holds across a resume: a
   fault before a stop or crash plus the identical fault after the resume stops at once.
 - **Re-run in place:** a harness fault before a decision: `rate-limit` (a transient 429 / 529
-  / overloaded: backs off; on a live run at most once per trial per invocation, then pauses),
+  / overloaded: backs off; on a live run at most once per trial in total, across resumes,
+  then pauses),
   `error-result`, `timeout`, `spawn-failed`, `transport-error`, or `crash` (the runner died
   mid-trial). Classification reads structured fields first (the
   assistant message's `error` class such as `rate_limit` / `authentication_failed`,
   `api_error_status`, the result `subtype` and `is_error`, the exit status) and a tested text
   vocabulary only as a fallback (`src/pilot/claude-transport.ts`). Any error result it cannot
   name is `error-result`: a harness fault, never an agent outcome. The text vocabulary is
-  applied **only** to runs that did not complete normally (no result event, an error result,
-  a non-zero or null exit, a structured error) and to their stderr, never to a clean result:
-  fc-v1's fixtures hold values such as qty 401, 403 and 429, so a clean result with no
-  `DONE`/`NOT DONE` line is the agent's "no claim", decided and never re-run. Under the
+  applied **only** to runs that did not complete normally (no result event: stdout and stderr
+  both; an error result: its text, `errors[]` and stderr; a non-zero or null exit; a
+  structured error), never to a clean result: fc-v1's fixtures hold values such as qty 401,
+  403 and 429, so a clean result with no `DONE`/`NOT DONE` line is the agent's "no claim",
+  decided and never re-run. One narrow, fail-closed exception (PR #598 round 3): a clean
+  result with no claim line whose text matches the usage-limit vocabulary (no bare numbers)
+  is `usage-limit` (exit 7, nothing counted); a clean result with a claim line is never
+  reclassified. Under the
   topped-up-run ruling (lead, 2026-11-26 12:22Z) the faulted attempt stays in the ledger with
   its arm row (cause `harness`) and its cost estimate, and the re-run's `start` line names it
   in `supersedes`. Its cost counts toward R7.
@@ -220,7 +225,9 @@ npx tsx scripts/m2-r1-pilot.ts status --out runs/r1-pilot
 ```
 
 Exit codes: 0 ok / complete, 1 run failed, 2 usage, 3 refused, 4 paused or incomplete,
-5 fail-closed stop (`auth`, `billing`, `api-key`), 6 two identical failures in a row.
+5 fail-closed stop (`auth`, `billing`, `api-key`), 6 two identical failures in a row,
+7 the subscription's usage limit (`usage-limit`; no retry, no attempt spent; take it to the
+lead before resuming).
 
 **The heartbeat.** A live launch keeps `<run dir>/live-status.json` (the A/B:
 `<A/B dir>/stage<N>/live-status.json`) up to date. It is rewritten atomically every 60 s and on
