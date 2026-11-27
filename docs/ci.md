@@ -175,7 +175,11 @@ docs-only plan. It clones OSWorld and WindowsAgentArena at their pinned commits,
 evaluators' Python dependencies from `scripts/upstream-evaluator-requirements.txt` (hash
 pinned), checks the committed `benchmark/upstream/` manifests against the clones, and runs
 `test/benchmark/upstream-evaluator.test.ts` with `MYCO_UPSTREAM_REQUIRED=1`, so it fails
-instead of skipping when an input is missing.
+instead of skipping when an input is missing. It then runs the public-R1 harness tests
+(`upstream-r1-grade.test.ts`, `osworld-gate-hook.test.ts`) against the OSWorld clone: the
+pinned harness file hashes, the `DesktopEnv.evaluate()` path in `run_single_example`, the
+documented runner patch, and the DONE gate hook through upstream's real loop with fakes. No VM
+or container is started.
 
 See what the planner would do for your branch:
 
