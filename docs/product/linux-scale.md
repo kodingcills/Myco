@@ -215,9 +215,19 @@ set's declared fixture digest, and U's desktop facts. It writes one directory:
 - **One hashed form** (lead ruling 2026-11-26 23:06Z), the same as the episode export's: every
   hashed value is `h-` plus the first 60 hex digits (240 bits) of the sha256 under the tag
   `myco.dataset.export-text/1`. It carries no input text and fits the 64-character key and app
-  cap. Closing is idempotent for exactly that form; no other `h-` string (64 hex, 59 or 61 hex,
-  upper case) counts as already hashed. That holds for ids too: an id starting `h-` or `H-` that
-  is not exactly `h-<60 hex>` is hashed, and the container refuses one written verbatim.
+  cap. No other `h-` string (64 hex, 59 or 61 hex, upper case) counts as already hashed. That
+  holds for ids too: an id starting `h-` or `H-` that is not exactly `h-<60 hex>` is hashed, and
+  the container refuses one written verbatim.
+- **Provenance-bound hashes** (#579 O3; `src/export-guard/provenance.ts`): even an exact
+  `h-<60 hex>` input is kept as is ONLY when the harness produced it, that is when the caller's
+  `hashLedger` records it for this episode id and path (a record's fields under its
+  `episode.id` and a `record:` path). Any other `h-<60 hex>` (an agent's) is re-hashed, so it
+  cannot carry hex-encoded text or a hex-letter identity out. `containerHashLedger(dir)` builds
+  the ledger from a container the harness wrote, after it validates, so re-exporting a
+  container's episodes is byte-identical. A container written before #579 is trusted by it, so
+  re-export from the source episodes instead.
+- **Accent folding** (#579 O2): identity matching also strips accents on both sides (NFD,
+  combining marks removed, `ø`/`ł`/`æ` transliterated), so `JOSE` matches a configured `josé`.
 - **`validateContainer`** never throws. Every problem is `CODE location`, with a fixed code from
   `CONTAINER_PROBLEM_CODES`. A location never echoes foreign text: a foreign entry name appears
   only as `h-<12 hex>`, a JSON key that is not a plain identifier, or that holds an identity,
