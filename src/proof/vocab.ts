@@ -157,27 +157,26 @@ const isIn = (list: readonly string[], raw: string): boolean => list.includes(ra
 
 /**
  * A tool name: as is when it is in `TOOL_NAMES`, else hashed (an `h-<60hex>` is kept only when
- * the harness's `ledger` records it for `action.tool`, #579 O3; likewise below).
+ * the harness's `ledger` records it at `scope`: the run id and the field's exact bundle path,
+ * `proofScope` in `closed.ts`, #579 O3 / #599; likewise below).
  */
-export function closedTool(raw: string, ledger: HashLedger = NO_LEDGER): string {
-  return isIn(TOOL_NAMES, raw) ? raw : hashValue(raw, "action.tool", ledger);
+export function closedTool(raw: string, ledger: HashLedger = NO_LEDGER, scope = ""): string {
+  return isIn(TOOL_NAMES, raw) ? raw : hashValue(raw, scope, ledger);
 }
 
 /** An app id: as is when it is in `REGISTERED_APPS`, else hashed. */
-export function closedApp(raw: string, ledger: HashLedger = NO_LEDGER): string {
-  return isIn(REGISTERED_APPS, raw) ? raw : hashValue(raw, "action.app", ledger);
+export function closedApp(raw: string, ledger: HashLedger = NO_LEDGER, scope = ""): string {
+  return isIn(REGISTERED_APPS, raw) ? raw : hashValue(raw, scope, ledger);
 }
 
 /** A policy subject: as is when it is a known tool or a registered app, else hashed. */
-export function closedSubject(raw: string, ledger: HashLedger = NO_LEDGER): string {
-  return isIn(TOOL_NAMES, raw) || isIn(REGISTERED_APPS, raw)
-    ? raw
-    : hashValue(raw, "policy.subject", ledger);
+export function closedSubject(raw: string, ledger: HashLedger = NO_LEDGER, scope = ""): string {
+  return isIn(TOOL_NAMES, raw) || isIn(REGISTERED_APPS, raw) ? raw : hashValue(raw, scope, ledger);
 }
 
 /** A key sequence: as is when it is spelled from the key vocabulary, else hashed. */
-export function closedKeys(raw: string, ledger: HashLedger = NO_LEDGER): string {
-  return isClosedKeys(raw) ? raw : hashValue(raw, "action.keys", ledger);
+export function closedKeys(raw: string, ledger: HashLedger = NO_LEDGER, scope = ""): string {
+  return isClosedKeys(raw) ? raw : hashValue(raw, scope, ledger);
 }
 
 /** Every single vocabulary member: constants of this code, skipped by the identity scan. */
