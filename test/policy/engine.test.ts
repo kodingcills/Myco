@@ -116,11 +116,13 @@ describe("policy engine: the spec's example policies", () => {
     const c = e.decide(one);
     expect(c.decision).toMatchObject({ decision: "deny", code: "POLICY_DESTRUCTIVE_LIMIT" });
     expect(e.evaluate(one)).toMatchObject({ code: "POLICY_DESTRUCTIVE_LIMIT" });
-    c.hold.release(); // a deny's hold is empty: releasing it frees nothing
-    expect(e.evaluate(one)).toMatchObject({ code: "POLICY_DESTRUCTIVE_LIMIT" });
     a.hold.release();
     a.hold.release(); // settling twice is a no-op
     a.hold.commit();
+    // A deny reserved nothing (c is still unsettled), so releasing a frees a slot.
+    expect(e.evaluate(one)).toMatchObject({ decision: "allow" });
+    c.hold.release(); // a deny's hold is empty: releasing it frees nothing extra
+    c.hold.commit();
     expect(e.evaluate(one)).toMatchObject({ decision: "allow" });
     b.hold.commit();
     b.hold.commit();

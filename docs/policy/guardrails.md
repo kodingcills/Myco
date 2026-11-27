@@ -59,12 +59,14 @@ bytes. Editing the file during a trial changes nothing.
 | Situation | Result |
 |---|---|
 | Config missing or unreadable | the trial refuses to start (`POLICY_CONFIG_MISSING`); it never runs unpoliced |
+| Config is not a regular file: a symlink at its own name, a FIFO, a device such as `/dev/zero`, a directory, or swapped for one before the open | refused before any blocking open (`POLICY_CONFIG_NOT_REGULAR`) |
+| Config larger than 64 KiB (`MAX_CONFIG_BYTES`), by `lstat` or by the bounded read | refused, never read in full (`POLICY_CONFIG_TOO_LARGE`) |
 | Config path relative, or resolving inside the document directory or any agent root | refused (`POLICY_CONFIG_NOT_HOST`) |
 | Trial scope does not resolve | refused (`POLICY_SCOPE_INVALID`) |
 | `flagged-screen` declared with no host screen sensor | refused (`POLICY_SENSOR_MISSING`) |
 | Config does not parse to the closed schema | every action denied (`POLICY_CONFIG_INVALID`) |
 | Facts reducer, classifier or sensor throws | denied (`POLICY_ENGINE_ERROR`) |
-| Action the reducer cannot reduce (Save As, an unknown action kind) | denied (`POLICY_ACTION_UNRECOGNISED`) |
+| Action the reducer cannot reduce: a key chord off the closed allow-list (Save As, any Alt chord or menu accelerator, F10, F12, close or quit chords, a chord the guest would refuse), typed text with a control character, an unknown action kind | denied (`POLICY_ACTION_UNRECOGNISED`) |
 | Async decision slower than the timeout (default 2 s) | denied (`POLICY_ENGINE_TIMEOUT`) |
 | Synchronous actuator meets `require-approval` | refused (`POLICY_APPROVAL_REQUIRED`), never allowed |
 
@@ -87,6 +89,22 @@ The async wrappers use track N's seam (`guardAction`, `PauseGate`, `HandoffPolic
 passes while any handoff is open, `require-approval` is a forced handoff the human approves,
 fixes or rejects, and `deny` is a `PolicyDenial` (no handoff opens). With no broker,
 `NO_APPROVALS` cancels every approval request, so nothing is forwarded.
+
+Key chords are parsed exactly as the guest parses them (`src/policy/chord.ts`, mirroring
+`parse_chord` in `runtime/crates/myco-rt-agent/src/act.rs`): split on `+`, trim with Rust's
+whitespace set, drop empty parts, collapse repeated modifiers, and treat an ASCII capital as
+Shift held. So `ctrl++s`, `+ctrl+s`, `ctrl+ctrl+s` and `super+s` are all Save, which writes over
+the original document. Every other chord is judged against a closed allow-list of chords that
+cannot write a file by themselves (clipboard, undo, select-all, formatting, navigation, plain
+keys); anything off the list is `POLICY_ACTION_UNRECOGNISED`. That includes `Ctrl+S` with a
+capital S, which the guest delivers as Ctrl+Shift+S (Save As).
+
+`destructive-limit` holds exactly under concurrency. The engine judges an action and reserves
+its destructive operations in one synchronous step (`PolicyEngine.decide`), counting both the
+operations already forwarded and those reserved by actions that have not settled yet. The
+wrapper commits the reservation when it forwards the action and releases it on any other
+outcome: a refusal, a rejected or cancelled approval, a timeout, or a throw. An action waiting
+for a human's approval keeps its slot reserved.
 
 Known limit: a click carries only a target ref, so a click on a Save or Delete button is not
 recognised by the reducers. The violation checker still sees its effect in the file-system diff.

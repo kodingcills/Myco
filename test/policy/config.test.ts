@@ -229,6 +229,21 @@ describe("policy config: pinned, closed, fail closed", () => {
     expect(readBoundedNoBlock(a, MAX_CONFIG_BYTES, lstatSync(a))).toMatchObject({ ok: true });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "a symlink swapped in at the last component is refused by the open, never followed",
+    () => {
+      const f = fixture();
+      const target = writeConfig(f, ALL_RULES, "target.json");
+      const link = join(f.host, "swapped.json");
+      symlinkSync(target, link);
+      // Even with the target's own inode as the expectation, O_NOFOLLOW refuses the link.
+      expect(readBoundedNoBlock(link, MAX_CONFIG_BYTES, lstatSync(target))).toEqual({
+        ok: false,
+        code: "not-regular",
+      });
+    },
+  );
+
   it("a parsed config is deeply frozen", () => {
     const c = parsePolicyConfig(JSON.stringify(ALL_RULES));
     expect(c).not.toBeNull();
