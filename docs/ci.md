@@ -21,7 +21,7 @@ nothing is skipped or fails for lack of one.
 | `ci.yml` | `myco-agent tests (macos-latest)` | yes | no |
 | `ci.yml` | `runtime guest agent tests (ubuntu-latest)` | yes | yes |
 | `ci.yml` | `linux path (ubuntu-latest)` | yes, when the plan says so | no |
-| `ci.yml` | `newcomer path (ubuntu-latest)` | yes, when the plan says so (same condition as `linux path`) | no |
+| `ci.yml` | `newcomer path (ubuntu-latest)`, `newcomer path (macos-latest)` | yes, when the plan says so (same condition as `linux path`) | no |
 | `ci.yml` | `safe parallelism (ubuntu-latest)` | yes (every PR; not gated by the plan) | no |
 | `ci.yml` | `m2 evidence and scorecard` | yes, when the plan says so | no |
 | `ci.yml` | `strict isolation (ubuntu-latest)` | yes | no |
