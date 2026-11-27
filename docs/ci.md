@@ -53,7 +53,9 @@ nothing is skipped or fails for lack of one.
   suite instead of skipping it. See `docs/product/strict-isolation.md` (track L2).
 - **Benchmark release.** Track G (#613). Builds the public false-completion release
   twice with `scripts/benchmark-release-package.ts` and requires byte-identical archives,
-  then `scripts/benchmark-release-repro.sh` unpacks one into an empty directory (no clone,
+  then `scripts/benchmark-release-repro.sh` reads the archive's raw tar headers (refusing pax,
+  GNU and every other non-regular entry, owners, modes, and entries `SHA256SUMS` does not
+  list), unpacks it into an empty directory (no clone,
   no `node_modules`) and runs `sha256sum -c`, the bundled task-set verifier and the bundled
   grader with plain Node; the regraded rows must equal the bundle's expected rows. See
   `docs/benchmark/release.md`.
