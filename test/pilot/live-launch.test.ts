@@ -1702,6 +1702,9 @@ describe("#606 S1+S2: stderr-only quota wording on a claimless clean result, and
         ] as const)
           expect([t, shape, await launchWith(output)]).toEqual([t, shape, decidedAs(claim)]);
     },
+    // Dozens of full fake launches per case: well under 1 s here, but past vitest's default
+    // 5 s on a loaded macOS runner (check (macos-latest) on #692). Assertions unchanged.
+    60_000,
   );
 
   it.each(NON_CLAIM_LINES)(
@@ -1717,6 +1720,7 @@ describe("#606 S1+S2: stderr-only quota wording on a claimless clean result, and
         ] as const)
           expect([t, shape, await launchWith(output)]).toEqual([t, shape, expectedFor(cls)]);
     },
+    60_000, // the same batch of full fake launches per case as above
   );
 
   it("the A/B launch's live driver shares the classifier: stderr-only and NBSP quota wording is usage-limit there too", async () => {
