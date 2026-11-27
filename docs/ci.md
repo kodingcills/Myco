@@ -141,6 +141,13 @@ The `linux path`, `newcomer path` and `m2 evidence and scorecard` jobs are not r
 a successful plan names a narrow mode and says their paths are untouched (`test/{linux,init}/`;
 `test/m2/`). Their other paths (`src/`, `scripts/`) always run everything. `viewer-perf` is unchanged.
 
+The `upstream evaluators (osworld, waa)` job (#682) is not required either and skips only for a
+docs-only plan. It clones OSWorld and WindowsAgentArena at their pinned commits, installs the
+evaluators' Python dependencies from `scripts/upstream-evaluator-requirements.txt` (hash
+pinned), checks the committed `benchmark/upstream/` manifests against the clones, and runs
+`test/benchmark/upstream-evaluator.test.ts` with `MYCO_UPSTREAM_REQUIRED=1`, so it fails
+instead of skipping when an input is missing.
+
 See what the planner would do for your branch:
 
 ```sh
