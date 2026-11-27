@@ -29,7 +29,8 @@ export type LeakKind =
   | "hostname"
   | "planted-marker"
   | "forbidden-string"
-  | "secret-shaped";
+  | "secret-shaped"
+  | "identity";
 
 /** The canary #542's tests plant in env, home, fixtures, the vault and oracle config. */
 export const PLANTED_MARKER = ["PLANTED", "FAKE", "MARKER"].join("_");
@@ -53,6 +54,14 @@ export interface HygieneOptions {
   readonly hostIdentity?: boolean;
   /** The identity to scan for instead of this machine's (tests plant one; CI's is generic). */
   readonly identity?: HostIdentity;
+  /**
+   * A file of configured identity strings (a full name, another account), one per line, `#`
+   * comments and blank lines ignored, each at least 3 characters: kind `identity` (lead ruling
+   * 2026-11-26 21:52Z). It feeds `identityStrings`, which the exporter and `validateContainer`
+   * match case-insensitively by substring in every verbatim field (joined forms included); free
+   * text is always digested. Never switched off by `hostIdentity: false`.
+   */
+  readonly identityFile?: string;
 }
 
 /**
@@ -139,7 +148,18 @@ const SECRET_SHAPED: readonly RegExp[] = [
 ];
 
 /** Account names too generic to scan for by name; their home paths are caught as host paths. */
-const GENERIC_ACCOUNTS = new Set(["root", "user", "runner", "admin", "ubuntu", "node", "nobody"]);
+/** Identical to the shared leak guard's list (#560, src/leak-guard/detect.ts); TO FILE: share it. */
+export const GENERIC_ACCOUNTS: ReadonlySet<string> = new Set([
+  "root",
+  "user",
+  "runner",
+  "admin",
+  "ubuntu",
+  "node",
+  "nobody",
+  "vscode",
+  "codespace",
+]);
 
 /** Placeholders the backend writes; they stand for desktop-local paths, never host ones. */
 const PLACEHOLDER = /<(?:home|desktop)>/g;
@@ -216,6 +236,32 @@ function machineIdentity(): HostIdentity {
     user = "";
   }
   return { user, host: hostname() };
+}
+
+/**
+ * The identity strings an export must never write verbatim, joined forms included (lead ruling
+ * 2026-11-26 21:52Z): THIS machine's account and host name (always, from os), the caller's
+ * planted identity (tests), and each line of `identityFile`. Same scope as #560: an account of at
+ * least 3 characters not in `GENERIC_ACCOUNTS`, a host name's first DNS label of at least 4 that
+ * is not `localhost`, a configured string of at least 3. Values are never printed.
+ */
+export function identityStrings(options: HygieneOptions = {}): Array<readonly [LeakKind, string]> {
+  const out: Array<readonly [LeakKind, string]> = [];
+  for (const id of [
+    machineIdentity(),
+    ...(options.identity === undefined ? [] : [options.identity]),
+  ]) {
+    if (id.user.length >= 3 && !GENERIC_ACCOUNTS.has(id.user.toLowerCase()))
+      out.push(["username", id.user]);
+    const host = id.host.split(".")[0] ?? "";
+    if (host.length >= 4 && host.toLowerCase() !== "localhost") out.push(["hostname", host]);
+  }
+  if (options.identityFile !== undefined)
+    for (const line of readFileSync(options.identityFile, "utf8").split(/\r?\n/)) {
+      const s = line.trim();
+      if (s.length >= 3 && !s.startsWith("#")) out.push(["identity", s]);
+    }
+  return out;
 }
 
 function identityPatterns(options: HygieneOptions): Array<[LeakKind, RegExp]> {
