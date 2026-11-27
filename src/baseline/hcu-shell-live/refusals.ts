@@ -75,6 +75,7 @@ export function coldBootGuardProblems(repoRoot: string): string[] {
   const out: string[] = [];
   if (!script.includes('echo "reset-trial-vm: boot class=$BOOT_CLASS'))
     out.push("cold-boot-guard-missing: reset-trial-vm.sh does not report #546's boot class");
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal bash parameter expansion in reset-trial-vm.sh.
   if (!script.includes("SNAPSHOT=${1:-${MYCO_TRIAL_SNAPSHOT:-trial-base-v3}}"))
     out.push("cold-boot-guard-missing: reset-trial-vm.sh does not default to trial-base-v3");
   return out;

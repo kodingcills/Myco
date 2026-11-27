@@ -128,6 +128,7 @@ describe("refusal functions", () => {
     mkdirSync(join(dir, "scripts"));
     writeFileSync(
       join(dir, "scripts/reset-trial-vm.sh"),
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal bash parameter expansion.
       "#!/bin/sh\nSNAPSHOT=${1:-trial-base-v2}\n",
     );
     expect(coldBootGuardProblems(dir)).toHaveLength(2);
