@@ -35,11 +35,11 @@ describe("rep-v1 task set", () => {
     );
   });
 
-  it("holds the spec's splits: 20 learn, 20 repeat, 20 similar, all rules", () => {
+  it("holds the ruled splits: 30 learn, 30 repeat, 30 similar, all rules", () => {
     expect(repManifestProblems(COMMITTED)).toEqual([]);
     expect(COMMITTED.learn).toHaveLength(REP_LEARN_N);
-    expect(COMMITTED.test.filter((u) => u.kind === "repeat")).toHaveLength(20);
-    expect(COMMITTED.test.filter((u) => u.kind === "similar")).toHaveLength(20);
+    expect(COMMITTED.test.filter((u) => u.kind === "repeat")).toHaveLength(30);
+    expect(COMMITTED.test.filter((u) => u.kind === "similar")).toHaveLength(30);
     const learnSeeds = new Set(COMMITTED.learn.map((l) => l.fixtureSeed));
     for (const u of COMMITTED.test) {
       const t = taskById(u.taskId);
@@ -63,16 +63,9 @@ describe("rep-v1 task set", () => {
     return repManifestProblems(m);
   };
   const similarIdx = COMMITTED.test.findIndex((u) => u.kind === "similar");
-  const other = TASKS.find(
-    (t) =>
-      t.faultClass === "none" &&
-      t.satisfiable &&
-      !COMMITTED.learn.some((l) => l.taskId === t.taskId) &&
-      COMMITTED.learn.some((l) => l.fixtureSeed === t.fixtureSeed),
-  );
 
   it.each([
-    ["a learn task dropped", (m: RepManifest) => (m.learn as unknown[]).pop(), "learn has 19"],
+    ["a learn task dropped", (m: RepManifest) => (m.learn as unknown[]).pop(), "learn has 29"],
     [
       "a similar task from the learn split",
       (m: RepManifest) => {
@@ -85,12 +78,10 @@ describe("rep-v1 task set", () => {
     [
       "a similar task sharing a learn fixture",
       (m: RepManifest) => {
-        const t = other as NonNullable<typeof other>;
+        // At 30 learn tasks every task on a learn fixture seed is itself a learn task, so the
+        // planted similar unit claims a learn task's fixture seed directly.
         Object.assign(m.test[similarIdx] as object, {
-          taskId: t.taskId,
-          fixtureSeed: t.fixtureSeed,
-          fixtureSha256: t.fixtureSha256,
-          instructionSha256: t.instructionSha256,
+          fixtureSeed: (m.learn[0] as RepManifest["learn"][number]).fixtureSeed,
         });
       },
       "similar shares a learn fixture",
@@ -118,7 +109,6 @@ describe("rep-v1 task set", () => {
       "not a no-fault satisfiable fc-v1 task",
     ],
   ])("refuses %s", (_name, f, expected) => {
-    expect(other).toBeDefined();
     expect(mutate(f).join("\n")).toContain(expected);
   });
 

@@ -44,17 +44,19 @@ const COMMIT = "c".repeat(40);
 const COMMITTED = readMPrereg(ROOT);
 const FILES = repoFileSha256(ROOT);
 
-/** The committed pre-registration as the lead would ratify it (pending rulings resolved). */
-function ratified(): LoadedMPrereg {
+/** The committed pre-registration (ratified by the 06:21Z and 06:30Z lead rulings). */
+const RATIFIED = COMMITTED;
+/** The same pre-registration with a ruling still pending: what a real pack must never pass. */
+function unratified(): LoadedMPrereg {
   const prereg = structuredClone(COMMITTED.prereg) as unknown as Record<string, unknown>;
-  prereg.ratification = { status: "ratified", pending: [] };
+  prereg.ratification = { status: "proposed", pending: [{ id: "n", proposed: "open" }] };
   return {
     ...COMMITTED,
     prereg: prereg as unknown as LoadedMPrereg["prereg"],
     hash: preregHash(prereg),
   };
 }
-const RATIFIED = ratified();
+const UNRATIFIED = unratified();
 const committedAt =
   (loaded: LoadedMPrereg, commit = COMMIT) =>
   (c: string, path: string) =>
@@ -256,7 +258,7 @@ describe("the bar (exact one-sided McNemar, p <= 0.05, >= 5 discordant)", () => 
     expect(r.refusals).toEqual([]);
     expect(r.notShown).toEqual([]);
     expect(r.result).toBe("shown");
-    expect(r.primary).toMatchObject({ units: 40, skillsOnOnly: 8, coldOnly: 1, both: 10 });
+    expect(r.primary).toMatchObject({ units: 60, skillsOnOnly: 8, coldOnly: 1, both: 10 });
     expect(r.primary?.p).toBeCloseTo(10 / 512, 12);
     expect(r.primary?.skillsOn.verified).toBe(18);
     expect(r.primary?.cold.verified).toBe(11);
@@ -272,12 +274,12 @@ describe("the bar (exact one-sided McNemar, p <= 0.05, >= 5 discordant)", () => 
   it("reports repeat and similar separately, and per-verified secondaries over ALL trials", () => {
     const r = analyze(pack(split(8, 1, 10)));
     const s = r.secondary as NonNullable<typeof r.secondary>;
-    expect(s.repeat.units + s.similar.units).toBe(40);
+    expect(s.repeat.units + s.similar.units).toBe(60);
     expect(s.repeat.skillsOnOnly + s.similar.skillsOnOnly).toBe(8);
-    // skills-on: 18 verified of 40; steps 10 on a pass, 30 on a fail.
-    expect(s.skillsOn.stepsPerVerified).toBeCloseTo((18 * 10 + 22 * 30) / 18, 9);
-    expect(s.skillsOn.estimatedUsdPerVerified).toBeCloseTo((40 * 0.02) / 18, 9);
-    expect(s.cold.falseDone).toBe(29);
+    // skills-on: 18 verified of 60; steps 10 on a pass, 30 on a fail.
+    expect(s.skillsOn.stepsPerVerified).toBeCloseTo((18 * 10 + 42 * 30) / 18, 9);
+    expect(s.skillsOn.estimatedUsdPerVerified).toBeCloseTo((60 * 0.02) / 18, 9);
+    expect(s.cold.falseDone).toBe(49);
   });
 
   it("a null cost makes the cost cell null, never 0", () => {
@@ -292,7 +294,7 @@ describe("the bar (exact one-sided McNemar, p <= 0.05, >= 5 discordant)", () => 
   it("underpowered at n with fewer than 5 discordant units", () => {
     const r = analyze(pack(split(4, 0, 10)));
     expect(r.result).toBe("not-shown");
-    expect(r.notShown).toEqual(["UNDERPOWERED_AT_N: 4 discordant of 40"]);
+    expect(r.notShown).toEqual(["UNDERPOWERED_AT_N: 4 discordant of 60"]);
   });
 
   it("5 of 5 discordant is shown (p = 1/32), the smallest table entry", () => {
@@ -324,8 +326,8 @@ describe("the bar (exact one-sided McNemar, p <= 0.05, >= 5 discordant)", () => 
 });
 
 describe("refusals (capability-spec §3.2, §3.5)", () => {
-  it("refuses a real pack under the committed, not-yet-ratified pre-registration", () => {
-    const r = analyze(pack(split(8, 1), { loaded: COMMITTED }), COMMITTED);
+  it("refuses a real pack under a pre-registration with a ruling still pending", () => {
+    const r = analyze(pack(split(8, 1), { loaded: UNRATIFIED }), UNRATIFIED);
     expect(r.result).toBe("refused");
     expect(r.refusals).toEqual(["PREREG_NOT_RATIFIED"]);
     expect(r.primary).toBeNull();
@@ -341,7 +343,7 @@ describe("refusals (capability-spec §3.2, §3.5)", () => {
   it("refuses a pre-registration that is not committed at the pack's commit", () => {
     const r = analyze(pack(split(8, 1)), RATIFIED, committedAt(RATIFIED, "9".repeat(40)));
     expect(r.refusals).toEqual(["PREREG_NOT_COMMITTED"]);
-    const edited = analyze(pack(split(8, 1)), RATIFIED, committedAt(COMMITTED));
+    const edited = analyze(pack(split(8, 1)), RATIFIED, committedAt(UNRATIFIED));
     expect(edited.refusals).toEqual(["PREREG_NOT_COMMITTED"]);
   });
 
@@ -365,13 +367,13 @@ describe("refusals (capability-spec §3.2, §3.5)", () => {
   });
 
   it("a simulated pack is plumbing: analysed, never shown, even unratified", () => {
-    const r = analyze(pack(split(20, 0), { loaded: COMMITTED, simulated: true }), COMMITTED);
+    const r = analyze(pack(split(20, 0), { loaded: UNRATIFIED, simulated: true }), UNRATIFIED);
     expect(r.refusals).toEqual([]);
     expect(r.result).toBe("simulated");
     expect(r.primary?.skillsOnOnly).toBe(20);
-    const mixed = pack(split(20, 0), { loaded: COMMITTED, simulated: true });
+    const mixed = pack(split(20, 0), { loaded: UNRATIFIED, simulated: true });
     const rows = mixed.rows.map((x, i) => (i === 30 ? rebuild(x, { plannerModelId: MODEL }) : x));
-    expect(analyze({ ...mixed, rows }, COMMITTED).refusals).toEqual([
+    expect(analyze({ ...mixed, rows }, UNRATIFIED).refusals).toEqual([
       "REAL_ROWS_IN_SIMULATED_PACK",
     ]);
   });
@@ -453,7 +455,7 @@ describe("not shown: guardrails, schedule, coverage, parity, base surface", () =
     const p = strong();
     const res = analyze({ ...p, rows: p.rows.slice(0, -1) });
     expect(res.result).toBe("not-shown");
-    expect(res.notShown).toContain("INCOMPLETE_TEST: 79 of 80");
+    expect(res.notShown).toContain("INCOMPLETE_TEST: 119 of 120");
   });
 
   it("a harness fault stays in the denominator as not verified", () => {
@@ -464,7 +466,7 @@ describe("not shown: guardrails, schedule, coverage, parity, base surface", () =
         : r,
     );
     const res = analyze({ ...p, rows });
-    expect(res.primary?.units).toBe(40);
+    expect(res.primary?.units).toBe(60);
     expect(res.primary?.skillsOnOnly).toBe(7);
   });
 
@@ -490,10 +492,10 @@ describe("not shown: guardrails, schedule, coverage, parity, base surface", () =
     const at = (i: number, over: Partial<RepRowInput>) =>
       p.rows.map((r, j) => (j === i ? rebuild(r, over) : r));
     expect(analyze({ ...p, rows: at(30, { plannerModelId: "claude-other-1" }) }).notShown).toEqual(
-      expect.arrayContaining(["ROW test-10: PARITY_MODEL", "PARITY_MIXED_MODEL"]),
+      expect.arrayContaining(["ROW test-0: PARITY_MODEL", "PARITY_MIXED_MODEL"]),
     );
     expect(analyze({ ...p, rows: at(30, { stepBudget: 40 }) }).notShown).toContain(
-      "ROW test-10: PARITY_STEP_BUDGET",
+      "ROW test-0: PARITY_STEP_BUDGET",
     );
     const onIdx = p.rows.findIndex((r) => r.arm === "skills-on");
     expect(analyze({ ...p, rows: at(onIdx, { storeHead: "9".repeat(64) }) }).notShown).toContain(
@@ -536,7 +538,7 @@ describe("not shown: guardrails, schedule, coverage, parity, base surface", () =
 });
 
 describe("CLI", () => {
-  it("refuses a real pack under the committed proposed pre-registration (exit 3)", () => {
+  it("refuses a pack whose recorded commit does not hold the pre-registration (exit 3, real git)", () => {
     const dir = join(base, "cli-pack");
     mkdirSync(join(dir, "store"), { recursive: true });
     const p = pack(split(8, 1), { loaded: COMMITTED });
@@ -551,7 +553,7 @@ describe("CLI", () => {
     expect(r.status).toBe(3);
     const report = JSON.parse(r.stdout);
     expect(report.result).toBe("refused");
-    expect(report.refusals).toContain("PREREG_NOT_RATIFIED");
+    expect(report.refusals).toEqual(["PREREG_NOT_COMMITTED"]);
   }, 30_000);
 
   it("git reads a committed file at a commit, and nothing for a non-sha", () => {

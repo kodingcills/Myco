@@ -14,7 +14,7 @@
  * it computes the bar and reports `shown` or `not-shown` with every reason. Simulated packs
  * are plumbing: their result is `simulated`, never `shown`.
  *
- * The primary metric is the grader-verified rate on the 40 test units (§1.1 via
+ * The primary metric is the grader-verified rate on the 60 test units (§1.1 via
  * `repOutcome`); the gate's verdict is never the measurement. Nothing here is R1 evidence.
  */
 import { spawnSync } from "node:child_process";
