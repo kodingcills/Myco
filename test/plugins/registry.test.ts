@@ -5,7 +5,7 @@
  * labelled with plugin provenance and as not-R1-evidence.
  */
 import { spawn } from "node:child_process";
-import { appendFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { benchmarkArmRowSchema } from "../../schemas/benchmark-ledger.ts";
@@ -17,13 +17,14 @@ import {
   runPluginOracle,
   runPluginReader,
 } from "../../src/plugins/host/registry.ts";
-import { fsizeBlocks, fsizeUnit } from "../../src/plugins/host/sandbox.ts";
-import { MAX_SELFTEST_OUTPUT_BYTES } from "../../src/plugins/sdk/protocol.ts";
+import { fsizeBlocks, fsizeUnit, runInSandbox } from "../../src/plugins/host/sandbox.ts";
+import { MAX_SELFTEST_OUTPUT_BYTES, PLUGIN_SPEC } from "../../src/plugins/sdk/protocol.ts";
 import {
   cleanupPlugins,
   copyExample,
   EXAMPLE_DIR,
   makePlugin,
+  tempDir,
   utf8,
   watchDisk,
 } from "./helpers.ts";
@@ -213,6 +214,39 @@ export default {
         fsizeBlocks(MAX_SELFTEST_OUTPUT_BYTES, unit) * unit, // and no further than one block past it
       );
       expect(w.leftover).toEqual([]);
+    },
+    T,
+  );
+
+  // #574 N1: the docs quote the self-test ceiling as a number ("8 MiB + 1024" in
+  // docs/plugins/byoa.md and docs/security/plugin-sandbox.md); the flood test above asserts
+  // relative to the imported constant, so this pins the value the docs state.
+  it("the self-test ceiling is the 8 MiB the docs state", () => {
+    expect(MAX_SELFTEST_OUTPUT_BYTES).toBe(8 * 1024 * 1024);
+  });
+
+  // #574 N2: the reason the self-test call has its own ceiling. The example plugin's
+  // selftest-cases answer (three ledgers, each with a correct save and five corruptions, base64)
+  // is far over a 256-byte verdict cap, yet the plugin registers, because selftest-cases runs
+  // under MAX_SELFTEST_OUTPUT_BYTES, not the manifest's maxOutputBytes. The bite check runs the
+  // same call under the manifest cap and sees it refused, so the registration really did need
+  // the separate ceiling.
+  it(
+    "a plugin whose self-test answer exceeds its manifest maxOutputBytes still registers",
+    () => {
+      const caps = {
+        timeoutMs: 5000,
+        memoryMb: 64,
+        maxInputBytes: 1048576,
+        maxOutputBytes: 256, // the manifest floor
+      };
+      const dir = copyExample({ caps });
+      const target = { dir, entry: join(dir, "plugin.ts"), caps };
+      const underManifestCap = runInSandbox(target, { spec: PLUGIN_SPEC, op: "selftest-cases" });
+      expect(underManifestCap).toEqual({ ok: false, code: "PLUGIN_OUTPUT_TOO_LARGE" });
+      const r = registerPlugin(dir);
+      expect(r).toMatchObject({ ok: true });
+      if (r.ok) expect(r.registration.manifest.caps.maxOutputBytes).toBe(256);
     },
     T,
   );
@@ -517,6 +551,48 @@ describe("only issued, unchanged registrations run; results are labelled", () =>
         status: "uncertain",
         codeSource: "plugin",
       });
+    },
+    T,
+  );
+});
+
+/**
+ * #574 (carried from #558 round 1): the disk bound in docs/security/plugin-sandbox.md is per
+ * call. N calls running at once would hold N times it. Within one host process that cannot
+ * happen: every plugin call is synchronous (`spawnSync`), so it returns a value, never a
+ * promise, and its private io directory is gone before the call returns. So one host process
+ * holds at most one call's io directory at any moment, and serial calls do not accumulate.
+ * Several host processes each get their own bound (documented, not enforced; see the doc).
+ */
+describe("plugin calls are serial within one host process (#574)", () => {
+  it(
+    "each call returns synchronously and removes its io directory before it returns",
+    () => {
+      const p = txtPlugin({});
+      const r = registerPlugin(p.dir);
+      if (!r.ok) throw new Error("setup: registration failed");
+      const root = tempDir("myco-plugin-serial-");
+      const prev = process.env.TMPDIR;
+      process.env.TMPDIR = root;
+      const live: number[] = [];
+      try {
+        const doc = { fileName: "t.txt", bytes: utf8("done-and-saved\n") };
+        const calls = [
+          () => runPluginOracle(r.registration, doc, {}),
+          () => runPluginReader(r.registration, doc),
+          () => runPluginOracle(r.registration, doc, {}),
+        ];
+        for (const call of calls) {
+          const out = call();
+          expect(typeof (out as { then?: unknown }).then).toBe("undefined"); // not a promise
+          expect(out).toMatchObject({ codeSource: "plugin" }); // the plugin really ran
+          live.push(readdirSync(root).length);
+        }
+      } finally {
+        if (prev === undefined) delete process.env.TMPDIR;
+        else process.env.TMPDIR = prev;
+      }
+      expect(live).toEqual([0, 0, 0]);
     },
     T,
   );
