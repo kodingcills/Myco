@@ -37,6 +37,12 @@ describe("claude-cli", () => {
     expect(transport.RATE_LIMIT_TEXT).toBe(cli.RATE_LIMIT_TEXT);
     expect(transport.AUTH_TEXT).toBe(cli.AUTH_TEXT);
     expect(runner.HarnessFault).toBe(cli.HarnessFault);
+    // Round 4: main's #598 / #607 classifier, carried here by the merge.
+    expect(runner.ApiKeyPathFault).toBe(cli.ApiKeyPathFault);
+    expect(transport.classOfUncleanRun).toBe(cli.classOfUncleanRun);
+    expect(transport.classOfClaimlessCleanResult).toBe(cli.classOfClaimlessCleanResult);
+    expect(transport.namesUsageLimit).toBe(cli.namesUsageLimit);
+    expect(transport.apiKeySourceProblem).toBe(cli.apiKeySourceProblem);
     expect(launch.childEnv).toBe(cli.childEnv);
     expect(launch.subscriptionPreflight).toBe(cli.subscriptionPreflight);
     expect(launch.preflightRefusal).toBe(cli.preflightRefusal);
