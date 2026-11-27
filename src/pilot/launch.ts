@@ -10,13 +10,15 @@
  *
  * The plan (`trialLaunchPlan`) is exactly what `runGatedTrial` audits with
  * `auditAgentLaunch` and hands, frozen, to the transport: argv from the reviewed template,
- * one MCP server (`myco-gate`, bound to this trial), one MCP config path.
+ * two MCP servers (`myco-gate`, bound to this trial, and the separate `myco-hcu` actuator
+ * that gives the agent its desktop action tools, #732), one MCP config path.
  */
 import { join, normalize } from "node:path";
 import type { BenchmarkTask } from "../benchmark/taskset.ts";
 import { SERVER_NAME } from "../gate/mcp-server.ts";
 import type { AgentLaunchPlan } from "../integrity/launch.ts";
 import { correctionPolicy, type PilotConfig } from "./config.ts";
+import { ACTUATOR_SERVER_NAME } from "./hcu-actuator.ts";
 
 // The subscription preflight and the environment allowlist builder live in `claude-cli.ts`
 // (dependency-free, TIF-268) and are re-exported here unchanged.
@@ -82,6 +84,12 @@ export function trialLaunchPlan(
           ...config.gateServerTemplate.args.map((a) => fill(a, vars)),
           ...correctionsArgs(config),
         ],
+        env: {},
+      },
+      // The agent's action tools (#732): a separate server, with no trial, run or path input.
+      [ACTUATOR_SERVER_NAME]: {
+        command: config.actuatorServerTemplate.command,
+        args: config.actuatorServerTemplate.args.map((a) => fill(a, vars)),
         env: {},
       },
     },
