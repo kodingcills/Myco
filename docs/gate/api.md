@@ -901,10 +901,10 @@ It may reveal only:
 
 - **what the task instruction already gave the agent**: the target's record, column and the
   value it was told to write (`src/tasks/task-text.ts` states all three for a single-edit
-  task), and a multi-step task's step number. `task-text.ts` renders single-edit tasks only
-  and there is no multi-step instruction renderer yet, so for multi-step tasks this is a
-  requirement on that renderer (state each step's record, column, value and number), to be
-  pinned by a test when it lands;
+  task), and a multi-step task's step number. `task-text.ts` renders single-edit tasks only;
+  for multi-step tasks `src/tasks/multi-step-text.ts` states each step's record, column,
+  value and number, pinned against the gate's own corrections by
+  `test/tasks/multi-step-text.test.ts` (track K);
 - **what the agent can observe in its own saved document**: a target cell's A1 address and
   what that cell now holds, whether the saved document is the one it was given, and the
   addresses of non-target cells its save changed.

@@ -51,6 +51,7 @@ function trial(
     trialKey: key,
     taskId: key.split("#")[0] as string,
     faulted: false,
+    faultKind: null,
     simulated: true,
     plannerModelId: "simulated:scripted",
     instructionSha256: INSTRUCTION,
@@ -75,6 +76,7 @@ const row = (taskId: string, arm: RecoveryArm, pass: boolean, faulted = false): 
   trialKey: `${taskId}#${arm}`,
   taskId,
   faulted,
+  faultKind: faulted ? "kill-app" : null,
   simulated: false,
   plannerModelId: "claude-opus-5-5",
   instructionSha256: INSTRUCTION,
@@ -196,17 +198,26 @@ describe("K9. the pack check refuses an attempt count that is not the harness's"
   it("the honest pack passes; harness attempts = rows' attempts", async () => {
     const b = await rowsOf();
     expect(b.harnessAttempts).toBe(3);
-    expect(checkRecoveryPack(b.rows, { harnessAttempts: b.harnessAttempts })).toEqual([]);
+    expect(
+      checkRecoveryPack(b.rows, { evidence: false, harnessAttempts: b.harnessAttempts }),
+    ).toEqual([]);
   });
 
   it("a dropped attempt, a dropped row, or an extra attempt is refused", async () => {
     const b = await rowsOf();
     const r2 = b.rows[1] as RecoveryRow;
     expect(
-      checkRecoveryPack([b.rows[0] as RecoveryRow, { ...r2, attempts: 1 }], { harnessAttempts: 3 }),
+      checkRecoveryPack([b.rows[0] as RecoveryRow, { ...r2, attempts: 1 }], {
+        evidence: false,
+        harnessAttempts: 3,
+      }),
     ).toEqual([expect.stringMatching(/attempt count 2 .* 3/)]);
-    expect(checkRecoveryPack([r2], { harnessAttempts: 3 })[0]).toMatch(/attempt count/);
-    expect(checkRecoveryPack(b.rows, { harnessAttempts: 2 })[0]).toMatch(/attempt count/);
+    expect(checkRecoveryPack([r2], { evidence: false, harnessAttempts: 3 })[0]).toMatch(
+      /attempt count/,
+    );
+    expect(checkRecoveryPack(b.rows, { evidence: false, harnessAttempts: 2 })[0]).toMatch(
+      /attempt count/,
+    );
   });
 
   it("an arm config, contrast, attempt budget or duplicate that does not fit is refused", async () => {
@@ -223,6 +234,7 @@ describe("K9. the pack check refuses an attempt count that is not the harness's"
     for (const [patch, re] of bad)
       expect(
         checkRecoveryPack([{ ...r, ...patch } as RecoveryRow], {
+          evidence: false,
           harnessAttempts: r.attempts,
         }).join("|"),
       ).toMatch(re);
@@ -234,10 +246,12 @@ describe("K9. the pack check refuses an attempt count that is not the harness's"
       recoveryTools: false,
       attempts: 2,
     } as RecoveryRow;
-    expect(checkRecoveryPack([none], { harnessAttempts: 2 }).join("|")).toMatch(/budget/);
-    expect(checkRecoveryPack([r, r], { harnessAttempts: 2 * r.attempts }).join("|")).toMatch(
-      /duplicate/,
+    expect(checkRecoveryPack([none], { evidence: false, harnessAttempts: 2 }).join("|")).toMatch(
+      /budget/,
     );
+    expect(
+      checkRecoveryPack([r, r], { evidence: false, harnessAttempts: 2 * r.attempts }).join("|"),
+    ).toMatch(/duplicate/);
   });
 
   it("simulated rows are refused when checking evidence", async () => {
@@ -291,7 +305,16 @@ describe("K13. the pre-registered bar: exact one-sided McNemar, p <= 0.05, >= 5 
       ),
     ).toThrow(/twice/);
     expect(() =>
-      recoveryBar(k, batch(none.rows.map((r) => ({ ...r, faulted: !r.faulted })))),
+      recoveryBar(
+        k,
+        batch(
+          none.rows.map((r) => ({
+            ...r,
+            faulted: !r.faulted,
+            faultKind: r.faulted ? null : ("focus-change" as const),
+          })),
+        ),
+      ),
     ).toThrow(/fault labels/);
     expect(() => recoveryBar(none, k)).toThrow();
     const sim = batch(k.rows.map((r) => ({ ...r, simulated: true })));
@@ -429,7 +452,7 @@ describe("K15 (D1). only a done claim the gate verified and the grader passed is
       return { claim: "" };
     };
     expect((await one(trial("t2#K", "K", silent))).claim).toBe("no-claim");
-    for (const near of ["Done", " done", "done "]) {
+    for (const near of ["Done", " done", "done ", "DONE"]) {
       const nearMiss: Agent = async (_c, w) => {
         w.setGuest(STEPS);
         return { claim: near };
@@ -500,7 +523,10 @@ describe("K15 (D1). only a done claim the gate verified and the grader passed is
       [{ fixtureSha256: undefined }, /sha256/],
     ] as [Record<string, unknown>, RegExp][])
       expect(
-        checkRecoveryPack([{ ...good, ...patch } as RecoveryRow], { harnessAttempts: 1 }).join("|"),
+        checkRecoveryPack([{ ...good, ...patch } as RecoveryRow], {
+          evidence: false,
+          harnessAttempts: 1,
+        }).join("|"),
         JSON.stringify(patch),
       ).toMatch(re);
   });
@@ -554,7 +580,9 @@ describe("K17 (D5). parity between and within the arms", () => {
       [{ taskSetVersion: "ms-long-v2" }, /mixed task sets/],
     ] as [Partial<RecoveryRow>, RegExp][]) {
       const mixed = rows.map((r, i) => (i === 0 ? { ...r, ...patch } : r));
-      expect(checkRecoveryPack(mixed, { harnessAttempts: 4 }).join("|")).toMatch(re);
+      expect(checkRecoveryPack(mixed, { evidence: false, harnessAttempts: 4 }).join("|")).toMatch(
+        re,
+      );
       expect(() => recoveryBar(batch(mixed), arms(4, 0, 0)[1])).toThrow(re);
     }
   });
@@ -591,5 +619,90 @@ describe("K17 (D5). parity between and within the arms", () => {
       instructionSha256: INSTRUCTION,
       fixtureSha256: FIXTURE,
     });
+  });
+});
+
+describe("#601 follow-ups: grade validation, evidence default, fault kind, S1, S2", () => {
+  const runOne = async (t: BatchTrial, arm: RecoveryArm = "K") => {
+    const res = await runRecoveryBatch([t], { arm });
+    expect(res.status).toBe("complete");
+    return res.rows[0] as RecoveryRow;
+  };
+
+  it("N5: a grade outside pass/fail/ungradable is refused", () => {
+    const good = row("t", "K", true);
+    expect(checkRecoveryPack([good], { harnessAttempts: 1 })).toEqual([]);
+    for (const grade of ["PASS", "", null, undefined, "passed"])
+      expect(
+        checkRecoveryPack([{ ...good, grade } as unknown as RecoveryRow], { harnessAttempts: 1 }),
+        String(grade),
+      ).toContain("t#K: unknown grade");
+    for (const grade of ["fail", "ungradable"] as const)
+      expect(checkRecoveryPack([{ ...good, grade }], { harnessAttempts: 1 })).toEqual([]);
+  });
+
+  it("N6: the pack check defaults to evidence mode; only an explicit false accepts simulated rows", () => {
+    const sim = { ...row("t", "K", true), simulated: true };
+    expect(checkRecoveryPack([sim], { harnessAttempts: 1 }).join("|")).toMatch(/simulated/);
+    expect(checkRecoveryPack([sim], { harnessAttempts: 1, evidence: undefined }).join("|")).toMatch(
+      /simulated/,
+    );
+    const scripted = { ...row("t", "K", true), plannerModelId: "simulated:scripted" };
+    expect(checkRecoveryPack([scripted], { harnessAttempts: 1 }).join("|")).toMatch(
+      /not a model id/,
+    );
+    expect(checkRecoveryPack([sim], { harnessAttempts: 1, evidence: false })).toEqual([]);
+  });
+
+  it("F6: rows record the trial's fault kind", async () => {
+    const r = await runOne(
+      trial("t1#K", "K", solves, undefined, { faulted: true, faultKind: "delayed-save" }),
+    );
+    expect(r).toMatchObject({ faulted: true, faultKind: "delayed-save" });
+    expect((await runOne(trial("t2#K", "K", solves))).faultKind).toBeNull();
+  });
+
+  it("F6: the pack refuses a fault kind that disagrees with the fault flag", () => {
+    const f = row("t", "K", true, true);
+    expect(f.faultKind).toBe("kill-app");
+    expect(checkRecoveryPack([f], { harnessAttempts: 1 })).toEqual([]);
+    for (const patch of [
+      { faulted: true, faultKind: null },
+      { faulted: true, faultKind: "power-cut" },
+      { faulted: false, faultKind: "kill-app" },
+      { faulted: false, faultKind: undefined },
+      { faulted: "yes", faultKind: "kill-app" },
+    ])
+      expect(
+        checkRecoveryPack([{ ...f, ...patch } as unknown as RecoveryRow], { harnessAttempts: 1 }),
+        JSON.stringify(patch),
+      ).toContain("t#K: fault kind does not match the fault flag");
+  });
+
+  it("F6: the bar refuses arms whose fault kinds differ on a task (same flag)", () => {
+    const [k, none] = arms(10, 5, 0);
+    const swapped = batch(
+      none.rows.map((r) => (r.faulted ? { ...r, faultKind: "focus-change" as const } : r)),
+    );
+    expect(() => recoveryBar(k, swapped)).toThrow(/fault labels differ/);
+  });
+
+  it("S1: equal-size arms over different task sets are refused as not the same tasks", () => {
+    const [k, none] = arms(10, 5, 0);
+    const other = batch([...none.rows.slice(1), row("ms-X", "no-recovery", false)]);
+    expect(other.rows).toHaveLength(k.rows.length);
+    expect(() => recoveryBar(k, other)).toThrow(/same tasks/);
+  });
+
+  it("S2: a non-string agent claim records no-claim", async () => {
+    for (const [i, claim] of [null, undefined, { claim: "done" }, 1, ["done"]].entries()) {
+      const odd: Agent = async (_c, w) => {
+        w.setGuest(STEPS);
+        return { claim } as unknown as { claim: string };
+      };
+      const r = await runOne(trial(`s2-${i}#K`, "K", odd));
+      expect(r.claim, JSON.stringify(claim)).toBe("no-claim");
+      expect(isVerifiedRow(r)).toBe(false);
+    }
   });
 });
