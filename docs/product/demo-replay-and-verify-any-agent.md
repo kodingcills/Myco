@@ -1,11 +1,17 @@
 # Demo track: replay and share in `myco watch`, and verify any agent's run
 
-**Status: spec, pre-registered, nothing built. Version 4** (fixes PR #567's round-3 verdict:
+**Status: spec, pre-registered, nothing built. Version 5** (defines checkpointed mid-run
+capture, [§1.4](#14-checkpointed-mid-run-capture) (issue #588), so the demo's done → refuted →
+retry → verified story can be decided, replayed and verified from sealed captured data; fixes
+#589's round-1 nits (issue #596): N1, the comparison set of
+[§3.2](#32-what-it-does) step 4, and N2, [§6](#6-dependencies-on-unmerged-prs) refreshed; and
+points every export at the shared export guard, `src/export-guard/`, which landed with #579.
+Version 4 fixed PR #567's round-3 verdict:
 the binding check of [§1.2](#12-attribution-a-decision-belongs-to-the-trial-its-gate-is-bound-to)
 now follows the gate's real line shapes, the key of [§1.3](#13-the-vault-key-file-for-real-runs)
 is stated per batch, and [§6](#6-dependencies-on-unmerged-prs) is current; version 4 supersedes
 #567, whose three rounds were used. Version 3 fixed #567's round-2 verdict, version 2 its
-round-1 verdict). TIF-265 (replay + share) and TIF-270 (verify any agent's run). Linear is at its
+round-1 verdict. Version 4 merged as #589). TIF-265 (replay + share) and TIF-270 (verify any agent's run). Linear is at its
 free-tier limit, so this spec's tracking issue and its follow-ups go through the GitHub Issues
 fallback: issues on this repository labelled `from-linear-overflow` plus `tier-1` or `tier-2`,
 cross-linked to the parent TIF issue, filed by the coordinator. This page is binding on the build PRs listed in [§5](#5-build-prs). Each acceptance criterion
@@ -62,6 +68,8 @@ The spec builds on these and changes none of their guarantees.
 | Vault key today | `src/pilot/runner.ts`, `src/schedule/executor.ts`, `src/benchmark/r1-dryrun.ts` | Each seals with `newVaultKey()` (32 random bytes) held in memory and never written. [§1.3](#13-the-vault-key-file-for-real-runs) is how a real run gets a key file |
 | Proof bundles (#562, merged) | `src/proof/bundle.ts` | `assembleProofBundle`, `verifyProofBundle`, the `h-<60hex>` id form |
 | Episode export allowlist (#566, merged) | `src/episode/closed.ts`, `src/episode/export.ts` | Closed export of episodes, `HASHED = /^h-[0-9a-f]{60}$/` |
+| Shared export guard (#579, merged as #592) | `src/export-guard/identity-words.ts`, `src/export-guard/fold.ts`, `src/export-guard/provenance.ts` | One identity fold (`identityFold`, `identityNeedles`, accent folding) and provenance-bound hashed values (`HashLedger`, `HASHED_FORM`) for every export surface; [§2.7](#27-export-privacy) reuses them and never re-implements them |
+| Identity context | `src/proof/identity.ts` | `mergeIdentity`, `hostIdentity`: the guard's identity set ([§2.7](#27-export-privacy)) |
 | Unprivileged backend (#561, merged) | `src/parallel/backend.ts`, `src/parallel/linux-backend.ts` | `PLAIN_ISOLATION.backend` is `"linux-plain"`, with `hostDirsHidden: false` |
 | Strict namespace backend (#551, merged) | `src/isolation/strict-linux-ns.ts` | `STRICT_BACKEND_ID = "strict-linux-ns"`; not a gated-trial transport and no display ([§2.6](#26-mock-runs-watermarked-never-evidence)) |
 | MCP client examples | `examples/mcp-clients/README.md`, `examples/mcp-clients/codex-transcript.md`, `examples/mcp-clients/stdio-requests.jsonl` | The clients and recorded calls the pre-registered proofs use |
@@ -85,7 +93,9 @@ the timeline join ([§2.2](#22-the-frame--decision-join)) and the clip digest
    `ORACLE_INPUT_FIELDS`, `GATE_REQUEST_SCHEMA` and `REASON_CODES` in `src/gate/api.ts` stay
    byte-unchanged by every build PR here. New codes live in their own closed enums, never in
    `REASON_CODES`. Each enum is listed in full in [§1.1](#11-the-closed-code-enums); a code
-   used anywhere on this page is a member of exactly one of them.
+   used anywhere on this page is a member of exactly one of them. Checkpointed capture
+   ([§1.4](#14-checkpointed-mid-run-capture)) changes which sealed bytes a mid-run call of an
+   opted-in trial reads; it adds no request field, result field or reason code either.
 2. **A verdict is what the gate's oracle said on host-side evidence. It is never a measurement.**
    Neither feature shows, computes or exports a rate, an R1/R2 number or a grader result. R1 and
    R2 numbers stay in the scorecards, decided by the independent grader.
@@ -123,7 +133,7 @@ a code only by a new version of this page.
 |---|---|
 | `TIMELINE_CODES` (watch: join and pair) | `TL_SCHEMA`, `TL_RUN`, `TL_GAP`, `TL_DUPLICATE`, `TL_FRAME_DIGEST`, `TL_ORDER`, `TL_LOG_AHEAD`, `TL_LOG_PREFIX`, `TL_LOG_BINDING`, `TL_MALFORMED`, `TL_CLOCK_SKEW`, `TL_NO_TIMELINE`, `TL_NO_FRAME_BEFORE`, `PAIR_MISMATCH` |
 | `CLIP_CODES` (export and `myco clip verify`) | `CLIP_NO_SIDECAR`, `CLIP_SCHEMA`, `CLIP_DIGEST`, `CLIP_FILE`, `CLIP_FRAMES`, `CLIP_BAND`, `CLIP_LOG_LINE`, `CLIP_LOG_PREFIX`, `CLIP_LOG_BINDING`, `CLIP_DECISION`, `CLIP_LOG_ONLY`, `CLIP_SEAL`, `CLIP_MOCK`, `CLIP_EVIDENCE`, `CLIP_TIMELINE`, `CLIP_CLAIM`, `CLIP_RUN_RECORD`, `CLIP_RECOMPUTE`, `CLIP_SOURCE`, `CLIP_OCR_HIT`, `CLIP_OCR_UNAVAILABLE`, `CLIP_BUDGET`, `CLIP_FRAME_REFUSED` |
-| `VERIFY_CODES` (`myco verify`) | `VERIFY_LOG_DISAGREES`, `VERIFY_LOG_BINDING`, `VERIFY_KEY_REFUSED`, `VERIFY_RECORDING_MISMATCH`, `VERIFY_R5_FAILED`, `VERIFY_BUNDLE_REFUSED`, `VERIFY_TRANSCRIPT_REFUSED`, `VERIFY_EPISODE_REFUSED`, `VERIFY_LEDGER_REFUSED`, plus `integrity:<code>` (the vault's own codes, passed through) |
+| `VERIFY_CODES` (`myco verify`) | `VERIFY_LOG_DISAGREES`, `VERIFY_LOG_BINDING`, `VERIFY_CHECKPOINT_MISMATCH`, `VERIFY_KEY_REFUSED`, `VERIFY_RECORDING_MISMATCH`, `VERIFY_R5_FAILED`, `VERIFY_BUNDLE_REFUSED`, `VERIFY_TRANSCRIPT_REFUSED`, `VERIFY_EPISODE_REFUSED`, `VERIFY_LEDGER_REFUSED`, plus `integrity:<code>` (the vault's own codes, passed through) |
 
 ### 1.2 Attribution: a decision belongs to the trial its gate is bound to
 
@@ -273,6 +283,97 @@ So a real run satisfies every `--vault-key-file` and `--seal-receipt` on this pa
 was given `--trial-records` on an isolated transport can be verified with `--vault` or
 exported as an evidence clip.
 
+### 1.4 Checkpointed mid-run capture
+
+On `main` a sealed trial is captured once, after the agent stops, so every mid-run gate call
+is `uncertain` ([§2.3](#23-what-real-runs-show-today)) and the demo's "done → refuted →
+retry → verified" story exists only on the mock path, which is never evidence. A
+**checkpoint** is a host-side capture of the trial's persisted state taken while the agent
+runs, at the moment one of its own gate calls needs evidence, sealed into the vault beside
+the final capture. A mid-run call of an opted-in trial is decided from that checkpoint, by
+the gate's own oracle, and replay and verify read the same sealed bytes later.
+
+- **Off by default, opt-in per batch.** `runGatedTrial` takes `captureCheckpoints: { max: <n> }`.
+  Without it the trial's decision log and vault tree are byte-identical to `main`'s, with no
+  checkpoint and every mid-run call `uncertain`; the only difference is that its outcome
+  records `captureCheckpoints: "off"` (VA-16). The live runner and the scripted path pass it only when the operator names it.
+- **What triggers one.** Only a call that reaches the sealed reader: an S3 call
+  ([§1.2](#12-attribution-a-decision-belongs-to-the-trial-its-gate-is-bound-to)), which has
+  passed parsing and the bound gate's assignment check. A parse rejection (S1) or an
+  assignment rejection (S2) reads nothing and triggers nothing, so naming another trial never
+  captures anything. Before the agent stops and while the budget lasts, the reader asks the
+  transport for `captureCheckpoint()`, a host copy of `persisted/<task stateFile>` made the
+  same way as `captureAfterStop()`, and gives it to the vault.
+- **How it is sealed.** `vault.checkpoint(runId, artifacts, logBefore)` writes
+  `checkpoints/<k>/persisted/<stateFile>` (`k` = 1, 2, … assigned by the vault, never by a
+  caller) and a checkpoint manifest `myco.checkpoint/1`: `runId`, `k`, the file's `sha256` and
+  `bytes`, and `logBefore` (`lines` and `prefixSha256` of the trial's own decision log just
+  before the capture, computed by B1's shared function; the harness writes that log through
+  the gate's `onDecision`, so it knows it without reading it). The manifest is MAC'd with the
+  trial's seal key and bound to the receipt's `sealDigest`, as the final capture is. It is
+  opened only through `openCheckpointForTrial(vault, binding, k)`, receipt-bound, never with
+  `AUDIT_WITHOUT_RECEIPT`. A checkpoint is refused after `markAgentStopped`; the final capture
+  stays the only capture after the stop.
+- **What the call reads.** The checkpoint just taken, and nothing else: the oracle, the
+  registry, `STATE_FILE_LIMIT` and the decision rule are the gate's, unchanged. Its result
+  carries the gate's own codes, and its `evidenceRefs` name the checkpoint copy (`kind:
+  "persisted-state"`, `runId` = `r`, the checkpoint's `sha256` and `bytes`), so rule (a) of
+  [§1.2](#12-attribution-a-decision-belongs-to-the-trial-its-gate-is-bound-to) holds.
+- **The trial's verdict does not move.** The trial's verdict is still the harness's own check
+  on the final capture after the agent stops. A checkpoint decision is never the trial's
+  verdict, never an arm row, never graded and never R1 evidence. A trial verified at
+  checkpoint 2 and refuted at the final capture (the agent broke it afterwards) is refuted.
+- **Bounded, one at a time.** At most `max` checkpoints per trial (proposed 4, lead ruling
+  pending, [§8](#8-open-questions-for-the-lead) question 5). Before it asks for a copy, the
+  reader checks the budget, then whether another checkpoint is being taken. A call past the
+  budget, a call that arrives while another checkpoint is being taken, and a call whose copy
+  fails are answered `uncertain` `STATE_UNREADABLE`, with no checkpoint taken.
+- **The three refusals look the same to the agent.** For the same request and a fixed clock,
+  the budget-spent, in-flight and copy-failed cases give byte-identical agent-facing results:
+  the same codes, the same single reason `could not look: no checkpoint taken`, and no
+  `evidenceRefs`. No new reason code. The reader's `detail` reaches the agent (`could not look:
+  <detail>`, `src/gate/gate.ts`), so it never names the case. Which case it was goes to the
+  operator only, through a new operator-only callback `onCheckpoint` on the sealed reader's
+  options, beside `onIntegrity` (`src/gate/sealed.ts`), which already carries integrity
+  violations to the operator and never to the agent. `onCheckpoint` never feeds a result,
+  a reason or the decision log. **Stated limit: identical bytes, not identical timing.** An
+  in-flight or budget-spent refusal can answer sooner than a copy failure, which waits for the
+  failed copy, so the agent may tell the cases apart by how long the call took. Whether C1
+  must equalise that timing is [§8](#8-open-questions-for-the-lead) question 5 (d).
+- **A state file that does not exist yet.** On an opted-in trial, a state file that does not
+  exist yet is not a copy failure: the transport reports it missing, and the call is answered
+  as the gate answers a missing file today, `uncertain` `STATE_MISSING` with the gate's
+  missing-state corrections (`src/gate/gate.ts`). No checkpoint is sealed and the budget is not
+  spent. Because the budget and in-flight checks come first, a call past the budget or during
+  a checkpoint gets the fixed `STATE_UNREADABLE` answer whether or not the file exists. So
+  does every call on `linux-plain` (see Isolation below).
+- **A torn copy fails closed.** A copy taken while the app writes may be partial. The oracle
+  then reads what was copied and answers `uncertain` or `refuted`; it is never repaired or
+  retried silently.
+- **It changes the arm, so it is recorded and refused as evidence.** A decisive mid-run answer
+  is feedback the agent can act on, like track B's corrections. The `decided` outcome records
+  `captureCheckpoints: "on" | "off"` beside `corrections`, the per-trial records carry it, and every
+  R1 and A/B evidence path refuses a trial recorded `on`, at the point where
+  `correctionsOnError` refuses corrections today. A checkpoint-on arm becomes evidence only
+  through its own pre-registration, never by this page.
+- **Isolation.** Checkpoints are evidence only on an isolated transport (`vm`,
+  [§2.6](#26-mock-runs-watermarked-never-evidence)); on `mock` they are plumbing, and on
+  `linux-plain` (where the agent could rewrite the copy) `captureCheckpoint()` is refused and
+  every mid-run call stays `uncertain`. That refusal comes before the missing-file check, so on
+  `linux-plain` an absent state file is `STATE_UNREADABLE` too, never `STATE_MISSING`. The checkpoint directory is inside the vault root, so
+  the vault's reachability rule keeps every agent root away from it.
+- **Where it is built, and when.** Checkpoints change `src/gate/sealed.ts`,
+  `src/gate/gated-trial.ts` and `src/integrity/vault.ts`. `src/gate/*` is held for the R1
+  pilot and PR #607 (coordinator rule, 2026-11-27), so build PR C1
+  ([§5](#5-build-prs)) waits for the trial run; this version only specifies it.
+
+So a checkpointed trial's own log reads, for the demo's retry story: call 1 `refuted`
+`ORACLE_FAIL` with refs to checkpoint 1; call 2 `verified` `ORACLE_PASS` with refs to
+checkpoint 2; then the harness's post-capture check, with refs to the final capture. Each line
+is pinned by the timeline join of [§2.2](#22-the-frame--decision-join) as any line is (no join
+change), and `myco verify --vault` recomputes each against the sealed bytes it read
+([§3.2](#32-what-it-does) step 4).
+
 ---
 
 ## 2. Feature 1: replay and share in `myco watch`
@@ -396,10 +497,16 @@ yet")**, and the decision that counts is the harness's own check after the agent
 - The `refuted` that catches a false done is the post-capture check. It pins to the last frame,
   after the agent's done claim.
 
-A mid-run "done → refuted → retry" timeline needs a checkpointed capture. That is a follow-up
-(a GitHub Issue under the fallback, filed by the coordinator), and this spec does not build it. Until it lands, mid-run refutes appear only in mock runs and
-the development path (`fileEvidenceReader`), and those are never evidence. The demo narration
-must not imply otherwise.
+A mid-run "done → refuted → retry" timeline needs a checkpointed capture. Version 5 specifies
+it ([§1.4](#14-checkpointed-mid-run-capture), issue #588); its build, C1, waits for the trial
+run. Until C1 lands, and on every trial that does not opt in, mid-run refutes appear only in
+mock runs and the development path (`fileEvidenceReader`), and those are never evidence. The
+demo narration must not imply otherwise. On an opted-in trial, the scrubber shows each mid-run
+decision on the frame it was made on with a "checkpoint, not the trial's verdict" label; the
+trial's verdict is still the post-capture line on the last frame (RS-18). The page takes the
+label from the log line alone (an S3 line with a `persisted-state` ref, before the run's last
+line) and never opens the vault, so it does not show which sealed checkpoint a line read:
+that match is `myco verify`'s (VA-15).
 
 ### 2.4 Side-by-side head-to-head replay
 
@@ -777,20 +884,31 @@ identity.
   evidence paths, file names and window titles are not fields at all. The helper's backstop
   scan (`src/leak-guard/detect.ts`) refuses the write on any finding. The clip module must pass
   #560's routing test (`test/leak-guard/routing.test.ts`).
+- **One export guard, reused, never re-implemented.** Identity matching and hashed-value
+  provenance come from `src/export-guard/`, the module every export surface shares (the
+  episode export, track U's container, track Q's bundles): `identityFold` and
+  `identityNeedles` (`src/export-guard/identity-words.ts`, with the accent folding of
+  `src/export-guard/fold.ts`) and `HashLedger` and `HASHED_FORM`
+  (`src/export-guard/provenance.ts`). The clip and replay modules import them and define no
+  fold, needle rule, hashed-form pattern or ledger of their own; a static test pins it
+  (RS-10).
 - **Identity ruling (21:52Z).** A bare username, or any configured identity string, is a leak
-  on its own, not only inside a path. The guard is `mergeIdentity(hostIdentity(), extra)`, so the
-  host's identity is always in it. `extra` comes from `--identity-file` and `--user-file` paths
+  on its own, not only inside a path. The guard is `mergeIdentity(hostIdentity(), extra)`
+  (`src/proof/identity.ts`), so the host's identity is always in it. `extra` comes from `--identity-file` and `--user-file` paths
   (the guest account name goes in `--user-file`). Files are read and never printed. An id that
-  contains an identity string, matched case-insensitively on the normal form #562 uses (NFKC,
-  full case fold, letters and digits only), is hashed.
+  contains an identity string, matched on the shared guard's fold (`identityFold`: NFKC, full
+  case fold, accents stripped, letters and digits only) with its needles (`identityNeedles`:
+  the whole string and each word of a multi-word name of at least
+  `IDENTITY_WORD_MIN_CHARS` characters), is hashed.
 - **F1 (22:18Z) and the hashed form (23:06Z).** A value goes out verbatim only when it is a
   closed id that passes the identity guard, or a member of a closed vocabulary (reason codes,
   verdicts, arms, `agentClaim`, the gate API version). Anything else becomes `h-<60hex>`: the
-  first 60 hex characters of the sha256 of `myco.clip/1/text ‖ 0x00 ‖ value`. An existing
-  value matching exactly `^h-[0-9a-f]{60}$` is kept as is. No other `h-` form counts as already
-  hashed. (Issue #579 proposes keeping an `h-<60hex>` verbatim only when the harness produced
-  it. If that lands first, the clip follows it, and RS-10's re-hash cases follow by a new
-  version of this page.)
+  first 60 hex characters of the sha256 of `myco.clip/1/text ‖ 0x00 ‖ value`. **Provenance
+  (#579, landed as #592, adopted by version 5):** an existing `h-<60hex>` value is kept as is
+  only when the clip exporter's own `HashLedger` recorded it at that field's scope (a value
+  the harness itself produced, such as a run id the trial runner hashed); any other value in
+  `HASHED_FORM`, wherever it came from, is re-hashed like any other value. No other `h-` form
+  counts as already hashed.
 - **Overlays come only from closed fields.** The band and the end card are rendered from the
   sidecar's closed fields, frame ordinals and the font's glyph set. There is no code path from a
   claim, a reason string, a file name or a window title to the renderer. The renderer takes a
@@ -852,6 +970,11 @@ The Limits list also changes in B2: "Attribution follows the log" stays true for
 live view, and B2 adds that the joined view (scrubber, pins, clips) attributes by the binding
 ([§1.2](#12-attribution-a-decision-belongs-to-the-trial-its-gate-is-bound-to)) and needs
 per-trial logs.
+
+**B7 (version 5) changes no row.** It adds one closed boolean, the checkpoint flag, to the
+`TimelineView` that B2's Redaction by allowlist text lists, taken from the log line the server
+already reads. It adds no route, file read, import or key, and the server still never opens
+the vault (RS-18's static scan).
 
 The routes, precisely:
 
@@ -928,8 +1051,8 @@ myco verify <runId> --task <taskId> --mock-evidence <evidenceRoot> [same optiona
   "oracle": { "family": "todo-items", "version": "1", "specSha256": "…" },   // or null
   "calls": [ { "call": 1, "source": "decision-log", "verdictForCall": "refuted",
                "reasonCodes": ["ORACLE_FAIL", "CLAIM_RECORDED"], "loggedVerdictAgrees": true } ],
-               // loggedVerdictAgrees: true | false | null (null: an S1 parse rejection or a
-               // mid-run --vault line, reported and never compared, §3.2 steps 3 and 4)
+               // loggedVerdictAgrees: true | false | null (null: a line outside step 4's
+               // comparison set, reported and never compared, §3.2 steps 3 and 4)
   "agentReported": [ { "call": 1, "client": "codex", "verdict": "refuted", "agrees": true } ],
   "bundle": { "sha256": "…", "head": "…" }     // or null without --out
 }
@@ -996,13 +1119,39 @@ myco verify <runId> --task <taskId> --mock-evidence <evidenceRoot> [same optiona
    `call` numbers are line order in this log. The decision log is the client-independent record of calls: `myco-gate` logs every
    call the same way, whichever MCP client made it, so this covers Claude Code, Codex, Cursor
    and a custom agent alike.
-4. **Compare, never adopt.** Each logged decision that read the same evidence the recompute
-   reads is compared with the recompute (`loggedVerdictAgrees`). With `--mock-evidence` and
-   `--recording`, that is every S2 and S3 line; S1 lines are never compared. With `--vault`, it is the last line, the gated harness's
-   own post-capture check (`runGatedTrial` makes it after capture, after the agent has
-   stopped, so no agent call follows it); the agent's mid-run lines were "no sealed capture
-   yet" and are reported, not compared. A disagreement on a post-capture decision makes
-   the overall result `uncertain` with `VERIFY_LOG_DISAGREES`. The log never overrides the
+4. **Compare, never adopt.** A logged decision is compared with a recompute
+   (`loggedVerdictAgrees`) only when both read the same bytes. Every other line is reported
+   with `loggedVerdictAgrees: null` and never compared. The **comparison set** (version 5,
+   fixing #596 N1, which found v4's "every S2 and S3 line" wrong for lines that read no
+   evidence or older evidence):
+   - **S1 lines:** never compared (step 3).
+   - **`--mock-evidence` and `--recording`:** every S2 line (it read nothing, and its
+     recompute, `ASSIGNMENT_MISMATCH`, reads nothing), and every S3 line whose `evidenceRefs`
+     equal the recompute's refs: the same number of refs, each with the same `kind`, `path`,
+     `sha256` and `bytes`. An S3 line that read no evidence (a `STATE_MISSING` call made
+     before the agent saved) or older evidence (call 1 of a mock retry run such as
+     `ms-slip-then-repair-retry`) has other refs and is not compared, so an honest retry run
+     is never `uncertain` for it, and an agent cannot turn its own `refuted` into `uncertain`
+     by calling the gate before it saves.
+   - **`--vault`:** the last line, the gated harness's own post-capture check
+     (`runGatedTrial` makes it after capture, after the agent has stopped, so no agent call
+     follows it), recomputed on the final capture; and, on a checkpointed trial
+     ([§1.4](#14-checkpointed-mid-run-capture)), each line matched to a sealed checkpoint,
+     recomputed on that checkpoint's bytes through `openCheckpointForTrial`. Mid-run lines of
+     a trial without checkpoints were "no sealed capture yet" and are reported, not compared.
+   - **Matching lines to checkpoints (`--vault`).** For the sealed checkpoints 1..m, each `k`
+     is matched to exactly one S3 line of the log, and: the line's ordinal is greater than
+     checkpoint `k`'s sealed `logBefore.lines`; its `persisted-state` ref has checkpoint `k`'s
+     `sha256` and `bytes`; and matched ordinals strictly increase with `k`. A sealed
+     checkpoint with no such line (its log write failed, or a line was removed), a line whose
+     `persisted-state` ref names bytes no checkpoint and not the final capture sealed (other
+     than the last line), or matches out of order give `uncertain` with
+     `VERIFY_CHECKPOINT_MISMATCH`. Identical bytes at two checkpoints are resolved by the
+     order rule, never by a clock.
+
+   A disagreement on **any compared line** makes the overall result `uncertain` with
+   `VERIFY_LOG_DISAGREES`: a compared line was written by the bound gate reading exactly the
+   bytes the recompute reads, so an honest log always agrees. The log never overrides the
    recompute, and the recompute never silently overrides the log.
 5. **What the agent told its user** (`--transcript`, optional). A client adapter reads the
    client's own transcript and extracts only, per gate call, the closed `verdict` the client
@@ -1024,6 +1173,7 @@ myco verify <runId> --task <taskId> --mock-evidence <evidenceRoot> [same optiona
 |---|---|
 | `VERIFY_LOG_DISAGREES` | a compared logged decision differs from the recompute (step 4) |
 | `VERIFY_LOG_BINDING` | the decision log fails the binding check (step 3) |
+| `VERIFY_CHECKPOINT_MISMATCH` | on a `--vault` run, the log's lines and the sealed checkpoints do not match one to one, in order, by digest (step 4, [§1.4](#14-checkpointed-mid-run-capture)) |
 | `VERIFY_KEY_REFUSED` | the `--vault-key-file` fails the checks of [§1.3](#13-the-vault-key-file-for-real-runs) (a symlink, not a regular file, not owned by the caller, group or other permission bits, over 128 bytes, or not exactly 32 bytes of hex key); no vault open is attempted (step 1) |
 | `VERIFY_RECORDING_MISMATCH` | a recording field or workflow copy differs from the operator's pinned spec, or carries a closed constant or field it must not ([§3.4](#34-a-recording-cannot-smuggle-evidence)) |
 | `VERIFY_R5_FAILED` | `certifyDerivedOracle` fails for a recording (step 2) |
@@ -1099,9 +1249,10 @@ reused, not copied: the same route table drives both the gate and verify.
 
 ### 3.6 Pre-registered proofs
 
-Expected verdicts, fixed before any build. Proofs P1–P4 run on `main`'s mock or Linux path,
-with no VM and no model, in `test/verify-run/proofs.test.ts`. P5 needs the VM and runs only
-after the trial run.
+Expected verdicts, fixed before any build. Proofs P1–P4 and P6 run on `main`'s mock or Linux
+path, with no VM and no model, in `test/verify-run/proofs.test.ts`. P5 needs the VM and runs
+only after the trial run. P6 (version 5) is the demo's retry story replayed and verified from
+sealed captured data; it is plumbing on the mock transport and never evidence.
 
 | # | Client / recording | Input | Expected |
 |---|---|---|---|
@@ -1110,6 +1261,7 @@ after the trial run.
 | P3 | **Raw JSON-RPC client** (`examples/mcp-clients/stdio-requests.jsonl`, `--client mcp-jsonrpc`). The file holds 4 requests and no responses | The test serves the committed requests through `serveStdio` with a gate bound to `df-s01`/`run-42` (`--audit` to a fresh log) over an evidence root whose `run-42/.myco-todo.json` is a byte copy of the mock demo's `demo-df-s01/.myco-todo.json`, and records the server's response lines. Verify `run-42 --task df-s01 --mock-evidence <root> --decision-log <that log>`, (a) with `--transcript` = the committed requests only, and (b) with `--transcript` = the requests interleaved with the recorded responses | Both: `verified`, exit 0, 1 call, logged and recomputed agree. (a) `agentReported: []` (a request stream reports no verdict). (b) `agentReported` has 1 entry, `verified`, `agrees: true` |
 | P4 | **Track R recording** (`pnpm myco-record demo`) | The demo's two replays; `--recording` | honest: `verified`, `trust: "derived"`, `simulated: true`, exit 0. skip-save: `refuted`, exit 1 |
 | P5 | **Live, after the trial run (VM):** Claude Code and Codex on the `myco-gate` arm, sealed vault | Every trial of the first live batch run on `trial-base-v3` (#564) whose runner was given `--trial-records <dir>` (V1 merged first, [§1.3](#13-the-vault-key-file-for-real-runs)): `--vault --seal-receipt <dir>/<runId>/seal-receipt.json --vault-key-file <dir>/<runId>/vault.key`, each trial's own decision log | For 100% of those trials, verify's verdict equals the trial's post-capture gate decision, the last line of its own log (`loggedVerdictAgrees: true`), and every bundle verifies. Any disagreement is a defect, not a result. A batch without trial records (receipts and key files) is reported as not verifiable, never audited without them |
+| P6 | **Checkpointed retry story, no VM** ([§1.4](#14-checkpointed-mid-run-capture)): a scripted agent on the mock transport, `runGatedTrial` with `captureCheckpoints: { max: 4 }`, a test vault, and the receipt and key written as `--seal-receipt` and `--vault-key-file` files by the test | The `calc-ms-demo` task (`MS_TASK_ID`) and the `slip-then-repair` scenario of `src/gate/multistep-demo.ts`, the run `pnpm myco-gate demo --transport mock --family calc-multi-step` shows as `ms-slip-then-repair-retry` (#516): the agent saves with step 2 wrong, claims done and calls the gate (call 1); repairs step 2, saves and calls again (call 2); stops. P6 reuses the scenario's edits (which step slips and how it is repaired), not its harness restore of oracle checkpoint 1: here the scripted agent repairs step 2 itself, and every checkpoint in P6 is a §1.4 capture, not one of the oracle's per-step checkpoints. The trial's own decision log and timeline. `myco verify <runId> --task calc-ms-demo --vault … --decision-log <that log>`, and `myco watch --run <runId> --decision-log <that log> --sealed-capture <vaultRoot>` | Log and verify: call 1 `refuted`, with `ORACLE_FAIL` among its codes, on checkpoint 1; call 2 `verified` `ORACLE_PASS` on checkpoint 2; the post-capture line `verified` on the final capture. Verify: `verified`, exit 0, 3 calls, all 3 compared and `loggedVerdictAgrees: true`, no `verifyCodes`. Watch: the join is valid, call 1 and call 2 are pinned to the frames they were made on and labelled as checkpoints, the post-capture line on the last frame; every frame is watermarked `MOCK` (the run is mock). The outcome records `captureCheckpoints: "on"`, and the R1 evidence check refuses it |
 
 Cursor and custom agents are covered through the decision log (step 3), which is the same for
 every client. A `--client cursor` adapter is added only when a Cursor transcript fixture exists.
@@ -1255,10 +1407,17 @@ means. Test file names are the ones the build PRs must create or extend.
   a fake hostname, macOS, Linux and Windows home paths built from the fake name, a key-shaped
   token, and a window
   title carrying the fake name. No byte of the GIF, poster or sidecar contains any of them
-  (raw-byte scan with the shared detector); ids carrying them are `h-<60hex>`; and an existing
-  `h-<60hex>` value is kept, while `h-<64hex>` and `h-<59hex>` are re-hashed.
+  (raw-byte scan with the shared detector); ids carrying them are `h-<60hex>`. Provenance
+  (version 5): an `h-<60hex>` value the exporter's `HashLedger` recorded at that field's
+  scope is kept; an agent-supplied `h-<60hex>` in any id field, and a ledger value moved to
+  another field's scope, are re-hashed; `h-<64hex>` and `h-<59hex>` are re-hashed. Identity
+  cases follow the shared guard: an accented configured name (`josé`) matched in `JOSE`, and
+  one word of a configured full name matched alone. A static test shows the clip and replay
+  modules import `identityFold`, `identityNeedles` and `HashLedger` from `src/export-guard/`
+  and define no fold, needle rule, `h-` pattern or ledger of their own.
 - **Refuted by:** any planted value recoverable from the output, a hashed id in any other
-  `h-` form, or the module failing #560's routing test.
+  `h-` form, an agent-supplied `h-<60hex>` kept verbatim, a local identity fold or `h-`
+  pattern in the clip or replay modules, or the module failing #560's routing test.
 
 #### RS-11. Exported frames pass the TIF-98 redactor rules (OCR and raw bytes)
 
@@ -1362,6 +1521,28 @@ means. Test file names are the ones the build PRs must create or extend.
   with `CLIP_LOG_BINDING`), or a sealed check that reads a value it compares against from the
   clip.
 
+#### RS-18. A checkpointed run replays read-only, each mid-run decision on its frame and flagged as a checkpoint
+
+- **Probe:** `test/watch/checkpoint-replay.test.ts`, on P6's trial
+  ([§3.6](#36-pre-registered-proofs)), no VM: `myco watch --run <runId> --decision-log <log>
+  --sealed-capture <vaultRoot>`. `GET /timeline/<runId>` gives a valid join: call 1
+  (`refuted`) and call 2 (`verified`) pinned to the frames they were made on, each with the
+  checkpoint flag (a closed boolean taken from the log line, [§2.3](#23-what-real-runs-show-today)),
+  and the post-capture line pinned to the last frame without it. The `TimelineView` carries no digest, path or byte of
+  the checkpoint (the Redaction by allowlist row of [§2.8](#28-security-model-what-holds-and-what-changes)).
+  Read-only: a tree snapshot of the vault root, the log and the frames is byte-identical
+  before and after a full scrub; every file is opened `O_RDONLY | O_NOFOLLOW`; and the static
+  scan shows the server imports neither `openCheckpointForTrial` nor `src/integrity/vault.ts`
+  (it reads frames and the timeline as plain files, as for any sealed run). A planted
+  identity in the frame file names, the log's `claim` and the checkpoint's bytes appears in
+  no response byte. Every frame is watermarked `MOCK`. A trial run without
+  `captureCheckpoints` gives the same view as on `main` (no checkpoint flag, mid-run calls
+  `uncertain`).
+- **Refuted by:** a mid-run decision pinned to another frame or shown without the checkpoint flag,
+  any write under the vault root, log or frames, a server import of the vault or the
+  checkpoint opener, any digest, path or planted identity byte in a response, or a frame of
+  P6's run without the watermark.
+
 ### Verify any agent (VA)
 
 #### VA-01. The CLI is exactly as specified
@@ -1394,9 +1575,16 @@ means. Test file names are the ones the build PRs must create or extend.
   record are identical in every case, and none of them adds `VERIFY_LOG_BINDING` or
   `VERIFY_LOG_DISAGREES`. Calls with oracle inputs are refused per call with
   `ORACLE_INPUT_REJECTED`; S1 calls are reported with `loggedVerdictAgrees: null`.
+  **Lines outside the comparison set (version 5, #596 N1):** with `--mock-evidence` on the
+  refuted run, the honest log is also given with an own-id `STATE_MISSING` line first (the
+  agent calling its bound gate before it saved, generated from a real gate bound to the run
+  over an empty evidence root), and the mock retry run `ms-slip-then-repair-retry` is given
+  its own log (call 1 read the pre-repair file). In both, the early line is reported with
+  `loggedVerdictAgrees: null`, no `VERIFY_LOG_DISAGREES` is added, and the run's verdict is
+  the recompute's (`refuted` and `verified` respectively).
 - **Refuted by:** any change in the run verdict or `verifyCodes` caused by a log, transcript
   or recording field, including an agent call naming another run in any shape the bound gate
-  logs.
+  logs, or an S3 line whose `evidenceRefs` differ from the recompute's being compared.
 
 #### VA-04. Every failure path is `uncertain` with codes only
 
@@ -1456,7 +1644,7 @@ means. Test file names are the ones the build PRs must create or extend.
 
 #### VA-10. The pre-registered proofs give the pre-registered verdicts
 
-- **Probe:** `test/verify-run/proofs.test.ts` for P1–P4 of
+- **Probe:** `test/verify-run/proofs.test.ts` for P1–P4 and P6 of
   [§3.6](#36-pre-registered-proofs), with each expected verdict and exit code as written there.
   P5 is checked by its batch report after the trial run.
 - **Refuted by:** any verdict or exit code different from the table. The table is not edited
@@ -1537,6 +1725,54 @@ means. Test file names are the ones the build PRs must create or extend.
   overwriting an existing file, or accepted in a directory an agent root can reach; or any key
   or key-path byte in any output.
 
+#### VA-15. Verify recomputes each checkpoint decision on the sealed bytes it read
+
+- **Probe:** `test/verify-run/checkpoints.test.ts`, on P6's trial and copies of it, no VM.
+  The honest trial verifies as P6 states. Each tamper gives `uncertain`, exit 2, with its
+  code: a checkpoint line removed from the log (`VERIFY_CHECKPOINT_MISMATCH`); calls 1 and 2
+  swapped with prefix anchors re-recorded (`VERIFY_CHECKPOINT_MISMATCH`, order); call 1's
+  `persisted-state` ref rewritten to call 2's digest (`VERIFY_CHECKPOINT_MISMATCH`); call 1's
+  logged verdict rewritten to `verified` with its refs kept (`VERIFY_LOG_DISAGREES`);
+  checkpoint 1's sealed bytes edited in the vault, and its manifest re-hashed without the key
+  (`integrity:<code>`, one fixture each); a checkpoint manifest copied from another trial
+  (`integrity:<code>`). A trial whose two checkpoints hold identical bytes (the agent called
+  twice without saving) verifies, matched by order. A trial without `captureCheckpoints`
+  verifies exactly as v4 states (mid-run lines `null`, only the last line compared).
+- **Refuted by:** any tamper ending `verified` or `refuted`, a checkpoint line compared
+  against bytes other than its own checkpoint's, or a checkpoint matched by clock or by the
+  log's `checkedAt`.
+
+#### VA-16. Checkpointed capture keeps every vault and gate guarantee, and is never evidence
+
+- **Probe:** `test/integrity/checkpoint.test.ts` and `test/gate/checkpoint-gate.test.ts`, no
+  VM. Off by default: a gated trial without `captureCheckpoints` produces a decision log and
+  vault tree byte-identical to `main`'s for the same script (timestamps fixed), its outcome
+  differs from `main`'s only by `captureCheckpoints: "off"`, and `captureCheckpoint()` is
+  never called. On: S1 and S2 calls (each pre-evidence shape of
+  [§1.2](#12-attribution-a-decision-belongs-to-the-trial-its-gate-is-bound-to), including
+  one naming another run) take no checkpoint; the fifth S3 call with `max: 4`, a call
+  during an in-flight checkpoint, and every call on a `linux-plain` transport (an absent
+  state file included, because the `linux-plain` refusal comes before the missing-file check)
+  are `uncertain` `STATE_UNREADABLE` with no checkpoint taken; for the same request and a fixed
+  clock, the budget-spent, in-flight and copy-failed cases give byte-identical agent-facing
+  results (codes, reasons and refs) while `onCheckpoint` tells the operator which case each
+  was; on an opted-in trial a state file that does not exist yet gives `uncertain`
+  `STATE_MISSING`, seals no checkpoint and spends no budget; `vault.checkpoint` after
+  `markAgentStopped` throws; `k` is assigned by the vault (a caller cannot choose or reuse
+  one); every checkpoint is opened only through `openCheckpointForTrial` with the receipt.
+  A trial verified at checkpoint 2 and refuted at its final capture has outcome verdict
+  `refuted`. `REASON_CODES`, `GATE_REQUEST_SCHEMA`, `ORACLE_INPUT_FIELDS` and the result's
+  fields are byte-unchanged (the existing pins in `test/gate/`). The outcome records
+  `captureCheckpoints: "on"`, and every R1 and A/B evidence check refuses such a trial, as it
+  refuses corrections `on`. The integrity suite's tamper routes are extended to checkpoint
+  files and manifests, each never `verified`. The vault reachability rule covers the
+  checkpoint directory (`test/integrity/surface.test.ts`).
+- **Refuted by:** any behaviour change with checkpoints off, a checkpoint taken for an S1 or
+  S2 call or past the budget, a checkpoint after the stop, a checkpoint decision becoming the
+  trial's verdict, a new reason code or request or result field, an agent-facing result that
+  differs between the budget-spent, in-flight and copy-failed cases or names which one it
+  was, or a checkpoint-on trial accepted as R1 or A/B evidence.
+
 ---
 
 ## 5. Build PRs
@@ -1563,31 +1799,47 @@ it is fixed. Then restore the head and confirm the probes pass.
 | V2 | Transcript adapters (`codex`, `mcp-jsonrpc`) and the Codex fixtures, `agentReported` | VA-03, VA-10 (P1, P3) | 2 | No VM | V1 | Revert the adapters: `test/verify-run/proofs.test.ts` P1 and P3 and the transcript cases of `test/verify-run/independence.test.ts` fail |
 | V3 | Recording source (track R): pinned workflow, R5 before verify, derived trust | VA-08, VA-10 (P4) | 2 | No VM | V1 | Revert the recording source: `test/verify-run/recording-tamper.test.ts` and P4 fail |
 | V4 | Proof bundle emission through #562's merged `src/proof/bundle.ts` | VA-11, VA-10 (P2) | 2 | No VM | V1 | Revert the bundle code: `test/verify-run/bundle.test.ts` fails |
-| L1 | Live proof after the trial run: P5 on the first live batch run with `--trial-records` (receipts and vault key files, [§1.3](#13-the-vault-key-file-for-real-runs)), and the first real caught false-done clip exported and verified in sealed mode | VA-10 (P5), RS-06 (on a real run), RS-16 (on a real run) | 2 | VM | the trial run, #564, B6, V4 | Not a code PR: the verifier re-runs `myco verify` and `myco clip verify` on the committed batch and checks every row |
+| L1 | Live proof after the trial run: P5 on the first live batch run with `--trial-records` (receipts and vault key files, [§1.3](#13-the-vault-key-file-for-real-runs)), and the first real caught false-done clip exported and verified in sealed mode | VA-10 (P5), RS-06 (on a real run), RS-16 (on a real run) | 2 | VM | the trial run, B6, V4 | Not a code PR: the verifier re-runs `myco verify` and `myco clip verify` on the committed batch and checks every row |
+| C1 | Checkpointed capture ([§1.4](#14-checkpointed-mid-run-capture)): `captureCheckpoints` on `runGatedTrial`, `captureCheckpoint()` on `GatedTrialTransport` (mock implements it; `linux-plain` refuses it), `vault.checkpoint` and the `myco.checkpoint/1` manifest, `openCheckpointForTrial`, the sealed reader deciding an opted-in mid-run S3 call from the checkpoint it just took, the budget and one-at-a-time rule, `captureCheckpoints` on the outcome and the per-trial records, and the R1 and A/B evidence refusal of `on` | VA-16 | 2 | No VM | V1, B1, the trial run | Revert the checkpoint code in `src/gate/sealed.ts`, `src/gate/gated-trial.ts`, `src/integrity/vault.ts` and the evidence refusal: `test/integrity/checkpoint.test.ts` and `test/gate/checkpoint-gate.test.ts` fail |
+| V5 | Checkpoint comparison in `myco verify --vault`: matching lines to sealed checkpoints, recompute on each checkpoint through `openCheckpointForTrial`, `VERIFY_CHECKPOINT_MISMATCH`, and P6 | VA-15, VA-10 (P6) | 2 | No VM | C1 | Revert the checkpoint comparison in `src/verify-run/`: `test/verify-run/checkpoints.test.ts` and P6 of `test/verify-run/proofs.test.ts` fail |
+| B7 | Checkpointed replay: the mock transport writing its rendered frames and the timeline into the trial's capture, and the scrubber's checkpoint flag on mid-run decisions of an opted-in trial (one closed boolean in `TimelineView`, from the log line only; the server never opens the vault) | RS-18 | 2 | No VM | B2, C1 | Revert the checkpoint flag and the mock frame capture: `test/watch/checkpoint-replay.test.ts` fails |
 
 **Order and parallelism.** B1 and V1 can start at once, without a VM: they share nothing. B2, B4
 and V2, V3 follow their parents. B6 waits for V1 (its recompute is V1's core) and for the PRs
 and issue in [§6](#6-dependencies-on-unmerged-prs); V4 needs only V1 now that #562 has merged. L1 is last, after the
 trial run on `trial-base-v3`, and never takes VM time the trial run or the integrity fixes
-need.
+need. C1 changes `src/gate/*` and the vault, which are held for the R1 pilot (PR #607 and the
+pilot itself), so C1 starts only after the trial run, never before; V5 and B7 follow it. C1
+also waits for B1, because a checkpoint manifest's `logBefore` is computed by B1's shared
+line-count and prefix function. None
+of C1, V5 or B7 needs a VM: P6 is their whole proof until a live batch opts in, which needs its
+own pre-registration ([§1.4](#14-checkpointed-mid-run-capture)).
 
 ---
 
 ## 6. Dependencies on unmerged PRs
 
 State checked against the GitHub REST API (`repos/kodingcills/Myco/pulls/<n>`) at
-2026-11-27T01:06Z, just before this version's commit. Closed PRs this spec cited before
-(#550, #553, #556, #541, #559) are replaced by their successors and are no longer
-dependencies. #559 closed unmerged. #567, this spec's versions 1 to 3, is open at that time
-and superseded by this version's PR; it is closed, not merged.
+2026-11-27T05:19Z, just before version 5's commit (version 4 checked it at 01:06Z). Closed
+PRs this spec cited before (#550, #553, #556, #541, #559) are replaced by their successors and
+are no longer dependencies. #559 closed unmerged. #567, this spec's versions 1 to 3, closed
+unmerged; version 4 merged as #589.
 
 | PR | State today | What depends on it | Criteria that wait on it | Until it merges |
 |---|---|---|---|---|
 | #560 (TIF-98: shared leak guard, allowlist serialization helper) | open, draft | B6: the sidecar must be written through its helper and pass its routing test | RS-10, RS-11, RS-16, RS-17 (B6) | B6 does not start. B1–B5 write no evidence export; the mock preview has no sidecar |
-| #564 (TIF-98: switch trials to `trial-base-v3`) | open | L1: P5 and the first real clip run on the first live batch, which runs on `trial-base-v3` | VA-10 (P5), RS-06 and RS-16 on a real run (L1) | L1 does not start. No B or V PR waits on it |
-| #576 (xlsx gate, value-domain sound; supersedes #550) | open | Verify supports exactly the gate's families; xlsx-backed Calc tasks need #576 | VA-02 for the xlsx family only | `myco verify` on an xlsx task is `uncertain` (the family is not in the registry), never guessed |
 
 **Merged, so no criterion waits on them any more:**
+
+- **#564** (TIF-98: switch trials to `trial-base-v3`), merged as `a2c5148b` at
+  2026-11-27T01:26:36Z. L1 no longer waits on it; L1 still runs only after the trial run, on
+  `trial-base-v3`.
+- **#576** (xlsx gate, value-domain sound; supersedes #550), merged as `edb09309` at
+  2026-11-27T01:36:10Z. VA-02 covers the xlsx family with the rest: `myco verify` supports
+  exactly the gate's families on `main`.
+- **#592** (#579: provenance-bound `h-<60hex>` and accent folding on every export surface),
+  merged as `03fb2b0`. It added `src/export-guard/`, which [§2.7](#27-export-privacy) and
+  RS-10 now reuse; RS-10's provenance cases follow it.
 
 - **#563** (TIF-274: A/B run gates, sticky boot-class halt, pinned pre-registration), merged
   as `f7562f19` at 2026-11-27T00:39:52Z. L1 no longer waits on it; L1 still runs only after
@@ -1623,8 +1875,14 @@ and B6 cites its number. Until that issue exists and is resolved, B6 does not st
 
 - **Any upload, share link, hosting or remote endpoint.** "Share" means a local file the user
   saves and posts themselves. No button posts anywhere.
-- **Mid-run checkpointed capture.** Real sealed runs show the refute at the end
+- **A checkpoint-on arm as evidence.** Checkpointed capture is specified
+  ([§1.4](#14-checkpointed-mid-run-capture)), but a trial recorded `captureCheckpoints: "on"`
+  is never R1 or A/B evidence and never graded under this page; using it in a measured arm
+  needs its own pre-registration. Trials without it show the refute at the end
   ([§2.3](#23-what-real-runs-show-today)).
+- **A checkpoint the agent did not ask for.** Timed or harness-scheduled checkpoints (a
+  capture every N seconds) are not specified: a checkpoint exists only to answer one of the
+  agent's own S3 calls.
 - **Side-by-side clip export**, MP4/WebM, audio, captions, clip editing.
 - **Grader results, rates or any R1/R2 number** in a clip, the page or verify output.
 - **Signed or keyed digests.** Rewrite resistance is the same open decision as #518 and #562.
@@ -1668,3 +1926,12 @@ and B6 cites its number. Until that issue exists and is resolved, B6 does not st
    evidence" as one operator command, with a page control that copies it (RS-16), because a
    server-side evidence render would put the vault key in the watch server. The alternative,
    a separate keyed exporter process the page could call, is not proposed.
+5. **Checkpointed capture (version 5, issue #588).** Proposals, all lead ruling pending:
+   (a) the per-trial budget `max` is 4 (the demo's retry story needs 2; more lets an agent
+   probe the oracle more often mid-run); (b) checkpoint mode is off by default and a trial
+   recorded `on` is refused as R1 and A/B evidence, so the R1 pilot and Stage 0/1 never run
+   with it; (c) C1 starts only after the trial run, because it changes `src/gate/*` and the
+   vault, which the R1 pilot holds; (d) the three refusals of §1.4 are byte-identical but not
+   timing-identical, and C1 records each case's answer time to the operator through
+   `onCheckpoint` without padding it, so the lead can rule on equalising it from measured
+   times. The alternative to (b), a pre-registered checkpoint-on arm, is not proposed here.
