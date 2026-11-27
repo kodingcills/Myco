@@ -450,9 +450,10 @@ export function frozenDesktopAction(action: unknown): GuardedDesktopAction | nul
       case "launch": {
         const command = a.command;
         const raw = a.args;
-        if (typeof command !== "string" || !Array.isArray(raw) || raw.length > 64) return null;
+        if (typeof command !== "string" || !Array.isArray(raw)) return null;
         const args: unknown[] = Array.from(raw);
-        if (!args.every((x) => typeof x === "string")) return null;
+        // The cap is checked on the copy: a Proxy's `length` can answer differently on each read.
+        if (args.length > 64 || !args.every((x) => typeof x === "string")) return null;
         return Object.freeze({ kind, command, args: Object.freeze(args as string[]) });
       }
       case "typeTextGlobal": {
@@ -613,6 +614,38 @@ export function policedCrossAppActuator<T extends GuardedCrossAppActuator>(
  * denial never falls back to another route (J's rule). J's program allow-list governs which
  * programs the script route runs, so the router's facts carry no app launch.
  */
+interface FrozenRouterDecision {
+  readonly reads: readonly string[];
+  readonly writes: readonly string[];
+  readonly argv: readonly string[] | undefined;
+}
+
+/** A frozen array of strings copied from `raw`, each read once; throws when it is not one. */
+function frozenStrings(raw: unknown): readonly string[] {
+  if (!Array.isArray(raw)) throw new UnrecognisedAction();
+  const copy: unknown[] = Array.from(raw);
+  if (!copy.every((x) => typeof x === "string")) throw new UnrecognisedAction();
+  return Object.freeze(copy as string[]);
+}
+
+/**
+ * A frozen copy of an allowing decision's paths and argv, each field read once. Throws
+ * `UnrecognisedAction` for anything malformed (a throwing getter included), which the guard
+ * records as `POLICY_ACTION_UNRECOGNISED`.
+ */
+function frozenRouterDecision(base: unknown): FrozenRouterDecision {
+  try {
+    const b = base as { writes?: unknown; reads?: unknown; argv?: unknown };
+    const writes = frozenStrings(b.writes);
+    const reads = frozenStrings(b.reads);
+    const rawArgv = b.argv;
+    const argv = rawArgv === undefined ? undefined : frozenStrings(rawArgv);
+    return { reads, writes, argv };
+  } catch {
+    throw new UnrecognisedAction();
+  }
+}
+
 export function guardedActionPolicy(inner: ActionPolicy, guard: PolicyGuard): ActionPolicy {
   return {
     id: inner.id,
@@ -620,11 +653,19 @@ export function guardedActionPolicy(inner: ActionPolicy, guard: PolicyGuard): Ac
       const base = inner.check(request);
       if (!base.allow) return base;
       // One frozen copy of J's decision: its writes are judged, and it is what the router runs.
-      const writes = Object.freeze(Array.from(base.writes));
-      const reads = Object.freeze(Array.from(base.reads));
-      const argv = base.argv === undefined ? undefined : Object.freeze(Array.from(base.argv));
-      const d = guard.decide("action-router.policy", () => writeFacts(writes));
+      // The copy is taken inside the guard's reducer, so a malformed decision (a non-array, a
+      // non-string entry, a getter that throws) is a logged `POLICY_ACTION_UNRECOGNISED` refusal,
+      // never a throw out of `check`.
+      let copy: FrozenRouterDecision | null = null;
+      const d = guard.decide("action-router.policy", () => {
+        copy = frozenRouterDecision(base);
+        return writeFacts(copy.writes);
+      });
+      const judged = copy as FrozenRouterDecision | null;
       if (!settle(d)) return { allow: false, code: policedCode(d) as PolicyAgentCode };
+      // Unreachable (no copy means the reducer threw, so denied); kept so nothing else runs.
+      if (judged === null) return { allow: false, code: "POLICY_DENIED" };
+      const { reads, writes, argv } = judged;
       return Object.freeze(
         argv === undefined
           ? { allow: true, code: "ALLOWED", reads, writes }
