@@ -1,0 +1,169 @@
+{
+  "schema": "myco.capability-prereg/1",
+  "track": "P",
+  "version": "p-v1",
+  "capability": "Cross-app workflows",
+  "frozenOn": "2026-11-27",
+  "status": "Frozen pre-registration (Part 1 §3). Values listed in leadRulingPending are proposed and await the lead's ruling; while that list is not empty the analysis decides nothing (decision lead-ruling-pending, never shown). Ratifying empties the list, which changes the pre-registration hash, and must happen before the first measurement run; a change to any value after the first measurement run is a new version (p-v2).",
+  "spec": {
+    "bar": "docs/product/capability-spec-2.md §P (as written)",
+    "sharedRules": "docs/product/capability-spec.md §1, §3, §4; docs/product/capability-spec-2.md §1, §4"
+  },
+  "hypothesis": "H1: on checkpointed multi-app tasks, B+P (per-step gate checkpoints plus one retry from the last verified checkpoint) verifies more tasks than B (one end-state gate check, no checkpoints, no retry). H0: no increase. One-sided.",
+  "arms": {
+    "B+P": {
+      "surface": "B plus the cross-app-steps family's per-step gate checkpoints and #514's one retry from the last verified checkpoint",
+      "gated": true,
+      "retryBudget": 1
+    },
+    "B": {
+      "surface": "base surface B: the same tasks, one gate check on the end state only, no checkpoints, no retry",
+      "gated": true,
+      "retryBudget": 0
+    },
+    "baseSurface": "C1 (capability-spec-2 §1.3: B is C1 until a Part 1 bar is shown). Both arms run in the same Ultra harness; their tool lists differ by exactly the treatment. hcu+shell is not a bar component here (parity, Part 1 §1.3); any comparison against it is a reported secondary."
+  },
+  "taskSet": {
+    "version": "xa-v2",
+    "tasks": 40,
+    "manifest": "benchmark/cross-app/xa-v2/manifest.json",
+    "manifestSha256": "c7a8d3a71aaebbe4e3492defe801dfb1771222b9a449741fbf86405f4d07b350",
+    "taskIds": [
+      "xa-v2-001",
+      "xa-v2-002",
+      "xa-v2-003",
+      "xa-v2-004",
+      "xa-v2-005",
+      "xa-v2-006",
+      "xa-v2-007",
+      "xa-v2-008",
+      "xa-v2-009",
+      "xa-v2-010",
+      "xa-v2-011",
+      "xa-v2-012",
+      "xa-v2-013",
+      "xa-v2-014",
+      "xa-v2-015",
+      "xa-v2-016",
+      "xa-v2-017",
+      "xa-v2-018",
+      "xa-v2-019",
+      "xa-v2-020",
+      "xa-v2-021",
+      "xa-v2-022",
+      "xa-v2-023",
+      "xa-v2-024",
+      "xa-v2-025",
+      "xa-v2-026",
+      "xa-v2-027",
+      "xa-v2-028",
+      "xa-v2-029",
+      "xa-v2-030",
+      "xa-v2-031",
+      "xa-v2-032",
+      "xa-v2-033",
+      "xa-v2-034",
+      "xa-v2-035",
+      "xa-v2-036",
+      "xa-v2-037",
+      "xa-v2-038",
+      "xa-v2-039",
+      "xa-v2-040"
+    ],
+    "builder": "scripts/cross-app-taskset.ts --set xa-v2 (the #535 builder, src/tasks/cross-app-taskset.ts)",
+    "conformanceSet": {
+      "version": "xa-v1",
+      "manifestSha256": "d740ed0434c664cc79fa9517562ba7c540489ffc39f7f24a58a6cc758975c79c",
+      "role": "plumbing and conformance only; never part of the bar"
+    }
+  },
+  "seeds": {
+    "assignment": "p-v1-assign-2026-11-27-Rk3wT9",
+    "bootstrap": "p-v1-boot-2026-11-27-Hq8nV2",
+    "taskBuild": {
+      "rule": "<version>-NN, NN = 01..40",
+      "first": "xa-v2-01",
+      "last": "xa-v2-40"
+    }
+  },
+  "assignment": "One scored trial per (task, arm). Tasks shuffled by the assignment seed (Fisher-Yates over mulberry32 seeded from sha256(seed)), then arms in ABBA blocks over consecutive tasks. A trial's ordinal must equal its slot in that schedule (scripts/cross-app-prereg.ts schedule).",
+  "stepBudget": 30,
+  "retryBudget": {
+    "B+P": 1,
+    "B": 0
+  },
+  "wallClockBudget": null,
+  "model": {
+    "plannerModelId": "claude-sonnet-5-5",
+    "plan": "Claude Ultra (Claude Code subscription): $0 Anthropic API, no Messages-API calls"
+  },
+  "primaryMetric": "Verified rate (Part 1 §1.1, gated rows): a done claim, the gate's end-state verdict verified (and, in B+P, the last checkpoint verified), and every step snapshot and the end state graded pass by the independent grader (src/benchmark/grade/cross-app.ts). A grader pass the gate did not verify is reported as 'correct, not accepted'.",
+  "bar": {
+    "alpha": 0.05,
+    "sided": "one-sided",
+    "direction": "B+P better than B",
+    "minDiscordant": 5,
+    "bootstrapResamples": 10000,
+    "ratioUpperBoundBelow": 1,
+    "components": [
+      {
+        "order": 1,
+        "metric": "verified",
+        "test": "exact one-sided McNemar (sign test on discordant tasks)",
+        "shownIf": "p <= 0.05 with at least 5 discordant tasks"
+      },
+      {
+        "order": 2,
+        "onlyIf": "component 1 shown",
+        "metric": "steps per verified task (total steps over ALL trials / verified trials)",
+        "test": "paired bootstrap over tasks, 10,000 resamples, bootstrap seed",
+        "shownIf": "one-sided 95% upper bound of B+P/B below 1.0"
+      }
+    ],
+    "guardrails": [
+      "Zero gate false-verifieds over all B+P trials (the gate end verdict verified while any step or end grade is fail or ungradable, or a checkpoint k verified while any of steps 1..k is graded fail or ungradable); one fails the bar.",
+      "Masked-step tasks (step k wrong in its own snapshot, fixed later) grade fail: a later step never masks an earlier failure.",
+      "Every step oracle passes R5's self-test on its claimed classes.",
+      "On the sealed-vault path, a family whose extra files the vault does not capture returns uncertain (fail closed)."
+    ],
+    "decision": "shown only if component 1 and component 2 are both shown; each component's result is reported on its own",
+    "notShown": [
+      "p > 0.05",
+      "component 2 not shown (component 1 is still reported as shown)",
+      "fewer than 5 discordant tasks ('underpowered at n', with the discordant count)",
+      "a guardrail breached",
+      "a parity or assignment check failed"
+    ],
+    "refused": [
+      "the pack's pre-registration hash does not match this file's hash",
+      "the pack's task set or manifest digest differs",
+      "the pack's prereg commit is missing or malformed (format check only; it is not looked up in git history)",
+      "any simulated row (planner not the pre-registered model id, or a simulated marker present and not exactly false)"
+    ]
+  },
+  "secondary": [
+    "per-step pass rate",
+    "the step at which failures first occur",
+    "steps per verified task (total steps over ALL trials / verified trials)",
+    "false done (a done claim while the task grades fail: any step snapshot or the end not pass)",
+    "correct, not accepted"
+  ],
+  "notInAnalysis": "Wall time and cost per verified task (capability-spec-2 §P secondaries) are not in p-v1: the pack carries no wall-time or cost field and the analysis computes neither. Adding them is a new version (p-v2).",
+  "evidence": "Experiment rows only, never R1 evidence (capability-spec-2 §1.5). Simulated rows never count. No run until the lead's GO for track P.",
+  "analysis": {
+    "module": "src/benchmark/cross-app-prereg.ts",
+    "moduleSha256": "d73c61334115edbeab1de7bcbb62a66bdfe5271512a7e47a18ae7ea9c463fe73",
+    "script": "scripts/cross-app-prereg.ts",
+    "scriptSha256": "40eddedea96d2d4842b4431addc132eb996e3cc71bbca445845166137bcd0fcf",
+    "packSchema": "myco.cross-app.p-pack/1",
+    "command": "npx tsx scripts/cross-app-prereg.ts analyze <pack.json>"
+  },
+  "leadRulingPending": [
+    "xa-v2 (40 tasks) as the bar's task set, keeping #535's xa-v1 as conformance (capability-spec-2 §6 'P'); #535's own bar (src/benchmark/cross-app-bar.ts: xa-v1 x 10 repetitions, Newcombe, 0.10 margin) is not this bar",
+    "B gets one end-state gate check so both arms are gated rows (capability-spec-2 §P, builder alignment (c)); #535's baseline arm is gate-less",
+    "one-sided vs two-sided tests across tracks (capability-spec-2 §6)",
+    "step budget 30 (Part 1 §1.3 default; P names none) for a three-step, two-app task with one retry",
+    "planner model id claude-sonnet-5-5 (the pilot's PILOT_MODEL on Ultra)",
+    "power: at n = 40 the bar is underpowered for net gains of about 10-15 points (Part 1 §1.5 power table)"
+  ]
+}
