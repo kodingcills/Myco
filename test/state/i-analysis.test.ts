@@ -3,6 +3,7 @@
  * the grader passed; the fixed sequence; the refusals that make the bar "not shown". Every
  * pack here is synthetic: no trial was run.
  */
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -14,8 +15,11 @@ import {
   type IAnalysisContext,
   type IPack,
   type ITrialRow,
+  LEAD_RULING_PENDING,
   mcnemarOneSidedP,
   type PairedTask,
+  pendingLeadRulings,
+  rowShapeProblem,
   verified,
   wilson95,
 } from "../../src/state/i-analysis.ts";
@@ -27,12 +31,18 @@ const { prereg, hash } = loadIPrereg(ROOT);
 const tasks = readTaskFacts(ROOT, prereg.taskSet.tasksFile);
 const sat = tasks.filter((t) => t.satisfiable);
 const COMMIT = "abcdef1234567";
-const ctx: IAnalysisContext = {
+/** The committed pre-registration, which still has pending lead rulings. */
+const committedCtx: IAnalysisContext = {
   prereg,
   preregSha256: hash,
   tasks,
   preregHashAtCommit: (c) => (c === COMMIT ? hash : null),
 };
+/**
+ * A HYPOTHETICAL ratified copy (no pending lead ruling), so the bar logic itself can be
+ * exercised. Nothing here claims the lead ruled.
+ */
+const ctx: IAnalysisContext = { ...committedCtx, prereg: { ...prereg, leadRulingPending: [] } };
 
 type Outcome = Pick<ITrialRow, "claim" | "grade" | "steps">;
 const PASS: Outcome = { claim: "done", grade: "pass", steps: 12 };
@@ -120,15 +130,62 @@ describe("verified (gate-less rows)", () => {
   });
 });
 
-describe("analyzeIPack: the fixed sequence", () => {
+describe("analyzeIPack: never shown while a lead ruling is pending", () => {
+  it("the committed pre-registration has pending rulings, so a winning pack is LEAD_RULING_PENDING", () => {
+    expect(prereg.leadRulingPending.length).toBeGreaterThan(0);
+    const a = analyzeIPack(winning(10), committedCtx);
+    expect(a.status).toBe(LEAD_RULING_PENDING);
+    expect(a.barShown).toBe(false);
+    expect(a.leadRulingPending).toEqual(prereg.leadRulingPending);
+    expect(a.components[0]).toMatchObject({ shown: false, reason: LEAD_RULING_PENDING });
+    expect(a.components[1]).toMatchObject({ shown: false });
+    // The pack itself is clean: pending is not a refusal of the pack.
+    expect(a.refusals).toEqual([]);
+  });
+  it("one pending ruling is enough", () => {
+    const one = { ...ctx, prereg: { ...prereg, leadRulingPending: ["modelId"] } };
+    const a = analyzeIPack(winning(10), one);
+    expect(a.status).toBe(LEAD_RULING_PENDING);
+    expect(a.barShown).toBe(false);
+  });
+  it("a leadRulingPending that is not a list of strings counts as pending (fail closed)", () => {
+    for (const bad of [undefined, null, "none", [1], {}]) {
+      const c = { ...ctx, prereg: { ...prereg, leadRulingPending: bad as never } };
+      const a = analyzeIPack(winning(10), c);
+      expect(a.status).toBe(LEAD_RULING_PENDING);
+      expect(a.barShown).toBe(false);
+      expect(pendingLeadRulings(c.prereg)).toEqual(["leadRulingPending is not a list of strings"]);
+    }
+  });
+  it("pending wins over a refusal too", () => {
+    const a = analyzeIPack(rowEdit(winning(10), 0, { toolOutputBreach: true }), committedCtx);
+    expect(a.status).toBe(LEAD_RULING_PENDING);
+    expect(a.refusals.join(";")).toMatch(/breach/);
+  });
+});
+
+describe("analyzeIPack: the fixed sequence (hypothetical ratified pre-registration)", () => {
   it("shows both components when C1+I verifies more with fewer steps", () => {
     const a = analyzeIPack(winning(10), ctx);
     expect(a.refusals).toEqual([]);
     expect(a.components[0]).toMatchObject({ id: 1, shown: true, favouring: 10, against: 0 });
     expect(a.components[1]).toMatchObject({ id: 2, shown: true });
     expect(a.barShown).toBe(true);
+    expect(a.status).toBe("shown");
+    expect(a.leadRulingPending).toEqual([]);
     expect(a.satisfiable.cap.verified).toBe(60);
     expect(a.satisfiable.base.verified).toBe(50);
+  });
+
+  it("bar 2's metric is total steps over ALL satisfiable trials per verified task (hand-computed)", () => {
+    // C1+I: 90 trials x 10 steps / 60 verified = 15; C1: 90 x 15 / 50 = 27; ratio 15/27.
+    // Counting steps over verified trials only would give 600/60 / (750/50) = 10/15 instead.
+    const a = analyzeIPack(winning(10, 10, 15), ctx);
+    expect(a.satisfiable.cap.stepsPerVerified).toBe(15);
+    expect(a.satisfiable.base.stepsPerVerified).toBe(27);
+    const c2 = a.components[1] as { point: number; upper95: number };
+    expect(c2.point).toBeCloseTo(15 / 27, 12);
+    expect(c2.upper95).toBeGreaterThanOrEqual(c2.point);
   });
 
   it("bar 2 is not shown when C1+I spends more steps per verified task", () => {
@@ -172,6 +229,33 @@ describe("analyzeIPack: refusals make the whole bar not shown, even on a winning
     ["schema", (p) => ({ ...p, schema: "x" as typeof I_PACK_SCHEMA }), /pack schema/],
     ["one simulated row", (p) => rowEdit(p, 3, { simulated: true }), /simulated row/],
     [
+      "a row with no simulated field (fail closed)",
+      (p) => rowDrop(p, 3, "simulated"),
+      /simulated row/,
+    ],
+    [
+      'simulated: "false" (a string)',
+      (p) => rowEdit(p, 3, { simulated: "false" as never }),
+      /simulated row/,
+    ],
+    ["simulated: 0", (p) => rowEdit(p, 3, { simulated: 0 as never }), /simulated row/],
+    [
+      "a row with no plannerModelId (named, not a TypeError)",
+      (p) => rowDrop(p, 3, "plannerModelId"),
+      /row 3: malformed \(plannerModelId is not a string\)/,
+    ],
+    [
+      "a row with a bad claim",
+      (p) => rowEdit(p, 3, { claim: "claimed" as never }),
+      /row 3: malformed \(claim/,
+    ],
+    [
+      "a row whose breach flag is not a boolean",
+      (p) => rowDrop(p, 3, "toolOutputBreach"),
+      /row 3: malformed \(toolOutputBreach/,
+    ],
+    ["rows not a list", (p) => ({ ...p, rows: {} as never }), /rows is not a list/],
+    [
       "a simulated planner label",
       (p) => rowEdit(p, 3, { plannerModelId: "simulated:x" }),
       /simulated row/,
@@ -213,6 +297,37 @@ describe("analyzeIPack: refusals make the whole bar not shown, even on a winning
 function rowEdit(p: IPack, i: number, over: Partial<ITrialRow>): IPack {
   return { ...p, rows: p.rows.map((r, j) => (j === i ? { ...r, ...over } : r)) };
 }
+function rowDrop(p: IPack, i: number, field: keyof ITrialRow): IPack {
+  const rows = p.rows.map((r, j) => {
+    if (j !== i) return r;
+    const copy: Record<string, unknown> = { ...r };
+    delete copy[field];
+    return copy as unknown as ITrialRow;
+  });
+  return { ...p, rows };
+}
+
+describe("analyzeIPack: the task facts must split 90 / 10", () => {
+  it("refuses when one invalid-target task is read as satisfiable", () => {
+    const firstInvalid = tasks.findIndex((t) => !t.satisfiable);
+    const skewed = tasks.map((t, i) => (i === firstInvalid ? { ...t, satisfiable: true } : t));
+    const a = analyzeIPack(winning(10), { ...ctx, tasks: skewed });
+    expect(a.refusals.join(";")).toMatch(/task facts do not split 90 satisfiable \/ 10/);
+    expect(a.barShown).toBe(false);
+  });
+});
+
+describe("rowShapeProblem", () => {
+  it("accepts a well-formed row and names the first bad field", () => {
+    const ok = winning(10).rows[0];
+    expect(rowShapeProblem(ok)).toBeNull();
+    expect(rowShapeProblem(null)).toBe("row is not an object");
+    expect(rowShapeProblem({ ...ok, steps: "3" })).toMatch(/steps/);
+    expect(rowShapeProblem({ ...ok, grade: "PASS" })).toMatch(/grade/);
+    expect(rowShapeProblem({ ...ok, taskId: 1 })).toMatch(/taskId/);
+    expect(rowShapeProblem({ ...ok, arm: null })).toMatch(/arm/);
+  });
+});
 
 describe("bootstrapRatioUpper95", () => {
   const paired: PairedTask[] = Array.from({ length: 90 }, (_, i) => ({
@@ -248,11 +363,45 @@ describe("the analysis CLI", () => {
     expect(run(["--help"]).code).toBe(2);
     expect(run([join(dir, "missing.json")]).code).toBe(2);
   });
-  it("exits 1 and prints the refusal for a pack whose commit does not hold the pre-registration", () => {
+  it("has no --require-r1 or --evidence mode: either flag exits 2 before any analysis", () => {
+    const f = join(dir, "flags.json");
+    writeFileSync(f, JSON.stringify(winning(10)));
+    for (const flag of ["--require-r1", "--evidence"]) {
+      const r = run([flag, f]);
+      expect(r.code).toBe(2);
+      expect(r.out).toBe("");
+      expect(run([flag]).code).toBe(2);
+    }
+  });
+  it("exits 3 (LEAD_RULING_PENDING), never 0, for a winning pack at a commit that holds the pre-registration", () => {
+    const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" });
+    const commit = head.stdout.trim();
+    // HEAD holds the committed pre-registration (true at any committed head of this branch).
+    expect(gitPreregHashAt(ROOT, commit)).toBe(hash);
+    const f = join(dir, "winning.json");
+    writeFileSync(f, JSON.stringify({ ...winning(10), preregCommit: commit }));
+    const r = run([f]);
+    expect(r.code).toBe(3);
+    expect(r.err).toMatch(/LEAD_RULING_PENDING/);
+    const out = JSON.parse(r.out);
+    expect(out.status).toBe(LEAD_RULING_PENDING);
+    expect(out.barShown).toBe(false);
+    expect(out.refusals).toEqual([]);
+    expect(out.leadRulingPending.length).toBeGreaterThan(0);
+  });
+  it("a row with no plannerModelId is a named refusal, not a crash (exit 3, not 2)", () => {
+    const f = join(dir, "noplanner.json");
+    writeFileSync(f, JSON.stringify(rowDrop(winning(10), 3, "plannerModelId")));
+    const r = run([f]);
+    expect(r.code).toBe(3);
+    expect(JSON.parse(r.out).refusals.join(";")).toMatch(/plannerModelId is not a string/);
+  });
+  it("exits non-zero and prints the refusal for a pack whose commit does not hold the pre-registration", () => {
     const f = join(dir, "pack.json");
     writeFileSync(f, JSON.stringify({ ...winning(10), preregCommit: "0000000" }));
     const r = run([f]);
-    expect(r.code).toBe(1);
+    // 3 while lead rulings are pending (status wins); the refusal is printed either way.
+    expect(r.code).toBe(3);
     expect(JSON.parse(r.out).refusals.join(";")).toMatch(/commit does not hold/);
   });
   it("gitPreregHashAt refuses non-hex and unknown commits", () => {

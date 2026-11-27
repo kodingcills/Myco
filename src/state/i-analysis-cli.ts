@@ -6,12 +6,15 @@
  * `preregCommit` with `git show`, runs `analyzeIPack`, and prints the analysis as JSON.
  *
  * Exit codes: 0 the bar is shown; 1 not shown (the JSON says why, with the numbers);
- * 2 the analysis could not run (bad pre-registration, unreadable pack, usage).
+ * 2 the analysis could not run (bad pre-registration, unreadable pack, usage, any flag:
+ * there is no `--require-r1` or `--evidence` mode, a capability pack is never R1 evidence);
+ * 3 `LEAD_RULING_PENDING`: the pre-registration still has a pending lead ruling, so nothing
+ * is shown whatever the pack says.
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { analyzeIPack, type IPack, type ITaskFact } from "./i-analysis.ts";
+import { analyzeIPack, type IPack, type ITaskFact, LEAD_RULING_PENDING } from "./i-analysis.ts";
 import { I_PREREG_JSON, loadIPrereg, preregHash } from "./prereg.ts";
 
 export interface CliIo {
@@ -59,7 +62,13 @@ export function main(argv: readonly string[], repoRoot: string, io: CliIo): numb
       preregHashAtCommit: (c) => gitPreregHashAt(repoRoot, c),
     });
     io.stdout(`${JSON.stringify(result, null, 2)}\n`);
-    return result.barShown ? 0 : 1;
+    if (result.status === LEAD_RULING_PENDING) {
+      io.stderr(
+        `capability-i-analysis: ${LEAD_RULING_PENDING}: ${result.leadRulingPending.length} lead ruling(s) pending; nothing is shown\n`,
+      );
+      return 3;
+    }
+    return result.status === "shown" && result.barShown ? 0 : 1;
   } catch (e) {
     io.stderr(`capability-i-analysis: ${(e as Error).message}\n`);
     return 2;
