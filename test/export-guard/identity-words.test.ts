@@ -20,11 +20,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { joinedIdentity as uJoined } from "../../src/dataset/closed.ts";
 import { identityStrings } from "../../src/dataset/hygiene.ts";
 import { joinedIdentity as eJoined } from "../../src/episode/closed.ts";
-import {
-  heldIdentity,
-  type IdentityEntry,
-  identityEntries,
-} from "../../src/episode/identity.ts";
+import { heldIdentity, type IdentityEntry, identityEntries } from "../../src/episode/identity.ts";
 import {
   heldEntries,
   type IdentityPair,
@@ -103,11 +99,7 @@ describe("D2: what the three surfaces share and where Q is stricter", () => {
 
   it("Q also matches the first dotted label of a configured string; the others match it whole", () => {
     const dotted = `${FIRST.toLowerCase()}.${LAST.toLowerCase()}`;
-    expect(surfaces(`${FIRST.toLowerCase()}_t`, { lines: [dotted] })).toEqual([
-      false,
-      false,
-      true,
-    ]);
+    expect(surfaces(`${FIRST.toLowerCase()}_t`, { lines: [dotted] })).toEqual([false, false, true]);
     // The whole dotted string, in any joined form, is held on all three.
     expect(surfaces(`${FIRST}${LAST}`, { lines: [dotted] })).toEqual([true, true, true]);
   });
