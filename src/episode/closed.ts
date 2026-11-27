@@ -47,6 +47,7 @@ import {
   EPISODE_SCHEMA,
   EPISODE_SOURCES,
 } from "../../schemas/episode.ts";
+import { malformedHash, skipsIdentityCheck } from "../export-guard/hash-like.ts";
 import {
   episodeScope,
   type HashLedger,
@@ -54,7 +55,7 @@ import {
   NO_LEDGER,
 } from "../export-guard/provenance.ts";
 import { REASON_CODES } from "../gate/api.ts";
-import { heldIdentity, type IdentityEntry } from "./identity.ts";
+import { heldIdentities, heldIdentity, type IdentityEntry } from "./identity.ts";
 import type { Episode } from "./types.ts";
 import { episodeIdOf } from "./validate.ts";
 
@@ -239,6 +240,9 @@ function treat(path: string, value: string, site: Site): string {
     // checks skip the hashed form, so an agent's one could carry a hex-letter identity.
     case "id":
       if (HASHED.test(value)) return keepOrHash(value, scope, site.ledger, hashed);
+      // A hash look-alike that is not exactly `h-<60 hex>` (`H-<60 HEX>`, `h-<64 hex>`,
+      // `h-<59 hex>`) is re-hashed, never kept (#612 D2, `src/export-guard/hash-like.ts`).
+      if (malformedHash(value)) return hashed(value);
       return CLOSED_ID.test(value) && !holds(value, site.joined) ? value : hashed(value);
     case "token":
       if (HASHED.test(value)) return keepOrHash(value, scope, site.ledger, hashed);
@@ -313,7 +317,8 @@ export function openStrings(ep: unknown): string[] {
         (t.kind === "text"
           ? HASHED.test(node)
           : t.kind === "id"
-            ? CLOSED_ID.test(node) || HASHED.test(node)
+            ? // #612 D2: an `h-`/`H-` id is accepted only as exactly `h-<60 hex>`.
+              !malformedHash(node) && (CLOSED_ID.test(node) || HASHED.test(node))
             : t.kind === "token"
               ? t.vocabulary.test(node) || HASHED.test(node)
               : t.grammar.test(node));
@@ -343,10 +348,11 @@ export function joinedIdentity(
     if (typeof node === "string") {
       const t = FIELD_TREATMENT[templateOf(path)];
       if (t === undefined || t.kind === "text" || (t.kind === "closed" && t.exempt)) return;
-      if (HASHED.test(node)) return;
+      // #612 D1: an `h-<60 hex>` skips the check only in a field the exporter hashes (an id or
+      // a token); in a closed-pattern field it is checked like any other value.
+      if (skipsIdentityCheck(t.kind, node)) return;
       // Every identity this string holds (folded: joined forms, full case folding; identity.ts).
-      for (const entry of joined)
-        if (heldIdentity(node, [entry]) !== undefined) out.push({ class: entry[0], path });
+      for (const entry of heldIdentities(node, joined)) out.push({ class: entry[0], path });
     } else if (Array.isArray(node)) {
       for (const [i, item] of node.entries()) visit(item, `${path}[${i}]`);
     } else if (node !== null && typeof node === "object") {

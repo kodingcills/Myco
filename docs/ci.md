@@ -21,6 +21,7 @@ nothing is skipped or fails for lack of one.
 | `ci.yml` | `myco-agent tests (macos-latest)` | yes | no |
 | `ci.yml` | `runtime guest agent tests (ubuntu-latest)` | yes | yes |
 | `ci.yml` | `linux path (ubuntu-latest)` | yes, when the plan says so | no |
+| `ci.yml` | `newcomer path (ubuntu-latest)` | yes, when the plan says so (same condition as `linux path`) | no |
 | `ci.yml` | `safe parallelism (ubuntu-latest)` | yes (every PR; not gated by the plan) | no |
 | `ci.yml` | `m2 evidence and scorecard` | yes, when the plan says so | no |
 | `ci.yml` | `strict isolation (ubuntu-latest)` | yes | no |
@@ -136,7 +137,7 @@ raises a PR's tier adds the label.
 
 **Core smoke set** (about 5 s, `SMOKE` in `scripts/ci-plan.py`; the test file pins this list and the code to each other): `test/claim-isolation.test.ts`, `test/eval.test.ts`, `test/evidence.test.ts`, `test/faults.test.ts`, `test/no-home-paths.test.ts`, `test/recovery.test.ts`, `test/runner.test.ts`, `test/verify.test.ts`, `test/baseline/import-graph.test.ts`, `test/gate/gate.test.ts`, `test/integrity/isolation.test.ts`, `test/oracle-selftest/selftest.test.ts`.
 
-The `linux path` and `m2 evidence and scorecard` jobs are not required. They run unless
+The `linux path`, `newcomer path` and `m2 evidence and scorecard` jobs are not required. They run unless
 a successful plan names a narrow mode and says their paths are untouched (`test/{linux,init}/`;
 `test/m2/`). Their other paths (`src/`, `scripts/`) always run everything. `viewer-perf` is unchanged.
 

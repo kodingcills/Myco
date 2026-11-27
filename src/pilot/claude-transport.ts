@@ -2,11 +2,17 @@
  * The live pilot transport: one headless Claude Code process per attempt, on the subscription.
  *
  * NOT exercised against a real `claude` in this repo's tests: `spawn` is injected, and the
- * tests hand it a fake that checks the argv and environment and returns canned output. The
- * runner CLI (`scripts/m2-r1-pilot.ts`) refuses a live launch unless it gets the explicit
- * flag and the printed plan's hash, and in this change it also has no `capture` (the VM-side
- * copy of the saved document is the lead-approved later step), so it cannot start a real
- * trial.
+ * tests hand it a fake that checks the argv and environment and returns canned output. Its
+ * `capture` is the VM step's host-side read of the guest document (`src/pilot/vm-capture.ts`,
+ * `liveVmDriver`); the runner CLIs build it only after every launch precondition holds
+ * (`src/pilot/live-launch.ts`).
+ *
+ * Subscription only (TIF-274): an API-path credential name in the agent's environment
+ * allowlist refuses the driver (`apiKeyPathRefusal`), and an `apiKeySource` other than `none`
+ * in the CLI's output is an `ApiKeyPathFault` that stops the run (code `api-key`). Credit,
+ * billing and quota errors are class `billing` and, like a lost login (`auth`) and the
+ * subscription's usage limit (`usage-limit`, its own code, for the lead), stop the run at once
+ * with a code: never a back-off or retry loop. Only a transient 429 / 529 / overloaded backs off.
  *
  * What it does, in the order the gated harness requires (`GatedTrialTransport`):
  *  - writes `mcpConfigJson(plan)` to `plan.mcpConfigPath` (the audit pinned the argv to that
@@ -19,7 +25,8 @@
  *  - reads the final `--output-format json` result and classifies it (`interpretResult`).
  *    Only a clean result (no error flag, subtype `success`, exit 0, no structured error) is
  *    the agent's outcome: the claim from the last line of the final message (`DONE` /
- *    `NOT DONE`, anything else is no claim) and the token usage. Everything else is a harness
+ *    `NOT DONE`, anything else is no claim) and the token usage; a clean result with no claim
+ *    whose text names the usage quota is `usage-limit` instead. Everything else is a harness
  *    fault, classified from structured fields first (the assistant message's `error` class,
  *    `api_error_status`, the result `subtype`, `is_error`, exit status) and from a tested
  *    text vocabulary only as a fallback; an error the classifier cannot name is
@@ -31,20 +38,37 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type AgentLaunchPlan, mcpConfigJson } from "../integrity/launch.ts";
 import type { CaptureInput } from "../integrity/vault.ts";
-import { childEnv, HarnessFault, interpretResult, type SpawnFn } from "./claude-cli.ts";
+import {
+  API_CREDENTIAL_NAMES,
+  childEnv,
+  HarnessFault,
+  interpretResult,
+  type SpawnFn,
+} from "./claude-cli.ts";
 import type { AgentReport, AttemptContext, PilotDriver, PilotTransport } from "./runner.ts";
 
-// The classifier and the spawn type live in `claude-cli.ts` (dependency-free, TIF-268) and
-// are re-exported here unchanged, so every existing importer keeps working.
+// The classifier and the spawn type live in `claude-cli.ts` (dependency-free, TIF-268: the
+// hcu+shell arm imports the very same classifier from there without loading the pilot runner)
+// and are re-exported here unchanged, so every existing importer keeps working.
 export {
   AUTH_TEXT,
+  apiKeySourceProblem,
+  BILLING_TEXT,
+  CLEAN_RESULT_AUTH_TEXT,
+  CLEAN_RESULT_BILLING_TEXT,
+  classOfClaimlessCleanResult,
+  classOfFailure,
   classOfStatus,
   classOfText,
   interpretResult,
+  namesUsageLimit,
   parseClaim,
   parseUsage,
   RATE_LIMIT_TEXT,
   type SpawnFn,
+  structuredClass,
+  USAGE_LIMIT_TEXT,
+  vocabularyForms,
 } from "./claude-cli.ts";
 
 export interface ClaudeDriverOptions {
@@ -62,7 +86,21 @@ export interface ClaudeDriverOptions {
 
 export const DEFAULT_KILL_GRACE_MS = 10_000;
 
+/**
+ * Why `claudeDriver` refuses to build: an API-path credential NAME in the agent's environment
+ * allowlist, which is the only way one could reach the `claude` process (names only; no value
+ * is read). A name in the parent environment is stripped by `childEnv` and refused earlier by
+ * the CLI preflight (`subscriptionPreflight`).
+ */
+export function apiKeyPathRefusal(opts: Pick<ClaudeDriverOptions, "envAllowlist">): string | null {
+  const named = API_CREDENTIAL_NAMES.filter((n) => opts.envAllowlist.includes(n));
+  if (named.length === 0) return null;
+  return `refusing the live driver: API-path credential name(s) ${named.join(", ")} in the agent's environment allowlist; the pilot runs on the Claude subscription only`;
+}
+
 export function claudeDriver(opts: ClaudeDriverOptions): PilotDriver {
+  const refusal = apiKeyPathRefusal(opts);
+  if (refusal !== null) throw new Error(refusal);
   return {
     simulated: false,
     transport(ctx: AttemptContext): PilotTransport {
