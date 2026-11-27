@@ -47,6 +47,12 @@ import {
 export interface GuestChannel {
   writeFile(guestPath: string, bytes: Buffer): Promise<number>;
   readFile(guestPath: string): Promise<Buffer>;
+  /**
+   * Open the seeded document in Calc on the interactive desktop, and resolve only once Calc
+   * answers (#734): the agent starts on an open document, as in hcu+shell's prepare. Rejects
+   * if Calc does not open or does not answer within the bound.
+   */
+  openInCalc(guestPath: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -128,6 +134,8 @@ export const VM_FAULT = {
   deploy: "the in-guest agent deploy failed after the reset",
   deployTimeout: "the trial deadline passed during the in-guest agent deploy",
   open: "the guest channel did not open after the reset",
+  calc: "the seeded document did not open in Calc before the agent started",
+  calcTimeout: "the trial deadline passed while opening the document in Calc",
   seed: "the task document could not be seeded in the guest",
   seedReadBack: "the seeded task document did not read back intact",
   read: "the persisted document could not be read back from the guest",
@@ -188,6 +196,18 @@ export class VmTrialStep {
     if (sha256(back) !== sha256(doc)) {
       await this.close();
       throw new HarnessFault("transport-error", VM_FAULT.seedReadBack);
+    }
+    // #734: the agent starts on the document open in Calc (as hcu+shell's prepare). A failure
+    // here is a harness fault, re-run in place under the runner's rules, never an agent outcome.
+    try {
+      await this.channel.openInCalc(this.paths.persisted);
+    } catch {
+      await this.close();
+      throw new HarnessFault("transport-error", VM_FAULT.calc);
+    }
+    if (this.ctx.signal.aborted) {
+      await this.close();
+      throw new HarnessFault("timeout", VM_FAULT.calcTimeout);
     }
     this.seededSha256 = sha256(doc);
   }
@@ -369,6 +389,61 @@ export function runDeploy(o: DeployRunOptions): Promise<void> {
   });
 }
 
+/** Calc's UNO socket for the readiness check (hcu+shell uses the same port and argv shape). */
+export const R1_CALC_UNO_PORT = "2002";
+/** How long the real backend waits for Calc to answer over UNO after launching it. */
+export const DEFAULT_CALC_OPEN_TIMEOUT_MS = 60_000;
+const SOFFICE = "C:\\Program Files\\LibreOffice\\program\\soffice.exe";
+
+/**
+ * The guest argv that opens the seeded document in Calc (#734): hcu+shell's openCalc argv. A
+ * `.csv` seed (the R1 gate state file) gets an explicit CSV import filter, so Calc opens it
+ * straight away instead of stopping at the Text Import dialog.
+ */
+export function calcOpenArgv(guestPath: string): readonly string[] {
+  const csv = /\.csv$/i.test(guestPath) ? ["--infilter=CSV:44,34,76,1"] : [];
+  return [
+    SOFFICE,
+    `--accept=socket,host=127.0.0.1,port=${R1_CALC_UNO_PORT};urp;`,
+    "--norestore",
+    "--nologo",
+    ...csv,
+    guestPath,
+  ];
+}
+
+/** The guest-agent calls `openInCalc` needs; the real channel passes its AgentClient. */
+export interface CalcClient {
+  launch(argv: readonly string[]): Promise<number>;
+  unoEval(params: { call: string; cell?: string; socket?: string }): Promise<unknown>;
+}
+
+/** Launch Calc on the document, then poll UNO until it answers or the bound passes. */
+export async function openInCalcVia(
+  client: CalcClient,
+  guestPath: string,
+  o: {
+    timeoutMs?: number;
+    pollMs?: number;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<void> {
+  const now = o.now ?? Date.now;
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  await client.launch(calcOpenArgv(guestPath));
+  const deadline = now() + (o.timeoutMs ?? DEFAULT_CALC_OPEN_TIMEOUT_MS);
+  for (;;) {
+    try {
+      await client.unoEval({ call: "get_string", cell: "A1", socket: R1_CALC_UNO_PORT });
+      return;
+    } catch (error) {
+      if (now() >= deadline) throw error;
+      await sleep(o.pollMs ?? 500);
+    }
+  }
+}
+
 export interface RealVmBackendOptions {
   readonly repoRoot: string;
   /** `--token-file PATH` for the in-guest agent's token (a path; read at point of use). */
@@ -460,6 +535,7 @@ export function realVmBackend(opts: RealVmBackendOptions): VmBackend {
       return {
         writeFile: (p, b) => client.writeFile(p, b),
         readFile: (p) => client.readFile(p),
+        openInCalc: (p) => openInCalcVia(client, p),
         close: () => tunnel.stop(),
       };
     },

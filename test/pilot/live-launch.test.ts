@@ -44,6 +44,7 @@ import {
 import { HarnessFault, runPilot } from "../../src/pilot/runner.ts";
 import {
   agentTokenFile,
+  calcOpenArgv,
   DEFAULT_DEPLOY_TIMEOUT_MS,
   DEFAULT_GUEST_ROOT,
   DEPLOY_OK_LINE,
@@ -51,7 +52,9 @@ import {
   guestTrialPaths,
   HOST_CAPTURE_FILE,
   liveVmDriver,
+  openInCalcVia,
   parseBootClass,
+  R1_CALC_UNO_PORT,
   realVmBackend,
   runDeploy,
   taskFixtureBytes,
@@ -118,6 +121,8 @@ function fakeVm(
     failOpen?: boolean;
     failCaptureRead?: boolean;
     corruptSeed?: boolean;
+    /** #734: Calc does not open the seeded document (or never answers). */
+    failCalc?: boolean;
   } = {},
 ) {
   const guest = new Map<string, Buffer>();
@@ -154,6 +159,10 @@ function fakeVm(
           const b = guest.get(p);
           if (b === undefined) throw new Error("missing");
           return b;
+        },
+        async openInCalc(p) {
+          events.push(`calc ${p}`);
+          if (o.failCalc) throw new Error("calc-uno-timeout");
         },
         async close() {
           events.push("close");
@@ -363,14 +372,15 @@ describe("R1 launch with every precondition and fakes reaches the live driver", 
       ).toBe(true);
     }
     // The VM step, in order, per trial: reset, deploy (#691), open, seed (write + read back),
-    // [agent], capture, close.
+    // open in Calc (#734), [agent], capture, close.
     const k1 = guestDoc("r1p-fc-v1-001-a1");
-    expect(vm.events.slice(0, 7)).toEqual([
+    expect(vm.events.slice(0, 8)).toEqual([
       "reset",
       "deploy",
       "open",
       `write ${k1}`,
       `read ${k1}`,
+      `calc ${k1}`,
       `read ${k1}`,
       "close",
     ]);
@@ -508,6 +518,12 @@ describe("VM step failures are code-only harness faults", () => {
     ["agent deploy fails (#691)", { failDeploy: true }, "transport-error", VM_FAULT.deploy],
     ["channel does not open", { failOpen: true }, "transport-error", VM_FAULT.open],
     ["seed does not read back", { corruptSeed: true }, "transport-error", VM_FAULT.seedReadBack],
+    [
+      "the document does not open in Calc (#734)",
+      { failCalc: true },
+      "transport-error",
+      VM_FAULT.calc,
+    ],
     ["capture read fails", { failCaptureRead: true }, "transport-error", VM_FAULT.read],
   ] as const)
     it(name, async () => {
@@ -2132,5 +2148,164 @@ describe("#691: open() reads the token file the deploy just wrote", () => {
 describe("the trap claude was never run", () => {
   it("no test in this file invoked a `claude` binary", () => {
     expect(existsSync(TRAP_MARK)).toBe(false);
+  });
+});
+
+describe("#734: the R1 step opens the seeded document in Calc before the agent starts", () => {
+  const ok = () => fakeClaude(() => ({ stdout: resultJson("x\nDONE") }));
+
+  it("order per attempt: reset, deploy, open, seed write, seed read-back, Calc, then claude", async () => {
+    const vm = fakeVm();
+    const claude = ok();
+    const out = tmp();
+    const cfg = { ...config(), trials: ["fc-v1-001"] };
+    const r = await launchR1Live(r1Opts(cfg, out), deps(vm, claude));
+    expect(r.exitCode).toBe(EXIT.complete);
+    const persisted = guestTrialPaths("C:\\myco\\pilot", "r1p-fc-v1-001-a1").persisted;
+    expect(vm.events.slice(0, 6)).toEqual([
+      "reset",
+      "deploy",
+      "open",
+      `write ${persisted}`,
+      `read ${persisted}`,
+      `calc ${persisted}`,
+    ]);
+    expect(claude.calls).toHaveLength(1);
+  });
+
+  it("a Calc failure is a transport-error harness fault: claude never starts, the trial re-runs in place", async () => {
+    const vm = fakeVm({ failCalc: true });
+    const claude = ok();
+    const out = tmp();
+    const cfg = { ...config(), trials: ["fc-v1-001"] };
+    const r = await launchR1Live(r1Opts(cfg, out), deps(vm, claude));
+    // Every attempt fails the same way before the agent: never an agent outcome, never a row.
+    expect(claude.calls).toHaveLength(0);
+    // The runner's repeat rule stops on the identical Calc fault; nothing is decided.
+    expect(r.result).toMatchObject({ stopCode: "repeat-failure" });
+    const ends = readFileSync(join(out, "pilot-progress.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .filter((l) => l.event === "end");
+    expect(ends.length).toBeGreaterThan(0);
+    for (const e of ends) {
+      expect(e).toMatchObject({
+        outcome: "harness-fault",
+        harnessClass: "transport-error",
+        faultMessage: VM_FAULT.calc,
+        armRow: {
+          claim: "no-claim",
+          gate: { called: false, verdict: null },
+          cause: { kind: "harness", detail: "harness fault: transport-error" },
+        },
+      });
+    }
+    // The channel is closed after the failed Calc step.
+    expect(vm.events.filter((e) => e === "close").length).toBeGreaterThanOrEqual(ends.length);
+  });
+
+  it("the trial deadline passing while Calc opens is a timeout fault, before the agent", async () => {
+    const vm = fakeVm();
+    const ac = new AbortController();
+    const backend: VmBackend = {
+      reset: () => vm.backend.reset(),
+      deploy: () => vm.backend.deploy(),
+      async open() {
+        const ch = await vm.backend.open();
+        return {
+          ...ch,
+          async openInCalc(p: string) {
+            await ch.openInCalc(p);
+            ac.abort();
+          },
+        };
+      },
+    };
+    const step = new VmTrialStep(
+      { backend, repoRoot: ROOT },
+      {
+        task: task1(),
+        runId: "k",
+        trialKey: "r1p-fc-v1-001-a1",
+        trialDir: tmp(),
+        signal: ac.signal,
+      },
+    );
+    const fault = await step.prepare().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(fault).toBeInstanceOf(HarnessFault);
+    expect((fault as HarnessFault).harnessClass).toBe("timeout");
+    expect((fault as HarnessFault).message).toBe(VM_FAULT.calcTimeout);
+    expect(vm.events.at(-1)).toBe("close");
+  });
+
+  it("the guest argv is hcu+shell's openCalc argv, with a CSV import filter for the .csv seed", () => {
+    const argv = calcOpenArgv("C:\\myco\\pilot\\r1p-fc-v1-001-a1\\doc.csv");
+    expect(argv[0]).toBe("C:\\Program Files\\LibreOffice\\program\\soffice.exe");
+    expect(argv).toContain(`--accept=socket,host=127.0.0.1,port=${R1_CALC_UNO_PORT};urp;`);
+    expect(argv).toContain("--norestore");
+    expect(argv).toContain("--nologo");
+    expect(argv).toContain("--infilter=CSV:44,34,76,1");
+    expect(argv.at(-1)).toBe("C:\\myco\\pilot\\r1p-fc-v1-001-a1\\doc.csv");
+    expect(calcOpenArgv("C:\\w\\a.xlsx")).not.toContain("--infilter=CSV:44,34,76,1");
+  });
+
+  it("openInCalcVia launches once, then polls UNO until Calc answers", async () => {
+    const calls: string[] = [];
+    let unoTries = 0;
+    let t = 0;
+    await openInCalcVia(
+      {
+        async launch(argv) {
+          calls.push(`launch ${argv.at(-1)}`);
+          return 42;
+        },
+        async unoEval(p) {
+          unoTries++;
+          calls.push(`uno ${p.call} ${p.cell} ${p.socket}`);
+          if (unoTries < 3) throw new Error("no listener");
+          return { ok: true };
+        },
+      },
+      "C:\\d\\doc.csv",
+      {
+        now: () => t,
+        sleep: async (ms) => {
+          t += ms;
+        },
+        timeoutMs: 60_000,
+        pollMs: 500,
+      },
+    );
+    expect(calls[0]).toBe("launch C:\\d\\doc.csv");
+    expect(calls.filter((c) => c.startsWith("launch"))).toHaveLength(1);
+    expect(unoTries).toBe(3);
+    expect(calls[1]).toBe(`uno get_string A1 ${R1_CALC_UNO_PORT}`);
+  });
+
+  it("openInCalcVia rejects when Calc never answers within the bound", async () => {
+    let t = 0;
+    const p = openInCalcVia(
+      {
+        launch: async () => 1,
+        unoEval: async () => {
+          throw new Error("no listener");
+        },
+      },
+      "C:\\d\\doc.csv",
+      {
+        now: () => t,
+        sleep: async (ms) => {
+          t += ms;
+        },
+        timeoutMs: 2_000,
+        pollMs: 500,
+      },
+    );
+    await expect(p).rejects.toThrow("no listener");
+    expect(t).toBeGreaterThanOrEqual(2_000);
   });
 });
