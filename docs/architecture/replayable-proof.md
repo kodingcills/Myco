@@ -148,7 +148,7 @@ The exporter does not look at what a string says. It looks at which field it is 
 | boolean | as is; any other value is refused | `run.simulated`, `verdict.accepted` |
 | integer | as is; any other value is refused | `checkpoint.checkpoint`, `handoff.checkpoint` |
 | sha256 digest | as is; any other value is refused | `verdict.oracle.specSha256` |
-| id | as is when it matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` **and** passes the identity guard (below), else **hashed**: `h-<60hex>` (below; itself a closed id, so equality is still checked). An input that is exactly `h-<60hex>` is kept as is; any other `h-` form (either case) is hashed, and a bundle id starting `h-` in any other form is refused | `run.runId`, `run.taskId`, `evidence.evidenceId`, `evidence.evidenceKind`, `verdict.taskId`, `verdict.runId`, `verdict.evidence`, `verdict.oracle.family`, `verdict.oracle.version`, `handoff.from`, `handoff.to`, `policy.policyId` |
+| id | as is when it matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` **and** passes the identity guard (below), else **hashed**: `h-<60hex>` (below; itself a closed id, so equality is still checked). An input that is exactly `h-<60hex>` is kept as is only when harness-produced (#579, the hash ledger below), else hashed; any other `h-` form (either case) is hashed, and a bundle id starting `h-` in any other form is refused | `run.runId`, `run.taskId`, `evidence.evidenceId`, `evidence.evidenceKind`, `verdict.taskId`, `verdict.runId`, `verdict.evidence`, `verdict.oracle.family`, `verdict.oracle.version`, `handoff.from`, `handoff.to`, `policy.policyId` |
 | agent-produced name (#562, F1) | as is only when it is a member of a **closed vocabulary** (`src/proof/vocab.ts`), exact case and spelling, else **hashed**; never a grammar (an id grammar wrote a foreign `jsmith`, `Users.jsmith.Documents` or `com.apple.Safari` verbatim, and the identity guard only knows this host). Tools: `TOOL_NAMES` (#542's action kinds, the runtime desktop actions, the Calc router kinds, the fast-path tools, the Windows guest agent ops, `myco_gate_check`). Apps: `REGISTERED_APPS` (`calc`, `writer`, `libreoffice-calc`, `libreoffice-writer`, `localc`, `lowriter`, `soffice`, `myco-todo`). Subject: a tool or a registered app. Keys: 1 to 4 space-separated chords, each a named key (`KEY_NAMES`: `Return`, `Tab`, `Escape`, `F1`-`F12`, ...) with optional modifiers (`ctrl`, `shift`, `alt`, `super`, `meta`, `cmd`) or one lower-case letter or digit with at least one modifier (`ctrl+s`); a bare letter is not a chord, so a sequence cannot spell a word; a key sequence is also put to the identity guard | `action.tool`, `action.keys`, `action.app`, `policy.subject` |
 | arm | as is when it is `myco-gate` or `hcu+shell`, else as an id | `run.arm` |
 | policy code | as is only when it is a member of the **closed enum** `POLICY_REASON_CODES` (the gate's `REASON_CODES` plus the repo's policy and handoff codes: `POLICY_ALLOW`, `POLICY_DENIED`, `POLICY_ERROR`, `POLICY_INVALID`, `TASK_NOT_ALLOWED`, `HUMAN_REJECTED`, `STILL_PAUSED`, `HANDOFF_TIMEOUT`, `HANDOFF_CANCELLED`, `ATTEMPT_ENDED`), else **hashed**; never a grammar (an upper-case grammar wrote `ZQGPTRR` or an account name in capitals verbatim, #553 r2 N1) | `policy.reasonCode` |
@@ -175,7 +175,9 @@ guard:
   `mergeIdentity(hostIdentity(), ...)`), never used instead of it, so fake host facts or an
   empty identity cannot turn the host's account name or hostname off (#562 D1). There is no
   "no identity" argument;
-- matching is on a normal form (NFKC, **full Unicode case folding**, every non-letter,
+- matching is on a normal form (NFKC, **full Unicode case folding**, accents stripped (#579 O2:
+  NFD, combining marks removed, `ø`/`ł`/`æ` transliterated, so `JOSE` matches `josé` and `rena`
+  matches `reña`), every non-letter,
   non-digit removed, on both sides). The fold upper-cases then lower-cases until nothing
   changes, so `ß`, `ẞ` and `SS` all fold to `ss` (a configured `Groß` matches `GROSS`, #562
   D2), dotless `ı` folds to `i`, and final `ς` is mapped to `σ` after the fold (lower-casing
@@ -213,9 +215,16 @@ keeping equality checkable, and it is a stated limit.
 container and the episode export): every hashed VALUE (an id, tool, app, key sequence,
 subject, policy code or media type that is not written as is) is `h-<60hex>`, `h-` plus the
 first 60 hex characters (240 bits) of that digest (`src/proof/hashed.ts`). Only digest hex is
-kept, so no input text survives. Hashing is idempotent: an input that is exactly `h-<60hex>`
-(lower-case hex) is kept as is, and every other `h-` form (`h-<64hex>`, 59 or 61 digits, upper
-case) is a plain value and is hashed. A bundle whose hashed-value field holds any other `h-`
+kept, so no input text survives. Every `h-` form other than exactly `h-<60hex>` (`h-<64hex>`,
+59 or 61 digits, upper case) is a plain value and is hashed. Even an exact `h-<60hex>` input is
+kept as is ONLY when the harness produced it (#579 O3, provenance-bound;
+`src/export-guard/provenance.ts`): the exporter's hash ledger records it for that field's scope
+(one scope for every id, since ids cross-reference; the field name for a vocabulary field).
+`bundleHashLedger(text)` builds the ledger from a bundle the harness wrote, after it verifies, so
+re-exporting a run from a bundle's own values is byte-identical. With no ledger every
+`h-<60hex>` input (an agent's) is re-hashed, so it cannot carry hex-encoded text or a hex-letter
+identity. A bundle written before #579 is trusted by `bundleHashLedger`, so re-export from the
+source run instead. A bundle whose hashed-value field holds any other `h-`
 form is refused (`PROOF_SCHEMA`). Full content digests are NOT truncated: `TextRef.sha256`,
 `evidence.sha256`, `prevSha256`, the head, the ledger head and the episode digest stay the full
 64-hex sha256.

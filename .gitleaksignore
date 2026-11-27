@@ -1,0 +1,5 @@
+# PR #592 (TIF-265 follow-up, #579): verified test fixtures, not secrets. Fake `QZ…` trial keys in
+# test/proof/provenance.test.ts at commit a4251066; later commits build the value at run time.
+a42510664301990fae387772edf0af7af3a253ef:test/proof/provenance.test.ts:generic-api-key:206
+a42510664301990fae387772edf0af7af3a253ef:test/proof/provenance.test.ts:generic-api-key:209
+a42510664301990fae387772edf0af7af3a253ef:test/proof/provenance.test.ts:generic-api-key:217
