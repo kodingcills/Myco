@@ -50,6 +50,8 @@ import {
   type AuditOptions,
   auditToolSurface,
   classifyTool,
+  HCU_ACTUATOR_SERVER_NAME,
+  isHcuAttachCommand,
   MCP_SERVERS,
   MYCO_RT_SESSION_ENV,
   MYCO_STATE_DOC_ENV,
@@ -383,6 +385,45 @@ function stateBindingViolations(plan: AgentLaunchPlan, runId: string): SurfaceVi
 }
 
 /**
+ * A `myco-hcu` actuator server in the plan (#732, #733 round 2 N3) must be exactly the
+ * reviewed actuator: `node --import tsx <abs>/scripts/myco-hcu.ts mcp --hcu-command <attach>`,
+ * with no environment. The HCU command must be the attach form (`isHcuAttachCommand`): a bare
+ * session-0 `computer-use.exe mcp` sees no desktop. Any other command (e.g. `bash -c ...`
+ * under the actuator's name), an extra flag or an env key is refused, as the state server's
+ * binding is. Fail closed.
+ */
+function actuatorBindingViolations(plan: AgentLaunchPlan): SurfaceViolation[] {
+  if (!Object.hasOwn(plan.mcpServers, HCU_ACTUATOR_SERVER_NAME)) return [];
+  const server = plan.mcpServers[HCU_ACTUATOR_SERVER_NAME] as McpServerLaunch;
+  const out: SurfaceViolation[] = [];
+  const violation = (detail: string) =>
+    out.push({ tool: `mcp__${HCU_ACTUATOR_SERVER_NAME}`, reach: "unknown", detail });
+  if (server.command !== "node") violation("the actuator server's command must be `node`");
+  const args = server.args;
+  const script = args[2] ?? "";
+  if (
+    args.length !== 6 ||
+    args[0] !== "--import" ||
+    args[1] !== "tsx" ||
+    !isAbsolute(script) ||
+    normalize(script) !== script ||
+    !/[\\/]scripts[\\/]myco-hcu\.ts$/.test(script) ||
+    args[3] !== "mcp" ||
+    args[4] !== "--hcu-command"
+  )
+    violation(
+      "the actuator server's args must be exactly --import tsx <repo>/scripts/myco-hcu.ts mcp --hcu-command <cmd>",
+    );
+  if (!isHcuAttachCommand(args[5] ?? ""))
+    violation(
+      "the actuator's HCU command must be the attach form (computer-use.exe mcp --attach <socket>)",
+    );
+  if (Object.keys(server.env ?? {}).length > 0)
+    violation("the actuator server takes no environment");
+  return out;
+}
+
+/**
  * Audit a launch plan. `ok` is true only when the argv grants nothing outside guest / gate /
  * agent-local reach, no flag widens it, the agent can load only `plan.mcpServers` (via
  * `--strict-mcp-config` and the one `--mcp-config plan.mcpConfigPath`), and every one of
@@ -399,6 +440,7 @@ export function auditAgentLaunch(plan: AgentLaunchPlan, opts: LaunchAuditOptions
   };
   const serverNames = Object.keys(plan.mcpServers);
   violations.push(...stateBindingViolations(plan, opts.runId));
+  violations.push(...actuatorBindingViolations(plan));
   for (const name of serverNames)
     if (!Object.hasOwn(servers, name))
       violations.push({
