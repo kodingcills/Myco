@@ -120,7 +120,7 @@ export const PLANNER_DIFFERENCES: readonly string[] = [
   "--max-turns 1 and no tool at all: the arm's actions are returned as JSON and executed by the harness, not by Claude Code",
   "per-call output ceiling 1024 tokens (CLAUDE_CODE_MAX_OUTPUT_TOKENS), C1's ceiling recorded on every hcu+shell row; the gate arm sets none",
   "the hcu+shell prompt (C1's prompt with the shell sentence) is the user message; the gate arm appends its gate instruction to the system prompt",
-  // Round 2 (verifier D6): every remaining difference from the myco-gate arm (#598 @ 13fccd96).
+  // Round 2 (verifier D6): every remaining difference from the myco-gate arm (#598 @ fc01e69a).
   "the agent's tools: HCU's pixel GUI tool plus the read-only shell, where the gate arm's agent has Myco's gate tool (the head-to-head itself)",
   "document: the published fixture CSV is hash-checked on the host, converted to .xlsx in the guest and opened in Calc, and the .xlsx is captured; the gate arm seeds and captures the raw CSV (doc.csv). fc-v1 declares persistedFormat xlsx and a GUI agent needs the document open; the gate arm's CSV is its pilot gate's CSV-only limit (#598 follow-up 1). Material to R2: the lead's GO on this plan decides it",
   "seed check: the guest-made .xlsx is read back, required non-empty and hashed (seededSha256), not compared to host bytes, because the host never holds the .xlsx; the gate arm compares its read-back with the bytes it wrote",
