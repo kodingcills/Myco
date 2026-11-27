@@ -14,7 +14,15 @@
  * session wrapper is the real scripts/vm-session.sh on a private lock path.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -41,6 +49,8 @@ interface Opts {
     noGui?: boolean;
     noAx?: boolean;
     noImage?: boolean;
+    /** The image block's data: "" (empty) or base64 of bytes that are not an image. */
+    imageData?: string;
     /** Per MCP session, in order: o = screenshot ok, f = screenshot runtime error. */
     shots?: string;
     /** identity stage answers (resume): the marker pid alive, and Windows' boot time. */
@@ -85,15 +95,23 @@ esac
 exit 0`,
   );
   stub(join(bin, "scp"), `echo "scp $*" >> "${log}"\nexit 0`);
+  // #746 B1: GNU coreutils semantics for \`stat -f\` (prints the filesystem block, exits 1), so the
+  // macOS run exercises what broke on Linux. The script must not depend on stat at all.
+  stub(
+    join(bin, "stat"),
+    `if [ "$1" = -f ]; then printf '  File: "%s"\\n    ID: 0 Namelen: 255 Type: apfs\\nBlock size: 4096\\n' "\${3:-x}"; exit 1; fi
+exec /usr/bin/stat "$@"`,
+  );
   // TIF-734: the MCP probe over ssh (computer-use.exe mcp --attach); answers by request id.
   const tools = opts.hcu?.noGui
     ? '[{"name":"AX"}]'
     : opts.hcu?.noAx
       ? '[{"name":"GUI"}]'
       : '[{"name":"AX"},{"name":"GUI"}]';
+  const data = opts.hcu?.imageData ?? "iVBORw0KGgo="; // base64 of the 8 PNG magic bytes
   const okShot = opts.hcu?.noImage
     ? '{"isError":false,"content":[{"type":"text","text":"{}"}]}'
-    : '{"isError":false,"content":[{"type":"text","text":"{}"},{"type":"image","mimeType":"image/png","data":"iVBORw0KGgo="}]}';
+    : `{"isError":false,"content":[{"type":"text","text":"{}"},{"type":"image","mimeType":"image/png","data":"${data}"}]}`;
   const badShot =
     '{"isError":true,"content":[{"type":"text","text":"{\\"ok\\":false,\\"code\\":\\"runtime_error\\"}"}]}';
   const shots = opts.hcu?.shots ?? "ooo";
@@ -491,6 +509,16 @@ describe("guest-maintenance.ps1 error mode and idle loop (exact)", () => {
   });
 });
 
+/** The stubbed test's explicit flag: short HCU timings and pins matching the fixture's files. */
+let fixturePins: { cu: string; provider: string } = { cu: "", provider: "" };
+const testFlag = () => ({
+  MYCO_BUILD_TRIAL_BASE_TEST: "1",
+  MYCO_TEST_HCU_RETRY_S: "0",
+  MYCO_TEST_HCU_PROBE_WAIT_S: "0",
+  MYCO_TEST_HCU_PIN_CU: fixturePins.cu,
+  MYCO_TEST_HCU_PIN_PROVIDER: fixturePins.provider,
+});
+
 /** A host HCU directory as build-trial-base.sh expects it, with a matching SHA256SUMS. */
 function hcuDir(tamper = false): string {
   const d = join(dir, "hcu");
@@ -504,6 +532,9 @@ function hcuDir(tamper = false): string {
   for (const f of files) writeFileSync(join(d, f), `bytes of ${f}`);
   const sums = spawnSync("shasum", ["-a", "256", ...files], { cwd: d, encoding: "utf8" }).stdout;
   writeFileSync(join(d, "SHA256SUMS"), sums);
+  const pin = (f: string) =>
+    (sums.split("\n").find((l) => l.endsWith(`  ${f}`)) ?? "").slice(0, 64);
+  fixturePins = { cu: pin("computer-use.exe"), provider: pin("computer-use-windows-provider.exe") };
   if (tamper) writeFileSync(join(d, "computer-use.exe"), "tampered");
   return d;
 }
@@ -513,8 +544,7 @@ describe("build-trial-base.sh with HCU (TIF-734)", () => {
     ...install({ ...opts, hcu: opts.hcu ?? {} }),
     MYCO_TRIAL_BASE_NAME: "trial-base-v4",
     MYCO_TRIAL_BASE_HCU_DIR: hcuDir(tamper),
-    MYCO_HCU_PROBE_WAIT_S: "0",
-    MYCO_HCU_RETRY_S: "0",
+    ...testFlag(),
   });
 
   it("without MYCO_TRIAL_BASE_HCU_DIR nothing HCU runs or is copied", {
@@ -586,8 +616,7 @@ describe("build-trial-base.sh: HCU warm-up (TIF-734, lead ruling 15:44Z)", () =>
     ...install({ hcu }),
     MYCO_TRIAL_BASE_NAME: "trial-base-v4",
     MYCO_TRIAL_BASE_HCU_DIR: hcuDir(),
-    MYCO_HCU_PROBE_WAIT_S: "0",
-    MYCO_HCU_RETRY_S: "0",
+    ...testFlag(),
   });
   const sessions = (calls: string[]) =>
     calls.filter((c) => c.startsWith("ssh ") && c.includes("mcp --attach"));
@@ -615,7 +644,8 @@ describe("build-trial-base.sh: HCU warm-up (TIF-734, lead ruling 15:44Z)", () =>
   it("at most 3 attempts; three failed screenshots mean no snapshot", {
     timeout: SLOW,
   }, async () => {
-    const r = await run(env({ shots: "ffff" }));
+    // V3: the bound is fixed in code; an environment value asking for more is ignored.
+    const r = await run({ ...env({ shots: "fffffffff" }), MYCO_HCU_PROBE_ATTEMPTS: "9" });
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("HCU MCP probe failed on all 3 attempts");
     expect(sessions(r.calls)).toHaveLength(3);
@@ -631,7 +661,10 @@ describe("build-trial-base.sh: HCU warm-up (TIF-734, lead ruling 15:44Z)", () =>
 
 describe("build-trial-base.sh: resume from 5b (TIF-734, lead ruling 15:44Z)", () => {
   /** The evidence a build leaves when it stopped at 5b, and the resume's environment. */
-  const resumeEnv = (opts: Opts = {}, evidence: { marker?: boolean; coldBoot?: boolean } = {}) => {
+  const resumeEnv = (
+    opts: Opts = {},
+    evidence: { marker?: boolean; coldBoot?: boolean; markMtime?: number } = {},
+  ) => {
     const out = join(dir, "evidence");
     mkdirSync(out, { recursive: true });
     writeFileSync(join(out, "11-egress-deny.log"), "deny ok\n");
@@ -643,6 +676,8 @@ describe("build-trial-base.sh: resume from 5b (TIF-734, lead ruling 15:44Z)", ()
         ? "verify: daemon answers\n"
         : "verify: computer-use.exe pid 5364 session 1\nsocket=C:\\x.sock\n",
     );
+    if (evidence.markMtime !== undefined)
+      utimesSync(join(out, "14b-hcu-verify.log"), evidence.markMtime, evidence.markMtime);
     writeFileSync(join(out, "14c-hcu-mcp-probe.json"), '{"screenshot_is_error":true}\n');
     writeFileSync(
       join(out, "boot-classes.log"),
@@ -655,8 +690,7 @@ describe("build-trial-base.sh: resume from 5b (TIF-734, lead ruling 15:44Z)", ()
       MYCO_TRIAL_BASE_NAME: "trial-base-v4",
       MYCO_TRIAL_BASE_HCU_DIR: hcuDir(),
       MYCO_TRIAL_BASE_RESUME_FROM: "5b",
-      MYCO_HCU_PROBE_WAIT_S: "0",
-      MYCO_HCU_RETRY_S: "0",
+      ...testFlag(),
     };
   };
   const noSnapshot = (calls: string[]) =>
@@ -691,9 +725,32 @@ describe("build-trial-base.sh: resume from 5b (TIF-734, lead ruling 15:44Z)", ()
     // The re-proofs come after the identity check and immediately before the shutdown and snapshot.
     expect(at(r.calls, "egress verify")).toBeGreaterThan(at(r.calls, "-Stage identity"));
     expect(existsSync(join(dir, "evidence", "before-resume", "14b-hcu-verify.log"))).toBe(true);
-    expect(readFileSync(join(dir, "evidence", "boot-classes.log"), "utf8")).toContain(
-      "resume from 5b: same instance (computer-use.exe pid 5364 alive",
+    // #746 B1: the 5b record's time is a plain integer, with a GNU-semantics stat on PATH.
+    expect(readFileSync(join(dir, "evidence", "boot-classes.log"), "utf8")).toMatch(
+      /^resume from 5b: same instance \(computer-use\.exe pid 5364 alive, boot_utc 1000 < 5b record \d+\)$/m,
     );
+  });
+
+  it("pins the 5b record time exactly: the file's mtime as an integer", {
+    timeout: SLOW,
+  }, async () => {
+    const r = await run(resumeEnv({}, { markMtime: 1_900_000_000 }));
+    expect(r.status).toBe(0);
+    expect(readFileSync(join(dir, "evidence", "boot-classes.log"), "utf8")).toContain(
+      "boot_utc 1000 < 5b record 1900000000)",
+    );
+  });
+
+  it("V1: a boot time equal to the 5b record is refused (strictly earlier only)", {
+    timeout: SLOW,
+  }, async () => {
+    const r = await run(
+      resumeEnv({ hcu: { bootUtc: 1_900_000_000 } }, { markMtime: 1_900_000_000 }),
+    );
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("(boot_utc 1900000000 >= 1900000000): not the same instance");
+    expect(at(r.calls, "egress verify")).toBe(-1);
+    noSnapshot(r.calls);
   });
 
   it("refuses a different guest: the marker pid is not alive in an interactive session", {
@@ -712,7 +769,10 @@ describe("build-trial-base.sh: resume from 5b (TIF-734, lead ruling 15:44Z)", ()
   }, async () => {
     const r = await run(resumeEnv({ hcu: { bootUtc: 9_999_999_999 } }));
     expect(r.status).toBe(1);
-    expect(r.stderr).toContain("the guest booted after the 5b record");
+    // The right reason: an integer comparison against the record time, not a junk value (#746 B1).
+    expect(r.stderr).toMatch(
+      /the guest booted after the 5b record \(boot_utc 9999999999 >= \d+\): not the same instance/,
+    );
     noSnapshot(r.calls);
   });
 
@@ -764,6 +824,9 @@ describe("build-trial-base.sh: resume from 5b (TIF-734, lead ruling 15:44Z)", ()
   }, async () => {
     const r = await run(resumeEnv({ probeReachable: true }));
     expect(r.status).toBe(1);
+    // The right reason: past identity, stopped by the probe (#746 B1).
+    expect(r.stderr).toContain("a probe target was reachable with egress denied");
+    expect(at(r.calls, "-Stage identity")).toBeGreaterThan(-1);
     noSnapshot(r.calls);
   });
 
@@ -772,6 +835,9 @@ describe("build-trial-base.sh: resume from 5b (TIF-734, lead ruling 15:44Z)", ()
   }, async () => {
     const r = await run(resumeEnv({ hcu: { shots: "fff" } }));
     expect(r.status).toBe(1);
+    // The right reason: past identity and the egress re-proofs, stopped by HCU (#746 B1).
+    expect(r.stderr).toContain("HCU MCP probe failed on all 3 attempts");
+    expect(at(r.calls, "egress probe")).toBeGreaterThan(-1);
     noSnapshot(r.calls);
   });
 
@@ -780,5 +846,85 @@ describe("build-trial-base.sh: resume from 5b (TIF-734, lead ruling 15:44Z)", ()
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("accepts only 5b");
     noSnapshot(r.calls);
+  });
+});
+
+describe("build-trial-base.sh: #746 round 2 (pins, real images, the test flag)", () => {
+  it("the 10 s spacing, 25 s wait and pins are fixed: every MYCO_TEST_ read sits inside the test-flag block", () => {
+    // A live run never sets the flag, and without it the pins refuse any test fixture, so this is
+    // pinned on the source: the only reads of the test overrides are inside that one block.
+    const src = readFileSync(BUILD, "utf8");
+    const open = 'if [ "$' + '{MYCO_BUILD_TRIAL_BASE_TEST:-}" = 1 ]; then';
+    const start = src.indexOf(open);
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf("\n  fi\n", start);
+    const block = src.slice(start, end);
+    const outside = src.slice(0, start) + src.slice(end);
+    expect(outside).not.toMatch(/MYCO_TEST_/);
+    expect(block).toContain("HCU_RETRY_S=$" + "{MYCO_TEST_HCU_RETRY_S:-$HCU_RETRY_S}");
+    expect(src).toMatch(/^HCU_RETRY_S=10$/m);
+    expect(src).toMatch(/^HCU_PROBE_WAIT_S=25$/m);
+    expect(src).toMatch(/^HCU_PROBE_ATTEMPTS=3$/m);
+  });
+
+  const hcuOn = (opts: Opts = {}): Record<string, string> => ({
+    ...install({ ...opts, hcu: opts.hcu ?? {} }),
+    MYCO_TRIAL_BASE_NAME: "trial-base-v4",
+    MYCO_TRIAL_BASE_HCU_DIR: hcuDir(),
+    ...testFlag(),
+  });
+  const noSnapshot = (calls: string[]) =>
+    expect(calls.filter((c) => c.startsWith("vm.sh snapshot "))).toEqual([]);
+
+  it("refuses a self-consistent HCU build that is not the pinned one, before any VM call", {
+    timeout: SLOW,
+  }, async () => {
+    // The fixture's SHA256SUMS matches its files; without the test pins, the script's own pins apply.
+    const vars: Record<string, string> = hcuOn();
+    delete vars.MYCO_TEST_HCU_PIN_CU;
+    delete vars.MYCO_TEST_HCU_PIN_PROVIDER;
+    const r = await run(vars);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(
+      "computer-use.exe is not the pinned HCU build (368345290f6979fbd6dc0e5aaaa3c41064c976f722768de7b99a2c52f6943800)",
+    );
+    expect(r.calls.filter((c) => c.startsWith("egress") || c.startsWith("reset"))).toEqual([]);
+  });
+
+  it("refuses a provider that is not the pinned one", { timeout: SLOW }, async () => {
+    const r = await run({ ...hcuOn(), MYCO_TEST_HCU_PIN_PROVIDER: "0".repeat(64) });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("computer-use-windows-provider.exe is not the pinned HCU build");
+    expect(r.calls.filter((c) => c.startsWith("egress") || c.startsWith("reset"))).toEqual([]);
+  });
+
+  it("the test flag is refused when the VM scripts are the real default path", {
+    timeout: SLOW,
+  }, async () => {
+    const vars = hcuOn();
+    const real = join(dir, "VMs", "myco-win11", "scripts");
+    mkdirSync(real, { recursive: true });
+    writeFileSync(join(real, "vm.sh"), readFileSync(join(vars.MYCO_VM_SCRIPTS ?? "", "vm.sh")), {
+      mode: 0o755,
+    });
+    const r = await run({ ...vars, MYCO_VM_SCRIPTS: real });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("MYCO_BUILD_TRIAL_BASE_TEST=1 is for the stubbed host test only");
+  });
+
+  for (const [name, imageData] of [
+    ["V9: an image block with empty data", ""],
+    ["image data that decodes to neither a PNG nor a JPEG", "aGVsbG8gd29ybGQ="],
+  ] as const)
+    it(`${name} is not a screenshot: no snapshot`, { timeout: SLOW }, async () => {
+      const r = await run(hcuOn({ hcu: { imageData } }));
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("HCU MCP probe failed on all 3 attempts");
+      noSnapshot(r.calls);
+    });
+
+  it("a JPEG screenshot counts as a real image", { timeout: SLOW }, async () => {
+    const r = await run(hcuOn({ hcu: { imageData: "/9j/4AAQSkZJRgABAQ==" } }));
+    expect(r.status).toBe(0);
   });
 });

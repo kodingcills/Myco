@@ -60,6 +60,14 @@ GUEST_HCU_PS='C:\myco\bin\myco-hcu.ps1'
 RESUME_FROM=${MYCO_TRIAL_BASE_RESUME_FROM:-}
 # Fixed, not overridable: HCU's first call on a fresh boot can time out (TIF-734 build 1).
 HCU_PROBE_ATTEMPTS=3
+# The pinned HCU build (microsoft/Hybrid-Computer-Use v1.0.1, 00eaeebe, win-arm64; #746).
+# SHA256SUMS must list exactly these; a self-consistent but different build is refused.
+HCU_PIN_CU=368345290f6979fbd6dc0e5aaaa3c41064c976f722768de7b99a2c52f6943800
+HCU_PIN_PROVIDER=09ea7922467bdaba95baad8d56126cb7400321a6caeda8100757ba65720f780f
+# Warm-up spacing and the per-session wait: 10 s and 25 s, as ruled (15:44Z). Only the stubbed
+# host test may shorten them, and only with MYCO_BUILD_TRIAL_BASE_TEST=1 and stub VM scripts.
+HCU_RETRY_S=10
+HCU_PROBE_WAIT_S=25
 # Overridable so the host test can stub them; the defaults are the in-repo scripts.
 EGRESS=${MYCO_EGRESS_SCRIPT:-$REPO/scripts/guest-egress.sh}
 RESET=${MYCO_RESET_SCRIPT:-$REPO/scripts/reset-trial-vm.sh}
@@ -88,6 +96,19 @@ if [ -n "$HCU_DIR" ]; then
     [ -f "$HCU_DIR/$f" ] || die "MYCO_TRIAL_BASE_HCU_DIR is missing $f"
   done
   (cd "$HCU_DIR" && shasum -a 256 -c SHA256SUMS >/dev/null 2>&1) || die "MYCO_TRIAL_BASE_HCU_DIR does not match its SHA256SUMS"
+  if [ "${MYCO_BUILD_TRIAL_BASE_TEST:-}" = 1 ]; then
+    [ -n "${MYCO_VM_SCRIPTS:-}" ] && [ "$VM" != "$HOME/VMs/myco-win11/scripts" ] \
+      || die "MYCO_BUILD_TRIAL_BASE_TEST=1 is for the stubbed host test only (MYCO_VM_SCRIPTS must point at stubs)"
+    HCU_PIN_CU=${MYCO_TEST_HCU_PIN_CU:-$HCU_PIN_CU}
+    HCU_PIN_PROVIDER=${MYCO_TEST_HCU_PIN_PROVIDER:-$HCU_PIN_PROVIDER}
+    HCU_RETRY_S=${MYCO_TEST_HCU_RETRY_S:-$HCU_RETRY_S}
+    HCU_PROBE_WAIT_S=${MYCO_TEST_HCU_PROBE_WAIT_S:-$HCU_PROBE_WAIT_S}
+  fi
+  pin_of() { sed -nE "s/^([0-9a-f]{64})[[:space:]]+\*?$1\$/\1/p" "$HCU_DIR/SHA256SUMS" | head -n 1; }
+  [ "$(pin_of computer-use.exe)" = "$HCU_PIN_CU" ] \
+    || die "MYCO_TRIAL_BASE_HCU_DIR: computer-use.exe is not the pinned HCU build ($HCU_PIN_CU)"
+  [ "$(pin_of computer-use-windows-provider.exe)" = "$HCU_PIN_PROVIDER" ] \
+    || die "MYCO_TRIAL_BASE_HCU_DIR: computer-use-windows-provider.exe is not the pinned HCU build ($HCU_PIN_PROVIDER)"
 fi
 has_snapshot "$NEW" && die "snapshot '$NEW' already exists; never overwrite a trial base (pick a new version name)"
 
@@ -209,7 +230,9 @@ grep -q '^step 5 boot in place: class=cold ' "$OUT/boot-classes.log" \
   || die "resume: boot-classes.log records no cold boot in place"
 MARK_PID=$(sed -nE 's/^verify: computer-use\.exe pid ([0-9]+) session [1-9][0-9]*$/\1/p' "$OUT/14b-hcu-verify.log" | tail -n 1)
 [ -n "$MARK_PID" ] || die "resume: 14b-hcu-verify.log holds no instance marker (computer-use.exe pid in an interactive session)"
-MARK_UTC=$(stat -f %m "$OUT/14b-hcu-verify.log" 2>/dev/null || stat -c %Y "$OUT/14b-hcu-verify.log")
+# The 5b record's mtime, portable (GNU `stat -f` prints the filesystem block; #746 B1).
+MARK_UTC=$(python3 -c 'import os, sys; print(int(os.stat(sys.argv[1]).st_mtime))' "$OUT/14b-hcu-verify.log")
+[[ "$MARK_UTC" =~ ^[0-9]+$ ]] || die "resume: cannot read the 5b record's time as an integer"
 [ "$(status)" = started ] || die "resume: the VM is not running (a stopped or restarted guest is not the build's instance)"
 bash "$EGRESS" status > "$OUT/r1-egress-status.log" 2>&1
 grep -q '^utm isolate-from-host: true$' "$OUT/r1-egress-status.log" || die "resume: egress is not denied (see r1-egress-status.log)"
@@ -250,7 +273,7 @@ if [ -n "$HCU_DIR" ]; then
         '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
         '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"GUI","arguments":{"actions":[{"type":"screenshot"}]}}}'
-      sleep "${MYCO_HCU_PROBE_WAIT_S:-25}"; } \
+      sleep "$HCU_PROBE_WAIT_S"; } \
       | ssh -F "$CFG" -o LogLevel=ERROR -o ConnectTimeout=10 myco-win11 "C:\\myco\\bin\\computer-use.exe mcp --attach $HCU_SOCKET" 2>/dev/null | tr -d '\r' > "$1"
   }
   HCU_OK=0
@@ -273,7 +296,15 @@ for line in open(raw):
 init = (by_id.get(1) or {}).get("result") or {}
 tools = [t.get("name") for t in ((by_id.get(2) or {}).get("result") or {}).get("tools", [])]
 shot = (by_id.get(3) or {}).get("result") or {}
-images = [c for c in shot.get("content", []) if c.get("type") == "image" and c.get("data")]
+import base64, binascii
+def real_image(c):
+    # A real screenshot: decodable base64 that starts with the PNG or JPEG magic bytes.
+    try:
+        b = base64.b64decode(c.get("data") or "", validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    return b.startswith(b"\x89PNG\r\n\x1a\n") or b.startswith(b"\xff\xd8\xff")
+images = [c for c in shot.get("content", []) if c.get("type") == "image" and c.get("data") and real_image(c)]
 summary = {
     "server": init.get("serverInfo"),
     "tools": tools,
@@ -292,7 +323,7 @@ PY
       break
     fi
     echo "step 5b: HCU MCP probe attempt $n of $HCU_PROBE_ATTEMPTS: failed (see 14c-hcu-mcp-probe-attempt-$n.json)" >> "$OUT/boot-classes.log"
-    [ "$n" -lt "$HCU_PROBE_ATTEMPTS" ] && sleep "${MYCO_HCU_RETRY_S:-10}"
+    [ "$n" -lt "$HCU_PROBE_ATTEMPTS" ] && sleep "$HCU_RETRY_S"
   done
   rm -f "$OUT/14c-hcu-mcp.raw"
   [ "$HCU_OK" = 1 ] || die "HCU MCP probe failed on all $HCU_PROBE_ATTEMPTS attempts (see 14c-hcu-mcp-probe-attempt-*.json)"
