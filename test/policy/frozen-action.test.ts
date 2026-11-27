@@ -322,6 +322,174 @@ describe("what runs is what was judged (#605 item 2)", () => {
   });
 });
 
+/** Turn the caller's object into `target` in place: every own key removed, then target's set. */
+function retarget(action: Record<string, unknown>, target: Record<string, unknown>): void {
+  for (const k of Object.keys(action)) delete action[k];
+  Object.assign(action, target);
+}
+
+/** A caller-owned clone of `a`: its own object, and its own ref or args (functions kept). */
+function callerCopy(a: Record<string, unknown>): Record<string, unknown> {
+  const c: Record<string, unknown> = { ...a };
+  if (typeof a.ref === "object" && a.ref !== null) c.ref = { ...(a.ref as object) };
+  if (Array.isArray(a.args)) c.args = [...a.args];
+  return c;
+}
+
+describe("every action kind runs as judged when changed during the approval (#605 item 2)", () => {
+  const DESKTOP_KINDS: Record<string, unknown>[] = [
+    { kind: "launch", command: SOFFICE, args: ["--calc"] },
+    { kind: "typeTextGlobal", text: "hello" },
+    { kind: "clickAt", x: 10, y: 20 },
+    { kind: "keyPress", keys: "ctrl+c" },
+  ];
+
+  it.each(DESKTOP_KINDS.map((a) => [a.kind, a] as const))(
+    "desktop %s changed to a launch of cp: the judged copy runs, frozen, and the original stays",
+    async (_kind, judged) => {
+      const f = fixture();
+      tampered(f);
+      const s = brokerSetup();
+      const g = guardFor(f, HELD_RULES, { screen: () => true });
+      const { t, calls } = spawningDesktop();
+      const p = policedDesktopTransport(t, g, {
+        trigger: s.trigger,
+        focusIsCredential: () => false,
+        launches: LAUNCHES,
+      });
+      const action = callerCopy(judged);
+      const held = p.act("s1", action as unknown as GuardedDesktopAction);
+      await flush();
+      // The caller turns the held action into `cp <outside> <original>` while a human decides.
+      retarget(action, { kind: "launch", command: CP, args: [f.outside, f.original] });
+      await approvePending(s);
+      expect(await held).toBe("delivered_unverified");
+      expect(calls).toEqual([judged]);
+      expect(calls[0]).not.toBe(action);
+      expect(Object.isFrozen(calls[0])).toBe(true);
+      expect(readFileSync(f.original, "utf8")).toBe("pristine");
+      expect(g.log().map((e) => e.code)).toEqual(["POLICY_FLAGGED_SCREEN"]);
+    },
+  );
+
+  const predicate = () => true;
+  const ADAPTER_KINDS: Record<string, unknown>[] = [
+    { kind: "click", ref: { nodeId: "cell-A1" } },
+    { kind: "typeText", ref: { nodeId: "cell-A1" }, text: "hello" },
+    { kind: "setValue", ref: { nodeId: "cell-A1" }, value: "42" },
+    { kind: "keyPress", keys: "ctrl+c" },
+    { kind: "waitFor", predicate, timeoutMs: 5 },
+  ];
+
+  it.each(ADAPTER_KINDS.map((a) => [a.kind, a] as const))(
+    "adapter %s changed to a setValue on a password field: the judged copy runs, frozen",
+    async (_kind, judged) => {
+      const f = fixture();
+      const s = brokerSetup();
+      const g = guardFor(f, HELD_RULES, { screen: () => true });
+      const { adapter, calls } = fakeAdapter();
+      const judgedRefs: TargetRef[] = [];
+      const p = policedAppAdapter(adapter, g, {
+        trigger: s.trigger,
+        isCredentialTarget: (ref) => {
+          judgedRefs.push(ref);
+          return false;
+        },
+      });
+      const action = callerCopy(judged);
+      const callerRef = action.ref;
+      const held = p.act(action as unknown as ProgramAction);
+      await flush();
+      // The caller changes both the held action and its ref object while a human decides.
+      if (typeof callerRef === "object" && callerRef !== null)
+        (callerRef as { nodeId: string }).nodeId = "password-field";
+      retarget(action, {
+        kind: "setValue",
+        ref: { nodeId: "password-field" },
+        value: "overwritten",
+      });
+      await approvePending(s);
+      expect((await held).outcome).toBe("delivered_unverified");
+      expect(calls).toEqual([judged]);
+      expect(calls[0]).not.toBe(action);
+      expect(Object.isFrozen(calls[0])).toBe(true);
+      const sent = calls[0] as { ref?: unknown };
+      if (judged.ref !== undefined) expect(Object.isFrozen(sent.ref)).toBe(true);
+      if (judged.kind === "typeText" || judged.kind === "setValue") {
+        // The very ref object the classifier judged is the one forwarded. (A click's target is
+        // not classified yet: #605 item 6.)
+        expect(judgedRefs).toHaveLength(1);
+        expect(sent.ref).toBe(judgedRefs[0]);
+      }
+      expect(g.log().map((e) => e.code)).toEqual(["POLICY_FLAGGED_SCREEN"]);
+    },
+  );
+});
+
+describe("round-2 hardening (#629 N1-N3)", () => {
+  it("N1: the 64-arg cap is checked on the copy, not on a length that can change", () => {
+    let lengthReads = 0;
+    const shifty = new Proxy(["a"], {
+      get(target, key, receiver) {
+        if (key === "length") {
+          lengthReads += 1;
+          return lengthReads === 1 ? 1 : 100;
+        }
+        if (typeof key === "string" && /^\d+$/.test(key)) return "a";
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    expect(Array.isArray(shifty)).toBe(true);
+    expect(frozenDesktopAction({ kind: "launch", command: "/x", args: shifty })).toBeNull();
+    // 64 is still accepted; the cap is "more than 64".
+    expect(
+      frozenDesktopAction({ kind: "launch", command: "/x", args: Array(64).fill("a") }),
+    ).not.toBeNull();
+  });
+
+  it("N2: a malformed allowing decision from J is a refusal code, never a throw", () => {
+    const f = fixture();
+    const throwing = {
+      allow: true,
+      code: "ALLOWED",
+      reads: [],
+      get writes(): string[] {
+        throw new Error("boom");
+      },
+    };
+    const malformed: unknown[] = [
+      { allow: true, code: "ALLOWED", reads: [], writes: "out.csv" },
+      { allow: true, code: "ALLOWED", reads: [], writes: [1] },
+      { allow: true, code: "ALLOWED", reads: "x", writes: [] },
+      { allow: true, code: "ALLOWED", reads: [], writes: [], argv: "cat x" },
+      { allow: true, code: "ALLOWED", reads: [], writes: [], argv: ["cat", 1] },
+      { allow: true, code: "ALLOWED" },
+      throwing,
+    ];
+    for (const [k, decision] of malformed.entries()) {
+      const g = guardFor(f, FILE_RULES);
+      const inner: ActionPolicy = { id: "inner", check: () => decision as PolicyDecision };
+      const policy = guardedActionPolicy(inner, g);
+      let d: PolicyDecision | undefined;
+      expect(() => {
+        d = policy.check({ route: "script", kind: "x", reads: [], writes: [] });
+      }, `case ${k}`).not.toThrow();
+      expect(d, `case ${k}`).toEqual({ allow: false, code: "POLICY_DENIED" });
+      expect(
+        g.log().map((e) => e.code),
+        `case ${k}`,
+      ).toEqual(["POLICY_ACTION_UNRECOGNISED"]);
+    }
+  });
+
+  it("N3: the waitFor copy requires a number timeout", () => {
+    const predicate = () => true;
+    for (const timeoutMs of ["5", undefined, null, {}])
+      expect(frozenAdapterAction({ kind: "waitFor", predicate, timeoutMs })).toBeNull();
+    expect(frozenAdapterAction({ kind: "waitFor", predicate: "p", timeoutMs: 5 })).toBeNull();
+  });
+});
+
 describe("policedDesktopTransport exposes only the interface (#605 item 4)", () => {
   class ClassTransport implements GuardedDesktopTransport<string> {
     // Stands in for `RuntimeTransport`'s raw MCP client: must not be reachable once policed.
