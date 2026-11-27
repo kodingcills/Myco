@@ -324,6 +324,7 @@ describe("j-v1 analysis: refusals", () => {
       { instructionSha256: "abc" },
       { instructionSha256: "A".repeat(64) },
       { fixtureSha256: null },
+      { fixtureSha256: "b".repeat(63) },
       { stepBudget: 0 },
       { outputCeiling: 1.5 },
     ];
