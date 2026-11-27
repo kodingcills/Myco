@@ -472,6 +472,48 @@ jobs:
           path: ${{ runner.temp }}/myco-linux
           if-no-files-found: ignore
 
+  # TIF-265 track D: the newcomer path. On a clean runner with only the documented
+  # prerequisites (Node 24, pnpm 10, the LibreOffice line setup.md and init print), the test
+  # clones this commit and runs every command of the docs blocks marked
+  # `<!-- newcomer-path: ... -->` as written (linux-path.md clone/install/check, setup.md
+  # quickstart, README quickstart, setup.md Linux block) with a fresh HOME, then a simulated
+  # task must get verified / refuted through the written .mcp.json. Timed; a non-zero exit, an
+  # undocumented placeholder or a blown budget fails it. $0: no model, no secrets, no VM.
+  # Not required; runs on the same plan condition as `linux path`.
+  newcomer-path:
+    name: newcomer path (ubuntu-latest)
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || (needs.plan.outputs.mode != 'targeted' && needs.plan.outputs.mode != 'docs') || needs.plan.outputs.linux_path != 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MYCO_NEWCOMER_PATH_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install LibreOffice Calc and Python-UNO (the documented line)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc python3-uno
+      # The harness side only (vitest, the MCP client, the scripted agents). The product under
+      # test is the fresh clone the test makes and installs from its own docs.
+      - name: Install the harness
+        run: pnpm install --frozen-lockfile
+      - name: Newcomer path (fresh clone, documented commands only, timed)
+        env:
+          MYCO_NEWCOMER_REPORT: ${{ runner.temp }}/newcomer-path/report.json
+        run: pnpm exec vitest run test/init/newcomer-path.test.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: newcomer-path
+          path: ${{ runner.temp }}/newcomer-path
+          if-no-files-found: ignore
+
   # Track L (safe parallelism): N disposable Linux desktops in parallel on the unprivileged
   # `linux-plain` backend (private root and HOME, own process group, own Xvfb), real
   # headless Calc driven by scripted agents ($0: no model, no API, no secrets).
