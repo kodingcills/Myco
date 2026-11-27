@@ -55,14 +55,17 @@ import {
 } from "../../src/pilot/vm-capture.ts";
 import {
   config,
+  FOLDED_USAGE_PHRASES,
   NBSP,
   PUBLISHED,
   ROOT,
   SOURCES,
   spaced,
+  THIN_SPACE,
   tmp,
   UNICODE_SPACES,
   USAGE_LIMIT_PHRASES,
+  ZWSP,
 } from "./helpers.ts";
 
 const sha256 = (b: Uint8Array | string) => createHash("sha256").update(b).digest("hex");
@@ -1361,8 +1364,11 @@ describe("#606 S1+S2: stderr-only quota wording on a claimless clean result, and
         ]).toEqual([phrase, line, decidedAs(claim)]);
   });
 
-  it("S2: every phrasing with each Unicode whitespace, on stderr, on plain stdout and as a claimless clean result: exit 7", async () => {
-    for (const phrase of USAGE_LIMIT_PHRASES)
+  // Split per phrase (#607 round 1, D1): each phrase's matrix is one test, well inside the
+  // default timeout on the macOS runner. The matrix itself is unchanged.
+  it.each(USAGE_LIMIT_PHRASES)(
+    "S2: %s with each Unicode whitespace, on stderr, on plain stdout and as a claimless clean result: exit 7",
+    async (phrase) => {
       for (const [name, sp] of UNICODE_SPACES) {
         const t = spaced(phrase, sp);
         for (const [shape, output] of [
@@ -1379,10 +1385,12 @@ describe("#606 S1+S2: stderr-only quota wording on a claimless clean result, and
             STOPPED,
           ]);
       }
-  });
+    },
+  );
 
-  it("S2: the same spaced phrasings with a claim line on a clean result stay the agent's outcome", async () => {
-    for (const phrase of USAGE_LIMIT_PHRASES)
+  it.each(USAGE_LIMIT_PHRASES)(
+    "S2: %s, spaced, with a claim line on a clean result stays the agent's outcome",
+    async (phrase) => {
       for (const [name, sp] of UNICODE_SPACES) {
         const t = spaced(phrase, sp);
         expect([
@@ -1396,7 +1404,8 @@ describe("#606 S1+S2: stderr-only quota wording on a claimless clean result, and
           await launchWith({ stdout: resultJson(`${t}\nNOT DONE`), code: 0 }),
         ]).toEqual([phrase, name, decidedAs("not-done")]);
       }
-  });
+    },
+  );
 
   it("negatives: 401/403/429 task data with NBSP (in the result or on stderr) stays the agent's outcome", async () => {
     const nb = NBSP;
@@ -1411,6 +1420,68 @@ describe("#606 S1+S2: stderr-only quota wording on a claimless clean result, and
         stderr,
         decidedAs("no-claim"),
       ]);
+  });
+
+  it("round 2 F-A: quota wording with a format character or a hyphen variant inside stops with exit 7 on every shape; a claim line keeps the agent's outcome", async () => {
+    for (const [name, t] of FOLDED_USAGE_PHRASES) {
+      for (const [shape, output] of [
+        ["stderr", { stdout: "", stderr: t, code: 1 }],
+        ["plain stdout", { stdout: t, code: 1 }],
+        ["plain stdout, exit 0", { stdout: t, code: 0 }],
+        ["clean claimless result", { stdout: resultJson(t), code: 0 }],
+        ["stderr, claimless clean result", { stdout: resultJson("Edited."), stderr: t, code: 0 }],
+      ] as const)
+        expect([name, shape, await launchWith(output)]).toEqual([name, shape, STOPPED]);
+      expect([name, await launchWith({ stdout: resultJson(`${t}\nDONE`), stderr: t })]).toEqual([
+        name,
+        decidedAs("done"),
+      ]);
+    }
+  });
+
+  it("round 2 F-B: billing and auth wording with NBSP, a thin space or ZWSP on plain stdout or stderr stops with exit 5, not a spent attempt", async () => {
+    for (const [text, cls] of [
+      ["Credit balance is too low", "billing"],
+      ["You're out of extra usage", "billing"],
+      ["Not logged in", "auth"],
+      ["OAuth token has expired", "auth"],
+    ] as const)
+      for (const sp of [NBSP, THIN_SPACE, ZWSP])
+        for (const output of [
+          { stdout: spaced(text, sp), code: 1 },
+          { stdout: "", stderr: spaced(text, sp), code: 1 },
+        ]) {
+          const r = await launchWith(output);
+          expect([
+            text,
+            sp.charCodeAt(0),
+            output.stdout === "",
+            r.exit,
+            r.stopCode,
+            r.classes,
+          ]).toEqual([
+            text,
+            sp.charCodeAt(0),
+            output.stdout === "",
+            EXIT.subscriptionStop,
+            cls,
+            [cls],
+          ]);
+        }
+  });
+
+  it("round 2 F-B: the broad vocabulary with NBSP or a thin space is never applied to a clean result", async () => {
+    for (const sp of [NBSP, THIN_SPACE])
+      for (const [stdout, stderr] of [
+        [resultJson(spaced("Credit balance is too low; not logged in", sp)), ""],
+        [resultJson("Edited."), spaced("Too many requests; Credit balance is too low", sp)],
+        [resultJson(spaced("You've hit your rate limit", sp)), spaced("rate limit reached", sp)],
+      ] as const)
+        expect([stdout, stderr, await launchWith({ stdout, stderr, code: 0 })]).toEqual([
+          stdout,
+          stderr,
+          decidedAs("no-claim"),
+        ]);
   });
 
   it("the A/B launch's live driver shares the classifier: stderr-only and NBSP quota wording is usage-limit there too", async () => {

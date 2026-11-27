@@ -28,14 +28,17 @@ import { loadLedger, PROGRESS_FILE } from "../../src/pilot/ledger.ts";
 import { HarnessFault, runPilot } from "../../src/pilot/runner.ts";
 import {
   config,
+  FOLDED_USAGE_PHRASES,
   NBSP,
   PUBLISHED,
   ROOT,
   SOURCES,
   spaced,
+  THIN_SPACE,
   tmp,
   UNICODE_SPACES,
   USAGE_LIMIT_PHRASES,
+  ZWSP,
 } from "./helpers.ts";
 
 interface Call {
@@ -497,6 +500,84 @@ describe("headless Claude Code transport (fake spawn)", () => {
       JSON.parse(result("x", { is_error: true })),
     ]);
     expect(faultOf(() => interpretResult(both, "", 1))).toBe("auth");
+  });
+
+  // #607 round 2, B1: "You've hit your limit" (each apostrophe, spacing and case) is the quota.
+  it('round 2 B1: "You\'ve hit your limit" is usage-limit; "your rate limit" is not', () => {
+    for (const t of [
+      "You've hit your limit",
+      "You’ve hit your limit",
+      "You‘ve hit your limit",
+      "Youʼve hit your limit",
+      "Youve hit your limit",
+      "YOU HAVE HIT YOUR LIMIT",
+      "You have reached your usage limit",
+      "you've reached your limit",
+      spaced("You've hit your limit", NBSP),
+      spaced("You've hit your limit", THIN_SPACE),
+      spaced("You've hit your limit", "\t"),
+    ]) {
+      expect([t, classOfText(t)]).toEqual([t, "usage-limit"]);
+      expect([t, faultOf(() => interpretResult(result(t), "", 0))]).toEqual([t, "usage-limit"]);
+      expect(interpretResult(result(`${t}\nDONE`), t, 0).claim).toBe("done");
+    }
+    for (const t of ["You've hit your rate limit", "You've hit the cell limit", "your limit"])
+      expect([t, interpretResult(result(t), t, 0).claim]).toEqual([t, "no-claim"]);
+  });
+
+  // #607 round 2, F-A: format characters and hyphen variants are folded before every match.
+  it("round 2 F-A: a format character or hyphen variant inside quota wording is usage-limit on every path", () => {
+    for (const [name, t] of FOLDED_USAGE_PHRASES) {
+      const probe = (stdout: string, stderr: string, code: number) =>
+        faultOf(() => interpretResult(stdout, stderr, code));
+      expect([
+        name,
+        classOfText(t),
+        probe("", t, 1),
+        probe(t, "", 1),
+        probe(t, "", 0),
+        probe(result(t, { is_error: true }), "", 1),
+        probe(JSON.stringify({ error: "rate_limit" }), t, 1),
+        probe(result(t), "", 0),
+        probe(result("Edited."), t, 0),
+      ]).toEqual([name, ...Array(8).fill("usage-limit")]);
+      expect(interpretResult(result(`${t}\nNOT DONE`), t, 0).claim).toBe("not-done");
+    }
+    // A transient limit with a format character stays transient, and never touches a clean result.
+    for (const t of [`rate${ZWSP}limit reached`, `rate${ZWSP} limit reached`]) {
+      expect([t, classOfText(t)]).toEqual([t, "rate-limit"]);
+      expect([t, interpretResult(result(t), t, 0).claim]).toEqual([t, "no-claim"]);
+    }
+  });
+
+  // #607 round 2, F-B: auth, billing and rate wording is folded as the usage wording is.
+  it("round 2 F-B: auth, billing and rate wording with NBSP, a thin space or ZWSP is classified on plain stdout and stderr", () => {
+    for (const [t0, cls] of [
+      ["Not logged in", "auth"],
+      ["OAuth token has expired", "auth"],
+      ["Invalid API key", "auth"],
+      ["Credit balance is too low", "billing"],
+      ["You're out of extra usage", "billing"],
+      ["Insufficient credit to continue", "billing"],
+      ["Too many requests", "rate-limit"],
+      ["Rate limit exceeded", "rate-limit"],
+    ] as const)
+      for (const sp of [NBSP, THIN_SPACE, ZWSP, "\t"]) {
+        const t = spaced(t0, sp);
+        expect([t0, sp.charCodeAt(0), classOfText(t)]).toEqual([t0, sp.charCodeAt(0), cls]);
+        for (const code of [1, 0])
+          expect([t0, sp.charCodeAt(0), code, faultOf(() => interpretResult(t, "", code))]).toEqual(
+            [t0, sp.charCodeAt(0), code, cls],
+          );
+        expect([t0, sp.charCodeAt(0), faultOf(() => interpretResult("", t, 1))]).toEqual([
+          t0,
+          sp.charCodeAt(0),
+          cls,
+        ]);
+        // Never applied to a clean result (D4): the claim stands, with or without a claim line.
+        expect(interpretResult(result(t), t, 0).claim).toBe("no-claim");
+        expect(interpretResult(result(`${t}\nDONE`), t, 0).claim).toBe("done");
+      }
   });
 
   it("classifies rate limits, unreadable output and spawn failures as harness faults", async () => {

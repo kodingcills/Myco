@@ -101,15 +101,22 @@ start hitting limits, raise `--delay-s`. Override per invocation with `--concurr
   the CLI emits no init message, so it never fires; the active guards are the environment
   preflight (no API-path name) and the agent's environment allowlist.
 - **The subscription's usage limit (lead ruling, round 2):** wording such as "usage limit
-  reached", "5-hour limit reached", "Weekly limit reached", "Opus limit reached" or "resets at
-  3pm" (`USAGE_LIMIT_TEXT`; also when it comes with the structured `rate_limit` class or HTTP
-  429) is class `usage-limit`. The run stops at once with exit **7** (`stopCode`
-  `usage-limit`): no retry, no back-off, no attempt spent. The CLI prints `USAGE LIMIT: ...
-  This must go to the lead`; take it to the lead and do not resume until the lead decides.
-  Before matching, every Unicode whitespace run (no-break space U+00A0, U+2000-U+200A,
-  U+202F, U+3000, tabs, newlines, repeated spaces) is folded to one space (`namesUsageLimit`;
-  #606 S2), on every path: stderr, plain stdout, error results, structured limits and the
-  clean-result exception below. The vocabulary itself is unchanged and has no bare numbers.
+  reached", "5-hour limit reached", "Weekly limit reached", "Opus limit reached", "resets at
+  3pm" or "You've hit your limit" (`USAGE_LIMIT_TEXT`; also when it comes with the structured
+  `rate_limit` class or HTTP 429) is class `usage-limit`. The run stops at once with exit
+  **7** (`stopCode` `usage-limit`): no retry, no back-off, no attempt spent. The CLI prints
+  `USAGE LIMIT: ... This must go to the lead`; take it to the lead and do not resume until
+  the lead decides. The usage vocabulary has no bare numbers. "You've hit your limit" (any
+  apostrophe, or "you have", "hit" or "reached", optional "usage") was added in #607 round 2.
+- **Folding before any text match (#606 S2, #607 round 2):** every vocabulary (auth, billing,
+  usage limit, transient limit) is matched on folded text (`vocabularyForms`), on every path:
+  stderr, plain stdout, error results, structured limits and the clean-result exception
+  below. Hyphen variants U+2010-U+2015 become "-"; Unicode format characters (zero-width
+  space U+200B-U+200D, word joiner U+2060, U+FEFF, U+180E) are tried both removed and as a
+  space; then every whitespace run (no-break space U+00A0, U+2000-U+200A, U+202F, U+3000,
+  tabs, newlines, repeated spaces) becomes one space. So "Credit balance is too low" with
+  no-break spaces stops as `billing`, as it does with ASCII spaces. The broad auth, billing and
+  transient vocabulary is still never applied to a clean result.
 - **Two identical failures:** on a live run, two harness faults in a row with the same class
   and message (no decided trial between) stop the run with exit **6** (`stopCode`
   `repeat-failure`), before a third attempt. Rate limits are excluded (they back off). The

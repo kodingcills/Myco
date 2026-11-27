@@ -30,6 +30,11 @@ export const USAGE_LIMIT_PHRASES = [
   "Limit resets at 9am",
   "daily limit exceeded",
   "usage_limit_reached",
+  // #607 round 2, B1: none of these matched before the phrase was added.
+  "You've hit your limit",
+  "You’ve hit your limit",
+  "YOU'VE HIT YOUR LIMIT",
+  "You have reached your limit",
 ] as const;
 
 /**
@@ -51,6 +56,30 @@ export const UNICODE_SPACES: readonly (readonly [string, string])[] = [
   ["newline", "\n"],
   ["repeated spaces", "   "],
 ];
+
+const ch = (code: number) => String.fromCharCode(code);
+
+/**
+ * Quota wording with a Unicode format character (`\p{Cf}`) or a hyphen variant inside it
+ * (#607 round 2, F-A). None matches the vocabulary on its raw text; each matches once folded.
+ */
+export const FOLDED_USAGE_PHRASES: readonly (readonly [string, string])[] = [
+  ["ZWSP U+200B before a space", `Claude usage${ch(0x200b)} limit`],
+  ["word joiner U+2060 as the space", `limit${ch(0x2060)}reached`],
+  ["ZWSP U+200B in a contraction", `You${ch(0x200b)}'ve hit your limit`],
+  ["ZWNJ U+200C before a space", `session${ch(0x200c)} limit`],
+  ["ZWJ U+200D as the space", `Opus${ch(0x200d)}limit`],
+  ["Mongolian vowel separator U+180E as the space", `weekly${ch(0x180e)}limit`],
+  ["non-breaking hyphen U+2011", `5${ch(0x2011)}hour limit`],
+  ["hyphen U+2010", `five${ch(0x2010)}hour limit`],
+  ["en dash U+2013", `5${ch(0x2013)}hour limit`],
+];
+
+/** Thin space (U+2009). */
+export const THIN_SPACE = ch(0x2009);
+
+/** ZWSP (U+200B). */
+export const ZWSP = ch(0x200b);
 
 /** NBSP (U+00A0). */
 export const NBSP = String.fromCharCode(0x00a0);

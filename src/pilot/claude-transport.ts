@@ -102,12 +102,13 @@ export function classOfStatus(status: number): PilotHarnessClass {
  * result, a non-zero exit) and carries no structured class; never for a clean result, whose
  * text is the agent's (fc-v1 fixtures hold qty values 401, 403 and 429). The one exception is
  * `USAGE_LIMIT_TEXT` alone, on a clean result with no claim line, tested on its text and
- * stderr (`interpretResult`). It is always applied through `namesUsageLimit`, which folds
- * Unicode whitespace first.
+ * stderr (`interpretResult`). Every vocabulary is applied to the folded forms of the text
+ * (`vocabularyForms`), never to the raw text.
  *
  * Two kinds of limit (lead ruling, PR #598 round 2, D3):
  *  - `USAGE_LIMIT_TEXT`, the subscription's own quota ("usage limit reached", "5-hour limit
- *    reached ∙ resets 3pm", "Weekly limit reached", "Opus limit reached", "resets at 5pm"):
+ *    reached ∙ resets 3pm", "Weekly limit reached", "Opus limit reached", "resets at 5pm",
+ *    "You've hit your limit"):
  *    class `usage-limit`, which stops the run at once with its own code (no retry, no attempt
  *    spent) and goes to the lead. It wins over the transient wording when both appear.
  *  - `RATE_LIMIT_TEXT`, a transient API limit (429 / 529 bodies, "rate limit", "too many
@@ -116,17 +117,39 @@ export function classOfStatus(status: number): PilotHarnessClass {
  * `test/pilot/claude-transport.test.ts` pins it.
  */
 export const USAGE_LIMIT_TEXT =
-  /usage[ _-]?limit|(?<!rate[ _-]?)limit (?:reached|exceeded|hit)|limit (?:will )?resets?|\bresets? (?:at |on |in )?(?:\d|mon|tue|wed|thu|fri|sat|sun|tomorrow)|(?:weekly|daily|monthly|hourly|session|\d+[ -]?hour|five[ -]hour|opus|sonnet|haiku|fable) limit/i;
+  /usage[ _-]?limit|(?<!rate[ _-]?)limit (?:reached|exceeded|hit)|limit (?:will )?resets?|\bresets? (?:at |on |in )?(?:\d|mon|tue|wed|thu|fri|sat|sun|tomorrow)|(?:weekly|daily|monthly|hourly|session|\d+[ -]?hour|five[ -]hour|opus|sonnet|haiku|fable) limit|(?:you['‘’ʼ]?ve|you have) (?:hit|reached) your (?:usage )?limit/i;
+
+const FORMAT_CHARS = /[\p{Cf}᠎]/gu;
+const HYPHENS = /[‐-―]/g;
 
 /**
- * Whether `text` names the subscription's usage quota. Every Unicode whitespace run (NBSP
- * U+00A0, U+2000-U+200A incl. U+2007, U+202F, U+205F, U+3000, U+FEFF, tabs, newlines, repeated
- * spaces; JS `\s`) is folded to one ASCII space first, because `USAGE_LIMIT_TEXT` spells its
- * spaces as literal ASCII spaces (#606 S2). The vocabulary itself is unchanged. Every
- * usage-limit decision goes through here, never through `USAGE_LIMIT_TEXT` directly.
+ * The forms of `text` every vocabulary is matched against (#606 S2, round 2 F-A). Hyphen
+ * variants U+2010-U+2015 (incl. the non-breaking U+2011 of "5-hour") become "-". Unicode
+ * format characters (`\p{Cf}`: U+200B-U+200D, U+2060, U+FEFF, U+180E, ...) are removed in one
+ * form and become a space in the other, so both "usage<ZWSP>limit" and "limit<WJ>reached"
+ * match. Then every whitespace run (JS `\s`: NBSP, U+2000-U+200A, U+202F, U+205F, U+3000,
+ * tabs, newlines, repeated spaces) becomes one ASCII space, because the vocabularies spell
+ * their spaces as literal ASCII spaces.
+ */
+export function vocabularyForms(text: string): readonly string[] {
+  const hyphens = text.replace(HYPHENS, "-");
+  return [hyphens.replace(FORMAT_CHARS, ""), hyphens.replace(FORMAT_CHARS, " ")].map((s) =>
+    s.replace(/\s+/g, " "),
+  );
+}
+
+/** Whether `vocabulary` matches any folded form of `text`; the only way a vocabulary is applied. */
+function matchesVocabulary(vocabulary: RegExp, text: string): boolean {
+  return vocabularyForms(text).some((form) => vocabulary.test(form));
+}
+
+/**
+ * Whether `text` names the subscription's usage quota, on its folded forms
+ * (`vocabularyForms`). Every usage-limit decision goes through here, never through
+ * `USAGE_LIMIT_TEXT` directly.
  */
 export function namesUsageLimit(text: string): boolean {
-  return USAGE_LIMIT_TEXT.test(text.replace(/\s+/g, " "));
+  return matchesVocabulary(USAGE_LIMIT_TEXT, text);
 }
 
 export const RATE_LIMIT_TEXT = /rate[ _-]?limit|too many requests|\b429\b|\b529\b|overloaded/i;
@@ -146,13 +169,15 @@ export const AUTH_TEXT =
 /**
  * The text-fallback class of an error message, or null when it names none. The order is
  * pinned (`test/pilot/claude-transport.test.ts`): a lost login first, then billing, then the
- * subscription's usage quota, then a transient limit.
+ * subscription's usage quota, then a transient limit. Each vocabulary is matched on the folded
+ * forms (`vocabularyForms`; round 2 F-B), so NBSP or thin-space wording is classified as its
+ * ASCII-spaced form is. Only runs that did not complete normally reach here.
  */
 export function classOfText(text: string): PilotHarnessClass | null {
-  if (AUTH_TEXT.test(text)) return "auth";
-  if (BILLING_TEXT.test(text)) return "billing";
+  if (matchesVocabulary(AUTH_TEXT, text)) return "auth";
+  if (matchesVocabulary(BILLING_TEXT, text)) return "billing";
   if (namesUsageLimit(text)) return "usage-limit";
-  if (RATE_LIMIT_TEXT.test(text)) return "rate-limit";
+  if (matchesVocabulary(RATE_LIMIT_TEXT, text)) return "rate-limit";
   return null;
 }
 
@@ -245,9 +270,9 @@ export function apiKeySourceProblem(messages: readonly Record<string, unknown>[]
  * `success`, `is_error` false, exit status 0, and no structured error on any message. A clean
  * result is the agent's outcome (a missing `DONE`/`NOT DONE` line is "no claim"), with one
  * fail-closed exception: no claim line AND usage-quota wording in its text or on stderr is
- * `usage-limit` (round 3, R2-D3b; #606 S1). The full text fallback runs only on runs that did not complete normally (no result
- * event: stdout and stderr; an error result: its text, `errors[]` and stderr; a non-zero or
- * null exit; a structured error).
+ * `usage-limit` (round 3, R2-D3b; #606 S1). The full text fallback runs only on runs that
+ * did not complete normally (no result event: stdout and stderr; an error result: its text,
+ * `errors[]` and stderr; a non-zero or null exit; a structured error).
  */
 export function interpretResult(stdout: string, stderr: string, code: number | null): AgentReport {
   const { result, messages } = parseOutput(stdout);
