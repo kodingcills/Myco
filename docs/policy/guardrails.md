@@ -157,8 +157,11 @@ What runs is what was judged. Each async wrapper takes a frozen copy of the acti
 called, reading every field once, judges that copy and forwards that copy. Changing the caller's
 object while the action waits on the pause gate or a human's approval, or a getter that answers
 differently on a second read, never reaches the inner actuator; a copy that cannot be taken is
-`POLICY_ACTION_UNRECOGNISED`. The router wrapper returns a frozen copy of J's decision whose
-writes it judged. `policedDesktopTransport` returns a frozen object with exactly the six
+`POLICY_ACTION_UNRECOGNISED` (a launch with more than 64 arguments among them, counted on the
+copy). This holds for every action kind: the four desktop kinds and the five adapter kinds each
+have a test that changes the held object during the approval. The router wrapper returns a frozen
+copy of J's decision whose writes it judged; the copy is taken inside the guard, so a malformed
+decision from J is a logged `POLICY_ACTION_UNRECOGNISED` refusal, never a throw. `policedDesktopTransport` returns a frozen object with exactly the six
 interface methods; it never spreads the inner transport, so none of its own fields (such as
 `RuntimeTransport`'s raw MCP client) is reachable through it. Tests:
 `test/policy/frozen-action.test.ts`.
