@@ -16,15 +16,7 @@
  * A halted batch is REPORTED (status `halted`, with the trial and attempt), never summarized
  * (spec: "the pack is reported as halted with that trial"). Otherwise the bar is
  * `recoveryBar` from `./batch.ts`, unchanged, with `evidence` false for plumbing.
- *
- * Before any decision it calls the shared capability-analysis guard
- * (`src/capability/analysis-guard.ts`, #652): a pack hash mismatch is refused, and the
- * verdict is never "shown" while the pre-registration's `pending` list is non-empty
- * (`LEAD_RULING_PENDING`, exit code 3 from the command line) or any row's `simulated` is
- * anything but absent or `false`.
  */
-
-import { guardCapabilityAnalysis, guardedVerdict } from "../capability/analysis-guard.ts";
 import {
   type BatchResult,
   type RecoveryBarResult,
@@ -63,15 +55,6 @@ export type AnalysisResult =
       readonly preregistrationHash: string;
       readonly frozen: boolean;
       readonly evidence: boolean;
-      /**
-       * "shown" only when the shared guard (#652) allows it (nothing pending, no simulated
-       * row), the bar is evidence and it passes. Never "shown" in a plumbing run.
-       */
-      readonly verdict: "shown" | "not-shown";
-      /** The guard's LEAD_RULING_PENDING / SIMULATED reasons; empty only when shown. */
-      readonly reasons: readonly string[];
-      /** 3 when a lead ruling is pending (computed, never shown), else 0. */
-      readonly exitCode: number;
       readonly bar: RecoveryBarResult;
     }
   | {
@@ -90,7 +73,7 @@ export function analyzeRecoveryPacks(inputs: AnalysisInputs): AnalysisResult {
   const hash = check.hash;
   if (!check.frozen && !plumbing)
     throw new Error(
-      `the pre-registration is a draft (pending: ${prereg.pending.map((x) => x.field).join(", ")}); a draft never analyses evidence (LEAD_RULING_PENDING)`,
+      `the pre-registration is a draft (pending: ${prereg.pending.map((x) => x.field).join(", ")}); a draft never analyses evidence`,
     );
 
   for (const [arm, pack] of [
@@ -109,21 +92,6 @@ export function analyzeRecoveryPacks(inputs: AnalysisInputs): AnalysisResult {
         `the ${arm} pack's commit does not hold this pre-registration (a pack must be run against a committed pre-registration)`,
       );
   }
-
-  // The shared guard (#652), before any decision: the hash rule refuses; pending rulings and
-  // simulated rows block "shown".
-  const guard = guardCapabilityAnalysis({
-    prereg: inputs.prereg,
-    preregHash: hash,
-    packs: [inputs.k, inputs.none].map((pack) => ({
-      recordedHash: pack.preregistrationHash,
-      committedHash: inputs.committedPreregHash(pack.preregCommit),
-    })),
-    rows: [inputs.k, inputs.none].flatMap((pack) =>
-      pack.batch.status === "complete" ? pack.batch.rows : [],
-    ),
-  });
-  if (guard.refused) throw new Error(`refused: ${guard.reasons.join("; ")}`);
 
   for (const [arm, pack] of [
     ["K", inputs.k],
@@ -156,21 +124,6 @@ export function analyzeRecoveryPacks(inputs: AnalysisInputs): AnalysisResult {
     frozen: check.frozen,
     // False for plumbing (`simulated: true` above); a draft never reaches here without it.
     evidence: bar.evidence,
-    verdict: guardedVerdict(guard, bar.evidence && bar.passes),
-    reasons: [
-      ...guard.reasons,
-      ...(bar.evidence ? [] : ["PLUMBING: never evidence"]),
-      ...(bar.passes ? [] : ["BAR_NOT_SHOWN"]),
-    ],
-    exitCode: guard.exitCode,
     bar,
   };
-}
-
-/**
- * The command line's exit code for a result: 0 analyzed (shown or not) or halted (reported),
- * 3 analyzed while a lead ruling is pending (never shown). A refusal throws (exit 1).
- */
-export function analysisExitCode(result: AnalysisResult): number {
-  return result.status === "analyzed" ? result.exitCode : 0;
 }

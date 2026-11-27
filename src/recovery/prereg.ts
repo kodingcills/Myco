@@ -194,8 +194,6 @@ const MODULES_REQUIRED = [
   "src/recovery/analysis.ts",
   "src/recovery/batch.ts",
   "src/recovery/prereg.ts",
-  // The shared capability-analysis guard (#652) that src/recovery/analysis.ts calls.
-  "src/capability/analysis-guard.ts",
 ];
 
 /** Validate a parsed `prereg.json` against the spec, the code and the committed files. */

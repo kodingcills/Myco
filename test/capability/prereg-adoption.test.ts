@@ -110,6 +110,19 @@ function adoptionProblems(root: string, preregPath: string): string[] {
   return problems;
 }
 
+/**
+ * Pre-registrations on `main` whose analysis files are being edited by an OPEN pull request,
+ * so this PR does not touch them (#652: tracks with open PRs adopt the guard in their next
+ * round). Each entry names that PR. The test below refuses an entry that already adopts
+ * the guard, so the list can only shrink. Nothing else may be added here without the
+ * coordinator's ruling.
+ *  - k-v1: PR #661 (Track K follow-up, the 06:21Z rulings) edits k-v1/prereg.json,
+ *    scripts/k-recovery-analysis.ts, src/recovery/analysis.ts and src/recovery/prereg.ts.
+ */
+const ADOPTION_PENDING: Readonly<Record<string, string>> = Object.freeze({
+  [`${PREREG_DIR}/k-v1/prereg.json`]: "#661",
+});
+
 const preregs = readdirSync(join(ROOT, PREREG_DIR), { withFileTypes: true })
   .filter((d) => d.isDirectory())
   .map((d) => `${PREREG_DIR}/${d.name}/prereg.json`)
@@ -122,10 +135,26 @@ describe("every capability pre-registration's analysis calls the shared guard (#
     );
   });
 
-  for (const p of preregs)
-    it(`${p}: the entry point calls the guard, and the guard is pinned`, () => {
-      expect(adoptionProblems(ROOT, p)).toEqual([]);
-    });
+  for (const p of preregs) {
+    const open = ADOPTION_PENDING[p];
+    if (open === undefined)
+      it(`${p}: the entry point calls the guard, and the guard is pinned`, () => {
+        expect(adoptionProblems(ROOT, p)).toEqual([]);
+      });
+    else
+      it(`${p}: listed as adopting in its open PR (${open}); it must not adopt yet`, () => {
+        // A ratchet, not an exemption: once the track's PR adopts the guard, this entry must be
+        // removed, so the strict check above applies to it.
+        expect(adoptionProblems(ROOT, p).length).toBeGreaterThan(0);
+      });
+  }
+
+  it("the pending list names only pre-registrations that exist, each with its open PR", () => {
+    for (const [p, open] of Object.entries(ADOPTION_PENDING)) {
+      expect(preregs).toContain(p);
+      expect(open).toMatch(/^#\d+$/);
+    }
+  });
 });
 
 describe("the adoption detector", () => {
