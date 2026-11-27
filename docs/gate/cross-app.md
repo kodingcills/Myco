@@ -225,6 +225,26 @@ any run.
   (everything on this page) never count. The vault path needs the multi-file capture below
   before cross-app trials can be evidence.
 
+## Pre-registration p-v1 (capability-spec-2 §P)
+
+The bar above is #535's proposal. The bar frozen for track P's first measurement is
+capability-spec-2 §P as written, pre-registered in
+`docs/product/capability-prereg/p-v1/` (`prereg.json`, with its hash in `prereg.sha256`). The
+two differ, and the lead's ruling on the differences is pending:
+
+| | #535 proposal | p-v1 |
+|---|---|---|
+| Task set | xa-v1 (12) x 10 repetitions | xa-v2 (40), one trial per (task, arm); xa-v1 stays conformance |
+| Arms | gate-less baseline vs myco | `B` (one end-state gate check) vs `B+P`: both gated rows |
+| Primary | grader pass rate | verified: done claim, gate verified (and last checkpoint, `B+P`), every snapshot and end graded `pass` |
+| Test | Newcombe interval, 0.10 margin | exact one-sided McNemar, at least 5 discordant; then steps per verified (bootstrap upper bound below 1.0) |
+
+xa-v2 is built by the same builder: `npx tsx scripts/cross-app-taskset.ts --set xa-v2
+[--check]`. The analysis is `src/benchmark/cross-app-prereg.ts`; run it with
+`npx tsx scripts/cross-app-prereg.ts check | schedule | analyze <pack.json>`. It refuses a pack
+whose pre-registration hash, task set or manifest digest does not match, and any simulated
+row, and it decides nothing while any lead ruling is pending (`lead-ruling-pending`).
+
 ## Limits and follow-ups
 
 - **Vault path:** `sealedEvidenceReader` serves only a task's `stateFile`, so a cross-app task
