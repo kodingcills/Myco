@@ -1,0 +1,151 @@
+{
+  "schema": "myco.capability.prereg/1",
+  "track": "R",
+  "version": "r-v1",
+  "capability": "Task recording to automation",
+  "spec": {
+    "bar": "docs/product/capability-spec-2.md, section 'R. Task recording to automation', as written at freeze",
+    "sharedRules": "docs/product/capability-spec.md sections 1 (grader decides, separation, arms and parity, metrics, statistics), 3 (pre-registration) and 4 (measurement constraints), by reference"
+  },
+  "frozenAt": "2026-11-27",
+  "ratification": "proposed; the values listed in leadRulingPending are proposals until the lead rules. No run starts before the lead's GO for track R (capability-spec section 4).",
+  "leadRulingPending": [
+    "demonstration.families: one operator demonstration per data column (4), because a compiled workflow fixes its column; the spec says 'one per family'",
+    "modelId: claude-sonnet-5-5, the planner of the hcu+shell Ultra head-to-head",
+    "demonstration.publication: recordings are made after this freeze and declared by SHA-256 in every pack; the analysis refuses a workflow from an undeclared recording",
+    "arms.secondary C1: reported only when C1 runs on the same Ultra harness; its absence leaves the primary unchanged",
+    "statistics: one-sided exact McNemar with 5 discordant minimum (capability-spec 1.5), not #532's two-sided sign test with 6"
+  ],
+  "question": "After one real operator demonstration per family, does the hcu+shell agent with Myco's recorded workflow complete more fr-v1 tasks, as the independent grader judges them, than the same agent without it?",
+  "arms": {
+    "primary": { "capability": "hcu+shell+R", "baseline": "hcu+shell" },
+    "secondary": [
+      { "capability": "hcu+shell+R", "baseline": "C1", "role": "reported, never a bar component" }
+    ],
+    "parity": "same planner model, instructions, fixtures, step budget, output ceiling, pacing and retry budget; the R arm's tools are hcu+shell's plus run_workflow only (capability-spec 1.3)",
+    "rowKind": "gate-less: myco-gate is not called in any arm; the derived oracle's verdict never decides acceptance"
+  },
+  "verified": "a done claim that the independent grader (src/benchmark/grade/) graded pass on the captured persisted bytes; never the derived gate's verdict, never the workflow replay's own report",
+  "grader": { "version": "false-completion-grader/1", "module": "src/benchmark/grade/" },
+  "taskSet": {
+    "version": "fr-v1",
+    "builder": "src/recording-eval/fr-v1.ts",
+    "manifest": "docs/product/capability-prereg/r-v1/fr-v1-manifest.json",
+    "manifestSha256": "c5abe975ca5e530cb381f4d6f41ca83b8f28e05a10ca60fc8e72b6b40d51e3e5",
+    "manifestHash": "SHA-256 over canonical JSON (sorted keys, no whitespace) of the manifest",
+    "tasks": 30,
+    "trialsPerTaskPerArm": 1,
+    "persistedFormat": "csv",
+    "singleEdit": true
+  },
+  "demonstration": {
+    "perFamily": 1,
+    "families": ["record-edit:name", "record-edit:qty", "record-edit:joined", "record-edit:salary"],
+    "simulated": false,
+    "operatorStarted": true,
+    "fixtures": "the manifest's demonstrationFamilies seeds, disjoint from every task fixture",
+    "publication": "each recording's SHA-256 is declared in the pack (pack.demonstrations) and published with the results; scripted-human recordings never count"
+  },
+  "seeds": {
+    "taskBuild": [
+      "fr-v1-a-01",
+      "fr-v1-a-02",
+      "fr-v1-a-03",
+      "fr-v1-a-04",
+      "fr-v1-a-05",
+      "fr-v1-a-06",
+      "fr-v1-a-07",
+      "fr-v1-a-08",
+      "fr-v1-a-09",
+      "fr-v1-a-10",
+      "fr-v1-b-01",
+      "fr-v1-b-02",
+      "fr-v1-b-03",
+      "fr-v1-b-04",
+      "fr-v1-b-05",
+      "fr-v1-b-06",
+      "fr-v1-b-07",
+      "fr-v1-b-08",
+      "fr-v1-b-09",
+      "fr-v1-b-10"
+    ],
+    "taskBuildRule": "the first 30 distinct (fixture, record, column) parameter sets of generateParameterSets over list a, then list b (src/recording-eval/fr-v1.ts)",
+    "assignment": "r-v1-assign-2026-11-27-Rq8t",
+    "assignmentRule": "rV1Schedule in the analysis module: seeded task order, each task's arm trials back to back, the six arm orders balanced and seeded",
+    "bootstrap": null,
+    "bootstrapNote": "no ratio-metric bar component in R; secondary ratios are reported as point values"
+  },
+  "stepBudget": 30,
+  "retryBudget": 0,
+  "wallClockBudgetS": null,
+  "scoredAttemptsPerTrial": 1,
+  "modelId": "claude-sonnet-5-5",
+  "harness": "Claude Ultra (headless Claude Code); $0 Anthropic API; no Messages-API calls",
+  "bar": {
+    "sequence": [
+      {
+        "id": "R-prereq",
+        "kind": "property",
+        "text": "every R trial's derived oracle was R5-certified before it verified, and the replay refusal log shows every uncertified oracle refused (SELFTEST_FAILED); one uncertified verify fails the bar"
+      },
+      {
+        "id": "R-primary",
+        "kind": "exact-mcnemar-one-sided",
+        "capability": "hcu+shell+R",
+        "baseline": "hcu+shell",
+        "metric": "verified",
+        "alpha": 0.05,
+        "minDiscordant": 5,
+        "text": "hcu+shell+R better than hcu+shell on verified, p <= 0.05 with at least 5 discordant tasks; tested only if R-prereq held"
+      }
+    ],
+    "guardrails": [
+      {
+        "id": "zero-derived-false-accepts",
+        "text": "zero trials where the derived gate said verified and the grader said fail or ungradable, over all R trials; reported with n and the one-sided 95% upper bound; one fails the bar"
+      },
+      {
+        "id": "planted-marker-scan",
+        "text": "the planted-marker scan of the pack (recordings' declarations, trials, grades) finds nothing"
+      }
+    ],
+    "notShown": "p > 0.05; fewer than 5 discordant tasks ('underpowered at n = 30'); the prerequisite failed; a guardrail breached; a parity check failed; or the pack's pre-registration hash does not match"
+  },
+  "secondary": [
+    "hcu+shell+R vs C1 on verified (same test, reported)",
+    "per-arm verified rate with Wilson 95% interval, over ALL trials",
+    "steps and wall time per verified task, over ALL trials",
+    "share of R trials that used a workflow",
+    "R5 pass rate of derived oracles, with its count",
+    "cost per verified task: token-derived ESTIMATE at frozen rates over ALL trials, never billed USD; null if any trial is null"
+  ],
+  "noExclusions": "harness faults stay in the denominator, reported by cause; a topped-up re-run keeps the faulted attempt linked (#511) and in the append-only attempt ledger (#518)",
+  "notEvidence": [
+    "simulated planners or scripted-human demonstrations (capability-spec 3.5)",
+    "R1 evidence: R rows are experiment rows (r1Evidence false); the R1 path never reads them",
+    "multi-edit workflows: fr-v1 is single-edit; any multi-edit result is reported separately"
+  ],
+  "analysis": {
+    "command": "npx tsx scripts/r-v1-analysis.ts analyse --pack <DIR> --evidence",
+    "files": [
+      {
+        "path": "src/recording-eval/analysis.ts",
+        "sha256": "9718b6cad06e88bd7fc200ba1163713f8a53b45e3fe27d56e1f4a39fe3b9e695"
+      },
+      {
+        "path": "src/recording-eval/canonical.ts",
+        "sha256": "b285c3651206b1c78a5d97639ea8184c79b11822ce5834eaf0751c466c3c4048"
+      },
+      {
+        "path": "scripts/r-v1-analysis.ts",
+        "sha256": "19ce4a5e80d55c5c3f6d0399de1c296a06430f07981bb6469050efd2377998a4"
+      }
+    ],
+    "packFiles": {
+      "pack.json": "myco.capability.r-pack/1",
+      "trials.jsonl": "myco.capability.r-trial/1, one row per trial",
+      "grades.jsonl": "myco.benchmark.grade-row/1 from the independent grader, one row per trial"
+    },
+    "preregHash": "SHA-256 over canonical JSON of this file; recorded in docs/product/capability-prereg/r-v1/prereg.sha256 and in every pack"
+  }
+}
