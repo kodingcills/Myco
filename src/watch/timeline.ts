@@ -300,7 +300,7 @@ export function parseManifest(bytes: Uint8Array): ManifestRead {
 }
 
 /**
- * Read a manifest file read-only. A missing file, a symlink (`O_NOFOLLOW`) or anything other
+ * Read a manifest file read-only. A missing file, a symbolic link (refused by `O_NOFOLLOW`) or anything other
  * than a regular file is `absent` (TL_NO_TIMELINE), never followed.
  */
 export function readManifest(path: string): ManifestRead {
