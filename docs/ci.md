@@ -122,7 +122,7 @@ a fallback does not reach full, or a mode runs the wrong steps.
   (`test/{gate,integrity,oracle-selftest,fault-classes,m2,benchmark}/`,
   `test/baseline/{run-lock,spend-ceiling,secret-file}.test.ts`, the directory-scanning
   guards `test/baseline/{hcu-shell/import-boundary,import-graph,instruction-required,probe-directory}.test.ts`,
-  `test/foundry/{split,hidden-split}.test.ts`, no-home-paths, claim isolation, evidence,
+  `test/foundry/{split,hidden-split}.test.ts`, no-home-paths, the leak guard (`src/leak-guard/`, `test/leak-guard/`), claim isolation, evidence,
   faults, VM-lock, scorecard). The test file checks that every tracked file under `src/{gate,integrity,benchmark,m2,core}/`,
   `schemas/`, `scripts/`, `.github/`, `agent/` and `runtime/` forces `full`, and that every
   listed prefix matches a tracked file;
@@ -135,7 +135,7 @@ until the full suite passes. A body edit alone does not start a run; the stated 
 effect at the next push, or add the label. **When unsure, add `tier-2`.** A reviewer who
 raises a PR's tier adds the label.
 
-**Core smoke set** (about 5 s, `SMOKE` in `scripts/ci-plan.py`; the test file pins this list and the code to each other): `test/claim-isolation.test.ts`, `test/eval.test.ts`, `test/evidence.test.ts`, `test/faults.test.ts`, `test/no-home-paths.test.ts`, `test/recovery.test.ts`, `test/runner.test.ts`, `test/verify.test.ts`, `test/baseline/import-graph.test.ts`, `test/gate/gate.test.ts`, `test/integrity/isolation.test.ts`, `test/oracle-selftest/selftest.test.ts`.
+**Core smoke set** (about 10 s, `SMOKE` in `scripts/ci-plan.py`; the test file pins this list and the code to each other): `test/claim-isolation.test.ts`, `test/eval.test.ts`, `test/evidence.test.ts`, `test/faults.test.ts`, `test/no-home-paths.test.ts`, `test/recovery.test.ts`, `test/runner.test.ts`, `test/verify.test.ts`, `test/baseline/import-graph.test.ts`, `test/gate/gate.test.ts`, `test/integrity/isolation.test.ts`, `test/oracle-selftest/selftest.test.ts`, `test/leak-guard/leak-guard.test.ts`, `test/leak-guard/detect.property.test.ts`, `test/leak-guard/routing.test.ts`. The last three are the TIF-98 shared leak guard and its routing lint (see "Leak guard" below), so it runs on every PR in every plan mode.
 
 The `linux path`, `newcomer path` and `m2 evidence and scorecard` jobs are not required. They run unless
 a successful plan names a narrow mode and says their paths are untouched (`test/{linux,init}/`;
@@ -146,6 +146,20 @@ See what the planner would do for your branch:
 ```sh
 python3 scripts/ci-plan.py --event pull_request --files $(git diff --name-only origin/main...HEAD)
 ```
+
+## Leak guard (TIF-98)
+
+One shared detector (`src/leak-guard/detect.ts`) looks for the host username, absolute home
+paths in every spelling (POSIX, Windows, `Documents and Settings`, 8.3, UNC, `\\?\`, mixed
+separators, spaced folders, JSON/URL/HTML-entity escapes), host names and key-shaped strings.
+`test/leak-guard/leak-guard.test.ts` runs it over every tracked file (with the justified
+allowlist `src/leak-guard/allowlist.json`) and over the files AND logs every outward-bound
+writer produces on fixtures (`test/leak-guard/produce.ts`). It is in the core smoke set, so
+it runs inside the required `check (…)` jobs on every PR whatever the plan mode; no check
+name changed. It reports `file:line class` only, never the matched value, and fails closed.
+Builders run the same checks locally with `pnpm leak-guard` before every push (see
+CONTRIBUTING.md, "Before you push"). `test/leak-guard/routing.test.ts` fails if a module
+writes outward dataset, episode or bundle output without `src/leak-guard/serialize.ts`.
 
 ## Security posture
 
