@@ -66,7 +66,7 @@ fault with a fixed, code-only message, never an agent outcome):
 | `trialTimeoutS` | 1800 | a longer trial is stopped and recorded as a harness `timeout` |
 | `maxAttemptsPerTrial` | 3 | attempts per trial that end in a harness fault **other than** a rate limit or a lost login; once spent, the trial is closed for this run directory and the run reports `incomplete` |
 
-Rate-limit, `auth` and `billing` faults never spend `maxAttemptsPerTrial`: they back off and pause, and a
+Rate-limit, `auth` and `billing` faults never spend `maxAttemptsPerTrial`: they back off, pause or stop, and a
 resume re-runs the trial. So a limit spell on the shared subscription can never strand a trial,
 and recovering from one needs no config change (and so no new run directory).
 

@@ -663,6 +663,21 @@ describe("two identical harness failures in a row abort the run", () => {
 });
 
 describe("resume continues from the durable ledger", () => {
+  it("billing stops never spend the attempt budget: resume after three stops still runs the trial", async () => {
+    const out = tmp();
+    const cfg = { ...config(), trials: ["fc-v1-001"] };
+    const billing = () => ({ stdout: "", stderr: "Credit balance is too low", code: 1 });
+    for (let i = 0; i < cfg.pacing.maxAttemptsPerTrial; i++) {
+      const r = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), fakeClaude(billing)));
+      expect(r.exitCode).toBe(EXIT.subscriptionStop);
+    }
+    const ok = fakeClaude(() => ({ stdout: resultJson("x\nDONE") }));
+    const r = await launchR1Live(r1Opts(cfg, out), deps(fakeVm(), ok));
+    expect(r.exitCode).toBe(EXIT.complete);
+    expect(ok.calls).toHaveLength(1);
+    expect(ok.calls[0]?.options.cwd?.toString()).toMatch(/r1p-fc-v1-001-a4$/);
+  });
+
   it("after a billing stop, the same launch skips decided trials and re-runs the stopped one in place", async () => {
     const out = tmp();
     const cfg = twoTrials();
