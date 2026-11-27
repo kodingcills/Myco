@@ -58,6 +58,9 @@ export type PolicyCode =
   | "OPERAND_SHAPE"
   | "PATH_OUTSIDE_WORKSPACE"
   | "WRITE_NOT_ALLOWED"
+  /** Track O's guard (`src/policy/actuators.ts`, `guardedActionPolicy`) refused the action. */
+  | "POLICY_DENIED"
+  | "POLICY_APPROVAL_REQUIRED"
   | "BAD_REQUEST";
 
 /** What one route will do, reduced to the facts a policy judges. */
