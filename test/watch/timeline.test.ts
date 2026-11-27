@@ -635,6 +635,30 @@ describe("the binding check on the gate's real line shapes (§1.2)", () => {
         R,
       ),
     ).toBe(false);
+    // The exact pre-evidence shape holds; each single deviation from it breaks (b).
+    const shape = {
+      ...decision,
+      requestRunId: S,
+      evidenceRunIds: [],
+      hasOracle: false,
+      hasCheckpoints: false,
+      hasCorrections: false,
+      verdict: "uncertain" as const,
+      accepted: false,
+      reasonCodes: ["ASSIGNMENT_MISMATCH" as const, "CLAIM_RECORDED" as const],
+    };
+    expect(bindingHolds(shape, R)).toBe(true);
+    for (const deviation of [
+      { reasonCodes: ["STATE_MISSING" as const] },
+      { reasonCodes: ["CLAIM_RECORDED" as const] },
+      { reasonCodes: [] },
+      { verdict: "refuted" as const },
+      { accepted: true },
+      { hasOracle: true },
+      { hasCheckpoints: true },
+      { hasCorrections: true },
+    ])
+      expect(bindingHolds({ ...shape, ...deviation }, R)).toBe(false);
   });
 
   it("a malformed line parses to null and is never a decision", () => {

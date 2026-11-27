@@ -329,8 +329,7 @@ export function isTimelineRecord(value: unknown): value is TimelineRecord {
   if (!isRecord(value)) return false;
   const keys = Object.keys(value).sort();
   return (
-    keys.length === RECORD_KEYS.length &&
-    keys.every((key, i) => key === RECORD_KEYS[i]) &&
+    keys.join(",") === RECORD_KEYS.join(",") &&
     value.schema === TIMELINE_SCHEMA &&
     typeof value.runId === "string" &&
     isSafeId(value.runId) &&
