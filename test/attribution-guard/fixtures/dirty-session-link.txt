@@ -1,0 +1,5 @@
+## Summary
+
+Adds the guard.
+
+Work log: https://claude.ai/code/session_019wFixture

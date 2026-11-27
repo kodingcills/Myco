@@ -28,7 +28,20 @@ corruption classes it catches. It must declare the format of its family's docume
    - two more cases with fresh random fixture seeds, random parameter picks and random file
      names;
    - the read corruptions the host derives from every correct document (three truncations,
-     three flipped bytes and a missing file per case).
+     three flipped bytes and a missing file per case);
+   - in the first bound-task case of every proposal, beyond its one-error documents, 16 more
+     drawn documents (#610 item 1; every shape once per proposal, since each document is one
+     sandboxed run):
+     - a **two-error document for every pair** of the five single errors (`CALC_ERRORS` in
+       `src/oracle-selftest/subjects.ts`): a wrong value at the target, the new value written
+       to another cell instead (wrong target), 1 to 3 other cells changed, a row with a fresh
+       key inserted, a row other than the target's deleted. That is 10 documents; the target's
+       own error decides the class (`wrong-value`, else `wrong-target`, else `collateral`);
+     - a document with **only an inserted row** and one with **only a deleted row**
+       (`collateral`);
+     - a wrong value of each **out-of-grammar shape** (`CALC_ODD_VALUES`, `wrong-value`):
+       over 64 characters (65 to 200), CSV-quoted (the quoted text may hold a comma or a
+       space), with a leading or trailing space, and a negative number at or below -20000.
 
    Every corruption is drawn afresh, per case, from host-side randomness (`node:crypto`) the
    sandboxed check cannot observe or seed: the wrong value (an edit of the new value, a number
@@ -43,8 +56,11 @@ corruption classes it catches. It must declare the format of its family's docume
    So a check's author, who knows the task's intent, cannot compute the self-test documents in
    advance. A check that is honest only on its seed, its file name, the bound task, the
    documents the round-2 self-test would have shown it, or the target values those held fails
-   it (`test/agent-checks/predictable-selftest.test.ts`). What the self-test cannot rule out is
-   a check that lies only on documents unlike anything it draws (§5);
+   it (`test/agent-checks/predictable-selftest.test.ts`). So does a check that embeds the
+   bound task's pristine fixture, counts the errors in a document, and lies on any document
+   with two errors, an inserted or deleted row, or an out-of-grammar target value
+   (`test/agent-checks/wide-selftest.test.ts`, `wide-values.test.ts`). What the self-test
+   cannot rule out is a check that lies only on documents unlike anything it draws (§5);
 3. refuses the check unless every correct document verifies and every corruption of every
    claimed class is caught. A throw or a timeout is a harness fault, never a catch.
 
@@ -63,6 +79,8 @@ column of its fixture, or changes nothing.
 | passes only its own easy cases | `AGENT_CHECK_SELFTEST_FAILED` |
 | honest only when it recognises the self-test (seed, file name, bound task) | `AGENT_CHECK_SELFTEST_FAILED` |
 | honest only on the bound task's precomputed self-test documents, or on the target values they hold | `AGENT_CHECK_SELFTEST_FAILED` |
+| honest on one-error documents only: lies on two errors (wrong target plus a changed cell, plus an inserted row, or any target error plus a deleted row, or any two errors) | `AGENT_CHECK_SELFTEST_FAILED` |
+| lies on a target value over 64 characters, quoted, space-edged, or at or below -20000 | `AGENT_CHECK_SELFTEST_FAILED` |
 | misses a flipped byte while claiming `corrupt-byte` | `AGENT_CHECK_SELFTEST_FAILED` |
 | claims only `missing-file` | `AGENT_CHECK_NO_VALUE_CLAIM` |
 | also a reader | `AGENT_CHECK_NOT_ORACLE_ONLY` |
@@ -114,13 +132,32 @@ Its only output is a frozen `myco.agent-check-signal/1`:
   fit the sandbox budget: each self-test document is one sandboxed process.
 - No agent-facing tool proposes a check yet, and nothing displays signals. Both need their own
   reviewed change, and both must keep the signal advisory.
-- **A check can still lie on a document unlike anything the self-test draws.** The draws are
-  wide but finite: one corruption per document (a wrong value and collateral damage together
-  is never drawn), a fixed set of value shapes, `.csv` only. A check that answers honestly on
-  everything the draw can produce and says `verified` to, say, a document with two errors
-  passes R5 and lies on that real document. Content cannot be made indistinguishable from
-  every possible real document. This is why the signal is advisory and refused as evidence:
-  it never changes a gate verdict, an R1 row, a scorecard cell or a grade (§3, §4).
+- **A check can still lie on a document unlike anything the self-test draws.** #610 item 1
+  widened the draw (§2: every pair of errors, inserted and deleted rows, four out-of-grammar
+  value shapes); it narrowed the gap and did not close it. Exactly what is still never drawn:
+  - three or more distinct errors in one document, or two of the same kind beyond what one
+    error draws (two inserted rows, two deleted rows, a wrong target in two cells, or a changed
+    cell that takes the new value beside another error);
+  - an out-of-grammar value combined with any other error, or written anywhere but the
+    target (an inserted row's cells and changed cells hold in-grammar values);
+  - value shapes outside the six in-grammar kinds and the four odd shapes: an empty cell,
+    non-ASCII text, a formula, a value with an embedded quote or newline, a leading `+`, a
+    number in scientific notation or with a thousands separator (except by chance), and a
+    negative number above -20000 that is neither a shift of up to 10,000 nor a one-character
+    edit of the value it replaces;
+  - structural edits other than one inserted or deleted row: a changed, added or removed
+    header or column, reordered rows or columns, duplicated keys, a changed key, blank lines,
+    `CRLF` line endings, a byte-order mark, a missing final newline;
+  - any `.xlsx` document.
+
+  A check that answers honestly on everything the draw can produce and says `verified` to,
+  say, a document with a wrong target and two inserted rows passes R5 and lies on that real
+  document; `test/agent-checks/known-limit.test.ts` executes exactly that, and shows the gate
+  refutes the document, the grader fails it, and `checkBenchmark`, `checkPack` and
+  `checkAbPack` refuse the lying signal. Content cannot be made indistinguishable from every
+  possible real document. This is why the signal is advisory and refused as evidence
+  everywhere: it never changes a gate verdict, an R1 row, a scorecard cell or a grade
+  (§3, §4).
 - The self-test cannot be told from a real run by intent or file name, but the
   sandbox still lets a check read the clock. A check that is honest only before a date it
   chose ("time bomb") passes the self-test. The sandbox should present a fixed clock to

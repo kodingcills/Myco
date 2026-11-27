@@ -1,0 +1,5 @@
+Add the guard
+
+Refs #685
+
+Claude-Session: https://claude.ai/code/session_019wFixture

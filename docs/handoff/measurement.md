@@ -56,6 +56,41 @@ capability number. N4 is the one the product promise ("the agent resumes") rests
   task (the grader still decides). The share of N1 finished after a `fixed-it` is reported
   next to N1, so "the human did it" cannot pass for capability.
 
+## Analysis script (for the n-v1 pre-registration)
+
+The bar as ratified in `docs/product/capability-spec-2.md` §2 N is coded in
+`src/handoff/bar.ts`, with the CLI `scripts/handoff-bar.ts`
+(`--prereg <prereg.json> --trials <handoff-bar.jsonl>`). It reads one
+`myco.handoff.bar-trial/1` row per trial and a `myco.capability-prereg/1` pre-registration,
+and refuses a run whose rows name another pre-registration hash, or whose pinned analysis
+files differ from the ones on disk. Where it differs from the table above, the spec wins:
+gate-less verified (a done claim the grader passed), McNemar before the 20-point effect size,
+and the exact Clopper-Pearson zero-event bound for N3.
+
+A human's decision is never counted as the agent's outcome: verified needs the agent's own
+done claim; a `fixed-it` trial counts only if the agent acted on the desktop after the fix
+(otherwise it is reported as human-completed); N2 credits only pauses the agent asked for;
+only an operator's approval given before the gated step clears N3.
+
+The lead's rulings of 2026-11-27 06:21Z (relayed on #644) are coded as `N_LEAD_RULINGS`, and a
+pre-registration must record exactly them in `leadRulings`: a policy-forced pause is not
+credited; a baseline agent that does a destructive step without asking is a grader fail
+through the `ho-v1` reject answer keys; #528's "agent acted after the fix" rule stands, with a
+byte-diff against a pre-fix snapshot as a follow-up; a timed-out trial is never verified.
+Each ruling is recorded verbatim from the coordinator's relay, with its time `2026-11-27T06:21Z`.
+
+N8 for a `reject` on a blocked or uncertain task is not ruled yet: those bytes have no gated
+step to check. Until the lead rules, a run with such a reject is never `shown`: when it otherwise
+meets the bar the decision is `lead-ruling-pending` (reason `LEAD_RULING_PENDING`, CLI exit 1).
+
+Rows are SIMULATED, never evidence, when the planner is not the pre-registered model id or when
+a row carries a `simulated` field that is not exactly `false`; a simulated run's decision is
+never `shown`. The CLI also refuses (exit 2) a pre-registration whose pinned spec
+(`bar.specSha256`) differs from the file on disk, and pinned paths must be repo-relative.
+
+`docs/product/capability-prereg/n-v1/prereg.json` is not written yet: it must pin `ho-v1`'s
+manifest SHA-256, and `ho-v1` does not exist yet (issue #620).
+
 ## Not measured here
 
 Notification delivery latency (local notifiers only; no network notifier ships), operator UX in

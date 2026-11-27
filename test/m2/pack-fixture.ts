@@ -1,6 +1,7 @@
 /**
  * Fixture M2 evidence packs (TIF-273): synthetic rows, private temp dirs, no VM, no model.
  */
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -290,11 +291,29 @@ export function r2Trials(): Trial[] {
   return out;
 }
 
+/**
+ * A TEST-ONLY R2 pre-registration hash (#649): the SHA-256 of a label, not of any committed
+ * pre-registration. It is never in the committed `R2_PREREGISTRATION_SHA256` (which is empty);
+ * tests that show a correctly-hashed R2 pack is accepted pass it through the test seam
+ * `TEST_R2_ALLOW`.
+ */
+export const TEST_R2_PREREG = createHash("sha256")
+  .update("test-only R2 pre-registration (#649); never committed")
+  .digest("hex");
+/** A TEST-ONLY capability pre-registration hash, standing for e.g. a J or V track's. */
+export const TEST_CAPABILITY_PREREG = createHash("sha256")
+  .update("test-only capability pre-registration hcu+shell+J-v1 (#649); never committed")
+  .digest("hex");
+/** `checkPack`'s test seam with the test R2 hash allowlisted. */
+export const TEST_R2_ALLOW = { r2PreregistrationAllowlist: [TEST_R2_PREREG] } as const;
+
+/** R2 + R7 pack manifest, carrying the test R2 pre-registration hash. */
 export const r2Manifest = (over: Partial<PackManifest> = {}) =>
   manifest({
     rows: ["R2", "R7"],
     expectTrials: { "myco-gate": 30, "hcu+shell": 30 },
     expectPairs: 30,
+    preregistration: { sha256: TEST_R2_PREREG },
     ...over,
   });
 

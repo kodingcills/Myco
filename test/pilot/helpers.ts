@@ -125,6 +125,41 @@ export const CLEAN_RESULT_TASK_DATA = [
   "Set the API key column and the OAuth login field; credit unchanged.",
 ] as const;
 
+/**
+ * Claim lines with a Unicode space, a tab, a format character or surrounding whitespace in
+ * them (#611), each with the claim it is read as. Spelled by code point.
+ */
+export const FOLDED_CLAIM_LINES: readonly (readonly [string, string, "done" | "not-done"])[] = [
+  ["NOT<NBSP>DONE", `NOT${ch(0x00a0)}DONE`, "not-done"],
+  ["NOT<U+2009>DONE", `NOT${ch(0x2009)}DONE`, "not-done"],
+  ["NOT<TAB>DONE", "NOT\tDONE", "not-done"],
+  ["N<ZWSP>OT DONE", `N${ch(0x200b)}OT DONE`, "not-done"],
+  ["DONE<NBSP>", `DONE${ch(0x00a0)}`, "done"],
+  ["NOT<U+202F>DONE", `NOT${ch(0x202f)}DONE`, "not-done"],
+  ["NOT<U+3000>DONE", `NOT${ch(0x3000)}DONE`, "not-done"],
+  ["NOT<WJ U+2060>DONE", `NOT${ch(0x2060)}DONE`, "not-done"],
+  ["NOT<two spaces>DONE", "NOT  DONE", "not-done"],
+  ["<TAB>NOT DONE<NBSP><TAB>", `\tNOT DONE${ch(0x00a0)}\t`, "not-done"],
+  ["DONE<ZWSP>", `DONE${ch(0x200b)}`, "done"],
+  ["<BOM U+FEFF>DONE", `${ch(0xfeff)}DONE`, "done"],
+  ["D<SHY U+00AD>ONE", `D${ch(0x00ad)}ONE`, "done"],
+];
+
+/** Last lines that are still not a claim once folded (#611): no new words, no case folding. */
+export const NON_CLAIM_LINES = [
+  "DONE.",
+  "done",
+  "Done",
+  "not done",
+  "NOT-DONE",
+  `NOT${ch(0x2011)}DONE`,
+  "NOTDONE",
+  `NOT${ch(0x200b)}DONE.`,
+  "NOT DONE yet",
+  "DONE!",
+  "N0T DONE",
+] as const;
+
 /** Thin space (U+2009). */
 export const THIN_SPACE = ch(0x2009);
 
