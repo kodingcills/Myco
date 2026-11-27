@@ -49,11 +49,15 @@ export const ACTUATOR_SERVER_NAME = HCU_ACTUATOR_SERVER_NAME;
 export const ACTUATOR_SERVER_VERSION = "0.1.0";
 
 /**
- * The HCU session socket the trial base's `MycoHCU` logon task serves on in the interactive
- * session (#734). #734 must register `computer-use.exe serve` on exactly this socket; a
- * different socket is a config change (it re-pins the plan hash), never an operator flag.
+ * The HCU session socket the trial base actually provides (VM-owner finding on #733 from the
+ * #734 trial-base work, lead ruling 15:44Z): the trial base's `MycoHCU` logon task starts
+ * HCU's interactive-session daemon in the `myco` user's logon session, and that daemon serves
+ * on `C:\Users\myco\AppData\Local\Temp\hcu--1\desktop-default.sock`. The attach target is
+ * that exact path. A different socket is a code change (it regenerates the reviewed config and
+ * re-pins the plan hash), never an operator flag.
  */
-export const HCU_SESSION_SOCKET = "C:\\myco\\run\\hcu-session.sock";
+export const HCU_SESSION_SOCKET =
+  "C:\\Users\\myco\\AppData\\Local\\Temp\\hcu--1\\desktop-default.sock";
 
 /**
  * HCU's stdio MCP server in the guest, in the ATTACH form (VM-owner finding on #733, lead

@@ -60,7 +60,7 @@ fault with a fixed, code-only message, never an agent outcome):
     the `hcu+shell` arm's desktop reach. It is the same Microsoft HCU in the guest, reached
     over the trial VM's SSH channel (`~/VMs/myco-win11/ssh_config`, host `myco-win11`) with
     the HCU guest command in its **attach form**:
-    `C:\myco\bin\computer-use.exe mcp --attach C:\myco\run\hcu-session.sock`
+    `C:\myco\bin\computer-use.exe mcp --attach C:\Users\myco\AppData\Local\Temp\hcu--1\desktop-default.sock`
     (`HCU_GUEST_COMMAND`, `src/pilot/hcu-actuator.ts`; it is in the reviewed config and the
     plan hash). The actions are C1's
     pixel actions, sent through the arm's own HCU client one action per call. The budget is
@@ -71,19 +71,30 @@ fault with a fixed, code-only message, never an agent outcome):
     evidence.
   - **Why the attach form (VM-owner finding on #733, lead ruling 14:00Z).** An SSH session
     runs in Windows session 0, where a bare `computer-use.exe mcp` sees no desktop. The trial
-    base (#734) registers a logon task, `MycoHCU`, that runs `computer-use.exe serve` in the
-    interactive session; `mcp --attach <session socket>` reaches it. **Contract with #734:**
-    `MycoHCU` serves on exactly `C:\myco\run\hcu-session.sock` (`HCU_SESSION_SOCKET`). If the
-    socket must differ, change `HCU_SESSION_SOCKET` in code: that regenerates the reviewed
-    config and re-pins the plan hash below; it is never an operator flag. The bare session-0
+    base (#734) registers a logon task, `MycoHCU`, that starts HCU's interactive-session
+    daemon in the `myco` user's logon session; `mcp --attach <session socket>` reaches it.
+    **Dependency on #734 (round 2 addendum, lead ruling 15:44Z):** the attach target is the
+    socket the trial base actually provides, which the VM owner found at
+    `C:\Users\myco\AppData\Local\Temp\hcu--1\desktop-default.sock` (`HCU_SESSION_SOCKET`).
+    It is the daemon's own default path for the first interactive session of user `myco`; if
+    #734's trial base ever serves elsewhere (another user, another session, a `--socket`
+    override), change `HCU_SESSION_SOCKET` in code: that regenerates the reviewed config and
+    re-pins the plan hash below; it is never an operator flag. The socket must be an absolute
+    `.sock` path (`isHcuAttachCommand`: no `..`, no chaining, no extra flag). The bare session-0
     form is refused three times over: by `scripts/myco-hcu.ts` at start (exit 2), by the
     launch audit (`auditAgentLaunch` pins the actuator's command and args, #733 N3), and by
     the probe's SSH channel (`src/pilot/hcu-ssh.ts`).
   - **The pre-agent HCU check (lead ruling 13:38Z, B1).** On every attempt, after the reset,
     the deploy and the seed, and before `claude` starts, the VM step opens the actuator's own
     channel (same SSH host, same attach command), initialises HCU (its `GUI` tool must be
-    served) and takes ONE screenshot, which must succeed, within 60 s. If HCU is unreachable,
-    or answers but cannot screenshot the interactive desktop, the attempt fails as a harness
+    served) and needs ONE screenshot to succeed, within 60 s. A freshly booted guest's first
+    screenshot can time out inside HCU (VM-owner findings on #733), so the check allows a
+    bounded **warm-up** (round 2 addendum, lead ruling 15:44Z): at most 3 screenshot attempts,
+    10 s apart (`HCU_WARMUP_ATTEMPTS`, `HCU_WARMUP_SPACING_MS`; fixed in code, no flag or
+    config field), all inside the same 60 s bound. Each attempt writes one code line to the
+    run log, `<trial key>: hcu-probe: warm-up screenshot <n>/3 ok|failed` (never HCU's text). A
+    failed connect or initialise is not retried. If HCU is unreachable, or all 3 screenshots
+    fail, the attempt fails as a harness
     fault (`transport-error`, message `hcu-unreachable: ...`, fixed and code-only). The agent
     is never started, no row is decided or counted, and the attempt re-runs in place under the
     usual rules: a second identical fault in a row stops the run (exit 6). It is never the
@@ -354,12 +365,14 @@ npx tsx scripts/benchmark-check.ts --arm runs/r1-pilot-dry-export/arm.jsonl \
 # Real launch (lead-approved). Needs the flag AND the configSha256 `plan` printed, under the
 # VM session lock. It prints the plan, then starts real trials or refuses with every reason.
 # The plan hash at the default pacing, since #732 added the action tools and #733 round 2
-# moved HCU to the attach form (pinned by test/pilot/config.test.ts):
-#   configSha256 2127d5b11ad0f1aa72ae2b9b18373f85a7ef46442f46d4721e182b615343c5fc
-# It was 8d774329... before #732, then b9b69348... with the bare session-0 HCU command. A run
+# moved HCU to the attach form, and its addendum moved the attach socket to the trial base's
+# (pinned by test/pilot/config.test.ts):
+#   configSha256 9238160613410c3beb9f0864af596cf519a8b109de09107458f143e934c50882
+# It was 8d774329... before #732, then b9b69348... with the bare session-0 HCU command, then
+# 2127d5b1... with the C:\myco\run socket (stage 0 planSha256 251b7a9f... then). A run
 # directory started under an older plan cannot be resumed under the new one, so start a fresh
 # --out. The A/B arms' hashes change too: stage 0's
-# planSha256 is now 251b7a9f146f7f77b4cbffa125e702004717354831ff2b191983d740902454cb.
+# planSha256 is now e044098d58c460a18fcff5cba6b7c8c8000d1a37694bf12688ad70943ab91803.
 scripts/vm-session.sh -- node --import tsx scripts/m2-r1-pilot.ts launch --out runs/r1-pilot \
   --launch-real-trials --plan-sha256 <configSha256 from plan>
 

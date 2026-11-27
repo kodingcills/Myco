@@ -17,7 +17,15 @@ export type FakeHcuMode =
   /** HCU answers but does not serve the `GUI` tool. */
   | "no-gui"
   /** HCU never answers. */
-  | "hang";
+  | "hang"
+  /**
+   * A freshly booted guest (VM-owner findings on #733): the first two screenshots time out in
+   * HCU's Windows runtime, the third succeeds.
+   */
+  | "cold-2";
+
+/** HCU's warm-up failure text, which must never reach a log or a fault message. */
+export const HCU_COLD_TEXT = "Windows runtime timed out after 838.8614ms";
 
 export const FAKE_PNG = "iVBORw0KGgo=";
 
@@ -26,6 +34,7 @@ export function fakeHcuSession(
   log: string[] = [],
 ): { open: () => HcuSession; log: string[]; closed: () => number } {
   let closed = 0;
+  let screenshots = 0;
   const open = (): HcuSession => {
     log.push("hcu-open");
     if (mode === "unreachable")
@@ -41,6 +50,12 @@ export function fakeHcuSession(
             ?.actions;
           if (actions?.[0]?.type === "screenshot") {
             log.push("hcu-screenshot");
+            screenshots += 1;
+            if (mode === "cold-2" && screenshots <= 2)
+              return {
+                isError: true,
+                content: [{ type: "text", text: JSON.stringify({ error: HCU_COLD_TEXT }) }],
+              };
             if (mode === "no-screenshot")
               return {
                 isError: true,

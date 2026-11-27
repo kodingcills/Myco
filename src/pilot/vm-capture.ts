@@ -70,10 +70,12 @@ export interface VmBackend {
   /**
    * The pre-agent HCU check (lead ruling 13:38Z, B1): resolves only once HCU in the reset guest
    * answered over the agent's own channel (the actuator's attach command) AND produced one
-   * screenshot of the interactive desktop. Any other result rejects. The real backend runs
-   * `probeHcuDesktop` (`src/pilot/hcu-ssh.ts`).
+   * screenshot of the interactive desktop, after at most `HCU_WARMUP_ATTEMPTS` screenshot
+   * attempts (the bounded warm-up, lead ruling 15:44Z). Any other result rejects. `log` is the
+   * harness log; every line written to it is a code. The real backend runs `probeHcuDesktop`
+   * (`src/pilot/hcu-ssh.ts`).
    */
-  probeHcu(): Promise<void>;
+  probeHcu(log: (line: string) => void): Promise<void>;
 }
 
 export const DEFAULT_GUEST_ROOT = "C:\\myco\\pilot";
@@ -128,6 +130,8 @@ export interface VmStepOptions {
   readonly repoRoot: string;
   readonly guestRoot?: string;
   readonly now?: () => number;
+  /** The harness log (the run's log). Lines are codes, prefixed with the trial key. */
+  readonly log?: (line: string) => void;
 }
 
 /** Fixed, code-only fault messages: the same failure always reads the same (repeat rule). */
@@ -212,8 +216,14 @@ export class VmTrialStep {
       await this.close();
       throw new HarnessFault("timeout", VM_FAULT.hcuTimeout);
     }
+    // A freshly booted guest's first screenshot can time out (VM-owner findings on #733): the
+    // probe allows a bounded warm-up (3 attempts, 10 s apart, fixed), each attempt logged as a
+    // code. Only all attempts failing is the fault below; the agent starts only after one
+    // screenshot succeeded.
+    const log = this.opts.log ?? (() => {});
+    const trialKey = this.ctx.trialKey;
     try {
-      await this.opts.backend.probeHcu();
+      await this.opts.backend.probeHcu((line) => log(`${trialKey}: ${line}`));
     } catch {
       await this.close();
       throw new HarnessFault("transport-error", VM_FAULT.hcu);
@@ -414,15 +424,21 @@ export interface RealVmBackendOptions {
 /**
  * The real backend's pre-agent HCU check (#733 B1): the actuator's own SSH channel and command
  * (`ACTUATOR_SERVER_TEMPLATE` carries the same `HCU_GUEST_COMMAND`; pinned equal by test), so
- * the probe sees what the agent will see. Connect, initialise, one screenshot, bounded.
- * Exported so a test drives it through a fake `ssh` (`test/pilot/hcu-ssh.test.ts`).
+ * the probe sees what the agent will see. Connect, initialise, the bounded screenshot warm-up,
+ * all inside one bound. Exported so a test drives it through a fake `ssh`
+ * (`test/pilot/hcu-ssh.test.ts`).
  */
 export function realHcuProbe(
   spawn: HcuSpawn,
   home: string,
+  log: (line: string) => void,
   timeoutMs: number = HCU_PROBE_TIMEOUT_MS,
+  sleep?: (ms: number) => Promise<void>,
 ): Promise<void> {
-  return probeHcuDesktop(() => openHcuSession(spawn, HCU_GUEST_COMMAND, home), timeoutMs);
+  return probeHcuDesktop(() => openHcuSession(spawn, HCU_GUEST_COMMAND, home), timeoutMs, {
+    log,
+    ...(sleep === undefined ? {} : { sleep }),
+  });
 }
 
 export function realVmBackend(opts: RealVmBackendOptions): VmBackend {
@@ -480,7 +496,7 @@ export function realVmBackend(opts: RealVmBackendOptions): VmBackend {
         });
       });
     },
-    probeHcu: () => realHcuProbe(spawn, homedir()),
+    probeHcu: (log) => realHcuProbe(spawn, homedir(), log),
     async open() {
       // The file the deploy just wrote (`agentTokenFile`), read at the point of use.
       const token = resolveRunLiveToken(["--token-file", tokenOut], process.env, homedir());

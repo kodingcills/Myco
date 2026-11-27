@@ -212,10 +212,11 @@ export const HCU_ACTUATOR_SERVER_NAME = "myco-hcu";
  * reaches the HCU `serve` process the trial base's `MycoHCU` logon task runs in the
  * interactive session (#734). The bare `computer-use.exe mcp` runs in SSH's session 0 and sees
  * no desktop, so it is refused (here, in the launch audit, and by the CLI). One token per part:
- * no shell metacharacter, no extra flag.
+ * no shell metacharacter, no extra flag, and the socket is an absolute Windows path to a
+ * `.sock` file (#733 round 2 addendum), so a flag can never stand in for it.
  */
 export const HCU_ATTACH_COMMAND =
-  /^[A-Za-z]:\\(?:[A-Za-z0-9_.-]+\\)*computer-use\.exe mcp --attach [A-Za-z0-9_.:\\/-]+$/;
+  /^[A-Za-z]:\\(?:[A-Za-z0-9_.-]+\\)*computer-use\.exe mcp --attach [A-Za-z]:\\(?:[A-Za-z0-9_.-]+\\)*[A-Za-z0-9_.-]+\.sock$/;
 
 export function isHcuAttachCommand(command: string): boolean {
   return HCU_ATTACH_COMMAND.test(command) && !command.includes("..");

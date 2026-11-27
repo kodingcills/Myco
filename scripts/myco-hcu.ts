@@ -2,7 +2,7 @@
  * `myco-hcu`: the R1 / A/B live agent's actuator, a stdio MCP server for Claude Code (#732).
  *
  *   node --import tsx scripts/myco-hcu.ts mcp \
- *     --hcu-command 'C:\myco\bin\computer-use.exe mcp --attach C:\myco\run\hcu-session.sock'
+ *     --hcu-command 'C:\myco\bin\computer-use.exe mcp --attach C:\Users\myco\AppData\Local\Temp\hcu--1\desktop-default.sock'
  *
  * The pilot's launch plan starts it (`ACTUATOR_SERVER_TEMPLATE`, `src/pilot/config.ts`); an
  * operator never runs it by hand. On the first tool call it opens ONE fixed channel

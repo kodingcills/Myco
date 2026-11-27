@@ -14,15 +14,18 @@ import { isHcuAttachCommand } from "../../src/integrity/surface.ts";
 import { ACTUATOR_SERVER_TEMPLATE } from "../../src/pilot/config.ts";
 import { HCU_GUEST_COMMAND, HCU_SESSION_SOCKET } from "../../src/pilot/hcu-actuator.ts";
 import {
+  HCU_PROBE_LOG,
   HCU_PROBE_TIMEOUT_MS,
   HCU_SSH_HOST,
+  HCU_WARMUP_ATTEMPTS,
+  HCU_WARMUP_SPACING_MS,
   type HcuSpawn,
   hcuSshArgs,
   openHcuSession,
   probeHcuDesktop,
 } from "../../src/pilot/hcu-ssh.ts";
 import { realHcuProbe } from "../../src/pilot/vm-capture.ts";
-import { fakeHcuSession } from "./fake-hcu.ts";
+import { fakeHcuSession, HCU_COLD_TEXT } from "./fake-hcu.ts";
 import { ROOT } from "./helpers.ts";
 
 describe("the attach form (VM-owner finding on #733, lead ruling 14:00Z)", () => {
@@ -46,9 +49,30 @@ describe("the attach form (VM-owner finding on #733, lead ruling 14:00Z)", () =>
       `C:\\myco\\..\\bin\\computer-use.exe mcp --attach ${HCU_SESSION_SOCKET}`,
       `C:\\myco\\bin\\computer-use.exe mcp --attach C:\\myco\\..\\x.sock`,
       `powershell -c C:\\myco\\bin\\computer-use.exe mcp --attach ${HCU_SESSION_SOCKET}`,
+      // Round 2 addendum: the socket is an absolute `.sock` path, so no flag can stand in.
+      "C:\\myco\\bin\\computer-use.exe mcp --attach --verbose",
+      "C:\\myco\\bin\\computer-use.exe mcp --attach hcu--1\\desktop-default.sock",
+      "C:\\myco\\bin\\computer-use.exe mcp --attach \\\\host\\share\\x.sock",
+      "C:\\myco\\bin\\computer-use.exe mcp --attach C:\\Users\\myco\\x.exe",
+      `C:\\myco\\bin\\computer-use.exe mcp --attach C:\\Users\\myco\\AppData\\Local\\Temp\\hcu--1\\..\\x.sock`,
+      `C:\\myco\\bin\\computer-use.exe mcp --attach ${HCU_SESSION_SOCKET} ${HCU_SESSION_SOCKET}`,
       "",
     ])
       expect(isHcuAttachCommand(bad), bad).toBe(false);
+  });
+
+  it("round 2 addendum: the attach target is the socket the trial base provides (#734's MycoHCU daemon), in code, config and runbook", () => {
+    expect(HCU_SESSION_SOCKET).toBe(
+      "C:\\Users\\myco\\AppData\\Local\\Temp\\hcu--1\\desktop-default.sock",
+    );
+    const committed = JSON.parse(
+      readFileSync(join(ROOT, "benchmark/pilot/r1/config.json"), "utf8"),
+    ) as { actuatorServerTemplate: { args: string[] } };
+    const args = committed.actuatorServerTemplate.args;
+    expect(args[args.indexOf("--hcu-command") + 1]).toBe(HCU_GUEST_COMMAND);
+    const runbook = readFileSync(join(ROOT, "docs/benchmark/pilot-runbook.md"), "utf8");
+    expect(runbook).toContain(`\`${HCU_GUEST_COMMAND}\``);
+    expect(runbook).not.toContain("hcu-session.sock");
   });
 
   it("the ssh argv: the trial VM's ssh_config and host, then the attach command, nothing else", () => {
@@ -143,6 +167,119 @@ describe("probeHcuDesktop: connect plus ONE successful screenshot (lead ruling 1
   });
 });
 
+/** A fake clock for the warm-up spacing: records each wait, then yields one macrotask. */
+function fakeClock() {
+  const sleeps: number[] = [];
+  return {
+    sleeps,
+    sleep: (ms: number) => {
+      sleeps.push(ms);
+      return new Promise<void>((r) => setImmediate(r));
+    },
+  };
+}
+
+/** Race a probe against a 1 s sentinel, so a hanging or looping mutant fails promptly. */
+async function settledPromptly(p: Promise<void>): Promise<string> {
+  let sentinelTimer: ReturnType<typeof setTimeout> | undefined;
+  const sentinel = new Promise<string>((r) => {
+    sentinelTimer = setTimeout(() => r("still running"), 1000);
+  });
+  try {
+    return await Promise.race([
+      p.then(
+        () => "resolved",
+        (e: unknown) => (e as Error).message,
+      ),
+      sentinel,
+    ]);
+  } finally {
+    clearTimeout(sentinelTimer);
+  }
+}
+
+describe("the bounded warm-up (#733 round 2 addendum, lead ruling 15:44Z)", () => {
+  it("is fixed at 3 attempts, 10 s apart, and the whole warm-up fits inside the probe's bound", () => {
+    expect(HCU_WARMUP_ATTEMPTS).toBe(3);
+    expect(HCU_WARMUP_SPACING_MS).toBe(10_000);
+    expect((HCU_WARMUP_ATTEMPTS - 1) * HCU_WARMUP_SPACING_MS).toBeLessThan(HCU_PROBE_TIMEOUT_MS);
+  });
+
+  it("fail, fail, succeed passes: 3 screenshots, two 10 s waits, each attempt logged as a code", async () => {
+    const hcu = fakeHcuSession("cold-2");
+    const clock = fakeClock();
+    const lines: string[] = [];
+    const outcome = await settledPromptly(
+      probeHcuDesktop(hcu.open, 5000, { log: (l) => lines.push(l), sleep: clock.sleep }),
+    );
+    expect(outcome).toBe("resolved");
+    expect(hcu.log.filter((e) => e === "hcu-screenshot")).toHaveLength(3);
+    expect(clock.sleeps).toEqual([HCU_WARMUP_SPACING_MS, HCU_WARMUP_SPACING_MS]);
+    expect(lines).toEqual([
+      HCU_PROBE_LOG.attempt(1, "failed"),
+      HCU_PROBE_LOG.attempt(2, "failed"),
+      HCU_PROBE_LOG.attempt(3, "ok"),
+    ]);
+    expect(lines.join("\n")).not.toContain(HCU_COLD_TEXT);
+    expect(hcu.closed()).toBe(1);
+  });
+
+  it("a warm guest passes on the first screenshot with no wait", async () => {
+    const hcu = fakeHcuSession("ok");
+    const clock = fakeClock();
+    const lines: string[] = [];
+    await probeHcuDesktop(hcu.open, 5000, { log: (l) => lines.push(l), sleep: clock.sleep });
+    expect(clock.sleeps).toEqual([]);
+    expect(lines).toEqual([HCU_PROBE_LOG.attempt(1, "ok")]);
+  });
+
+  it("fail x3 rejects (hcu-unreachable) after exactly 3 screenshots and 2 waits, promptly; no wait after the last", async () => {
+    const hcu = fakeHcuSession("no-screenshot");
+    const clock = fakeClock();
+    const lines: string[] = [];
+    const outcome = await settledPromptly(
+      probeHcuDesktop(hcu.open, 5000, { log: (l) => lines.push(l), sleep: clock.sleep }),
+    );
+    expect(outcome).toBe("hcu-unreachable");
+    expect(hcu.log.filter((e) => e === "hcu-screenshot")).toHaveLength(HCU_WARMUP_ATTEMPTS);
+    expect(clock.sleeps).toEqual([HCU_WARMUP_SPACING_MS, HCU_WARMUP_SPACING_MS]);
+    expect(lines).toEqual([1, 2, 3].map((n) => HCU_PROBE_LOG.attempt(n, "failed")));
+    expect(lines.join("\n")).not.toMatch(/no_interactive_desktop|C:\\/);
+    expect(hcu.closed()).toBe(1);
+  });
+
+  it("a failed open or initialise is not a warm-up: no retry, no wait, one code line", async () => {
+    for (const mode of ["unreachable", "no-gui"] as const) {
+      const hcu = fakeHcuSession(mode);
+      const clock = fakeClock();
+      const lines: string[] = [];
+      const outcome = await settledPromptly(
+        probeHcuDesktop(hcu.open, 5000, { log: (l) => lines.push(l), sleep: clock.sleep }),
+      );
+      expect(outcome).toBe("hcu-unreachable");
+      expect(hcu.log.filter((e) => e === "hcu-open")).toHaveLength(1);
+      expect(hcu.log).not.toContain("hcu-screenshot");
+      expect(clock.sleeps).toEqual([]);
+      expect(lines).toEqual([HCU_PROBE_LOG.connectFailed]);
+    }
+  });
+
+  it("the probe's bound covers the warm-up: a wait that outlasts it rejects at the bound, promptly", async () => {
+    const hcu = fakeHcuSession("cold-2");
+    const lines: string[] = [];
+    const outcome = await settledPromptly(
+      probeHcuDesktop(hcu.open, 50, {
+        log: (l) => lines.push(l),
+        sleep: () => new Promise(() => {}),
+      }),
+    );
+    expect(outcome).toBe("hcu-unreachable");
+    expect(hcu.log.filter((e) => e === "hcu-screenshot")).toHaveLength(1);
+    expect(lines).toEqual([HCU_PROBE_LOG.attempt(1, "failed"), HCU_PROBE_LOG.timeout]);
+    expect(hcu.closed()).toBe(1);
+  });
+});
+
 /**
  * A fake `ssh` whose child speaks HCU's MCP on stdio (newline-delimited JSON-RPC), so the real
  * backend's probe runs end to end: `openHcuSession` -> `mcpStdio` -> `connectHcuGui`.
@@ -196,22 +333,33 @@ function fakeSshHcu(screenshot: "ok" | "error") {
 describe("the real backend's probe (realHcuProbe), end to end through a fake ssh", () => {
   it("runs ssh with the actuator's attach command and resolves on one screenshot; ssh is closed", async () => {
     const ssh = fakeSshHcu("ok");
-    await expect(realHcuProbe(ssh.spawn, "/home/op", 2000)).resolves.toBeUndefined();
+    const lines: string[] = [];
+    await expect(
+      realHcuProbe(ssh.spawn, "/home/op", (l) => lines.push(l), 2000),
+    ).resolves.toBeUndefined();
+    expect(lines).toEqual([HCU_PROBE_LOG.attempt(1, "ok")]);
     expect(ssh.calls).toEqual([
       { command: "ssh", args: hcuSshArgs(HCU_GUEST_COMMAND, "/home/op") },
     ]);
     expect(ssh.killed()).toBe(1);
   });
 
-  it("rejects when the guest HCU cannot screenshot the desktop", async () => {
+  it("rejects after the 3 warm-up attempts when the guest HCU cannot screenshot the desktop", async () => {
     const ssh = fakeSshHcu("error");
-    await expect(realHcuProbe(ssh.spawn, "/home/op", 2000)).rejects.toThrow("hcu-unreachable");
+    const clock = fakeClock();
+    const lines: string[] = [];
+    await expect(
+      realHcuProbe(ssh.spawn, "/home/op", (l) => lines.push(l), 2000, clock.sleep),
+    ).rejects.toThrow("hcu-unreachable");
+    expect(clock.sleeps).toEqual([HCU_WARMUP_SPACING_MS, HCU_WARMUP_SPACING_MS]);
+    expect(lines).toEqual([1, 2, 3].map((n) => HCU_PROBE_LOG.attempt(n, "failed")));
+    expect(ssh.calls).toHaveLength(1);
     expect(ssh.killed()).toBe(1);
   });
 
-  it("realVmBackend wires probeHcu to realHcuProbe (the backend itself is never built in a test)", () => {
+  it("realVmBackend wires probeHcu to realHcuProbe with the harness log, and no other knob (the backend itself is never built in a test)", () => {
     const src = readFileSync(join(ROOT, "src/pilot/vm-capture.ts"), "utf8");
     const backend = src.slice(src.indexOf("export function realVmBackend("));
-    expect(backend).toMatch(/probeHcu: \(\) => realHcuProbe\(spawn, homedir\(\)\),/);
+    expect(backend).toMatch(/probeHcu: \(log\) => realHcuProbe\(spawn, homedir\(\), log\),/);
   });
 });

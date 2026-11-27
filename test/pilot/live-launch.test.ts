@@ -20,7 +20,12 @@ import { apiKeyPathRefusal, claudeDriver, type SpawnFn } from "../../src/pilot/c
 import { CHILD_ENV_ALLOWLIST, configSha256, type PilotConfig } from "../../src/pilot/config.ts";
 import { COST_BASIS } from "../../src/pilot/cost.ts";
 import { fakeDriver, PILOT_DRY_RUN_PLANNER, virtualClock } from "../../src/pilot/dry-run.ts";
-import { probeHcuDesktop } from "../../src/pilot/hcu-ssh.ts";
+import {
+  HCU_PROBE_LOG,
+  HCU_WARMUP_ATTEMPTS,
+  HCU_WARMUP_SPACING_MS,
+  probeHcuDesktop,
+} from "../../src/pilot/hcu-ssh.ts";
 import { trialLaunchPlan } from "../../src/pilot/launch.ts";
 import {
   AttemptLedger,
@@ -60,7 +65,7 @@ import {
   type VmBackend,
   VmTrialStep,
 } from "../../src/pilot/vm-capture.ts";
-import { type FakeHcuMode, fakeHcuSession } from "./fake-hcu.ts";
+import { type FakeHcuMode, fakeHcuSession, HCU_COLD_TEXT } from "./fake-hcu.ts";
 import {
   CLEAN_RESULT_FAULT_PHRASES,
   CLEAN_RESULT_TASK_DATA,
@@ -132,12 +137,22 @@ function fakeVm(
   let reads = 0;
   let deploys = 0;
   let probes = 0;
+  /** The warm-up spacing the probe asked for (a fake clock: it waits one macrotask). */
+  const warmupSleeps: number[] = [];
+  /** Every fake-HCU event across probes (`hcu-open`, `hcu-screenshot`, `hcu-close`). */
+  const hcuLog: string[] = [];
   const backend: VmBackend = {
-    async probeHcu() {
+    async probeHcu(log) {
       probes++;
       events.push("hcu-probe");
       const mode = typeof o.hcu === "function" ? o.hcu(probes) : (o.hcu ?? "ok");
-      await probeHcuDesktop(fakeHcuSession(mode).open, 200);
+      await probeHcuDesktop(fakeHcuSession(mode, hcuLog).open, 200, {
+        log,
+        sleep: (ms) => {
+          warmupSleeps.push(ms);
+          return new Promise((r) => setImmediate(r));
+        },
+      });
     },
     async reset() {
       events.push("reset");
@@ -175,7 +190,7 @@ function fakeVm(
       };
     },
   };
-  return { backend, guest, events, built: 0 };
+  return { backend, guest, events, warmupSleeps, hcuLog, built: 0 };
 }
 
 interface SpawnCall {
@@ -2027,7 +2042,7 @@ describe("#691: the live driver deploys the in-guest agent after each reset, bef
         ac.abort();
       },
       open: () => vm.backend.open(),
-      probeHcu: () => vm.backend.probeHcu(),
+      probeHcu: (log) => vm.backend.probeHcu(log),
     };
     const trialDir = tmp();
     const step = new VmTrialStep(
@@ -2163,7 +2178,7 @@ describe("#733 B1 (lead ruling 13:38Z): the pre-agent HCU check is a harness fau
           close: () => ch.close(),
         };
       },
-      probeHcu: () => vm.backend.probeHcu(),
+      probeHcu: (log) => vm.backend.probeHcu(log),
     };
     const step = new VmTrialStep(
       { backend, repoRoot: ROOT },
@@ -2205,6 +2220,58 @@ describe("#733 B1 (lead ruling 13:38Z): the pre-agent HCU check is a harness fau
       expect((fault as HarnessFault).message).toBe(VM_FAULT.hcu);
       expect(vm.events.slice(-2)).toEqual(["hcu-probe", "close"]);
     }
+  });
+
+  it("round 2 addendum (lead ruling 15:44Z): a cold guest (fail, fail, succeed) passes the warm-up; claude starts once, after it; each attempt is logged as a code", async () => {
+    const vm = fakeVm({ hcu: "cold-2" });
+    const claude = agentIn(vm);
+    const out = tmp();
+    const d = deps(vm, claude);
+    const cfg = { ...config(), trials: ["fc-v1-001"] };
+    const r = await launchR1Live(r1Opts(cfg, out), d);
+    expect(r.exitCode).toBe(EXIT.complete);
+    expect(r.result).toMatchObject({ status: "complete", ran: 1, faulted: 0, stopCode: null });
+    // One probe, three screenshots, 10 s apart (fake clock), then the agent.
+    expect(vm.events.filter((e) => e === "hcu-probe")).toHaveLength(1);
+    expect(vm.hcuLog.filter((e) => e === "hcu-screenshot")).toHaveLength(HCU_WARMUP_ATTEMPTS);
+    expect(vm.warmupSleeps).toEqual([HCU_WARMUP_SPACING_MS, HCU_WARMUP_SPACING_MS]);
+    expect(vm.events[vm.events.indexOf("claude") - 1]).toBe("hcu-probe");
+    expect(claude.calls).toHaveLength(1);
+    // The harness log has one code line per attempt, keyed to the trial; never HCU's text.
+    const key = "r1p-fc-v1-001-a1";
+    expect(d.lines.filter((l) => l.includes("hcu-probe:"))).toEqual([
+      `${key}: ${HCU_PROBE_LOG.attempt(1, "failed")}`,
+      `${key}: ${HCU_PROBE_LOG.attempt(2, "failed")}`,
+      `${key}: ${HCU_PROBE_LOG.attempt(3, "ok")}`,
+    ]);
+    expect(d.lines.join("\n")).not.toContain(HCU_COLD_TEXT);
+    expect(JSON.stringify(ledgerEnds(out))).not.toContain(HCU_COLD_TEXT);
+    // The decided row is the agent's; the warm-up left no fault behind.
+    expect(ledgerEnds(out).map((e) => e.outcome)).toEqual(["decided"]);
+  });
+
+  it("round 2 addendum: all 3 warm-up attempts failing is the harness fault (transport-error, VM_FAULT.hcu); claude never starts and nothing is decided", async () => {
+    const vm = fakeVm({ hcu: "no-screenshot" });
+    const claude = agentIn(vm);
+    const out = tmp();
+    const d = deps(vm, claude);
+    const cfg = { ...config(), trials: ["fc-v1-001"] };
+    const r = await launchR1Live(r1Opts(cfg, out), d);
+    // Two attempts (the second identical fault stops the run), each with exactly 3 screenshots.
+    expect(r.exitCode).toBe(EXIT.repeatFailure);
+    expect(vm.events.filter((e) => e === "hcu-probe")).toHaveLength(2);
+    expect(vm.hcuLog.filter((e) => e === "hcu-screenshot")).toHaveLength(2 * HCU_WARMUP_ATTEMPTS);
+    expect(vm.warmupSleeps).toEqual(Array(4).fill(HCU_WARMUP_SPACING_MS));
+    expect(claude.calls).toEqual([]);
+    expect(vm.events).not.toContain("claude");
+    expect(ledgerEnds(out).map((e) => [e.outcome, e.harnessClass, e.faultMessage])).toEqual([
+      ["harness-fault", "transport-error", VM_FAULT.hcu],
+      ["harness-fault", "transport-error", VM_FAULT.hcu],
+    ]);
+    expect(ledgerEnds(out).filter((e) => e.outcome === "decided")).toEqual([]);
+    const probeLines = d.lines.filter((l) => l.includes("hcu-probe:"));
+    expect(probeLines.filter((l) => l.endsWith(" failed"))).toHaveLength(6);
+    expect(probeLines.filter((l) => l.endsWith(" ok"))).toEqual([]);
   });
 
   it("the fault messages are fixed and code-only", () => {

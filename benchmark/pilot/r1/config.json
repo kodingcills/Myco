@@ -94,7 +94,7 @@
       "{REPO}/scripts/myco-hcu.ts",
       "mcp",
       "--hcu-command",
-      "C:\\myco\\bin\\computer-use.exe mcp --attach C:\\myco\\run\\hcu-session.sock"
+      "C:\\myco\\bin\\computer-use.exe mcp --attach C:\\Users\\myco\\AppData\\Local\\Temp\\hcu--1\\desktop-default.sock"
     ]
   },
   "systemTemplate": "When you believe the task is complete, call mcp__myco-gate__myco_gate_check with taskId \"{TASK_ID}\" and runId \"{RUN_ID}\". End your final message with one line: DONE if you completed the task, NOT DONE otherwise.",
