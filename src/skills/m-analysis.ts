@@ -7,12 +7,19 @@
  *                             frozen store head
  *   <pack>/rows.jsonl         myco.skills.rep-row/1: every learn and test trial
  *   <pack>/store/skills.jsonl the store as frozen after the learn phase
+ *   <pack>/gate-audit.jsonl   the gate's decision log for the learn phase (`myco-gate --audit`:
+ *                             one GateResult per line), for the §2 M audit-log guardrail
  *
  * It REFUSES a pack (result `refused`) whose pre-registration hash does not match the committed
  * pre-registration, whose analysis files changed since the freeze, or that mixes simulated and
- * real rows; a real pack is also refused while the pre-registration is not ratified. Otherwise
- * it computes the bar and reports `shown` or `not-shown` with every reason. Simulated packs
- * are plumbing: their result is `simulated`, never `shown`.
+ * real rows; a real pack is also refused while the pre-registration is not ratified or any lead
+ * ruling is pending (`LEAD_RULING_PENDING`). A row or pack is real only when its `simulated`
+ * field is absent or exactly `false` (and its planner is a model id). Otherwise it computes the
+ * bar and reports `shown` or `not-shown` with every reason. Simulated packs are plumbing: their
+ * result is `simulated`, never `shown`.
+ *
+ * Coverage is exact: the learn rows' (scheduleIndex, taskId) pairs must be the learn schedule,
+ * each index once, and every test slot must be filled once. No exclusions, no retries.
  *
  * The primary metric is the grader-verified rate on the 60 test units (§1.1 via
  * `repOutcome`); the gate's verdict is never the measurement. Nothing here is R1 evidence.
@@ -59,7 +66,13 @@ export interface RepPack {
   readonly rows: readonly RepRow[];
   /** The frozen store's `skills.jsonl` text. */
   readonly storeText: string;
+  /** The learn phase's gate decision log (`gate-audit.jsonl`), or null when the pack has none. */
+  readonly gateAuditText: string | null;
 }
+
+/** A row or pack is real only when `simulated` is absent or exactly false. */
+const flaggedSimulated = (x: { readonly simulated?: unknown } | null | undefined) =>
+  x?.simulated !== undefined && x.simulated !== false;
 
 export interface RateCell {
   readonly verified: number;
@@ -87,6 +100,8 @@ export interface PerVerified {
   /** Token-derived ESTIMATE over ALL trials / verified; null when any cost is null. */
   readonly estimatedUsdPerVerified: number | null;
   readonly falseDone: number;
+  /** Wilson 95% interval for falseDone / trials (§1.4), or null when there are no trials. */
+  readonly falseDoneWilson95: readonly [number, number] | null;
   readonly trials: number;
 }
 
@@ -109,6 +124,8 @@ export interface MReport {
     readonly storedFromNonVerified: number;
     readonly storedSourceNotPass: number;
     readonly scanHits: number;
+    /** Stored skills whose source run's last logged gate decision is not verified+accepted. */
+    readonly storedNotVerifiedInGateAudit: number;
   } | null;
   readonly r1Evidence: false;
 }
@@ -164,13 +181,36 @@ function perVerified(rows: readonly RepRow[]): PerVerified {
   const sum = (f: (r: RepRow) => number | null) =>
     rows.some((r) => f(r) === null) ? null : rows.reduce((s, r) => s + (f(r) as number), 0);
   const per = (total: number | null) => (total === null || v === 0 ? null : total / v);
+  const falseDone = rows.filter(
+    (r) => r.outcome === "false-done" || r.outcome === "ungraded",
+  ).length;
   return {
     stepsPerVerified: per(sum((r) => r.steps)),
     wallMsPerVerified: per(sum((r) => r.wallMs)),
     estimatedUsdPerVerified: per(sum((r) => r.estimatedUsd)),
-    falseDone: rows.filter((r) => r.outcome === "false-done" || r.outcome === "ungraded").length,
+    falseDone,
+    falseDoneWilson95: wilson(falseDone, rows.length),
     trials: rows.length,
   };
+}
+
+/**
+ * The gate decision log's lines grouped by `request.runId`, in log order. Throws when a line
+ * is not a JSON object (an unreadable log is never read as "no decisions").
+ */
+function decisionsByRun(text: string) {
+  const out = new Map<string, { taskId: unknown; verdict: unknown; accepted: unknown }[]>();
+  for (const line of text.split("\n")) {
+    if (line.trim().length === 0) continue;
+    const d = JSON.parse(line) as Record<string, unknown> | null;
+    if (typeof d !== "object" || d === null || Array.isArray(d)) throw new Error("line");
+    const req = (d.request ?? {}) as Record<string, unknown>;
+    if (typeof req.runId !== "string") continue;
+    const list = out.get(req.runId) ?? [];
+    list.push({ taskId: req.taskId, verdict: d.verdict, accepted: d.accepted });
+    out.set(req.runId, list);
+  }
+  return out;
 }
 
 /** Forbidden values of a published task: its intent and every fixture data cell. */
@@ -230,12 +270,22 @@ export function analyzeMPack(pack: RepPack, o: AnalyzeOptions): MReport {
     committedHash = null;
   }
   if (committedHash !== hash) refusals.push("PREREG_NOT_COMMITTED");
-  const simulatedRows = pack.rows.filter((r) => isSimulatedPlanner(r.plannerModelId)).length;
-  if (meta?.simulated !== true && simulatedRows > 0) refusals.push("SIMULATED_ROWS_NEVER_COUNT");
-  if (meta?.simulated === true && simulatedRows !== pack.rows.length)
+  // A pack or row is real only when `simulated` is absent or exactly false.
+  const simulated = flaggedSimulated(meta);
+  const simulatedRows = pack.rows.filter(
+    (r) => isSimulatedPlanner(r.plannerModelId) || flaggedSimulated(r),
+  ).length;
+  const simulatedPlanners = pack.rows.filter((r) => isSimulatedPlanner(r.plannerModelId)).length;
+  if (!simulated && simulatedRows > 0) refusals.push("SIMULATED_ROWS_NEVER_COUNT");
+  if (simulated && simulatedPlanners !== pack.rows.length)
     refusals.push("REAL_ROWS_IN_SIMULATED_PACK");
-  if (meta?.simulated !== true && p.ratification?.status !== "ratified")
-    refusals.push("PREREG_NOT_RATIFIED");
+  if (!simulated && p.ratification?.status !== "ratified") refusals.push("PREREG_NOT_RATIFIED");
+  // Never `shown` while a lead ruling is pending (shared rule for every capability analysis).
+  const pending = p.ratification?.pending;
+  if (!simulated && (!Array.isArray(pending) || pending.length > 0))
+    refusals.push(
+      `LEAD_RULING_PENDING: ${Array.isArray(pending) ? pending.map((x) => x?.id).join(", ") : "unreadable"}`,
+    );
   if (refusals.length > 0)
     return {
       ...base,
@@ -260,8 +310,7 @@ export function analyzeMPack(pack: RepPack, o: AnalyzeOptions): MReport {
       notShown.push(`ROW ${r.runId}: PREREG`);
     if (r.baseSurface !== meta.baseSurface) notShown.push(`ROW ${r.runId}: PARITY_BASE_SURFACE`);
     if (r.stepBudget !== p.stepBudget) notShown.push(`ROW ${r.runId}: PARITY_STEP_BUDGET`);
-    if (!meta.simulated && r.plannerModelId !== p.modelId)
-      notShown.push(`ROW ${r.runId}: PARITY_MODEL`);
+    if (!simulated && r.plannerModelId !== p.modelId) notShown.push(`ROW ${r.runId}: PARITY_MODEL`);
   }
   if (new Set(pack.rows.map((r) => r.plannerModelId)).size > 1) notShown.push("PARITY_MIXED_MODEL");
   if (new Set(pack.rows.map((r) => r.runId)).size !== pack.rows.length)
@@ -275,13 +324,20 @@ export function analyzeMPack(pack: RepPack, o: AnalyzeOptions): MReport {
   const unitRef = new Map(manifest.test.map((u) => [u.unitId, u]));
   if (learnRows.length !== schedule.learn.length)
     notShown.push(`INCOMPLETE_LEARN: ${learnRows.length} of ${schedule.learn.length}`);
+  // Exact coverage: each learn slot (scheduleIndex, taskId) exactly once. A count match alone
+  // would let a re-run of one learn task fill another's slot (retryBudget 0, no exclusions).
+  const learnSlots = new Set<number>();
   for (const r of learnRows) {
     const l = learnRef.get(r.taskId);
+    if (learnSlots.has(r.scheduleIndex)) notShown.push(`DUPLICATE_LEARN_SLOT ${r.scheduleIndex}`);
+    learnSlots.add(r.scheduleIndex);
     if (schedule.learn[r.scheduleIndex] !== r.taskId) notShown.push(`SCHEDULE ${r.runId}`);
     if (!l || l.instructionSha256 !== r.instructionSha256 || l.fixtureSha256 !== r.fixtureSha256)
       notShown.push(`TASK_MISMATCH ${r.runId}`);
     if (r.storeHead !== GENESIS) notShown.push(`LEARN_NOT_COLD ${r.runId}`);
   }
+  for (const i of schedule.learn.keys())
+    if (!learnSlots.has(i)) notShown.push(`MISSING_LEARN_SLOT ${i}`);
   if (testRows.length !== schedule.test.length)
     notShown.push(`INCOMPLETE_TEST: ${testRows.length} of ${schedule.test.length}`);
   const on = new Map<string, RepRow>();
@@ -305,12 +361,25 @@ export function analyzeMPack(pack: RepPack, o: AnalyzeOptions): MReport {
     if (r.arm === "skills-on" && r.storeHead !== meta.storeHead)
       notShown.push(`STORE_HEAD ${r.runId}`);
   }
+  const testSlots = new Set(testRows.map((r) => r.scheduleIndex));
+  for (const i of schedule.test.keys())
+    if (!testSlots.has(i)) notShown.push(`MISSING_TEST_SLOT ${i}`);
 
   // ---- guardrails: the store holds only grader-confirmed, gate-verified learn outcomes ------
   let storedSkills = 0;
   let storedFromNonVerified = 0;
   let storedSourceNotPass = 0;
   let scanHits = 0;
+  let storedNotVerifiedInGateAudit = 0;
+  // §2 M: "zero stored skills from a non-verified gate verdict (checked against the gate audit
+  // log)". The row's own gate field is not enough: the log is what the gate wrote.
+  let audit: ReturnType<typeof decisionsByRun> | null = null;
+  try {
+    audit = pack.gateAuditText === null ? null : decisionsByRun(pack.gateAuditText);
+  } catch {
+    audit = null;
+  }
+  if (audit === null) notShown.push("GATE_AUDIT_UNREADABLE");
   try {
     const { events, head } = verifyLog(pack.storeText);
     if (head !== meta.storeHead) notShown.push("STORE_HEAD_NOT_PACK_HEAD");
@@ -326,10 +395,23 @@ export function analyzeMPack(pack: RepPack, o: AnalyzeOptions): MReport {
         repOutcome(src) !== "verified" ||
         src.admittedSkillId !== e.record.skillId ||
         src.taskId !== e.record.provenance.taskId ||
-        e.record.provenance.simulated !== meta.simulated
+        e.record.provenance.simulated !== simulated
       )
         storedFromNonVerified++;
       if (src?.grade?.status !== "pass") storedSourceNotPass++;
+      // Every logged decision for the source run names its task; the last one is verified and
+      // accepted, and the row's gate field says the same.
+      const logged = audit?.get(e.record.provenance.runId) ?? [];
+      const last = logged[logged.length - 1];
+      if (
+        last === undefined ||
+        logged.some((d) => d.taskId !== e.record.provenance.taskId) ||
+        last.verdict !== "verified" ||
+        last.accepted !== true ||
+        src?.gate?.verdict !== last.verdict ||
+        src?.gate?.accepted !== last.accepted
+      )
+        storedNotVerifiedInGateAudit++;
       const forbidden = forbiddenFor(e.record.provenance.taskId);
       const texts = [...e.record.preconditions, ...e.record.steps];
       if (forbidden === null || texts.some((t) => checkText(t, forbidden) !== null)) scanHits++;
@@ -344,6 +426,8 @@ export function analyzeMPack(pack: RepPack, o: AnalyzeOptions): MReport {
     notShown.push(`GUARDRAIL_STORED_FROM_NON_VERIFIED: ${storedFromNonVerified}`);
   if (storedSourceNotPass > 0) notShown.push(`GUARDRAIL_SOURCE_NOT_PASS: ${storedSourceNotPass}`);
   if (scanHits > 0) notShown.push(`GUARDRAIL_SCAN: ${scanHits}`);
+  if (storedNotVerifiedInGateAudit > 0)
+    notShown.push(`GUARDRAIL_GATE_AUDIT: ${storedNotVerifiedInGateAudit}`);
 
   // ---- the bar -----------------------------------------------------------------------------
   const units = manifest.test.map((u) => u.unitId);
@@ -362,17 +446,23 @@ export function analyzeMPack(pack: RepPack, o: AnalyzeOptions): MReport {
 
   return {
     ...base,
-    result: meta.simulated ? "simulated" : notShown.length === 0 ? "shown" : "not-shown",
+    result: simulated ? "simulated" : notShown.length === 0 ? "shown" : "not-shown",
     refusals,
     notShown,
     baseSurface: meta.baseSurface,
     primary,
     secondary,
-    guardrails: { storedSkills, storedFromNonVerified, storedSourceNotPass, scanHits },
+    guardrails: {
+      storedSkills,
+      storedFromNonVerified,
+      storedSourceNotPass,
+      scanHits,
+      storedNotVerifiedInGateAudit,
+    },
   };
 }
 
-/** Read a pack directory. */
+/** Read a pack directory. A missing `gate-audit.jsonl` is null (and never `shown`). */
 export function readRepPack(dir: string): RepPack {
   const meta = JSON.parse(readFileSync(join(dir, "pack.json"), "utf8")) as RepPackMeta;
   const rows = readFileSync(join(dir, "rows.jsonl"), "utf8")
@@ -380,7 +470,13 @@ export function readRepPack(dir: string): RepPack {
     .filter((l) => l.trim().length > 0)
     .map((l) => JSON.parse(l) as RepRow);
   const storeText = readFileSync(join(dir, "store", "skills.jsonl"), "utf8");
-  return { meta, rows, storeText };
+  let gateAuditText: string | null;
+  try {
+    gateAuditText = readFileSync(join(dir, "gate-audit.jsonl"), "utf8");
+  } catch {
+    gateAuditText = null;
+  }
+  return { meta, rows, storeText, gateAuditText };
 }
 
 /** The CLI's whole job: read, analyse, return the report. */

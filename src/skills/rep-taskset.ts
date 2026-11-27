@@ -12,8 +12,8 @@
  * Only no-fault, satisfiable fc-v1 tasks are used: M's bar is about learning, not fault
  * handling. fc-v1 has one family, `calc-record-edit`; the spec's second learn family,
  * `calc-multi-step`, has no published, graded task set yet (TIF-270), so rep-v1 is
- * calc-record-edit only. That deviation is flagged "lead ruling pending" in the
- * pre-registration; adding the family is a new task-set version.
+ * calc-record-edit only. The lead accepted that deviation (ruling 2026-11-27 06:21Z,
+ * `learn-families` in the pre-registration); adding the family is a new task-set version.
  *
  * Selection order comes from SHA-256 of (build seed, item), never from Math.random.
  */
