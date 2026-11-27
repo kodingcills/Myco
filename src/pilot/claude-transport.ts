@@ -101,7 +101,9 @@ export function classOfStatus(status: number): PilotHarnessClass {
  * Text fallback, only for a run that did NOT complete normally (no result event, an error
  * result, a non-zero exit) and carries no structured class; never for a clean result, whose
  * text is the agent's (fc-v1 fixtures hold qty values 401, 403 and 429). The one exception is
- * `USAGE_LIMIT_TEXT` alone, on a clean result with no claim line (`interpretResult`).
+ * `USAGE_LIMIT_TEXT` alone, on a clean result with no claim line, tested on its text and
+ * stderr (`interpretResult`). It is always applied through `namesUsageLimit`, which folds
+ * Unicode whitespace first.
  *
  * Two kinds of limit (lead ruling, PR #598 round 2, D3):
  *  - `USAGE_LIMIT_TEXT`, the subscription's own quota ("usage limit reached", "5-hour limit
@@ -116,7 +118,18 @@ export function classOfStatus(status: number): PilotHarnessClass {
 export const USAGE_LIMIT_TEXT =
   /usage[ _-]?limit|(?<!rate[ _-]?)limit (?:reached|exceeded|hit)|limit (?:will )?resets?|\bresets? (?:at |on |in )?(?:\d|mon|tue|wed|thu|fri|sat|sun|tomorrow)|(?:weekly|daily|monthly|hourly|session|\d+[ -]?hour|five[ -]hour|opus|sonnet|haiku|fable) limit/i;
 
-export const RATE_LIMIT_TEXT = /rate[ _-]?limit|too many requests|\b429\b|\b529\b|overloaded/i;
+/**
+ * Whether `text` names the subscription's usage quota. Every Unicode whitespace run (NBSP
+ * U+00A0, U+2000-U+200A incl. U+2007, U+202F, U+205F, U+3000, U+FEFF, tabs, newlines, repeated
+ * spaces; JS `\s`) is folded to one ASCII space first, because `USAGE_LIMIT_TEXT` spells its
+ * spaces as literal ASCII spaces (#606 S2). The vocabulary itself is unchanged. Every
+ * usage-limit decision goes through here, never through `USAGE_LIMIT_TEXT` directly.
+ */
+export function namesUsageLimit(text: string): boolean {
+  return USAGE_LIMIT_TEXT.test(text.replace(/\s+/g, " "));
+}
+
+export const RATE_LIMIT_TEXT =/rate[ _-]?limit|too many requests|\b429\b|\b529\b|overloaded/i;
 
 /**
  * Credit, billing and quota wording ("Credit balance is too low", "out of extra usage", "quota
@@ -138,7 +151,7 @@ export const AUTH_TEXT =
 export function classOfText(text: string): PilotHarnessClass | null {
   if (AUTH_TEXT.test(text)) return "auth";
   if (BILLING_TEXT.test(text)) return "billing";
-  if (USAGE_LIMIT_TEXT.test(text)) return "usage-limit";
+  if (namesUsageLimit(text)) return "usage-limit";
   if (RATE_LIMIT_TEXT.test(text)) return "rate-limit";
   return null;
 }
@@ -149,7 +162,7 @@ export function classOfText(text: string): PilotHarnessClass | null {
  * same structured class, and the quota must stop the run, not back off (D3).
  */
 function refineLimit(cls: PilotHarnessClass, text: string): PilotHarnessClass {
-  return cls === "rate-limit" && USAGE_LIMIT_TEXT.test(text) ? "usage-limit" : cls;
+  return cls === "rate-limit" && namesUsageLimit(text) ? "usage-limit" : cls;
 }
 
 export function parseClaim(text: string): AgentReport["claim"] {
@@ -231,8 +244,8 @@ export function apiKeySourceProblem(messages: readonly Record<string, unknown>[]
  * outcome. Returns the agent's report only for a clean result: `type: "result"`, subtype
  * `success`, `is_error` false, exit status 0, and no structured error on any message. A clean
  * result is the agent's outcome (a missing `DONE`/`NOT DONE` line is "no claim"), with one
- * fail-closed exception: no claim line AND usage-quota wording is `usage-limit` (round 3,
- * R2-D3b). The full text fallback runs only on runs that did not complete normally (no result
+ * fail-closed exception: no claim line AND usage-quota wording in its text or on stderr is
+ * `usage-limit` (round 3, R2-D3b; #606 S1). The full text fallback runs only on runs that did not complete normally (no result
  * event: stdout and stderr; an error result: its text, `errors[]` and stderr; a non-zero or
  * null exit; a structured error).
  */
@@ -282,11 +295,13 @@ export function interpretResult(stdout: string, stderr: string, code: number | n
   // subscription's usage quota is the CLI reporting the quota, not an agent outcome. It stops
   // the run as `usage-limit` and nothing is counted. The usage vocabulary has no bare numbers,
   // so fixture qty values (401 / 403 / 429) cannot trigger it; a result WITH a claim line is
-  // never reclassified.
-  if (claim === "no-claim" && USAGE_LIMIT_TEXT.test(text))
+  // never reclassified. The quota wording may be on stderr alone (lead ruling 03:58Z, #606
+  // S1): a claimless clean result is tested together with stderr; with a claim line, stderr
+  // never matters.
+  if (claim === "no-claim" && namesUsageLimit(`${text}\n${stderr}`))
     fault(
       "usage-limit",
-      "claude returned a clean result with no claim whose text names the usage limit",
+      "claude returned a clean result with no claim, and its text or stderr names the usage limit",
     );
   return { claim, usage };
 }
