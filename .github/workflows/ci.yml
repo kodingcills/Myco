@@ -631,6 +631,44 @@ jobs:
           path: ${{ runner.temp }}/newcomer-path
           if-no-files-found: ignore
 
+  # TIF-265 track D: the newcomer path on macOS (#672). The same live test on a clean macOS
+  # runner with only the documented prerequisites (Node 24, pnpm 10; no LibreOffice, which
+  # init skips off Linux): setup.md's `macos` clone block, the setup.md quickstart and the
+  # README quickstart as written, with a fresh HOME; then a simulated df-s01 task on the mock
+  # desktop must get verified / refuted through the written .mcp.json. Timed, same budget.
+  # $0: no model, no secrets, no VM. Not required; same plan condition as the Linux job.
+  newcomer-path-macos:
+    name: newcomer path (macos-latest)
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || (needs.plan.outputs.mode != 'targeted' && needs.plan.outputs.mode != 'docs' && needs.plan.outputs.mode != 'affected') || needs.plan.outputs.linux_path != 'false') }}
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      MYCO_NEWCOMER_PATH_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      # The harness side only (vitest, the MCP client). The product under test is the fresh
+      # clone the test makes and installs from its own docs.
+      - name: Install the harness
+        run: pnpm install --frozen-lockfile
+      - name: Newcomer path (fresh clone, documented commands only, timed)
+        env:
+          MYCO_NEWCOMER_REPORT: ${{ runner.temp }}/newcomer-path-macos/report.json
+        run: pnpm exec vitest run test/init/newcomer-path.test.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: newcomer-path-macos
+          path: ${{ runner.temp }}/newcomer-path-macos
+          if-no-files-found: ignore
+
   # Track L (safe parallelism): N disposable Linux desktops in parallel on the unprivileged
   # `linux-plain` backend (private root and HOME, own process group, own Xvfb), real
   # headless Calc driven by scripted agents ($0: no model, no API, no secrets).

@@ -2,8 +2,8 @@
  * Newcomer path, static drift (TIF-265 track D). Runs on every PR, no clone, no process:
  * what README.md, docs/product/setup.md and docs/product/linux-path.md tell a newcomer to
  * type must agree with what `myco init` accepts and does, with each other, and with the
- * `newcomer path (ubuntu-latest)` CI job that runs those commands for real
- * (newcomer-path.test.ts).
+ * `newcomer path (ubuntu-latest)` and `newcomer path (macos-latest)` CI jobs that run those
+ * commands for real (newcomer-path.test.ts).
  */
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -31,6 +31,7 @@ const LINUX = read("docs/product/linux-path.md");
 const CI = read(".github/workflows/ci.yml");
 const INIT_SRC = read("src/setup/init.ts");
 const JOB = "newcomer path (ubuntu-latest)";
+const MAC_JOB = "newcomer path (macos-latest)";
 
 /** Every block the live run executes, and the document it lives in. */
 const BLOCKS = [
@@ -38,6 +39,7 @@ const BLOCKS = [
   { doc: "docs/product/setup.md", text: SETUP, name: "setup" },
   { doc: "README.md", text: README, name: "readme-quickstart" },
   { doc: "docs/product/setup.md", text: SETUP, name: "linux" },
+  { doc: "docs/product/setup.md", text: SETUP, name: "macos" },
 ] as const;
 
 const P = { myco: "/m", project: "/p" };
@@ -114,7 +116,7 @@ describe("newcomer path: the docs agree with init, with each other and with CI",
     }
     // No marker the live run would silently ignore.
     expect(markerNames(README)).toEqual(["readme-quickstart"]);
-    expect(markerNames(SETUP)).toEqual(["setup", "linux"]);
+    expect(markerNames(SETUP)).toEqual(["setup", "linux", "macos"]);
     expect(markerNames(LINUX)).toEqual(["clone"]);
   });
 
@@ -125,7 +127,8 @@ describe("newcomer path: the docs agree with init, with each other and with CI",
       .filter((l) => l.startsWith("/path/to/Myco/bin/myco init"));
     const lines = [...BLOCKS.flatMap((b) => markedBlock(b.text, b.name)), ...fromReadme];
     const inits = lines.map((c) => initArgv(substitute(c, P))).filter((a) => a !== null);
-    // setup: 2, readme quickstart: 2, linux: 1, plus the README "Getting started" line.
+    // setup: 2, readme quickstart: 2, linux: 1, plus the README "Getting started" line
+    // (the macos block has no init: it is followed by the setup block).
     expect(inits.length).toBeGreaterThanOrEqual(6);
     for (const argv of inits) {
       let parsed: unknown;
@@ -153,6 +156,18 @@ describe("newcomer path: the docs agree with init, with each other and with CI",
     expect(clone).toContain("pnpm myco-linux --check");
   });
 
+  it("the macOS block is the Linux clone block without its Linux-only check", () => {
+    const linux = markedBlock(LINUX, "clone");
+    expect(linux.at(-1)).toBe("pnpm myco-linux --check");
+    expect(markedBlock(SETUP, "macos")).toEqual(linux.slice(0, -1));
+    // Nothing in it runs Linux-only tooling, and setup.md says step 2 is skipped there.
+    expect(markedBlock(SETUP, "macos").join("\n")).not.toMatch(/myco-linux|apt-get|soffice/);
+    expect(SETUP).toContain("`skipped: the Linux desktop path runs on Linux`");
+    expect(INIT_SRC).toContain(
+      "skipped: the Linux desktop path runs on Linux (this is ${deps.platform})",
+    );
+  });
+
   it("one LibreOffice install line: init, setup.md, linux-path.md and the CI job", () => {
     expect(LINUX_INSTALL).toBe(
       "sudo apt-get install -y --no-install-recommends libreoffice-calc python3-uno",
@@ -169,9 +184,12 @@ describe("newcomer path: the docs agree with init, with each other and with CI",
     expect(pkg.engines.node).toBe(">=24");
     expect(README).toContain("Needs Node ≥ 24 and pnpm 10");
     expect(LINUX).toContain("Node 24 or later, pnpm 10.");
-    const job = jobBlock(CI, JOB);
-    expect(job).toMatch(/^\s+node-version: 24$/m);
-    expect(job).toMatch(/^\s+run: npm install -g pnpm@10$/m);
+    for (const name of [JOB, MAC_JOB]) {
+      const job = jobBlock(CI, name);
+      expect(job, name).toMatch(/^\s+node-version: 24$/m);
+      expect(job, name).toMatch(/^\s+run: npm install -g pnpm@10$/m);
+    }
+    expect(SETUP).toContain("Node 24 or later and pnpm 10, nothing else.");
   });
 
   it("setup.md's step table matches the step headers init prints", () => {
@@ -201,10 +219,32 @@ describe("newcomer path: the docs agree with init, with each other and with CI",
     expect(normalise(argv.join(" "))).toContain(`--tasks ${P.myco}/examples/linux-path/tasks.json`);
   });
 
-  it("the CI job runs the live newcomer test, required (never a silent skip)", () => {
-    const job = jobBlock(CI, JOB);
-    expect(job).toContain('MYCO_NEWCOMER_PATH_REQUIRED: "1"');
-    expect(job).toContain("run: pnpm exec vitest run test/init/newcomer-path.test.ts");
-    expect(job).toContain("timeout-minutes:");
+  it("both CI jobs run the live newcomer test, required (never a silent skip)", () => {
+    for (const [name, runner] of [
+      [JOB, "ubuntu-latest"],
+      [MAC_JOB, "macos-latest"],
+    ] as const) {
+      const job = jobBlock(CI, name);
+      expect(job, name).toMatch(new RegExp(`^\\s+runs-on: ${runner}$`, "m"));
+      expect(job, name).toContain('MYCO_NEWCOMER_PATH_REQUIRED: "1"');
+      expect(job, name).toContain("run: pnpm exec vitest run test/init/newcomer-path.test.ts");
+      expect(job, name).toContain("timeout-minutes:");
+    }
+    // Same plan condition: the macOS job runs whenever the Linux one does.
+    const cond = (name: string) => jobBlock(CI, name).match(/^\s+if: (.+)$/m)?.[1];
+    expect(cond(MAC_JOB)).toBeDefined();
+    expect(cond(MAC_JOB)).toBe(cond(JOB));
+  });
+
+  it("the macOS job installs only the documented prerequisites", () => {
+    const runs = jobBlock(CI, MAC_JOB)
+      .split("\n")
+      .filter((l) => /^\s+run: /.test(l))
+      .map((l) => l.trim());
+    expect(runs).toEqual([
+      "run: npm install -g pnpm@10",
+      "run: pnpm install --frozen-lockfile",
+      "run: pnpm exec vitest run test/init/newcomer-path.test.ts",
+    ]);
   });
 });
