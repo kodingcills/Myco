@@ -11,21 +11,40 @@
  * `JSON.stringify` writes them; anything else (undefined, a function, a non-finite number, a
  * non-plain object) is refused, so two readers can never disagree on the bytes.
  *
+ * ## Lead rulings
+ *
+ * The spec left the K step budget and the `ms-long-v1` size to the lead (§6). The lead ruled
+ * both at 06:21Z on 2026-11-27 (relayed on PR #647): step budget 80 for both arms, and
+ * n = 90 under the J rule (a VM-hours estimate in the file before freezing; if it would delay
+ * the critical path, fall back to n = 40 pre-registered as exploratory, before any data).
+ * Each ruling is a `leadRulings` entry naming the `fields` it settles. Every field in
+ * `LEAD_RULED_FIELDS` must be either ruled or listed as lead-pending (`leadRulingPending`, or
+ * a `pending` item whose reason says "lead ruling pending"); `leadRulingsPending` returns
+ * what is still open, and the analysis never reports "shown" while it is non-empty (#652).
+ *
+ * ## Confirmatory or exploratory
+ *
+ * `designation` is `"confirmatory"` at n = 90 and `"exploratory"` at the n = 40 fallback; no
+ * other pairing passes. An exploratory pre-registration never yields a "shown" bar.
+ * `vmHoursEstimate` holds the estimate the ruling asks for; its arithmetic is checked
+ * (trials = size x 2 arms x k; VM-hours = trials x seconds per trial / 3600).
+ *
  * ## Draft or frozen
  *
- * The spec leaves the K step budget (80) and the `ms-long-v1` size (40) to the lead (§6), and
  * `ms-long-v1` is not built, so its manifest SHA-256 does not exist yet. The file therefore
  * says `status: "draft"` and lists every open item in `pending`. It is frozen only when
- * `pending` is empty, `status` is `"frozen"` and the manifest SHA-256 is set
- * (`checkKPrereg`'s `frozen`). The analysis (`./analysis.ts`) refuses evidence against a
- * draft: a draft can only analyse plumbing (simulated) packs.
+ * `pending` and `leadRulingPending` are empty, `status` is `"frozen"` and the manifest
+ * SHA-256 is set (`checkKPrereg`'s `frozen`). The analysis (`./analysis.ts`) refuses evidence
+ * against a draft: a draft can only analyse plumbing (simulated) packs.
  *
  * ## What the check pins
  *
  * The stored hash; the K section of the spec by SHA-256 (the bar as written); the bar's test,
  * side, alpha and discordant minimum (§1.5); the arms against `ARM_CONFIG`; the task set
  * version and fault kinds against `batch.ts`; the model id against the evidence planners;
- * the analysis script and modules, the instruction renderer and the grader entry by SHA-256.
+ * the analysis script and modules (with `./trial.ts`, whose `ARM_CONFIG` the pack check
+ * reads), the instruction renderer, and the grader entry with the grader modules it imports
+ * (`grade.ts`, `sheet.ts`, `zip.ts`), by SHA-256.
  * File reads are injected (`PreregFiles`): this module imports only `node:crypto`, under the
  * `src/recovery/` import boundary (`test/recovery/boundary.test.ts`).
  */
@@ -48,6 +67,15 @@ export const K_ANALYSIS_SCRIPT = "scripts/k-recovery-analysis.ts";
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const SEED = /^[A-Za-z0-9._:-]{8,64}$/;
+const RULING_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z$/;
+const LEAD_PENDING_REASON = /lead ruling pending/i;
+
+/** The fields the spec leaves to the lead (§6): each must be ruled or listed lead-pending. */
+export const LEAD_RULED_FIELDS = ["stepBudget", "taskSet.size"] as const;
+/** The 06:21Z size ruling: n = 90 is confirmatory; the n = 40 fallback is exploratory. */
+export const K_CONFIRMATORY_TASKS = 90;
+export const K_EXPLORATORY_TASKS = 40;
+const ARMS = 2;
 
 /** Canonical JSON (see the module header). Throws on a value it cannot write canonically. */
 export function canonicalJson(value: unknown): string {
@@ -104,17 +132,54 @@ export interface PendingItem {
   readonly reason: string;
 }
 
+export interface LeadRuling {
+  /** UTC, minute precision: `YYYY-MM-DDTHH:MMZ`. */
+  readonly at: string;
+  /** The pre-registration fields this ruling settles. */
+  readonly fields: readonly string[];
+  readonly question: string;
+  readonly ruling: string;
+  readonly source: string;
+}
+
+export interface VmHoursEstimate {
+  readonly basis: string;
+  readonly stepBudget: number;
+  readonly tasks: number;
+  readonly trials: number;
+  readonly trialsFormula: string;
+  readonly secondsPerTrial: number;
+  readonly secondsPerTrialFormula: string;
+  readonly vmHours: number;
+  readonly atTrialTimeout: { readonly secondsPerTrial: number; readonly vmHours: number };
+  readonly atFallback: {
+    readonly tasks: number;
+    readonly trials: number;
+    readonly vmHours: number;
+  };
+}
+
 /** The shape of `prereg.json`. Validated by `checkKPrereg`, never trusted. */
 export interface KPrereg {
   readonly schema: typeof K_PREREG_SCHEMA;
   readonly track: "K";
   readonly version: "k-v1";
   readonly status: "draft" | "frozen";
+  readonly designation: "confirmatory" | "exploratory";
   readonly pending: readonly PendingItem[];
+  readonly leadRulingPending: readonly PendingItem[];
+  readonly leadRulings: readonly LeadRuling[];
+  readonly sizeRule: {
+    readonly rule: string;
+    readonly applied: string;
+    readonly criticalPath: string;
+  };
+  readonly vmHoursEstimate: VmHoursEstimate;
   readonly spec: {
     readonly path: string;
     readonly heading: string;
     readonly sectionSha256: string;
+    readonly amendedBy: string;
   };
   readonly bar: {
     readonly primaryMetric: string;
@@ -160,7 +225,10 @@ export interface KPrereg {
   readonly modelId: string;
   readonly harness: string;
   readonly instruction: PinnedFile & { readonly version: string };
-  readonly grader: PinnedFile & { readonly version: string };
+  readonly grader: PinnedFile & {
+    readonly version: string;
+    readonly modules: readonly PinnedFile[];
+  };
   readonly analysis: {
     readonly script: PinnedFile;
     readonly modules: readonly PinnedFile[];
@@ -194,7 +262,42 @@ const MODULES_REQUIRED = [
   "src/recovery/analysis.ts",
   "src/recovery/batch.ts",
   "src/recovery/prereg.ts",
+  "src/recovery/trial.ts",
 ];
+/** What `src/benchmark/grade/multi-step.ts` imports, directly or through `sheet.ts`. */
+const GRADER_MODULES_REQUIRED = [
+  "src/benchmark/grade/grade.ts",
+  "src/benchmark/grade/sheet.ts",
+  "src/benchmark/grade/zip.ts",
+];
+
+/**
+ * The lead rulings still open (#652 rule 1): every `leadRulingPending` item, every `pending`
+ * item whose reason says "lead ruling pending", and every field in `LEAD_RULED_FIELDS` that
+ * no `leadRulings` entry settles. Fails closed: a malformed list counts as one open ruling.
+ */
+export function leadRulingsPending(raw: unknown): string[] {
+  if (!isObject(raw)) return ["(not a pre-registration)"];
+  const open = new Set<string>();
+  const field = (x: unknown) =>
+    isObject(x) && typeof x.field === "string" ? x.field : "(malformed item)";
+  if (!Array.isArray(raw.leadRulingPending)) open.add("leadRulingPending (not a list)");
+  else for (const x of raw.leadRulingPending) open.add(field(x));
+  if (!Array.isArray(raw.pending)) open.add("pending (not a list)");
+  else
+    for (const x of raw.pending)
+      if (!isObject(x) || typeof x.reason !== "string" || LEAD_PENDING_REASON.test(x.reason))
+        open.add(field(x));
+  const ruled = new Set<string>();
+  if (Array.isArray(raw.leadRulings))
+    for (const r of raw.leadRulings)
+      if (isObject(r) && Array.isArray(r.fields))
+        for (const f of r.fields) if (typeof f === "string") ruled.add(f);
+  for (const f of LEAD_RULED_FIELDS) if (!ruled.has(f)) open.add(f);
+  return [...open];
+}
+
+const near = (a: unknown, b: number) => typeof a === "number" && Math.abs(a - b) < 0.05;
 
 /** Validate a parsed `prereg.json` against the spec, the code and the committed files. */
 export function checkKPrereg(raw: unknown, files: PreregFiles): PreregCheck {
@@ -220,6 +323,10 @@ export function checkKPrereg(raw: unknown, files: PreregFiles): PreregCheck {
     problems.push(`spec must point at ${K_SPEC_PATH}, ${K_SPEC_HEADING}`);
   if (sectionHash === null || p.spec?.sectionSha256 !== sectionHash)
     problems.push("spec.sectionSha256 is not the SHA-256 of the spec's K section as committed");
+  // The pinned section still says "40" and "proposed 80": the bar is that section as amended
+  // by the lead's rulings, and the file must say so.
+  if (!/\bleadRulings\b/.test(String(p.spec?.amendedBy)))
+    problems.push("spec.amendedBy must say the K section is amended by leadRulings");
   const bar = p.bar;
   if (
     bar?.sided !== "one-sided" ||
@@ -295,6 +402,77 @@ export function checkKPrereg(raw: unknown, files: PreregFiles): PreregCheck {
   if (!RECOVERY_EVIDENCE_PLANNERS.has(p.modelId))
     problems.push("modelId must be an evidence planner model id");
 
+  // Lead rulings (06:21Z): who ruled what, and the confirmatory/exploratory designation.
+  if (!Array.isArray(p.leadRulings)) problems.push("leadRulings must be a list");
+  else
+    for (const r of p.leadRulings)
+      if (
+        !isObject(r) ||
+        !RULING_AT.test(String(r.at)) ||
+        !Array.isArray(r.fields) ||
+        r.fields.length === 0 ||
+        !r.fields.every((f) => typeof f === "string") ||
+        [r.question, r.ruling, r.source].some((s) => typeof s !== "string" || s.length === 0)
+      )
+        problems.push(
+          "a lead ruling needs at (YYYY-MM-DDTHH:MMZ), fields, question, ruling, source",
+        );
+  if (
+    !Array.isArray(p.leadRulingPending) ||
+    !p.leadRulingPending.every(
+      (x) => isObject(x) && typeof x.field === "string" && typeof x.reason === "string",
+    )
+  )
+    problems.push("leadRulingPending must be a list of { field, reason }");
+  if (
+    !(p.designation === "confirmatory" && ts?.size === K_CONFIRMATORY_TASKS) &&
+    !(p.designation === "exploratory" && ts?.size === K_EXPLORATORY_TASKS)
+  )
+    problems.push(
+      `designation and size must be confirmatory at ${K_CONFIRMATORY_TASKS} tasks or exploratory at ${K_EXPLORATORY_TASKS} (lead ruling 06:21Z)`,
+    );
+  const sr = p.sizeRule;
+  if (
+    !isObject(sr) ||
+    [sr.rule, sr.applied, sr.criticalPath].some((s) => typeof s !== "string" || s.length === 0)
+  )
+    problems.push("sizeRule needs rule, applied and criticalPath");
+
+  // The VM-hours estimate the size ruling asks for, before freezing.
+  const vm = p.vmHoursEstimate;
+  if (!isObject(vm)) problems.push("vmHoursEstimate is required (lead ruling 06:21Z)");
+  else {
+    const trials = (ts?.size ?? Number.NaN) * ARMS * p.k;
+    if (typeof vm.basis !== "string" || vm.basis.length === 0)
+      problems.push("vmHoursEstimate.basis must state the per-trial assumption and its source");
+    if (vm.stepBudget !== p.stepBudget)
+      problems.push("vmHoursEstimate.stepBudget must be the pre-registered step budget");
+    if (vm.tasks !== ts?.size || vm.trials !== trials)
+      problems.push("vmHoursEstimate.trials must be the task count x 2 arms x k");
+    if (!(typeof vm.secondsPerTrial === "number" && vm.secondsPerTrial > 0))
+      problems.push("vmHoursEstimate.secondsPerTrial must be a positive number");
+    else if (!near(vm.vmHours, (vm.trials * vm.secondsPerTrial) / 3600))
+      problems.push("vmHoursEstimate.vmHours must be trials x secondsPerTrial / 3600");
+    const timeout = vm.atTrialTimeout;
+    if (
+      !isObject(timeout) ||
+      !(typeof timeout.secondsPerTrial === "number" && timeout.secondsPerTrial > 0) ||
+      !near(timeout.vmHours, (vm.trials * timeout.secondsPerTrial) / 3600)
+    )
+      problems.push("vmHoursEstimate.atTrialTimeout must be trials x its seconds / 3600");
+    const fb = vm.atFallback;
+    const fbTrials = K_EXPLORATORY_TASKS * ARMS * p.k;
+    if (
+      !isObject(fb) ||
+      fb.tasks !== K_EXPLORATORY_TASKS ||
+      fb.trials !== fbTrials ||
+      !near(fb.vmHours, (fbTrials * Number(vm.secondsPerTrial)) / 3600)
+    )
+      problems.push(
+        `vmHoursEstimate.atFallback must be ${K_EXPLORATORY_TASKS} tasks at the same seconds per trial`,
+      );
+  }
+
   // Pinned code: the analysis, the renderer and the grader entry, by SHA-256.
   const pinned: PinnedFile[] = [];
   if (p.analysis?.script?.path !== K_ANALYSIS_SCRIPT)
@@ -309,7 +487,11 @@ export function checkKPrereg(raw: unknown, files: PreregFiles): PreregCheck {
     )
   )
     problems.push(`analysis.command must run ${K_ANALYSIS_SCRIPT} on ${K_PREREG_PATH}`);
-  pinned.push(p.analysis?.script, ...modules, p.instruction, p.grader);
+  const graderModules = Array.isArray(p.grader?.modules) ? p.grader.modules : [];
+  const graderPaths = graderModules.map((m) => m?.path);
+  if (GRADER_MODULES_REQUIRED.some((m) => !graderPaths.includes(m)))
+    problems.push(`grader.modules must include ${GRADER_MODULES_REQUIRED.join(", ")}`);
+  pinned.push(p.analysis?.script, ...modules, p.instruction, p.grader, ...graderModules);
   for (const file of pinned) {
     if (!isObject(file) || typeof file.path !== "string" || !SHA256.test(String(file.sha256))) {
       problems.push("a pinned file needs a path and a sha256");
@@ -333,6 +515,8 @@ export function checkKPrereg(raw: unknown, files: PreregFiles): PreregCheck {
     problems.push("status must be draft or frozen");
   if (p.status === "frozen" && (pending?.length ?? 1) > 0)
     problems.push("a frozen pre-registration has nothing pending");
+  if (p.status === "frozen" && leadRulingsPending(raw).length > 0)
+    problems.push("a frozen pre-registration has no lead ruling pending");
   if (p.status === "frozen" && ts?.manifestSha256 === null)
     problems.push("a frozen pre-registration needs the task set's manifest SHA-256");
   if (p.status === "draft" && pending?.length === 0) problems.push("a draft lists what is pending");

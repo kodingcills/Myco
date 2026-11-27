@@ -30,7 +30,14 @@ import {
 import { type BenchmarkGradeRow, gradeRow } from "../../src/benchmark/grade/row.ts";
 import { buildTaskSet } from "../../src/benchmark/taskset.ts";
 import { checkPack } from "../../src/m2/evidence.ts";
-import { input, manifest, r1Trials, r2Manifest, r2Trials } from "../m2/pack-fixture.ts";
+import {
+  input,
+  manifest,
+  r1Trials,
+  r2Manifest,
+  r2Trials,
+  TEST_R2_ALLOW,
+} from "../m2/pack-fixture.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 const H = (c: string) => c.repeat(64);
@@ -314,15 +321,18 @@ describe("capability arms: the M2 pack check refuses them in every pack", () => 
     const r1 = input(r1Trials());
     const r2 = input(r2Trials(), r2Manifest());
     expect(checkPack(r1)).toMatchObject({ ok: true, errors: [] });
-    expect(checkPack(r2)).toMatchObject({ ok: true, errors: [] });
+    expect(checkPack(r2, TEST_R2_ALLOW)).toMatchObject({ ok: true, errors: [] });
     for (const pack of [r1, r2])
       for (const arm of CAPABILITY_ARMS) {
         const cap = row("cap", { arm, taskSetVersion: "fx-synthetic", persistedSha256: doc(9000) });
-        const r = checkPack({
-          ...pack,
-          arm: [...pack.arm, cap],
-          grades: [...pack.grades, grade(cap)],
-        });
+        const r = checkPack(
+          {
+            ...pack,
+            arm: [...pack.arm, cap],
+            grades: [...pack.grades, grade(cap)],
+          },
+          TEST_R2_ALLOW,
+        );
         expect(r.ok, arm).toBe(false);
         expect(r.errors, arm).toContain(`ledger: ${arm}: no expected trial count given`);
       }

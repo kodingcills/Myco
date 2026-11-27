@@ -1,0 +1,7 @@
+Add the guard
+
+First paragraph.
+Co-authored-by: Claude <noreply@example.com>
+More prose after the trailer.
+
+Refs #685

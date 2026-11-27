@@ -440,14 +440,13 @@ export function checkBenchmark(
     }
     // The other direction (#509 round 1): the gate's registry rejects every fc-v1
     // invalid-target spec, so a gated arm row on one claims a gate decision that cannot exist.
-    if (
-      row.arm === "myco-gate" &&
-      row.faultClass === "invalid-target" &&
-      row.gate?.unregistrable !== true
-    ) {
+    // Gated means a gate record (#649 item 1): a myco-gate row always, and a capability row
+    // (C1+K, gated C1, C1+P, hcu+shell+V) whenever it carries one.
+    const gated = row.arm === "myco-gate" || row.gate !== null;
+    if (gated && row.faultClass === "invalid-target" && row.gate?.unregistrable !== true) {
       errors.push(`${row.trialKey}: an invalid-target task cannot be gated (it is unregistrable)`);
     }
-    if (row.arm === "myco-gate" && row.accepted && row.persistedSha256 === null) {
+    if (gated && row.accepted && row.persistedSha256 === null) {
       errors.push(`${row.trialKey}: an accepted gated row must carry its captured bytes' sha256`);
     }
     if (row.accepted !== expectedAccepted(row)) {

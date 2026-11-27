@@ -148,6 +148,41 @@ describe("D1 round 3: every corruption of the bound task is drawn, not fixed", (
     }
   });
 
+  it("V1 (#610 item 2): EACH bound-task case is drawn, none left on the fixed path", () => {
+    // A case on the fixed path holds the round-2 document in every drawn class at once.
+    for (const c of own) {
+      const allFixed = DRAWN.every((cls) => hex(docOf(c, cls)) === hex(docOf(fixed, cls)));
+      expect(allFixed, c.id).toBe(false);
+    }
+    // The first case of each proposal also carries the wider corruptions (with a draw only).
+    for (const p of proposals)
+      expect(p[0]?.corruptions.length).toBeGreaterThan(fixed.corruptions.length);
+  });
+
+  it("V5 (#610 item 2): the drawn wrong values spread over value kinds, not one numeric shift", () => {
+    // With a numeric new value (4242), a draw stuck on "move the number by up to 10,000" gives
+    // only numbers in [-5758, 14242]; the honest draw also edits characters, draws words and
+    // copies other cells.
+    const values = Array.from({ length: 20 }, () =>
+      agentCheckSelfTestCases("calc-record-edit", TASK),
+    )
+      .flatMap((p) => p.slice(0, OWN))
+      .map((c) => {
+        const rs = Buffer.from(docOf(c, "wrong-value").bytes as Uint8Array)
+          .toString("utf8")
+          .trimEnd()
+          .split("\n")
+          .map((l) => l.split(","));
+        return rs.find((r, i) => i > 0 && r[0] === SPEC.rowKey)?.[
+          rs[0]?.indexOf(SPEC.column) ?? -1
+        ];
+      }) as string[];
+    const shifted = (v: string) => /^-?\d+$/.test(v) && Math.abs(Number(v) - 4242) <= 10_000;
+    expect(values.length).toBe(60);
+    expect(values.every(shifted)).toBe(false);
+    expect(values.filter((v) => !/^-?\d+$/.test(v)).length).toBeGreaterThan(0);
+  });
+
   for (const cls of DRAWN) {
     it(`${cls}: varies across draws and is not the fixed round-2 document`, () => {
       const docs = own.map((c) => hex(docOf(c, cls)));
@@ -198,6 +233,21 @@ describe("D1 round 3: every corruption of the bound task is drawn, not fixed", (
     const drawn = Array.from({ length: 6 }, () => offsets(opts.draw));
     expect(new Set(drawn).size).toBeGreaterThan(1);
     expect(drawn.includes(fixedHost)).toBe(false);
+  });
+
+  it("V2 (#610 item 2): the host byte-flip offsets are drawn too, not only the truncations", () => {
+    const opts = agentCheckRegisterOptions("calc-record-edit", TASK);
+    const flips = (draw?: (n: number) => number) =>
+      hostCorruptions(fixed.correct, draw)
+        .filter((x) => x.cls === "corrupt-byte")
+        .map((x) => hex(x.doc))
+        .sort()
+        .join("|");
+    const fixedFlips = flips();
+    expect(fixedFlips.split("|").length).toBe(3);
+    const drawn = Array.from({ length: 6 }, () => flips(opts.draw));
+    expect(new Set(drawn).size).toBeGreaterThan(1);
+    expect(drawn.includes(fixedFlips)).toBe(false);
   });
 
   it("a broken random source fails closed, promptly, instead of looping forever", () => {
