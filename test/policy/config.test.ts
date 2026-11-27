@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 import { readBoundedNoBlock } from "../../src/policy/bounded-read.ts";
 import { loadPolicyConfig, MAX_CONFIG_BYTES, parsePolicyConfig } from "../../src/policy/config.ts";
 import { startPolicy } from "../../src/policy/guard.ts";
-import { ALL_RULES, fixture, oneRule, writeConfig } from "./helpers.ts";
+import { ALL_RULES, fixture, oneRule, POLICED_ARM_TOOLS, writeConfig } from "./helpers.ts";
 
 const NONE = { writes: [], deletes: [], launches: [], credentialInput: false, destructive: 0 };
 
@@ -19,6 +19,7 @@ function start(f: ReturnType<typeof fixture>, configPath: string, extraRoots: st
   return startPolicy({
     configPath,
     scope: { originalDocument: f.original, documentDir: f.docDir },
+    grantedTools: POLICED_ARM_TOOLS,
     agentRoots: extraRoots,
     screenSensor: () => false,
   });
@@ -73,6 +74,7 @@ describe("policy config: refuse to start rather than run unpoliced", () => {
     const r = startPolicy({
       configPath: writeConfig(f, ALL_RULES),
       scope: { originalDocument: f.original, documentDir: f.docDir },
+      grantedTools: POLICED_ARM_TOOLS,
     });
     expect(r).toEqual({ ok: false, code: "POLICY_SENSOR_MISSING" });
   });
@@ -82,6 +84,7 @@ describe("policy config: refuse to start rather than run unpoliced", () => {
     const r = startPolicy({
       configPath: writeConfig(f, ALL_RULES),
       scope: { originalDocument: f.outside, documentDir: f.docDir },
+      grantedTools: POLICED_ARM_TOOLS,
       screenSensor: () => false,
     });
     expect(r).toEqual({ ok: false, code: "POLICY_SCOPE_INVALID" });
