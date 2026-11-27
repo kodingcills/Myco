@@ -1,5 +1,7 @@
 /**
  * The live driver's VM step (TIF-274): per trial attempt, a cold reset of the trial VM, the
+ * in-guest agent deployed into the reset guest (#691: the trial snapshot holds no agent, so the
+ * M1 sweep's verified deploy runs after every reset, before the channel opens), the
  * task's document seeded at a harness-fixed guest path, headless Claude Code on the operator's
  * subscription (`claudeDriver`), and, after the agent stopped, the HOST's own copy of the
  * persisted document read back from the guest over the existing SSH channel (the in-guest
@@ -12,7 +14,7 @@
  *    transcript, the gate's evidence root) is read by the capture;
  *  - the gate keeps its contract: `myco.gate/v1` takes taskId/runId/claim only, bound to this
  *    one trial; every mid-run call stays `uncertain` (the capture happens after the stop);
- *  - every failure of the VM step (reset, channel, seed, read-back) is a `HarnessFault` with a
+ *  - every failure of the VM step (reset, deploy, channel, seed, read-back) is a `HarnessFault` with a
  *    fixed, code-only message, never an agent outcome. The read-back never substitutes bytes:
  *    an unreadable document is a fault, not an empty document.
  *
@@ -53,6 +55,14 @@ export type BootClass = "cold" | "fast";
 export interface VmBackend {
   /** Cold-reset the trial VM; resolves with the boot class the reset printed (null: none). */
   reset(): Promise<{ readonly bootClass: BootClass | null }>;
+  /**
+   * Deploy the in-guest agent into the freshly reset guest (TIF-274, #691): the trial snapshot
+   * holds no agent, so every reset wipes it. The real backend runs the M1 sweep's verified
+   * deploy (`agent/bootstrap/deploy-to-vm.sh`: verified copy, install, scheduled task, a fresh
+   * per-deploy token written to the host token file, ping check). Resolves only once that
+   * deploy reported success; any failure rejects.
+   */
+  deploy(): Promise<void>;
   /** Open the guest channel (after a reset the old one is gone with the guest). */
   open(): Promise<GuestChannel>;
 }
@@ -115,6 +125,8 @@ export interface VmStepOptions {
 export const VM_FAULT = {
   reset: "the trial VM reset failed",
   timeout: "the trial deadline passed during the VM reset",
+  deploy: "the in-guest agent deploy failed after the reset",
+  deployTimeout: "the trial deadline passed during the in-guest agent deploy",
   open: "the guest channel did not open after the reset",
   seed: "the task document could not be seeded in the guest",
   seedReadBack: "the seeded task document did not read back intact",
@@ -149,6 +161,16 @@ export class VmTrialStep {
       throw new HarnessFault("spawn-failed", VM_FAULT.reset);
     }
     if (this.ctx.signal.aborted) throw new HarnessFault("timeout", VM_FAULT.timeout);
+    // The reset wiped the in-guest agent (the trial snapshot holds none; TIF-274, #691), so it
+    // is deployed again before the channel opens, on every attempt. A failed deploy is a fault
+    // of the harness (re-run in place under the runner's rules), never an agent outcome, and
+    // the channel is not opened after it.
+    try {
+      await this.opts.backend.deploy();
+    } catch {
+      throw new HarnessFault("transport-error", VM_FAULT.deploy);
+    }
+    if (this.ctx.signal.aborted) throw new HarnessFault("timeout", VM_FAULT.deployTimeout);
     try {
       this.channel = await this.opts.backend.open();
     } catch {
@@ -209,7 +231,7 @@ export class VmTrialStep {
 
 /**
  * The live driver: `claudeDriver` (subscription only; API-key paths refused) with the VM step
- * around it. Per attempt: reset, seed, run the agent, then capture from the guest. The report
+ * around it. Per attempt: reset, deploy, open, seed, run the agent, then capture from the guest. The report
  * carries the reset's boot class.
  */
 export function liveVmDriver(
@@ -263,10 +285,96 @@ export function liveVmDriver(
 // The real backend: the trial reset script and the SSH tunnel. Never built by a test.
 // ---------------------------------------------------------------------------------------------
 
+/** The M1 sweep's verified deploy, relative to the repository root (`scripts/m1-sweep.sh`). */
+export const DEPLOY_SCRIPT = ["agent", "bootstrap", "deploy-to-vm.sh"] as const;
+/** The line `deploy-to-vm.sh` prints only after the ping check and the host token write. */
+export const DEPLOY_OK_LINE = "DEPLOY OK";
+/** The deploy's bound: the M1 sweep's `alarm 400` around the same script. */
+export const DEFAULT_DEPLOY_TIMEOUT_MS = 400_000;
+
+/**
+ * The ONE host token file path a trial uses: the deploy writes the fresh token there
+ * (`MYCO_TOKEN_OUT`) and `open()` reads it from there (`--token-file`). A path only; the token
+ * is never read here. The operator's `--token-file`, else their `MYCO_TOKEN_OUT`, else the
+ * deploy's default `~/.myco-token`. Pinning `open()` to that file keeps a stale exported
+ * `MYCO_AGENT_TOKEN` from winning over the token the deploy just rotated.
+ */
+export function agentTokenFile(
+  tokenFile: string | undefined,
+  env: NodeJS.ProcessEnv,
+  home: string,
+): string {
+  if (tokenFile !== undefined) return tokenFile;
+  const out = env.MYCO_TOKEN_OUT;
+  return out !== undefined && out !== "" ? out : join(home, ".myco-token");
+}
+
+export interface DeployRunOptions {
+  readonly repoRoot: string;
+  readonly spawn: SpawnFn;
+  /** Where the deploy writes the fresh token (`agentTokenFile`); passed as a path. */
+  readonly tokenOut: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly timeoutMs?: number;
+  /** Where the deploy's own output goes (default: the host's stderr, as the reset's). */
+  readonly echo?: (chunk: Buffer) => void;
+}
+
+/**
+ * Run `agent/bootstrap/deploy-to-vm.sh` once. Resolves only when it exited 0 AND printed
+ * `DEPLOY OK`; a non-zero exit, a missing success line, a spawn error or the bound (killed)
+ * rejects. The token never passes through here: the script writes it to `tokenOut` itself.
+ */
+export function runDeploy(o: DeployRunOptions): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const echo = o.echo ?? ((d: Buffer) => process.stderr.write(d));
+    let child: ChildProcess;
+    try {
+      child = o.spawn("bash", [join(o.repoRoot, ...DEPLOY_SCRIPT)], {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...o.env, MYCO_TOKEN_OUT: o.tokenOut },
+      });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    let settled = false;
+    let timedOut = false;
+    let stdout = "";
+    const finish = (error: Error | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error === null) resolve();
+      else reject(error);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      finish(new Error("deploy-to-vm.sh exceeded its bound and was killed"));
+    }, o.timeoutMs ?? DEFAULT_DEPLOY_TIMEOUT_MS);
+    child.stdout?.on("data", (d: Buffer) => {
+      stdout += d.toString("utf8");
+      echo(d);
+    });
+    child.stderr?.on("data", (d: Buffer) => echo(d));
+    child.on("error", (error) => finish(error));
+    child.on("close", (code) => {
+      if (timedOut) return;
+      if (code !== 0) finish(new Error(`deploy-to-vm.sh exited ${String(code)}`));
+      else if (!stdout.split(/\r?\n/).includes(DEPLOY_OK_LINE))
+        finish(new Error(`deploy-to-vm.sh exited 0 without ${DEPLOY_OK_LINE}`));
+      else finish(null);
+    });
+  });
+}
+
 export interface RealVmBackendOptions {
   readonly repoRoot: string;
   /** `--token-file PATH` for the in-guest agent's token (a path; read at point of use). */
   readonly tokenFile?: string;
+  /** The per-trial deploy's bound. Default `DEFAULT_DEPLOY_TIMEOUT_MS`. */
+  readonly deployTimeoutMs?: number;
   /** Inherit FD 9 (the `scripts/vm-session.sh` lock) into the reset, so it accepts the lock. */
   readonly inheritLockFd: boolean;
   readonly spawn?: SpawnFn;
@@ -280,7 +388,17 @@ export function realVmBackend(opts: RealVmBackendOptions): VmBackend {
   if (process.env.VITEST !== undefined)
     throw new Error("realVmBackend is never built under a test runner: inject a fake VmBackend");
   const spawn = opts.spawn ?? (nodeSpawn as unknown as SpawnFn);
+  const tokenOut = agentTokenFile(opts.tokenFile, process.env, homedir());
   return {
+    deploy() {
+      return runDeploy({
+        repoRoot: opts.repoRoot,
+        spawn,
+        tokenOut,
+        env: process.env,
+        ...(opts.deployTimeoutMs === undefined ? {} : { timeoutMs: opts.deployTimeoutMs }),
+      });
+    },
     reset() {
       return new Promise((resolve, reject) => {
         // stdio[9] = 9 passes the session's lock descriptor through; nothing else is inherited.
@@ -321,8 +439,8 @@ export function realVmBackend(opts: RealVmBackendOptions): VmBackend {
       });
     },
     async open() {
-      const argv = opts.tokenFile === undefined ? [] : ["--token-file", opts.tokenFile];
-      const token = resolveRunLiveToken(argv, process.env, homedir());
+      // The file the deploy just wrote (`agentTokenFile`), read at the point of use.
+      const token = resolveRunLiveToken(["--token-file", tokenOut], process.env, homedir());
       const tunnel = new SshTunnel();
       await tunnel.start();
       const client = AgentClient.overTunnel(tunnel, { token, timeoutMs: 60_000 });
