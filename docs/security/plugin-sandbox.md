@@ -107,6 +107,16 @@ A function added to `process` by a future Node is allowed until it is reviewed h
    (`process.cwd()`, `process.argv`, `process.report.getReport().header`) and a reader could
    place them in its state. Nothing a plugin returns reaches an agent today; the agent-facing
    `plugin_state` tool (TO FILE) needs the host-path scan the measurement guardrail names.
+7. **The disk bound is per call, not per host (#574).** The output-size row bounds one call:
+   the per-request ceiling + one block (`maxOutputBytes` + 1024, or 8 MiB + 1024 for
+   `selftest-cases`). Within one host process calls cannot overlap: every call is synchronous
+   (`spawnSync`), returns a value rather than a promise, and removes its io directory before it
+   returns, so one process holds at most one call's output on disk and serial calls do not
+   accumulate (`registry.test.ts`, "plugin calls are serial within one host process"). Nothing
+   limits how many host processes run plugins at once: K processes can hold K times the bound
+   (K × (8 MiB + 1024) if all are registering). A host that runs plugins from several processes
+   budgets disk for that, or runs them from one. A cross-process cap is not built (TO FILE if a
+   concurrent host appears).
 
 7. **New `process` functions.** The guard pins a reviewed list (above), not every function a
    future Node release adds. The OS layer still blocks signals and network whatever the
