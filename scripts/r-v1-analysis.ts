@@ -8,8 +8,10 @@
  * `analyse` reads `DIR/pack.json`, `DIR/trials.jsonl` (myco.capability.r-trial/1) and
  * `DIR/grades.jsonl` (the independent grader's myco.benchmark.grade-row/1 rows), checks them
  * against the committed prereg and fr-v1 manifest, and prints the analysis as JSON. Before
- * anything else it checks that this script and the analysis module still hash to the values
- * the prereg froze, so a pack is never analysed by code other than the pre-registered code.
+ * anything else it checks that `prereg.json` still hashes to the committed `prereg.sha256`
+ * (PREREG_NOT_COMMITTED otherwise) and that this script and the analysis module still hash to
+ * the values the prereg froze (ANALYSIS_CODE_CHANGED otherwise), so a pack is never analysed
+ * against an edited prereg or by code other than the pre-registered code.
  * VERIFIED comes only from the grader's rows; the derived oracle and the replay never decide.
  *
  * `manifest` regenerates the fr-v1 manifest from `src/recording-eval/fr-v1.ts` and writes it
@@ -28,6 +30,7 @@ import { buildFrV1, manifestText } from "../src/recording-eval/fr-v1.ts";
 const ROOT = resolve(import.meta.dirname, "..");
 const PREREG_DIR = "docs/product/capability-prereg/r-v1";
 const PREREG = join(PREREG_DIR, "prereg.json");
+const PREREG_HASH = join(PREREG_DIR, "prereg.sha256");
 const MANIFEST = join(PREREG_DIR, "fr-v1-manifest.json");
 const USAGE =
   "usage: npx tsx scripts/r-v1-analysis.ts (analyse --pack DIR [--evidence] [--marker TEXT]... | manifest (--write|--check) | hash)";
@@ -97,8 +100,15 @@ function main(argv: readonly string[]): number {
     return 3;
   }
   const prereg = readJson(PREREG);
-  if (!frozenCodeMatches(prereg)) {
-    out(JSON.stringify({ status: "refused", codes: ["ANALYSIS_CODE_CHANGED"] }));
+  const codes: string[] = [];
+  // The pack's hash is checked against prereg.json below; this binds prereg.json itself to
+  // the committed hash, so an edited prereg (and a pack built against it) is never analysed.
+  if (canonicalSha256(prereg) !== readFileSync(join(ROOT, PREREG_HASH), "utf8").trim()) {
+    codes.push("PREREG_NOT_COMMITTED");
+  }
+  if (!frozenCodeMatches(prereg)) codes.push("ANALYSIS_CODE_CHANGED");
+  if (codes.length > 0) {
+    out(JSON.stringify({ status: "refused", codes }));
     return 1;
   }
   const result = analyseRPack({

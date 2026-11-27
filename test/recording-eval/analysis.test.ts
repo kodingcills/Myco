@@ -527,12 +527,15 @@ describe("B1 (round 1): never shown while a lead ruling is pending", () => {
   it.each([
     ["a simulated pack", undefined],
     ["a real-model pack", MODEL],
-  ])("N-a (round 2, kills X7): %s without --evidence still reports the pending count", (_w, planner) => {
-    const r = analysed(run(buildPack({ planner, outcome: discordant(8, 1) }), false));
-    expect(r.evidence).toBe(false);
-    expect(r.leadRulingPending).toBe(pendingCount);
-    expect(r.barShown).toBe(false);
-  });
+  ])(
+    "N-a (round 2, kills X7): %s without --evidence still reports the pending count",
+    (_w, planner) => {
+      const r = analysed(run(buildPack({ planner, outcome: discordant(8, 1) }), false));
+      expect(r.evidence).toBe(false);
+      expect(r.leadRulingPending).toBe(pendingCount);
+      expect(r.barShown).toBe(false);
+    },
+  );
 
   it("the 5-vs-0 boundary pack on the committed prereg: not shown either", () => {
     const r = analysed(run(buildPack({ planner: MODEL, outcome: discordant(5, 0) })));
