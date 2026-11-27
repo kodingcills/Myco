@@ -31,6 +31,7 @@
  */
 import { readFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
+import { stripAccents } from "../export-guard/fold.ts";
 
 export type IdentityClass = "username" | "hostname" | "identity";
 
@@ -53,14 +54,16 @@ export const GENERIC_ACCOUNTS: ReadonlySet<string> = new Set([
   "codespace",
 ]);
 
-/** The form identity matching compares: full Unicode case folding, letters and digits only. */
+/**
+ * The form identity matching compares: full Unicode case folding, then accents stripped (#579
+ * O2, `stripAccents`: NFD, combining marks removed, `ø`/`ł`/`æ`… transliterated, so `josé`
+ * matches `JOSE` and `reña` matches `rena`), then letters and digits only. Both sides fold.
+ */
 export const fold = (s: string): string =>
-  s
-    .normalize("NFKC")
-    .toUpperCase()
-    .toLowerCase()
-    .replace(/ß/g, "ss")
-    .replace(/[^\p{L}\p{N}]/gu, "");
+  stripAccents(s.normalize("NFKC").toUpperCase().toLowerCase().replace(/ß/g, "ss")).replace(
+    /[^\p{L}\p{N}]/gu,
+    "",
+  );
 
 /** The shortest folded identity looked for. */
 export const IDENTITY_MIN_CHARS = 3;

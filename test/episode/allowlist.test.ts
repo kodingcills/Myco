@@ -27,7 +27,7 @@ import { EpisodeStore, readStoreDir } from "../../src/episode/store.ts";
 import type { Episode } from "../../src/episode/types.ts";
 import { canonicalJson, episodeIdOf, sha256Hex } from "../../src/episode/validate.ts";
 import { runMultiStepMockDemo } from "../../src/gate/multistep-demo.ts";
-import { draft, fakeKey, HOST, scratch } from "./helpers.ts";
+import { draft, fakeKey, HOST, ledgerOf, scratch } from "./helpers.ts";
 import { makePathFuzzer } from "./path-fuzz.ts";
 import * as CORPUS from "./probe-corpus.ts";
 
@@ -186,8 +186,9 @@ describe("property: arbitrary host paths (seeded fuzz) never survive closing", (
       expect(hit, `case ${i} (${f.shape})`).toEqual([]);
       expect(openStrings(closed), `case ${i} (${f.shape})`).toEqual([]);
       expect(closed.episodeId).toBe(episodeIdOf(closed));
-      // Idempotent: closing a closed episode changes nothing.
-      expect(canonicalJson(closeEpisode(closed))).toBe(s);
+      // Idempotent for harness-produced hashes (#579 O3): closing a closed episode under the
+      // ledger an import records for it changes nothing.
+      expect(canonicalJson(closeEpisode(closed, [], ledgerOf(closed)))).toBe(s);
     }
   });
 });

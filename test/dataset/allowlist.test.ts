@@ -28,6 +28,7 @@ import {
   closeEpisode,
   closeRecordFields,
   EPISODE_FIELD_TREATMENT,
+  hashLedgerOf,
   KNOWN_KEYS,
   openEpisodeStrings,
   REGISTERED_APPS,
@@ -227,7 +228,10 @@ describe("property: arbitrary host paths (seeded fuzz) never survive closing", (
         `case ${i} (${f.shape})`,
       ).toEqual([]);
       expect(openEpisodeStrings(closed), `case ${i}`).toEqual([]);
-      expect(canonicalJson(closeEpisode(closed))).toBe(canonicalJson(closed));
+      // Idempotent for harness-produced hashes (#579 O3): under the ledger of the closed episode.
+      expect(canonicalJson(closeEpisode(closed, [], hashLedgerOf([closed])))).toBe(
+        canonicalJson(closed),
+      );
     }
   });
 });
