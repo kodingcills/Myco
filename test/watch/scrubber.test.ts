@@ -220,6 +220,15 @@ describe("GET /timeline/<run> (RS-04 on a recorded run)", () => {
       });
       expect(await timeline(server, RUN)).toMatchObject({ joined: false, code: "TL_LOG_BINDING" });
     }
+    // Even a log with no line to break the binding is refused without the operator's task.
+    const quiet = await recordedRun([{ frame: "a" }, { frame: "b" }]);
+    const server = await serve({
+      runs: [RUN],
+      tasks: [],
+      decisionLog: quiet.log,
+      frames: directoryFrameSource(quiet.root, "per-run", new Set([RUN])),
+    });
+    expect(await timeline(server, RUN)).toMatchObject({ joined: false, code: "TL_LOG_BINDING" });
   });
 
   it("per-run own logs: each run joins from its own log, and its live events come only from it", async () => {

@@ -109,4 +109,84 @@ describe("scrubber page", () => {
     expect(await page.locator("#pinned").textContent()).toContain("call 1: refuted");
     await page.close();
   }, 60_000);
+
+  it("the watermark stays on when the timeline never arrives, or realRuns is missing or contradicted", async () => {
+    const visible = async (setup: (p: import("@playwright/test").Page) => Promise<void>) => {
+      const page = await browser.newPage();
+      await setup(page);
+      await page.goto(server.url);
+      await page.locator("#frameinfo").filter({ hasText: "frame" }).waitFor();
+      await page.waitForTimeout(300);
+      const out = [
+        await page.locator("#wm").isVisible(),
+        await page.locator("#wmband").isVisible(),
+      ];
+      await page.close();
+      return out;
+    };
+    // The timeline request fails: no mock mark arrives, the watermark stays.
+    const blockTimeline = async (p: import("@playwright/test").Page) => {
+      await p.route("**/timeline/**", (r) => r.abort());
+    };
+    expect(await visible(blockTimeline)).toEqual([true, true]);
+    // A timeline that says mock: false is not enough while the state does not name the run.
+    const timelineSaysReal = async (p: import("@playwright/test").Page) => {
+      await p.route("**/timeline/**", async (route) => {
+        const response = await route.fetch();
+        const view = (await response.json()) as Record<string, unknown>;
+        await route.fulfill({ response, json: { ...view, mock: false, watermark: null } });
+      });
+    };
+    expect(await visible(timelineSaysReal)).toEqual([true, true]);
+    // ... nor when the state's realRuns field is missing altogether.
+    const noRealRunsField = async (p: import("@playwright/test").Page) => {
+      await timelineSaysReal(p);
+      await p.addInitScript("window.EventSource = undefined;");
+      await p.route("**/api/state", async (route) => {
+        const response = await route.fetch();
+        const { realRuns: _gone, ...state } = (await response.json()) as Record<string, unknown>;
+        await route.fulfill({ response, json: state });
+      });
+    };
+    expect(await visible(noRealRunsField)).toEqual([true, true]);
+    // A state with realRuns stripped (and no EventSource) keeps it too.
+    const rewriteState =
+      (edit: (s: Record<string, unknown>) => void) =>
+      async (p: import("@playwright/test").Page) => {
+        await p.addInitScript("window.EventSource = undefined;");
+        await p.route("**/api/state", async (route) => {
+          const response = await route.fetch();
+          const state = (await response.json()) as Record<string, unknown>;
+          edit(state);
+          await route.fulfill({ response, json: state });
+        });
+      };
+    expect(
+      await visible(
+        rewriteState((s) => {
+          delete s.realRuns;
+        }),
+      ),
+    ).toEqual([true, true]);
+    // A state that names the run real while its timeline says mock: still watermarked.
+    expect(
+      await visible(
+        rewriteState((s) => {
+          s.realRuns = [RUN];
+        }),
+      ),
+    ).toEqual([true, true]);
+    // Only both together (state names it real and the timeline is not mock) would turn it off.
+    const both = async (p: import("@playwright/test").Page) => {
+      await rewriteState((s) => {
+        s.realRuns = [RUN];
+      })(p);
+      await p.route("**/timeline/**", async (route) => {
+        const response = await route.fetch();
+        const view = (await response.json()) as Record<string, unknown>;
+        await route.fulfill({ response, json: { ...view, mock: false, watermark: null } });
+      });
+    };
+    expect(await visible(both)).toEqual([false, false]);
+  }, 60_000);
 });
