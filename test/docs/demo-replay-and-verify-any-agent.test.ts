@@ -133,9 +133,9 @@ describe("demo replay + verify-any-agent spec: build PRs", () => {
   });
 });
 
-const PENDING = ["#560", "#563", "#564", "#576", "#584"];
-/** Merged PRs (state checked 2026-11-27T00:34Z): never listed as open, never waited on. */
-const MERGED = ["#551", "#561", "#562", "#565", "#566"];
+const PENDING = ["#560", "#564", "#576"];
+/** Merged PRs (state checked 2026-11-27T01:06Z): never listed as open, never waited on. */
+const MERGED = ["#551", "#561", "#562", "#563", "#565", "#566", "#584"];
 
 describe("demo replay + verify-any-agent spec: grounding and dependencies", () => {
   it("every path in the grounding table exists on main", () => {
@@ -315,6 +315,74 @@ describe("demo replay + verify-any-agent spec: code enums, watch rows, trackers"
   });
 });
 
+describe("demo replay + verify-any-agent spec: the binding check follows the gate's code (v4)", () => {
+  const PRE_EVIDENCE = [
+    "INVALID_REQUEST",
+    "UNKNOWN_FIELD",
+    "ORACLE_INPUT_REJECTED",
+    "UNSUPPORTED_API_VERSION",
+    "ASSIGNMENT_MISMATCH",
+  ];
+  const binding = flat(
+    section("### 1.2 Attribution: a decision belongs to the trial its gate is bound to"),
+  );
+
+  it("rule (b) names exactly the gate's pre-evidence rejection codes", () => {
+    const rule = binding.slice(binding.indexOf("**(b) A foreign id only on a pre-evidence"));
+    const codes = [...rule.slice(0, rule.indexOf("A line that breaks")).matchAll(/`([A-Z_]+)`/g)]
+      .map((m) => m[1] ?? "")
+      .filter((c) => c !== "CLAIM_RECORDED");
+    expect(codes.sort()).toEqual([...PRE_EVIDENCE].sort());
+    // The same set the MCP server flags as a rejected request.
+    const mcp = readFileSync(join(ROOT, "src/gate/mcp-server.ts"), "utf8");
+    const list = mcp.slice(mcp.indexOf("const rejected"), mcp.indexOf("].includes(code)"));
+    expect([...list.matchAll(/"([A-Z_]+)"/g)].map((m) => m[1]).sort()).toEqual(
+      [...PRE_EVIDENCE].sort(),
+    );
+  });
+
+  it("the gate still logs a parse rejection with partialOf(raw), before the assignment check", () => {
+    const api = readFileSync(join(ROOT, "src/gate/api.ts"), "utf8");
+    expect(api).toContain("function partialOf(raw: Record<string, unknown>)");
+    const gate = readFileSync(join(ROOT, "src/gate/gate.ts"), "utf8");
+    const decide = gate.slice(gate.indexOf("async function decide("));
+    expect(decide.indexOf("request: parsed.partial")).toBeGreaterThan(0);
+    expect(decide.indexOf("request: parsed.partial")).toBeLessThan(
+      decide.indexOf('"ASSIGNMENT_MISMATCH"'),
+    );
+  });
+
+  it("RS-01, VA-03 and VA-13 carry the pre-evidence rejection lines as binding-holds cases", () => {
+    for (const id of ["RS-01", "VA-03", "VA-13"]) {
+      const text = flat(criterionText(id));
+      expect(text, id).toContain("**Binding holds, attribution unchanged:**");
+      for (const code of ["UNKNOWN_FIELD", "INVALID_REQUEST", "ORACLE_INPUT_REJECTED"])
+        expect(text, `${id} ${code}`).toContain(`\`${code}\``);
+    }
+  });
+
+  it("pins the clip regression rows: a foreign-id agent rejection never blocks export or verify", () => {
+    const text = section("### 2.5 The clip digest and `myco clip verify`");
+    const regression = rows(text.split("\n\n").filter((b) => b.trim().startsWith("|"))[2] ?? "");
+    expect(regression.length).toBeGreaterThanOrEqual(3);
+    for (const r of regression) {
+      expect(r[1], r[0]).toBe("exit 2 `CLIP_LOG_ONLY`");
+      expect(r[2], r[0]).toBe("exit 0");
+    }
+    expect(regression.some((r) => (r[0] ?? "").includes("`UNKNOWN_FIELD`"))).toBe(true);
+    expect(flat(criterionText("RS-17"))).toContain("required regression cases");
+  });
+
+  it("the shared demo log still fails by design, and the key is stated per batch", () => {
+    expect(binding).toContain("therefore still fails by design");
+    expect(flat(criterionText("VA-13"))).toContain("`VERIFY_LOG_BINDING`, by design");
+    const runner = readFileSync(join(ROOT, "src/pilot/runner.ts"), "utf8");
+    expect(runner.split("newVaultKey()").length - 1).toBe(1);
+    expect(DOC).toContain("**The key is per batch, not per trial.**");
+    expect(flat(criterionText("VA-14"))).toContain("the two trials' key files hold identical bytes");
+  });
+});
+
 describe("demo replay + verify-any-agent spec: binding lines", () => {
   it.each([
     "`myco.gate/v1` still takes only `taskId`, `runId` and `claim`.",
@@ -331,8 +399,12 @@ describe("demo replay + verify-any-agent spec: binding lines", () => {
     "`request.runId` and `request.taskId` are never used to attribute a line.",
     "**The watch server never loads a key, never opens the vault's sealed files and never serves an evidence clip**",
     "`--vault` requires both `--seal-receipt` and `--vault-key-file`; without either it is a usage error (exit 3), never an offline audit.",
-    "On lines that carry `ASSIGNMENT_MISMATCH`, rewriting `request.runId` to any other listed run changes no pin.",
-    "On a line without `ASSIGNMENT_MISMATCH`, the same rewrite breaks the binding check and the join is invalid with `TL_LOG_BINDING`",
+    "On pre-evidence rejection lines, rewriting `request.runId` to any other listed run changes no pin.",
+    "On a line that is not a pre-evidence rejection (a verdict line past the assignment check), the same rewrite breaks the binding check and the join is invalid with `TL_LOG_BINDING`",
+    "**(a) Evidence binding.** Every `evidenceRefs[].runId` equals `r`.",
+    "So no call the agent makes, malformed or not, can make its own honest per-trial log fail the binding check",
+    "**This timing rule bounds only the per-trial path, not the key:**",
+    "An S1 line is not re-parsed",
     "The key file is written **after** that trial's agent has stopped and its post-capture check has returned",
     "`open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)`",
     "Until it is ratified, V1 does not merge.",
