@@ -3,34 +3,30 @@
 #
 #   scripts/benchmark-release-repro.sh <archive.tar>
 #
-# Unpacks the archive into a new, empty directory (no clone, no node_modules), then runs,
-# from there and with a bare environment (PATH only), the commands the bundle's RELEASE.md
-# lists: every file against SHA256SUMS, the task set against its manifest, and the bundled
-# grader over the reproduction requests, whose output must equal reproduce-expected.jsonl
-# byte for byte. Also refuses an archive whose entries carry owner names or anything but
-# plain files (tar -tv shows `0/0` and no extended headers). Exit 0 when all pass.
+# First reads the archive's raw tar headers (scripts/benchmark-release-check-archive.ts, not a
+# `tar -tv` listing, which applies pax headers silently): it refuses any entry that is not a
+# plain ustar regular file (a pax `x`/`g` header such as an xattr record, a GNU `L`/`K` header,
+# a directory or link), mode other than 0644, uid or gid other than 0, an owner or group name,
+# and any entry SHA256SUMS does not list. Then unpacks the archive into a new, empty directory
+# (no clone, no node_modules) and runs, from there and with a bare environment (PATH only),
+# the commands the bundle's RELEASE.md lists: every file against SHA256SUMS, the task set
+# against its manifest (the bundled verifier), and the bundled grader over the reproduction
+# requests, whose output must equal reproduce-expected.jsonl byte for byte. Exit 0 when all pass.
 set -euo pipefail
 
 archive="${1:?usage: benchmark-release-repro.sh <archive.tar>}"
 test -f "$archive" || { echo "no such archive" >&2; exit 2; }
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 root="myco-false-completion-fc-v1"
 work=$(mktemp -d "${TMPDIR:-/tmp}/myco-release-repro.XXXXXX")
 trap 'rm -rf "$work"' EXIT
+bare=(env -i "PATH=$PATH")
 
-# Owners: every entry is a regular file owned by 0/0 with no user or group name. Listed
-# WITHOUT --numeric-owner, so a stored name shows instead of the number: GNU tar lists
-# `-rw-r--r-- 0/0 size ...`, bsdtar (macOS) `-rw-r--r--  0 0 0 size ...`, only when the
-# header's user and group names are empty.
-listing=$(tar -tvf "$archive")
-if grep -Ev '^-rw-r--r-- +(0/0|[0-9]+ +0 +0) ' <<<"$listing" >/dev/null; then
-  echo "archive has an entry that is not a 0644 regular file owned by 0/0" >&2
-  exit 1
-fi
+"${bare[@]}" node "$here/benchmark-release-check-archive.ts" "$archive" "$root"
 
 tar -xf "$archive" -C "$work"
 cd "$work/$root"
 if command -v sha256sum >/dev/null; then sum=(sha256sum); else sum=(shasum -a 256); fi
-bare=(env -i "PATH=$PATH")
 "${bare[@]}" "${sum[@]}" -c --quiet SHA256SUMS
 "${bare[@]}" node scripts/benchmark-verify-bundle.ts benchmark/false-completion/fc-v1
 "${bare[@]}" node scripts/benchmark-grade.ts reproduce-requests.jsonl >"$work/regraded.jsonl"
