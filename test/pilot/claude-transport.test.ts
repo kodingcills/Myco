@@ -27,7 +27,10 @@ import { trialLaunchPlan } from "../../src/pilot/launch.ts";
 import { loadLedger, PROGRESS_FILE } from "../../src/pilot/ledger.ts";
 import { HarnessFault, runPilot } from "../../src/pilot/runner.ts";
 import {
+  CLEAN_RESULT_FAULT_PHRASES,
+  CLEAN_RESULT_TASK_DATA,
   config,
+  FAULT_WORDING,
   FOLDED_USAGE_PHRASES,
   NBSP,
   PUBLISHED,
@@ -37,6 +40,7 @@ import {
   THIN_SPACE,
   tmp,
   UNICODE_SPACES,
+  UNMAPPED_STRUCTURED,
   USAGE_LIMIT_PHRASES,
   ZWSP,
 } from "./helpers.ts";
@@ -169,12 +173,10 @@ describe("headless Claude Code transport (fake spawn)", () => {
       // And as bare stderr with no JSON result at all.
       expect(faultOf(() => interpretResult("", text, 1))).toBe(cls);
       // A CLEAN, completed result WITH a claim line is the agent's outcome even with this
-      // text; without one, quota wording is usage-limit (round 3, R2-D3b) and login wording
-      // stays the agent's (no-claim) outcome.
+      // text; without one, quota wording is usage-limit (round 3, R2-D3b) and the exact CLI
+      // login wording is auth (#607 round 3, L1).
       expect(interpretResult(result(`${text}\nNOT DONE`), "", 0).claim).toBe("not-done");
-      expect(faultOf(() => interpretResult(result(text), "", 0))).toBe(
-        cls === "usage-limit" ? "usage-limit" : "none",
-      );
+      expect(faultOf(() => interpretResult(result(text), "", 0))).toBe(cls);
     }
   });
 
@@ -189,7 +191,9 @@ describe("headless Claude Code transport (fake spawn)", () => {
       "I looked at EMP-0055: its qty is 429. I could not save the file.",
       "Row EMP-0127 has qty 401; I left it unchanged.",
       "EMP-0090 qty 403 is now 430.",
-      "Invalid API key · Please run /login",
+      // #607 round 3, L1: the broad words alone ("API key", "login", "OAuth", "credit") stay
+      // the agent's; only the exact CLI phrases stop (next test).
+      "I renamed the API key column and the OAuth login field; credit was unchanged.",
     ];
     for (const text of probes) {
       expect([text, faultOf(() => interpretResult(result(text), "", 0))]).toEqual([text, "none"]);
@@ -574,10 +578,128 @@ describe("headless Claude Code transport (fake spawn)", () => {
           sp.charCodeAt(0),
           cls,
         ]);
-        // Never applied to a clean result (D4): the claim stands, with or without a claim line.
-        expect(interpretResult(result(t), t, 0).claim).toBe("no-claim");
+        // The broad vocabulary is never applied to a clean result (D4). A claimless clean
+        // result stops only on the narrow exact CLI phrases (#607 round 3, L1); with a claim
+        // line the claim always stands.
+        const narrow = ![
+          "Insufficient credit to continue",
+          "Too many requests",
+          "Rate limit exceeded",
+        ].includes(t0);
+        expect([t0, faultOf(() => interpretResult(result(t), t, 0))]).toEqual([
+          t0,
+          narrow ? cls : "none",
+        ]);
         expect(interpretResult(result(`${t}\nDONE`), t, 0).claim).toBe("done");
       }
+  });
+
+  // #607 round 3, B2: an unmapped structured class (`error-result`) falls back to the text.
+  it("round 3 B2: an unmapped structured error with quota, billing, auth or transient wording is classified by its text on every errored path", () => {
+    const withAssistant = (s: Record<string, unknown>, res: string | null) =>
+      JSON.stringify([
+        { type: "assistant", message: { content: [] }, ...s },
+        ...(res === null ? [] : [JSON.parse(res)]),
+      ]);
+    for (const [sname, s] of UNMAPPED_STRUCTURED) {
+      for (const [t, cls] of FAULT_WORDING) {
+        const errRes = (text: string, extra: Record<string, unknown> = {}) =>
+          result(text, { is_error: true, subtype: "error_during_execution", ...extra });
+        expect([
+          sname,
+          t,
+          // The error result's own text.
+          faultOf(() => interpretResult(withAssistant(s, errRes(t)), "", 1)),
+          // Its errors[] list.
+          faultOf(() =>
+            interpretResult(withAssistant(s, errRes("API Error", { errors: [t] })), "", 1),
+          ),
+          // stderr only.
+          faultOf(() => interpretResult(withAssistant(s, errRes("API Error")), t, 1)),
+          // No result event: the structured field and the wording on stderr.
+          faultOf(() => interpretResult(withAssistant(s, null), t, 1)),
+          // A clean-looking result with a claim line, exit 0: the structured error makes it
+          // errored, so the claim is never counted.
+          faultOf(() => interpretResult(withAssistant(s, result("x\nDONE")), t, 0)),
+          // The structured field on the result message itself.
+          faultOf(() => interpretResult(errRes(t, s), "", 1)),
+        ]).toEqual([sname, t, cls, cls, cls, cls, cls, cls]);
+      }
+      // With no vocabulary the structured class stands: a status 500 alone is error-result.
+      expect([
+        sname,
+        faultOf(() =>
+          interpretResult(
+            withAssistant(s, result("Something went wrong.", { is_error: true })),
+            "",
+            1,
+          ),
+        ),
+        faultOf(() => interpretResult(withAssistant(s, null), "boom", 1)),
+      ]).toEqual([sname, "error-result", "error-result"]);
+    }
+    // A mapped structured class still wins over the text.
+    const mapped = (e: Record<string, unknown>) =>
+      withAssistant(e, result("Credit balance is too low", { is_error: true }));
+    expect(faultOf(() => interpretResult(mapped({ error: "authentication_failed" }), "", 1))).toBe(
+      "auth",
+    );
+    expect(faultOf(() => interpretResult(mapped({ error: "rate_limit" }), "", 1))).toBe(
+      "rate-limit",
+    );
+  });
+
+  // #607 round 3, L1: the narrow billing and auth phrases stop a claimless clean result.
+  it("round 3 L1: a claimless clean result with a narrow billing or auth phrase (text or stderr) stops with its class; a claim line is never reclassified", () => {
+    for (const [t0, cls] of CLEAN_RESULT_FAULT_PHRASES)
+      for (const t of [
+        t0,
+        t0.toUpperCase(),
+        spaced(t0, NBSP),
+        spaced(t0, ZWSP),
+        spaced(t0, "\t"),
+      ]) {
+        expect([
+          t,
+          faultOf(() => interpretResult(result(t), "", 0)),
+          faultOf(() => interpretResult(result("Edited."), t, 0)),
+          faultOf(() => interpretResult(result(`I tried.\n${t}`), "", 0)),
+        ]).toEqual([t, cls, cls, cls]);
+        for (const [line, claim] of [
+          ["DONE", "done"],
+          ["NOT DONE", "not-done"],
+        ] as const)
+          expect([t, interpretResult(result(`${t}\n${line}`), t, 0).claim]).toEqual([t, claim]);
+      }
+    // Auth before billing before usage, as in classOfText.
+    expect(
+      faultOf(() => interpretResult(result("Credit balance is too low; not logged in"), "", 0)),
+    ).toBe("auth");
+    expect(
+      faultOf(() => interpretResult(result("Out of extra usage; usage limit reached"), "", 0)),
+    ).toBe("billing");
+    // Task data sharing the broad vocabulary stays the agent's no-claim, in the text or on stderr.
+    for (const t of CLEAN_RESULT_TASK_DATA) {
+      expect([t, faultOf(() => interpretResult(result(t), "", 0))]).toEqual([t, "none"]);
+      expect([t, interpretResult(result("Edited."), spaced(t, NBSP), 0).claim]).toEqual([
+        t,
+        "no-claim",
+      ]);
+    }
+  });
+
+  // #607 round 3, F-E: "log-in again" (hyphenated, or a folded hyphen variant) is auth.
+  it("round 3 F-E: 'please log-in again' is auth on a failed run, with an ASCII or folded hyphen", () => {
+    for (const t of [
+      "Session expired: please log-in again",
+      `please log${String.fromCharCode(0x2011)}in again`,
+      `Please log${String.fromCharCode(0x2010)}in again`,
+      "please log in again",
+      "please login again",
+    ]) {
+      expect([t, classOfText(t)]).toEqual([t, "auth"]);
+      expect([t, faultOf(() => interpretResult("", t, 1))]).toEqual([t, "auth"]);
+    }
   });
 
   it("classifies rate limits, unreadable output and spawn failures as harness faults", async () => {

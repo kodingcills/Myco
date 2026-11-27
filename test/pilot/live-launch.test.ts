@@ -54,7 +54,10 @@ import {
   type VmBackend,
 } from "../../src/pilot/vm-capture.ts";
 import {
+  CLEAN_RESULT_FAULT_PHRASES,
+  CLEAN_RESULT_TASK_DATA,
   config,
+  FAULT_WORDING,
   FOLDED_USAGE_PHRASES,
   NBSP,
   PUBLISHED,
@@ -64,6 +67,7 @@ import {
   THIN_SPACE,
   tmp,
   UNICODE_SPACES,
+  UNMAPPED_STRUCTURED,
   USAGE_LIMIT_PHRASES,
   ZWSP,
 } from "./helpers.ts";
@@ -1473,15 +1477,133 @@ describe("#606 S1+S2: stderr-only quota wording on a claimless clean result, and
   it("round 2 F-B: the broad vocabulary with NBSP or a thin space is never applied to a clean result", async () => {
     for (const sp of [NBSP, THIN_SPACE])
       for (const [stdout, stderr] of [
-        [resultJson(spaced("Credit balance is too low; not logged in", sp)), ""],
-        [resultJson("Edited."), spaced("Too many requests; Credit balance is too low", sp)],
         [resultJson(spaced("You've hit your rate limit", sp)), spaced("rate limit reached", sp)],
+        [resultJson(spaced("Too many requests; billing address updated", sp)), ""],
+        [resultJson("Edited."), spaced("quota column fixed; credential field cleared; 403", sp)],
       ] as const)
         expect([stdout, stderr, await launchWith({ stdout, stderr, code: 0 })]).toEqual([
           stdout,
           stderr,
           decidedAs("no-claim"),
         ]);
+  });
+
+  // A billing or auth stop: exit 5 with the class as the stop code, one spawn, one reset, the
+  // trial still open with its one attempt unspent, nothing counted, the next trial not started.
+  const subscriptionStopped = (cls: string) => ({
+    exit: EXIT.subscriptionStop,
+    stopCode: cls,
+    spawns: 1,
+    resets: 1,
+    classes: [cls],
+    open: "open",
+    report: false,
+    t2: 0,
+    outcomes: ["harness-fault"],
+    claim: null,
+  });
+  // A transient limit, repeated: backed off once (one extra cold reset), then paused with the
+  // trial open and its attempt unspent (the ledger-durable cap, round 3 F2).
+  const TRANSIENT_PAUSED = {
+    exit: EXIT.paused,
+    stopCode: null,
+    spawns: 2,
+    resets: 2,
+    classes: ["rate-limit", "rate-limit"],
+    open: "open",
+    report: false,
+    t2: 0,
+    outcomes: ["harness-fault", "harness-fault"],
+    claim: null,
+  };
+  const expectedFor = (cls: string) =>
+    cls === "usage-limit"
+      ? STOPPED
+      : cls === "rate-limit"
+        ? TRANSIENT_PAUSED
+        : subscriptionStopped(cls);
+
+  it("round 2 F-B, updated by round 3 L1: the exact CLI billing and auth phrases on a claimless clean result now stop with exit 5", async () => {
+    for (const sp of [NBSP, THIN_SPACE])
+      for (const [stdout, stderr, cls] of [
+        [resultJson(spaced("Credit balance is too low; not logged in", sp)), "", "auth"],
+        [
+          resultJson("Edited."),
+          spaced("Too many requests; Credit balance is too low", sp),
+          "billing",
+        ],
+      ] as const)
+        expect([stdout, stderr, await launchWith({ stdout, stderr, code: 0 })]).toEqual([
+          stdout,
+          stderr,
+          subscriptionStopped(cls),
+        ]);
+  });
+
+  // #607 round 3, B2: an unmapped structured class no longer hides the text vocabulary.
+  it.each(UNMAPPED_STRUCTURED)(
+    "round 3 B2: %s with quota, billing, auth or transient wording stops or backs off as its class, the attempt unspent",
+    async (_name, s) => {
+      const withAssistant = (res: string | null) =>
+        JSON.stringify([
+          { type: "assistant", message: { content: [] }, ...s },
+          ...(res === null ? [] : [JSON.parse(res)]),
+        ]);
+      const errRes = (text: string) =>
+        resultJson(text, { is_error: true, subtype: "error_during_execution" });
+      for (const [t, cls] of FAULT_WORDING)
+        for (const [shape, output] of [
+          ["error result text", { stdout: withAssistant(errRes(t)), code: 1 }],
+          [
+            "stderr with an error result",
+            { stdout: withAssistant(errRes("API Error")), stderr: t, code: 1 },
+          ],
+          ["no result event, stderr", { stdout: withAssistant(null), stderr: t, code: 1 }],
+          [
+            "clean-looking DONE result, exit 0, stderr",
+            { stdout: withAssistant(resultJson("x\nDONE")), stderr: t, code: 0 },
+          ],
+        ] as const)
+          expect([t, shape, await launchWith(output)]).toEqual([t, shape, expectedFor(cls)]);
+      // With no vocabulary the structured class stands: an unclassified error result, which
+      // is re-run and spends the attempt (unchanged behaviour).
+      const plain = await launchWith({
+        stdout: withAssistant(errRes("Something went wrong.")),
+        code: 1,
+      });
+      expect(plain.classes[0]).toBe("error-result");
+      expect(plain.open).not.toBe("open");
+    },
+  );
+
+  // #607 round 3, L1, end to end.
+  it("round 3 L1: each narrow billing or auth phrase as a claimless clean result (text or stderr-only) stops with exit 5; with a claim line it is decided; task data stays no-claim", async () => {
+    for (const [t0, cls] of CLEAN_RESULT_FAULT_PHRASES)
+      for (const t of [t0, spaced(t0, NBSP), spaced(t0, ZWSP)]) {
+        for (const [shape, output] of [
+          ["clean claimless result", { stdout: resultJson(t), code: 0 }],
+          ["stderr, claimless clean result", { stdout: resultJson("Edited."), stderr: t, code: 0 }],
+        ] as const)
+          expect([t, shape, await launchWith(output)]).toEqual([
+            t,
+            shape,
+            subscriptionStopped(cls),
+          ]);
+        expect([
+          t,
+          await launchWith({ stdout: resultJson(`${t}\nDONE`), stderr: t, code: 0 }),
+        ]).toEqual([t, decidedAs("done")]);
+        expect([t, await launchWith({ stdout: resultJson(`${t}\nNOT DONE`), code: 0 })]).toEqual([
+          t,
+          decidedAs("not-done"),
+        ]);
+      }
+    for (const t of CLEAN_RESULT_TASK_DATA)
+      for (const output of [
+        { stdout: resultJson(t), code: 0 },
+        { stdout: resultJson("Edited."), stderr: spaced(t, NBSP), code: 0 },
+      ])
+        expect([t, await launchWith(output)]).toEqual([t, decidedAs("no-claim")]);
   });
 
   it("the A/B launch's live driver shares the classifier: stderr-only and NBSP quota wording is usage-limit there too", async () => {

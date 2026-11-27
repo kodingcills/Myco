@@ -73,7 +73,57 @@ export const FOLDED_USAGE_PHRASES: readonly (readonly [string, string])[] = [
   ["non-breaking hyphen U+2011", `5${ch(0x2011)}hour limit`],
   ["hyphen U+2010", `five${ch(0x2010)}hour limit`],
   ["en dash U+2013", `5${ch(0x2013)}hour limit`],
+  // #607 round 3, N3: the top of the hyphen range, and a phrase that needs a format character
+  // removed AND a whitespace fold together.
+  ["em dash U+2014", `5${ch(0x2014)}hour limit`],
+  ["horizontal bar U+2015", `five${ch(0x2015)}hour limit`],
+  ["ZWSP U+200B inside a word plus NBSP as the space", `us${ch(0x200b)}age${ch(0x00a0)}limit`],
 ];
+
+/**
+ * Structured error fields the classifier does not map, so its class is `error-result` (#607
+ * round 3, B2): unknown `error` strings and API statuses other than 401/402/403/429/529.
+ */
+export const UNMAPPED_STRUCTURED: readonly (readonly [string, Record<string, unknown>])[] = [
+  ["api_error_status 400", { api_error_status: 400 }],
+  ["api_error_status 500", { api_error_status: 500 }],
+  ["error unknown", { error: "unknown" }],
+  ["error invalid_request", { error: "invalid_request" }],
+  ["error server_error", { error: "server_error" }],
+];
+
+/** Quota, billing, auth and transient wording, each with the class its text names (B2). */
+export const FAULT_WORDING: readonly (readonly [string, string])[] = [
+  ["You've hit your limit", "usage-limit"],
+  ["Claude usage limit reached", "usage-limit"],
+  ["Your credit balance is too low to access the API", "billing"],
+  ["You're out of extra usage", "billing"],
+  ["Not logged in · Please run /login", "auth"],
+  ["OAuth token has expired", "auth"],
+  ["rate limit reached", "rate-limit"],
+];
+
+/**
+ * The narrow, numberless billing and auth phrases that stop a claimless clean result (#607
+ * round 3, L1), each with its class.
+ */
+export const CLEAN_RESULT_FAULT_PHRASES: readonly (readonly [string, string])[] = [
+  ["Credit balance is too low", "billing"],
+  ["You're out of extra usage", "billing"],
+  ["Please run /login", "auth"],
+  ["Not logged in", "auth"],
+  ["Invalid API key", "auth"],
+  ["OAuth token has expired", "auth"],
+];
+
+/** Task data that shares words with the billing / auth vocabulary; always the agent's (L1). */
+export const CLEAN_RESULT_TASK_DATA = [
+  "billing address updated",
+  "qty 429; HTTP 401",
+  "credential field cleared",
+  "Fixed the quota column and the forbidden flag; 403 rows left.",
+  "Set the API key column and the OAuth login field; credit unchanged.",
+] as const;
 
 /** Thin space (U+2009). */
 export const THIN_SPACE = ch(0x2009);

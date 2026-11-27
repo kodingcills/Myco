@@ -165,7 +165,7 @@ export const BILLING_TEXT =
   /credit balance|out of credits?|credits? (?:(?:are|is|have been|has been) )?(?:exhausted|depleted|used up|ran out)|insufficient (?:credits?|funds|balance)|billing|payment (?:required|failed|method)|\b402\b|quota|out of (?:extra )?usage/i;
 
 export const AUTH_TEXT =
-  /invalid (?:api )?key|api key|\/login|not logged in|log ?in again|please (?:log|sign) ?in|authenticat|unauthori[sz]ed|oauth|\b401\b|\b403\b|forbidden|credential|account (?:is )?on hold|verification required|token (?:has )?expired/i;
+  /invalid (?:api )?key|api key|\/login|not logged in|log[ -]?in again|please (?:log|sign)[ -]?in|authenticat|unauthori[sz]ed|oauth|\b401\b|\b403\b|forbidden|credential|account (?:is )?on hold|verification required|token (?:has )?expired/i;
 
 /**
  * The text-fallback class of an error message, or null when it names none. The order is
@@ -189,6 +189,46 @@ export function classOfText(text: string): PilotHarnessClass | null {
  */
 function refineLimit(cls: PilotHarnessClass, text: string): PilotHarnessClass {
   return cls === "rate-limit" && namesUsageLimit(text) ? "usage-limit" : cls;
+}
+
+/**
+ * The class of a run that did not complete normally, from its structured class and its text
+ * (#607 round 3, B2). With no structured class, or only an unmapped one (`error-result`: an
+ * unknown `error` string such as `invalid_request` / `server_error`, or an `api_error_status`
+ * other than 401/402/403/429/529, e.g. 400 or 500), the text vocabulary decides, so quota,
+ * billing or auth wording is never spent as an unclassified error result; with no matching
+ * text, the structured class stands (a bare status 500 stays `error-result`). A mapped
+ * structured class (auth, billing, rate-limit) wins, refined only by `refineLimit`.
+ */
+function classOfFailure(
+  structured: PilotHarnessClass | null,
+  text: string,
+): PilotHarnessClass | null {
+  return structured === null || structured === "error-result"
+    ? (classOfText(text) ?? structured)
+    : refineLimit(structured, text);
+}
+
+/**
+ * The narrow, numberless billing and auth wording that stops a claimless clean result (#607
+ * round 3, L1; lead rule 04:52Z). Exact CLI phrases only: unlike `BILLING_TEXT` / `AUTH_TEXT`
+ * ("billing", "quota", "credential", bare 401/403) none of them reads as task data. Matched on
+ * the folded forms (`vocabularyForms`). A result with a claim line is never reclassified.
+ */
+export const CLEAN_RESULT_AUTH_TEXT =
+  /please run \/login|not logged in|invalid api key|oauth token has expired/i;
+export const CLEAN_RESULT_BILLING_TEXT = /credit balance is too low|out of extra usage/i;
+
+/**
+ * The harness class of a claimless clean result, or null when it is the agent's `no-claim`.
+ * Tested on its text and stderr together (#606 S1). Auth first, then billing, then the usage
+ * quota, the same order as `classOfText`.
+ */
+function classOfClaimlessCleanResult(text: string): PilotHarnessClass | null {
+  if (matchesVocabulary(CLEAN_RESULT_AUTH_TEXT, text)) return "auth";
+  if (matchesVocabulary(CLEAN_RESULT_BILLING_TEXT, text)) return "billing";
+  if (namesUsageLimit(text)) return "usage-limit";
+  return null;
 }
 
 export function parseClaim(text: string): AgentReport["claim"] {
@@ -271,9 +311,11 @@ export function apiKeySourceProblem(messages: readonly Record<string, unknown>[]
  * `success`, `is_error` false, exit status 0, and no structured error on any message. A clean
  * result is the agent's outcome (a missing `DONE`/`NOT DONE` line is "no claim"), with one
  * fail-closed exception: no claim line AND usage-quota wording in its text or on stderr is
- * `usage-limit` (round 3, R2-D3b; #606 S1). The full text fallback runs only on runs that
+ * `usage-limit` (round 3, R2-D3b; #606 S1), and the narrow billing / auth phrases stop with
+ * their own class (#607 round 3, L1). The full text fallback runs only on runs that
  * did not complete normally (no result event: stdout and stderr; an error result: its text,
- * `errors[]` and stderr; a non-zero or null exit; a structured error).
+ * `errors[]` and stderr; a non-zero or null exit; a structured error), and also when the only
+ * structured class is unmapped (`classOfFailure`, #607 round 3, B2).
  */
 export function interpretResult(stdout: string, stderr: string, code: number | null): AgentReport {
   const { result, messages } = parseOutput(stdout);
@@ -291,8 +333,7 @@ export function interpretResult(stdout: string, stderr: string, code: number | n
     // classified with stderr (PR #598 round 3, R2-D3a: quota wording on stdout must stop the
     // run, not be re-run as a transport error that spends attempts).
     const noResultText = `${stdout}\n${stderr}`;
-    const cls =
-      structured === null ? classOfText(noResultText) : refineLimit(structured, noResultText);
+    const cls = classOfFailure(structured, noResultText);
     if (cls !== null)
       fault(cls, `claude exited ${String(code)} with a ${cls} signal and no result`);
     fault(
@@ -306,10 +347,10 @@ export function interpretResult(stdout: string, stderr: string, code: number | n
     r.is_error !== false || r.subtype !== "success" || code !== 0 || structured !== null;
   if (errored) {
     const failedText = `${text}\n${errors.join("\n")}\n${stderr}`;
-    const cls = structured === null ? classOfText(failedText) : refineLimit(structured, failedText);
+    const cls = classOfFailure(structured, failedText);
     fault(
       cls ?? "error-result",
-      `claude returned an error result (subtype ${String(r.subtype)}, exit ${String(code)}${cls === null ? ", unclassified" : ""})`,
+      `claude returned an error result (subtype ${String(r.subtype)}, exit ${String(code)}${cls === null || cls === "error-result" ? ", unclassified" : ""})`,
     );
   }
   // A run that completed normally is the agent's outcome. The auth / billing / transient
@@ -323,12 +364,17 @@ export function interpretResult(stdout: string, stderr: string, code: number | n
   // so fixture qty values (401 / 403 / 429) cannot trigger it; a result WITH a claim line is
   // never reclassified. The quota wording may be on stderr alone (lead ruling 03:58Z, #606
   // S1): a claimless clean result is tested together with stderr; with a claim line, stderr
-  // never matters.
-  if (claim === "no-claim" && namesUsageLimit(`${text}\n${stderr}`))
-    fault(
-      "usage-limit",
-      "claude returned a clean result with no claim, and its text or stderr names the usage limit",
-    );
+  // never matters. Round 3, L1 (lead rule 04:52Z): the same holds for a narrow, numberless set
+  // of exact CLI billing and auth phrases (`CLEAN_RESULT_*_TEXT`), which stop with their own
+  // class; the broad billing / auth / transient vocabulary is still never applied here.
+  if (claim === "no-claim") {
+    const cls = classOfClaimlessCleanResult(`${text}\n${stderr}`);
+    if (cls !== null)
+      fault(
+        cls,
+        `claude returned a clean result with no claim, and its text or stderr names a ${cls} fault`,
+      );
+  }
   return { claim, usage };
 }
 
