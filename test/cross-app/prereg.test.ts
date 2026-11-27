@@ -22,6 +22,7 @@ import {
   assignmentSchedule,
   bootstrapRatioUpper95,
   canonicalJson,
+  isFalseDone,
   isFalseVerified,
   isVerified,
   loadPPrereg,
@@ -36,6 +37,7 @@ import {
   type PTrial,
   preregHash,
   sha256Hex,
+  wilson95,
   zeroEventUpper95,
 } from "../../src/benchmark/cross-app-prereg.ts";
 import { XA_V2, xaTaskIds } from "../../src/tasks/cross-app-taskset.ts";
@@ -44,6 +46,13 @@ const ROOT = resolve(import.meta.dirname, "..", "..");
 const loaded = loadPPrereg(ROOT);
 const { prereg, hash } = loaded;
 const COMMIT = "0".repeat(40);
+/**
+ * The committed prereg lists lead rulings as pending, so no pack can be decided under it. The
+ * decision tests run under a test-only ratified copy (the pending list emptied) and its hash;
+ * nothing here writes it to disk.
+ */
+const ratified = { ...prereg, leadRulingPending: [] as string[] };
+const ratifiedHash = preregHash(ratified);
 
 describe("p-v1 is frozen and consistent", () => {
   it("the committed prereg agrees with its hash file and every digest it pins", () => {
@@ -222,7 +231,7 @@ function trial(
     retryBudget: prereg.retryBudget[arm],
     doneClaim: true,
     gateEndVerdict: gate,
-    ...(arm === "B+P" ? { lastCheckpointVerdict: gate } : {}),
+    ...(arm === "B+P" ? { checkpointVerdicts: [gate, gate, gate] } : {}),
     stepGrades:
       outcome === "false-verified"
         ? ["fail", "pass", "pass"]
@@ -277,14 +286,61 @@ function pack(o: {
   );
   return {
     schema: "myco.cross-app.p-pack/1",
-    preregSha256: hash,
+    preregSha256: ratifiedHash,
     preregCommit: COMMIT,
     taskSetVersion: "xa-v2",
     manifestSha256: prereg.taskSet.manifestSha256,
     trials,
   };
 }
-const analyze = (p: PPack) => analyzePPack(p, prereg, hash);
+const analyze = (p: PPack) => analyzePPack(p, ratified, ratifiedHash);
+
+describe("no decision while a lead ruling is pending", () => {
+  it("the committed prereg (rulings pending) never yields shown, however strong the pack", () => {
+    expect(prereg.leadRulingPending.length).toBeGreaterThan(0);
+    for (const [pOnly, bOnly] of [
+      [8, 0],
+      [5, 0],
+      [10, 2],
+    ] as const) {
+      const p = { ...pack({ pOnly, bOnly }), preregSha256: hash };
+      // Under the ratified copy the same pack is shown...
+      expect(analyze({ ...p, preregSha256: ratifiedHash }).decision).toBe("shown");
+      // ...under the committed prereg it is not decided at all.
+      const r = analyzePPack(p, prereg, hash);
+      expect(r.decision).toBe("lead-ruling-pending");
+      expect(r.reasons).toEqual([`LEAD_RULING_PENDING ${prereg.leadRulingPending.length}`]);
+      expect(r.arms).toBeUndefined();
+      expect(r.component1).toBeUndefined();
+    }
+  });
+
+  it("one pending item is enough; a missing or non-array field fails closed", () => {
+    const strong = pack({ pOnly: 8, bOnly: 0 });
+    const under = (pending: unknown) => {
+      const pr = { ...prereg, leadRulingPending: pending } as unknown as typeof prereg;
+      return analyzePPack({ ...strong, preregSha256: preregHash(pr) }, pr, preregHash(pr));
+    };
+    expect(under(["x"])).toMatchObject({
+      decision: "lead-ruling-pending",
+      reasons: ["LEAD_RULING_PENDING 1"],
+    });
+    for (const bad of [undefined, null, "none", {}, 0]) {
+      expect(under(bad), String(bad)).toMatchObject({
+        decision: "lead-ruling-pending",
+        reasons: ["LEAD_RULING_FIELD"],
+      });
+    }
+    expect(under([]).decision).toBe("shown");
+  });
+
+  it("refusals still come first: a simulated pack under pending rulings is refused", () => {
+    const sim = pack({ pOnly: 8, bOnly: 0, edit: (t) => ({ ...t, plannerModelId: "scripted" }) });
+    const r = analyzePPack({ ...sim, preregSha256: hash }, prereg, hash);
+    expect(r.decision).toBe("refused");
+    expect(r.reasons).toEqual(["SIMULATED_ROW"]);
+  });
+});
 
 describe("verified and false-verified", () => {
   const base = trial("B+P", "xa-v2-001", 0, "verified", 10);
@@ -292,12 +348,64 @@ describe("verified and false-verified", () => {
     expect(isVerified(base)).toBe(true);
     expect(isVerified({ ...base, doneClaim: false })).toBe(false);
     expect(isVerified({ ...base, gateEndVerdict: "uncertain" })).toBe(false);
-    expect(isVerified({ ...base, lastCheckpointVerdict: "refuted" })).toBe(false);
+    expect(isVerified({ ...base, checkpointVerdicts: ["verified", "verified", "refuted"] })).toBe(
+      false,
+    );
+    expect(isVerified({ ...base, checkpointVerdicts: undefined })).toBe(false);
     expect(isVerified({ ...base, endGrade: "ungradable" })).toBe(false);
     expect(isVerified({ ...base, stepGrades: ["pass", "fail", "pass"] })).toBe(false);
     // B has no checkpoints: the end-state gate check is enough.
     const b = trial("B", "xa-v2-001", 1, "verified", 10);
-    expect(isVerified({ ...b, lastCheckpointVerdict: undefined })).toBe(true);
+    expect(isVerified(b)).toBe(true);
+    expect("checkpointVerdicts" in b).toBe(false);
+  });
+
+  it("a checkpoint verified over a failed step is a false-verified, even with the end refuted", () => {
+    const ckpt: PTrial = {
+      ...trial("B+P", "xa-v2-001", 0, "failed", 10),
+      gateEndVerdict: "refuted",
+      checkpointVerdicts: ["verified", "verified", "refuted"],
+      stepGrades: ["pass", "fail", "pass"],
+      endGrade: "fail",
+    };
+    expect(isFalseVerified(ckpt)).toBe(true);
+    // Checkpoint 1 verified covers step 1 only: a later failure is not a false-verified...
+    expect(
+      isFalseVerified({ ...ckpt, checkpointVerdicts: ["verified", "refuted", "not-reached"] }),
+    ).toBe(false);
+    // ...but an ungradable step 1 under it is.
+    expect(
+      isFalseVerified({
+        ...ckpt,
+        checkpointVerdicts: ["verified", "refuted", "not-reached"],
+        stepGrades: ["ungradable", "fail", "fail"],
+      }),
+    ).toBe(true);
+    // The last checkpoint verified over an earlier failure, end refuted.
+    expect(
+      isFalseVerified({
+        ...ckpt,
+        checkpointVerdicts: ["refuted", "refuted", "verified"],
+        stepGrades: ["fail", "pass", "pass"],
+      }),
+    ).toBe(true);
+    expect(
+      isFalseVerified({ ...ckpt, checkpointVerdicts: ["refuted", "refuted", "refuted"] }),
+    ).toBe(false);
+  });
+
+  it("false done: a done claim while any step or the end grades fail, a masked step included", () => {
+    const masked: PTrial = {
+      ...trial("B", "xa-v2-001", 1, "failed", 10),
+      stepGrades: ["fail", "pass", "pass"],
+      endGrade: "pass",
+    };
+    expect(isFalseDone(masked)).toBe(true);
+    expect(isFalseDone({ ...masked, doneClaim: false })).toBe(false);
+    expect(isFalseDone({ ...masked, stepGrades: ["pass", "pass", "pass"] })).toBe(false);
+    expect(
+      isFalseDone({ ...masked, stepGrades: ["pass", "pass", "pass"], endGrade: "ungradable" }),
+    ).toBe(true);
   });
 
   it("a masked step (step 1 wrong, end right, gate verified) is not verified and is a false-verified", () => {
@@ -328,11 +436,82 @@ describe("analysis decisions", () => {
     expect(r.arms?.B.verified).toBe(10);
   });
 
-  it("component 2 not shown when B+P spends more steps per verified task", () => {
+  it("component 2 not shown: the overall decision is not shown; component 1 is still reported", () => {
     const r = analyze(pack({ pOnly: 8, bOnly: 0, pSteps: 30, bSteps: 10 }));
     expect(r.component1).toBe("shown");
     expect(r.component2).toBe("not-shown");
-    expect(r.decision).toBe("shown");
+    expect(r.decision).toBe("not-shown");
+    expect(r.reasons.some((x) => x.startsWith("RATIO_UPPER95"))).toBe(true);
+  });
+
+  it("each arm's verified count carries its Wilson 95% interval (z = 1.96)", () => {
+    // Reference values of the Wilson score interval at 95%.
+    const [lo, hi] = wilson95(5, 10);
+    expect(lo).toBeCloseTo(0.2366, 4);
+    expect(hi).toBeCloseTo(0.7634, 4);
+    expect(wilson95(0, 10)[0]).toBe(0);
+    expect(wilson95(0, 10)[1]).toBeCloseTo(0.2775, 4);
+    const r = analyze(pack({ pOnly: 8, bOnly: 0 }));
+    expect(r.arms?.B.wilson95).toEqual(wilson95(10, 40));
+    expect(r.arms?.["B+P"].wilson95).toEqual(wilson95(18, 40));
+  });
+
+  it("false done is counted per arm: done claim and the task grades fail", () => {
+    // 8 B+P-only, 10 both, 22 neither: every failed trial claims done in the fixture.
+    const base = analyze(pack({ pOnly: 8, bOnly: 0 }));
+    expect(base.arms?.["B+P"].falseDone).toBe(22);
+    expect(base.arms?.B.falseDone).toBe(30);
+    const r = analyze(
+      pack({
+        pOnly: 8,
+        bOnly: 0,
+        edit: (t) =>
+          t.arm !== "B"
+            ? t
+            : t.taskId === "xa-v2-040"
+              ? { ...t, doneClaim: false } // a failed trial without a done claim
+              : t.taskId === "xa-v2-010" // a "both" task: masked step, gate refuted
+                ? {
+                    ...t,
+                    gateEndVerdict: "refuted",
+                    stepGrades: ["fail", "pass", "pass"],
+                    endGrade: "pass",
+                  }
+                : t,
+      }),
+    );
+    expect(r.arms?.B.falseDone).toBe(30);
+    expect(r.arms?.B.verified).toBe(9);
+  });
+
+  it("a checkpoint false-verified in B+P fails the bar (end refuted)", () => {
+    const r = analyze(
+      pack({
+        pOnly: 12,
+        bOnly: 0,
+        edit: (t) =>
+          t.arm === "B+P" && t.taskId === "xa-v2-040"
+            ? {
+                ...t,
+                gateEndVerdict: "refuted",
+                checkpointVerdicts: ["verified", "verified", "refuted"],
+                stepGrades: ["pass", "fail", "pass"],
+                endGrade: "fail",
+              }
+            : t,
+      }),
+    );
+    expect(r.decision).toBe("not-shown");
+    expect(r.reasons).toContain("GUARDRAIL_FALSE_VERIFIED 1");
+  });
+
+  it("p-v1 reports no wall-time or cost secondaries, and the prereg says so", () => {
+    const r = analyze(pack({ pOnly: 8, bOnly: 0 }));
+    const keys = JSON.stringify(r).toLowerCase();
+    expect(keys).not.toMatch(/wall|cost|usd|seconds/);
+    const raw = JSON.parse(readFileSync(join(ROOT, P_PREREG_PATH), "utf8"));
+    expect(raw.notInAnalysis).toMatch(/wall time and cost per verified task/i);
+    expect(JSON.stringify(raw.secondary)).not.toMatch(/wall|cost/);
   });
 
   it("underpowered: 4 discordant, all for B+P, is not shown and says so", () => {
@@ -400,11 +579,16 @@ describe("analysis decisions", () => {
     }
   });
 
-  it("refuses a pack whose prereg hash, commit, task set or manifest does not match", () => {
+  it("refuses a pack whose prereg hash, task set or manifest does not match, or whose commit is missing or malformed", () => {
     const good = pack({ pOnly: 8, bOnly: 0 });
+    // The commit is format-checked only: any well-formed 40-hex SHA passes (not looked up in git).
+    expect(analyze({ ...good, preregCommit: "f".repeat(40) }).decision).toBe("shown");
     const cases: [PPack, string][] = [
       [{ ...good, preregSha256: "f".repeat(64) }, "PREREG_HASH_MISMATCH"],
       [{ ...good, preregCommit: "" }, "PREREG_COMMIT_MISSING"],
+      [{ ...good, preregCommit: "F".repeat(40) }, "PREREG_COMMIT_MISSING"],
+      [{ ...good, preregCommit: "0".repeat(39) }, "PREREG_COMMIT_MISSING"],
+      [{ ...good, preregCommit: 7 as unknown as string }, "PREREG_COMMIT_MISSING"],
       [{ ...good, taskSetVersion: "xa-v1" }, "TASK_SET_MISMATCH"],
       [{ ...good, manifestSha256: XA_BAR.manifestSha256 }, "MANIFEST_MISMATCH"],
       [{ ...good, schema: "x" as PPack["schema"] }, "PACK_SCHEMA"],
@@ -417,16 +601,32 @@ describe("analysis decisions", () => {
     }
   });
 
-  it("refuses any simulated row: marked simulated, or a planner other than the prereg's model", () => {
+  it("refuses any simulated row: a marker that is not exactly false, or a planner other than the prereg's model", () => {
     const mark = (f: (t: PTrial) => PTrial) => (t: PTrial) => (t.ordinal === 5 ? f(t) : t);
+    const markers: unknown[] = [true, "true", "false", 1, 0, null, {}, [], "yes"];
     for (const edit of [
-      mark((t) => ({ ...t, simulated: true })),
+      ...markers.map((m) => mark((t) => ({ ...t, simulated: m }) as PTrial)),
       mark((t) => ({ ...t, plannerModelId: "scripted" })),
     ]) {
       const r = analyze(pack({ pOnly: 8, bOnly: 0, edit }));
       expect(r.decision).toBe("refused");
       expect(r.reasons).toEqual(["SIMULATED_ROW"]);
     }
+    // The marker on the last row only, carried through JSON as a string, is still refused.
+    const p = pack({ pOnly: 8, bOnly: 0 });
+    const last = p.trials.length - 1;
+    const viaJson = JSON.parse(
+      JSON.stringify({
+        ...p,
+        trials: p.trials.map((t, i) => (i === last ? { ...t, simulated: "true" } : t)),
+      }),
+    ) as PPack;
+    expect(analyze(viaJson).reasons).toEqual(["SIMULATED_ROW"]);
+    // A real row: no marker, or exactly false.
+    expect(
+      analyze(pack({ pOnly: 8, bOnly: 0, edit: (t) => ({ ...t, simulated: false }) })).decision,
+    ).toBe("shown");
+    expect(analyze(p).decision).toBe("shown");
   });
 
   it("incomplete: a missing, duplicated or malformed cell is never analysed", () => {
@@ -454,11 +654,34 @@ describe("analysis decisions", () => {
     const bp = good.trials.findIndex((t) => t.arm === "B+P");
     const r = analyze({
       ...good,
-      trials: good.trials.map((t, i) =>
-        i === bp ? { ...t, lastCheckpointVerdict: undefined } : t,
-      ),
+      trials: good.trials.map((t, i) => (i === bp ? { ...t, checkpointVerdicts: undefined } : t)),
     });
     expect(r.reasons.some((x) => x.startsWith("CHECKPOINT"))).toBe(true);
+    const bIdx = good.trials.findIndex((t) => t.arm === "B");
+    const cp = (i: number, cps: unknown) =>
+      analyze({
+        ...good,
+        trials: good.trials.map((t, j) =>
+          j === i ? ({ ...t, checkpointVerdicts: cps } as PTrial) : t,
+        ),
+      });
+    for (const [i, cps] of [
+      [bp, ["verified", "verified"]],
+      [bp, ["not-reached", "verified", "verified"]],
+      [bp, ["verified", "maybe", "verified"]],
+      [bIdx, ["verified", "verified", "verified"]],
+    ] as const) {
+      const res = cp(i, cps);
+      expect(res.decision, JSON.stringify(cps)).toBe("incomplete");
+      expect(res.reasons.some((x) => x.startsWith("CHECKPOINT"))).toBe(true);
+    }
+    expect(cp(bp, ["refuted", "not-reached", "not-reached"]).decision).toBe("shown");
+    const nul = analyze({
+      ...good,
+      trials: good.trials.map((t, i) => (i === 3 ? (null as unknown as PTrial) : t)),
+    });
+    expect(nul.decision).toBe("incomplete");
+    expect(nul.reasons).toContain("TRIAL_NOT_OBJECT");
   });
 });
 
@@ -475,9 +698,46 @@ describe("the CLI", () => {
     const dir = mkdtempSync(join(tmpdir(), "p-pack-"));
     const file = join(dir, "pack.json");
     const sim = pack({ pOnly: 8, bOnly: 0, edit: (t) => ({ ...t, plannerModelId: "scripted" }) });
-    writeFileSync(file, JSON.stringify(sim));
+    writeFileSync(file, JSON.stringify({ ...sim, preregSha256: hash }));
     const r = cli("analyze", file);
     expect(r.status).toBe(1);
     expect(JSON.parse(r.stdout).reasons).toEqual(["SIMULATED_ROW"]);
+    // A strong real-model pack under the committed prereg: rulings pending, so not decided.
+    const strong = join(dir, "strong.json");
+    writeFileSync(strong, JSON.stringify({ ...pack({ pOnly: 8, bOnly: 0 }), preregSha256: hash }));
+    const s = cli("analyze", strong);
+    expect(s.status).toBe(1);
+    expect(JSON.parse(s.stdout).decision).toBe("lead-ruling-pending");
+  });
+
+  it("analyze refuses to run under an inconsistent prereg", { timeout: 60_000 }, () => {
+    // A temp copy of the pinned files with the hash file tampered; the copied script loads the
+    // copied prereg (its root is the copy).
+    const root = mkdtempSync(join(tmpdir(), "p-v1-cli-"));
+    for (const rel of [
+      P_PREREG_PATH,
+      P_PREREG_HASH_PATH,
+      prereg.taskSet.manifest,
+      join(dirname(prereg.taskSet.manifest), "tasks.jsonl"),
+      P_ANALYSIS_MODULE,
+      P_ANALYSIS_SCRIPT,
+    ]) {
+      mkdirSync(dirname(join(root, rel)), { recursive: true });
+      copyFileSync(join(ROOT, rel), join(root, rel));
+    }
+    const file = join(root, "pack.json");
+    writeFileSync(file, JSON.stringify({ ...pack({ pOnly: 8, bOnly: 0 }), preregSha256: hash }));
+    const run = () =>
+      spawnSync("npx", ["tsx", join(root, P_ANALYSIS_SCRIPT), "analyze", file], {
+        cwd: ROOT,
+        encoding: "utf8",
+      });
+    const before = run();
+    expect(before.stdout).toContain("lead-ruling-pending"); // the copy itself is consistent
+    writeFileSync(join(root, P_PREREG_HASH_PATH), `${"f".repeat(64)}\n`);
+    const r = run();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("prereg p-v1 inconsistent: PREREG_HASH_FILE");
+    expect(r.stdout).toBe("");
   });
 });

@@ -4,7 +4,7 @@
   "version": "p-v1",
   "capability": "Cross-app workflows",
   "frozenOn": "2026-11-27",
-  "status": "Frozen pre-registration (Part 1 §3). Values listed in leadRulingPending are proposed and await the lead's ruling; a change to any value after the first measurement run is a new version (p-v2).",
+  "status": "Frozen pre-registration (Part 1 §3). Values listed in leadRulingPending are proposed and await the lead's ruling; while that list is not empty the analysis decides nothing (decision lead-ruling-pending, never shown). Ratifying empties the list, which changes the pre-registration hash, and must happen before the first measurement run; a change to any value after the first measurement run is a new version (p-v2).",
   "spec": {
     "bar": "docs/product/capability-spec-2.md §P (as written)",
     "sharedRules": "docs/product/capability-spec.md §1, §3, §4; docs/product/capability-spec-2.md §1, §4"
@@ -121,13 +121,15 @@
       }
     ],
     "guardrails": [
-      "Zero gate false-verifieds over all B+P trials (gate end verdict verified while any step or end grade is fail or ungradable); one fails the bar.",
+      "Zero gate false-verifieds over all B+P trials (the gate end verdict verified while any step or end grade is fail or ungradable, or a checkpoint k verified while any of steps 1..k is graded fail or ungradable); one fails the bar.",
       "Masked-step tasks (step k wrong in its own snapshot, fixed later) grade fail: a later step never masks an earlier failure.",
       "Every step oracle passes R5's self-test on its claimed classes.",
       "On the sealed-vault path, a family whose extra files the vault does not capture returns uncertain (fail closed)."
     ],
+    "decision": "shown only if component 1 and component 2 are both shown; each component's result is reported on its own",
     "notShown": [
       "p > 0.05",
+      "component 2 not shown (component 1 is still reported as shown)",
       "fewer than 5 discordant tasks ('underpowered at n', with the discordant count)",
       "a guardrail breached",
       "a parity or assignment check failed"
@@ -135,22 +137,24 @@
     "refused": [
       "the pack's pre-registration hash does not match this file's hash",
       "the pack's task set or manifest digest differs",
-      "any simulated row (planner not the pre-registered model id, or marked simulated)"
+      "the pack's prereg commit is missing or malformed (format check only; it is not looked up in git history)",
+      "any simulated row (planner not the pre-registered model id, or a simulated marker present and not exactly false)"
     ]
   },
   "secondary": [
     "per-step pass rate",
     "the step at which failures first occur",
-    "steps, wall time and cost per verified task (cost a token-derived estimate over ALL trials; null never 0)",
-    "false done",
+    "steps per verified task (total steps over ALL trials / verified trials)",
+    "false done (a done claim while the task grades fail: any step snapshot or the end not pass)",
     "correct, not accepted"
   ],
+  "notInAnalysis": "Wall time and cost per verified task (capability-spec-2 §P secondaries) are not in p-v1: the pack carries no wall-time or cost field and the analysis computes neither. Adding them is a new version (p-v2).",
   "evidence": "Experiment rows only, never R1 evidence (capability-spec-2 §1.5). Simulated rows never count. No run until the lead's GO for track P.",
   "analysis": {
     "module": "src/benchmark/cross-app-prereg.ts",
-    "moduleSha256": "5a507043dae99989c491fd22ebc9e06ca4ff61e6fb2853a07f05519d9f8b08cd",
+    "moduleSha256": "d73c61334115edbeab1de7bcbb62a66bdfe5271512a7e47a18ae7ea9c463fe73",
     "script": "scripts/cross-app-prereg.ts",
-    "scriptSha256": "e93b0bcca85c2cc7bcf8d6c579bbacdfa196bebf851866bd95cf06fcf8f75876",
+    "scriptSha256": "40eddedea96d2d4842b4431addc132eb996e3cc71bbca445845166137bcd0fcf",
     "packSchema": "myco.cross-app.p-pack/1",
     "command": "npx tsx scripts/cross-app-prereg.ts analyze <pack.json>"
   },

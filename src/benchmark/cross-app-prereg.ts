@@ -18,15 +18,27 @@
  *      p <= 0.05 with at least 5 discordant tasks;
  *   2. only if 1 is shown: steps per verified task, paired bootstrap over tasks (10,000
  *      resamples, pre-registered seed), one-sided 95% upper bound of `B+P`/`B` below 1.0.
- * - Guardrail: zero gate false-verifieds over all `B+P` trials (gate end `verified` while any
- *   step or end grade is not `pass`); one fails the bar.
+ * - Guardrail: zero gate false-verifieds over all `B+P` trials; one fails the bar. A trial is
+ *   false-verified when the gate said `verified` and the grader did not pass what that verdict
+ *   covers: the end verdict `verified` while any step or end grade is not `pass`, or a
+ *   checkpoint k `verified` while any of steps 1..k is not graded `pass` (spec-2 §P: "gate
+ *   `verified`, grader `fail` or `ungradable`"; a checkpoint k holds only if steps 1..k pass).
+ * - Shown only if every bar component is shown: the overall decision is `shown` only when
+ *   component 1 and component 2 are both shown; each component's own result is reported.
  * - Not shown (Part 1 §1.5): p > 0.05; fewer than 5 discordant ("underpowered at n"); a
- *   guardrail breached; a parity or assignment check failed.
+ *   guardrail breached; a parity or assignment check failed; component 2 not shown.
  * - Refused (Part 1 §3 items 2 and 5): a pack whose pre-registration hash, task set or
- *   manifest digest does not match the committed pre-registration, or any simulated row (a
- *   planner that is not the pre-registered model id, or a row marked simulated).
+ *   manifest digest does not match the committed pre-registration, whose prereg commit is
+ *   missing or malformed (its format only: the commit is not looked up in git history), or
+ *   any simulated row (a planner that is not the pre-registered model id, or a `simulated`
+ *   marker that is present and not exactly `false`).
+ * - Lead ruling pending: while the pre-registration's `leadRulingPending` is not an empty
+ *   array, nothing is analysed and the decision is `lead-ruling-pending`, never `shown`.
  * - Incomplete: the record does not fill every (task, arm) cell exactly once with known
  *   values. Never a pass.
+ *
+ * Not in p-v1's pack or analysis: wall time and cost per verified task (spec-2 §P lists them
+ * as secondary). Steps per verified task is computed; the prereg says the other two are not.
  *
  * Self-contained on purpose: the pre-registration pins this file's SHA-256, so it imports no
  * repo module whose change could alter the analysis without changing that digest. It reads
@@ -47,6 +59,8 @@ export const P_ARMS = ["B+P", "B"] as const;
 export type PArm = (typeof P_ARMS)[number];
 export type PGrade = "pass" | "fail" | "ungradable";
 export type PVerdict = "verified" | "refuted" | "uncertain";
+/** A `B+P` checkpoint: the gate's final verdict on it, or `not-reached` (only after the last reached). */
+export type PCheckpoint = PVerdict | "not-reached";
 
 /** The fields of the pre-registration this analysis reads (the rest is for readers). */
 export interface PPrereg {
@@ -76,6 +90,11 @@ export interface PPrereg {
     readonly script: string;
     readonly scriptSha256: string;
   };
+  /**
+   * Values proposed but not yet ratified by the lead. The analysis refuses to decide (decision
+   * `lead-ruling-pending`) unless this is an empty array; anything else fails closed.
+   */
+  readonly leadRulingPending: readonly string[];
 }
 
 /** One scored trial of the pack (one per task per arm). */
@@ -85,6 +104,7 @@ export interface PTrial {
   /** 0-based position in the run order; must follow the pre-registered schedule. */
   readonly ordinal: number;
   readonly plannerModelId: string;
+  /** Absent or exactly `false` on a real row; any other value (even `"true"`) is refused. */
   readonly simulated?: boolean;
   readonly instructionSha256: string;
   readonly stepBudget: number;
@@ -92,8 +112,11 @@ export interface PTrial {
   readonly doneClaim: boolean;
   /** The gate's end-state verdict (both arms are gated rows). */
   readonly gateEndVerdict: PVerdict;
-  /** `B+P` only: the gate's verdict on the last checkpoint. */
-  readonly lastCheckpointVerdict?: PVerdict;
+  /**
+   * `B+P` only (absent in `B`, which has no checkpoints): the gate's final verdict on
+   * checkpoint k (index k-1), one per step. The last checkpoint is the last entry.
+   */
+  readonly checkpointVerdicts?: readonly PCheckpoint[];
   /** The independent grader's status for each step snapshot, in step order. */
   readonly stepGrades: readonly PGrade[];
   /** The independent grader's status for the end state. */
@@ -117,6 +140,7 @@ export interface PArmSummary {
   readonly rate: number;
   readonly wilson95: readonly [number, number];
   readonly correctNotAccepted: number;
+  /** Done claim while the task grades fail: any step snapshot or the end not `pass`. */
   readonly falseDone: number;
   /** Per step: snapshots graded `pass` over trials. */
   readonly stepPassRate: readonly number[];
@@ -128,7 +152,8 @@ export interface PArmSummary {
 }
 
 export interface PResult {
-  readonly decision: "shown" | "not-shown" | "refused" | "incomplete";
+  /** `shown` only when component 1 and component 2 are both shown. */
+  readonly decision: "shown" | "not-shown" | "refused" | "lead-ruling-pending" | "incomplete";
   /** Codes and short reasons; refusals and incompletes list every problem found. */
   readonly reasons: readonly string[];
   readonly evidenceUse: "experiment-only (never R1 evidence)";
@@ -310,15 +335,28 @@ const STEPS_PER_TASK = 3;
 
 const allPass = (t: PTrial) => t.stepGrades.every((g) => g === "pass") && t.endGrade === "pass";
 
-/** Part 1 §1.1, gated rows, with P's checkpoint clause. */
+/** Part 1 §1.1, gated rows, with P's checkpoint clause (the last checkpoint `verified`). */
 export function isVerified(t: PTrial): boolean {
   if (!t.doneClaim || t.gateEndVerdict !== "verified" || !allPass(t)) return false;
-  return t.arm === "B" || t.lastCheckpointVerdict === "verified";
+  return t.arm === "B" || t.checkpointVerdicts?.[STEPS_PER_TASK - 1] === "verified";
 }
 
-/** Gate end `verified` while the grader did not pass every snapshot and the end state. */
+/**
+ * The gate said `verified` where the grader did not pass what the verdict covers: the end
+ * verdict while any snapshot or the end is not `pass`, or checkpoint k while any of steps 1..k
+ * is not `pass`.
+ */
 export function isFalseVerified(t: PTrial): boolean {
-  return t.gateEndVerdict === "verified" && !allPass(t);
+  if (t.gateEndVerdict === "verified" && !allPass(t)) return true;
+  const cps = t.checkpointVerdicts ?? [];
+  return cps.some(
+    (v, k) => v === "verified" && !t.stepGrades.slice(0, k + 1).every((g) => g === "pass"),
+  );
+}
+
+/** False done (Part 1 table): a done claim while the task grades fail (a masked step included). */
+export function isFalseDone(t: PTrial): boolean {
+  return t.doneClaim && !allPass(t);
 }
 
 function summarize(trials: readonly PTrial[]): PArmSummary {
@@ -327,7 +365,7 @@ function summarize(trials: readonly PTrial[]): PArmSummary {
   const correctNotAccepted = trials.filter(
     (t) => t.doneClaim && allPass(t) && !isVerified(t),
   ).length;
-  const falseDone = trials.filter((t) => t.doneClaim && t.endGrade !== "pass").length;
+  const falseDone = trials.filter(isFalseDone).length;
   const stepPassRate = Array.from(
     { length: STEPS_PER_TASK },
     (_, k) => trials.filter((t) => t.stepGrades[k] === "pass").length / n,
@@ -366,12 +404,24 @@ function refusals(pack: PPack, prereg: PPrereg, committedHash: string): string[]
   if (pack.manifestSha256 !== prereg.taskSet.manifestSha256) out.push("MANIFEST_MISMATCH");
   const trials = Array.isArray(pack.trials) ? pack.trials : [];
   for (const t of trials) {
-    if (t.simulated === true || t.plannerModelId !== prereg.model.plannerModelId) {
+    if (typeof t !== "object" || t === null) continue; // designProblems reports it
+    // A real row carries no marker or exactly `false`; any other value is a simulated row.
+    const marked = t.simulated !== undefined && t.simulated !== false;
+    if (marked || t.plannerModelId !== prereg.model.plannerModelId) {
       out.push("SIMULATED_ROW");
       break;
     }
   }
   return out;
+}
+
+/** One verdict per step; `not-reached` only after the last reached checkpoint. */
+function checkpointsWellFormed(cps: unknown): boolean {
+  if (!Array.isArray(cps) || cps.length !== STEPS_PER_TASK) return false;
+  const firstUnreached = cps.indexOf("not-reached");
+  return cps.every((v, k) =>
+    firstUnreached >= 0 && k >= firstUnreached ? v === "not-reached" : VERDICTS.has(v),
+  );
 }
 
 /** Design problems: every (task, arm) cell exactly once, known values only. */
@@ -381,6 +431,10 @@ function designProblems(pack: PPack, prereg: PPrereg): string[] {
   const known = new Set(prereg.taskSet.taskIds);
   const seen = new Map<string, number>();
   for (const t of pack.trials) {
+    if (typeof t !== "object" || t === null) {
+      out.push("TRIAL_NOT_OBJECT");
+      continue;
+    }
     const id = `${String(t.arm)}:${String(t.taskId)}`;
     if (!(P_ARMS as readonly unknown[]).includes(t.arm)) {
       out.push(`UNKNOWN_ARM ${String(t.arm)}`);
@@ -392,7 +446,8 @@ function designProblems(pack: PPack, prereg: PPrereg): string[] {
     }
     if (typeof t.doneClaim !== "boolean") out.push(`DONE_CLAIM ${id}`);
     if (!VERDICTS.has(t.gateEndVerdict)) out.push(`GATE_VERDICT ${id}`);
-    if (t.arm === "B+P" && !VERDICTS.has(t.lastCheckpointVerdict)) out.push(`CHECKPOINT ${id}`);
+    if (t.arm === "B+P" ? !checkpointsWellFormed(t.checkpointVerdicts) : "checkpointVerdicts" in t)
+      out.push(`CHECKPOINT ${id}`);
     if (!GRADES.has(t.endGrade)) out.push(`END_GRADE ${id}`);
     if (
       !Array.isArray(t.stepGrades) ||
@@ -495,6 +550,16 @@ export function analyzePPack(pack: PPack, prereg: PPrereg, committedHash: string
   const refused = refusals(pack, prereg, committedHash);
   if (refused.length > 0)
     return { decision: "refused", reasons: refused, evidenceUse: EVIDENCE_USE };
+  // No decision while any pre-registered value awaits the lead (fail closed on a bad field).
+  const pending = prereg.leadRulingPending;
+  if (!Array.isArray(pending) || pending.length !== 0)
+    return {
+      decision: "lead-ruling-pending",
+      reasons: [
+        Array.isArray(pending) ? `LEAD_RULING_PENDING ${pending.length}` : "LEAD_RULING_FIELD",
+      ],
+      evidenceUse: EVIDENCE_USE,
+    };
   const design = designProblems(pack, prereg);
   if (design.length > 0)
     return { decision: "incomplete", reasons: design, evidenceUse: EVIDENCE_USE };
@@ -540,7 +605,7 @@ export function analyzePPack(pack: PPack, prereg: PPrereg, committedHash: string
     if (component2 === "not-shown") reasons.push(`RATIO_UPPER95 ${ratioUpper95}`);
   }
   return {
-    decision: component1 === "shown" ? "shown" : "not-shown",
+    decision: component1 === "shown" && component2 === "shown" ? "shown" : "not-shown",
     reasons,
     evidenceUse: EVIDENCE_USE,
     arms,
