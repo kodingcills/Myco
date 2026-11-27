@@ -18,7 +18,7 @@
  * PR accepts no sidecar at all (the evidence clip and its sidecar are build PR B6), so any
  * sidecar is refused with CLIP_SCHEMA. Nothing here ever exits 0 from verify.
  */
-import { closeSync, constants, existsSync, openSync, writeSync } from "node:fs";
+import { closeSync, constants, openSync, writeSync } from "node:fs";
 import type { Writable } from "node:stream";
 import { isSafeId } from "../../gate/api.ts";
 import { guardWithHost, readIdentityLines } from "../../proof/identity.ts";
@@ -176,7 +176,7 @@ function runExport(argv: readonly string[], io: { stdout: Writable; stderr: Writ
     ...(widthText === undefined ? {} : { width: Number(widthText) }),
   });
   if (!preview.ok) return refuse(io, json, preview.code);
-  if (existsSync(out) || !writeExclusive(out, preview.gif)) {
+  if (!writeExclusive(out, preview.gif)) {
     io.stderr.write("myco clip: refused: --out exists or cannot be created (nothing written)\n");
     return EXIT_REFUSED;
   }

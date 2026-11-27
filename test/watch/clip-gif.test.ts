@@ -2,14 +2,18 @@
  * Clip GIF encoder and the postable budget (spec #589 §2.7 encoder output, §2.9 budget, RS-15;
  * issue #666). Structure is checked by an independent reader (gif-decode.ts) and by Chromium.
  */
+
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { type Browser, chromium } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PALETTE } from "../../src/watch/clip/band.ts";
-import { encodeGif, lzwEncode } from "../../src/watch/clip/gif.ts";
+import { encodeGif, GifWriter, lzwEncode } from "../../src/watch/clip/gif.ts";
 import { CLIP_BUDGET, exportMockPreview } from "../../src/watch/clip/mock-preview.ts";
 import { decodeGif } from "./gif-decode.ts";
-
-import { OWN, previewInput, recordedRun } from "./recorded-run.ts";
+import { encodePng, tempDir } from "./helpers.ts";
+import { OWN, previewInput, RUN, recordedRun, TASK } from "./recorded-run.ts";
+import { manifestBytes, recordTrial } from "./timeline-fixture.ts";
 
 function noise(n: number, seed: number): Uint8Array {
   const out = new Uint8Array(n);
@@ -39,6 +43,18 @@ describe("GIF encoder (§2.7)", () => {
     });
     // Noise this large overflows the 4096-entry table at least once.
     expect(lzwEncode(noise(width * height, 1)).length).toBeGreaterThan(4096);
+  });
+
+  it("a capped writer refuses the first frame that would cross the cap, and adds nothing", () => {
+    const frame = { pixels: noise(64 * 64, 5), delayCs: 10 };
+    const full = encodeGif(64, 64, PALETTE, [frame, frame]).length;
+    const writer = new GifWriter(64, 64, PALETTE, full - 1);
+    expect(writer.add(frame)).toBe(true);
+    expect(writer.add(frame)).toBe(false);
+    const out = writer.finish();
+    expect(decodeGif(out).frames).toHaveLength(1);
+    expect(out.length).toBeLessThan(full);
+    expect(new GifWriter(64, 64, PALETTE, full).add(frame)).toBe(true);
   });
 
   it("is deterministic: the same frames give the same bytes", () => {
@@ -130,6 +146,39 @@ describe("postable budget (§2.9, RS-15)", () => {
         code: "CLIP_BUDGET",
       });
   }, 60_000);
+
+  it("refuses output over 5 MiB (CLIP_BUDGET): full-size noise frames", async () => {
+    const width = 960;
+    const height = 1080;
+    const noisy = (i: number) => {
+      const row = width * 3 + 1;
+      const raw = Buffer.alloc(row * height);
+      // xorshift32: noise the frame backstop accepts and LZW cannot compress.
+      let s = (0x9e3779b1 ^ (i * 7919)) >>> 0 || 1;
+      for (let y = 0; y < height; y += 1)
+        for (let x = 1; x < row; x += 1) {
+          s ^= s << 13;
+          s >>>= 0;
+          s ^= s >>> 17;
+          s ^= s << 5;
+          s >>>= 0;
+          raw[y * row + x] = s & 0xff;
+        }
+      return encodePng({ width, height, colorType: 2, raw, level: 1 });
+    };
+    const steps = [...Array.from({ length: 8 }, (_, i) => ({ frame: `n${i}` })), { call: OWN }];
+    const trial = await recordTrial({ taskId: TASK, runId: RUN }, steps, { encode: noisy });
+    const root = tempDir("myco-clip-noise-");
+    mkdirSync(join(root, RUN));
+    for (const [i, bytes] of trial.frames.entries())
+      writeFileSync(join(root, RUN, `f${i}.png`), bytes);
+    writeFileSync(join(root, RUN, "timeline.jsonl"), manifestBytes(trial.records));
+    const rec = { root, log: join(root, "log"), trial };
+    expect(exportMockPreview({ ...previewInput(rec, 0, 7), width: 960 })).toEqual({
+      ok: false,
+      code: "CLIP_BUDGET",
+    });
+  }, 120_000);
 
   it("refuses an invalid join (CLIP_TIMELINE), an out-of-range span (CLIP_FRAMES) and a bad frame", async () => {
     const rec = await recordedRun();

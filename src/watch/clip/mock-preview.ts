@@ -25,7 +25,7 @@ import {
   quantizeScaled,
   watermarkMask,
 } from "./band.ts";
-import { encodeGif, type IndexedFrame } from "./gif.ts";
+import { GifWriter } from "./gif.ts";
 import { decodeSanitizedPng } from "./png-decode.ts";
 
 /** The closed clip codes (§1.1). A code used here is a member of exactly this enum. */
@@ -129,23 +129,18 @@ export function exportMockPreview(input: MockPreviewInput): MockPreview {
       width > CLIP_BUDGET.maxWidth
     )
       return refuse("CLIP_BUDGET");
-    const sources = [];
-    for (let f = from; f <= to; f += 1) {
+    // Frames are decoded, composed and encoded one at a time: at most one source frame and one
+    // output frame are held, and the writer stops at the first frame over the byte cap.
+    const decode = (f: number) => {
       const raw = input.frame(f);
-      if (raw === null || raw.provenance !== "file" || raw.contentType !== "image/png")
-        return refuse("CLIP_FRAME_REFUSED");
+      if (raw === null || raw.provenance !== "file" || raw.contentType !== "image/png") return null;
       const served = servableFrame(raw, input.needles);
-      const rgba = served === null ? null : decodeSanitizedPng(served.bytes);
-      if (rgba === null) return refuse("CLIP_FRAME_REFUSED");
-      sources.push(rgba);
-    }
-    const first = sources[0];
-    if (first === undefined) return refuse("CLIP_FRAMES");
+      return served === null ? null : decodeSanitizedPng(served.bytes);
+    };
+    const first = decode(from);
+    if (first === null) return refuse("CLIP_FRAME_REFUSED");
     const contentH = Math.max(1, Math.round((width * first.height) / first.width));
     if (contentH > CLIP_BUDGET.maxContentHeight) return refuse("CLIP_BUDGET");
-    const run = displayId(input.runId, input.guard);
-    const task = displayId(input.taskId, input.guard);
-    const mask = watermarkMask(width, contentH);
     const delay = Math.max(
       CLIP_BUDGET.minDelayCs,
       Math.min(
@@ -153,10 +148,17 @@ export function exportMockPreview(input: MockPreviewInput): MockPreview {
         Math.floor((CLIP_BUDGET.maxTotalCs - CLIP_BUDGET.endCardCs) / span),
       ),
     );
-    const frames: IndexedFrame[] = [];
+    if (span * delay + CLIP_BUDGET.endCardCs > CLIP_BUDGET.maxTotalCs) return refuse("CLIP_BUDGET");
+    const run = displayId(input.runId, input.guard);
+    const task = displayId(input.taskId, input.guard);
+    const mask = watermarkMask(width, contentH);
+    const height = contentH + BAND_H;
+    const writer = new GifWriter(width, height, PALETTE, CLIP_BUDGET.maxBytes);
+    const delaysCs: number[] = [];
     let last: BandFields | null = null;
-    sources.forEach((rgba, i) => {
-      const f = from + i;
+    for (let f = from; f <= to; f += 1) {
+      const rgba = f === from ? first : decode(f);
+      if (rgba === null) return refuse("CLIP_FRAME_REFUSED");
       const d = decisionAt(join.decisions, f);
       const fields: BandFields = {
         run,
@@ -167,27 +169,22 @@ export function exportMockPreview(input: MockPreviewInput): MockPreview {
           d === null ? null : { call: d.call, verdict: d.verdict, reasonCodes: [...d.reasonCodes] },
       };
       last = fields;
-      frames.push({
-        pixels: composeFrame(quantizeScaled(rgba, width, contentH), width, contentH, mask, fields),
-        delayCs: delay,
-      });
-    });
+      const pixels = composeFrame(
+        quantizeScaled(rgba, width, contentH),
+        width,
+        contentH,
+        mask,
+        fields,
+      );
+      if (!writer.add({ pixels, delayCs: delay })) return refuse("CLIP_BUDGET");
+      delaysCs.push(delay);
+    }
     if (last === null) return refuse("CLIP_FRAMES");
-    frames.push({ pixels: endCard(width, contentH, mask, last), delayCs: CLIP_BUDGET.endCardCs });
-    const totalCs = frames.reduce((sum, fr) => sum + fr.delayCs, 0);
-    if (totalCs > CLIP_BUDGET.maxTotalCs) return refuse("CLIP_BUDGET");
-    const height = contentH + BAND_H;
-    const gif = encodeGif(width, height, PALETTE, frames);
-    if (gif.length > CLIP_BUDGET.maxBytes) return refuse("CLIP_BUDGET");
-    return {
-      ok: true,
-      gif,
-      mock: true,
-      frames: frames.length,
-      width,
-      height,
-      delaysCs: frames.map((fr) => fr.delayCs),
-    };
+    const card = endCard(width, contentH, mask, last);
+    if (!writer.add({ pixels: card, delayCs: CLIP_BUDGET.endCardCs })) return refuse("CLIP_BUDGET");
+    delaysCs.push(CLIP_BUDGET.endCardCs);
+    const gif = writer.finish();
+    return { ok: true, gif, mock: true, frames: delaysCs.length, width, height, delaysCs };
   } catch {
     // A character outside the band font (RenderRefused) or any render failure: refuse.
     return refuse("CLIP_FRAME_REFUSED");
