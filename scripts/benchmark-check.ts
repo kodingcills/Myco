@@ -16,22 +16,28 @@
  * denominator cannot shrink silently. With --require-r1 or --evidence the myco-gate rows are also
  * bound to their published task set (src/benchmark/taskset-binding.ts, shared with the M2 pack
  * check): exactly a whole number of runs of fc-v1, real hashes, split = runs x 10.
+ * --expect also takes a capability arm (tracks I-V, e.g. C1+I=90) for a consistency check;
+ * --require-r1 and --evidence refuse every capability-arm row (capability-spec.md §3.4).
  */
 import { readFileSync } from "node:fs";
+import { CAPABILITY_ARMS, R1_PATH_ARMS } from "../schemas/benchmark-ledger.ts";
 import {
-  type Arm,
-  type BenchmarkArmRow,
   checkBenchmark,
   experimentRowsError,
+  type LedgerArm,
+  type LedgerArmRow,
 } from "../src/benchmark/check.ts";
 
+// Every arm the ledger schema admits. A capability arm (tracks I-V) can be checked for
+// consistency, but --require-r1 and --evidence refuse its rows (capability-spec.md §3.4).
+const LEDGER_ARMS: ReadonlySet<string> = new Set([...R1_PATH_ARMS, ...CAPABILITY_ARMS]);
 const args = process.argv.slice(2);
 let armPath: string | undefined;
 let gradesPath: string | undefined;
 let requireR1 = false;
 let evidence = false;
-const expectTrials: Partial<Record<Arm, number>> = {};
-const expectUnregistrable: Partial<Record<Arm, number>> = {};
+const expectTrials: Partial<Record<LedgerArm, number>> = {};
+const expectUnregistrable: Partial<Record<LedgerArm, number>> = {};
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === "--arm") armPath = args[++i];
@@ -41,11 +47,11 @@ for (let i = 0; i < args.length; i++) {
   else if (a === "--expect" || a === "--expect-unregistrable") {
     const [arm, n] = (args[++i] ?? "").split("=");
     const count = a === "--expect" ? /^[1-9][0-9]*$/ : /^(?:0|[1-9][0-9]*)$/;
-    if ((arm !== "myco-gate" && arm !== "hcu+shell") || !count.test(n ?? "")) {
+    if (arm === undefined || !LEDGER_ARMS.has(arm) || !count.test(n ?? "")) {
       process.stderr.write(`bad ${a} ${args[i]}\n`);
       process.exit(2);
     }
-    (a === "--expect" ? expectTrials : expectUnregistrable)[arm] = Number(n);
+    (a === "--expect" ? expectTrials : expectUnregistrable)[arm as LedgerArm] = Number(n);
   } else {
     process.stderr.write(`unknown argument ${a}\n`);
     process.exit(2);
@@ -84,8 +90,7 @@ const checked = checkBenchmark(armRows, readJsonl(gradesPath), {
 });
 // An R1 verdict is never computed over experiment rows (the corrections A/B, both arms), with
 // or without --evidence (#572 N3). With --evidence checkBenchmark already refuses them.
-const experimental =
-  requireR1 && !evidence ? experimentRowsError(armRows as BenchmarkArmRow[]) : null;
+const experimental = requireR1 && !evidence ? experimentRowsError(armRows as LedgerArmRow[]) : null;
 const result =
   experimental === null
     ? checked
