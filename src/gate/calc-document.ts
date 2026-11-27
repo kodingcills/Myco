@@ -34,8 +34,14 @@
  * default for these values.
  */
 import { cellRef } from "../core/filepersist.ts";
-import { DATA_COLUMNS, generateFixture } from "../tasks/fixture.ts";
+import { DATA_COLUMNS, FIXTURE_COLUMNS, generateFixture } from "../tasks/fixture.ts";
 import { groundTruth, isAutoCorrectImmune, locateInFixture } from "../tasks/intent.ts";
+import {
+  looksLikeZip,
+  type NumberColumnType,
+  readXlsxDocument,
+  XlsxError,
+} from "./xlsx-document.ts";
 
 /** A saved sheet as the gate reads it: non-empty cells by A1 ref. */
 export interface ParsedDocument {
@@ -60,13 +66,96 @@ export function parseDocument(text: string): ParsedDocument {
   return { cells };
 }
 
+/** The persisted formats a Calc task can name (`spec.persistedFormat`; default `csv`). */
+export const PERSISTED_FORMATS = ["csv", "xlsx"] as const;
+export type PersistedFormat = (typeof PERSISTED_FORMATS)[number];
+
+/** A saved document in the cell model, and how many sheets it holds (CSV: always 1). */
+export interface SavedDocument extends ParsedDocument {
+  readonly sheetCount: number;
+  /**
+   * xlsx only: every literal number cell, by A1 ref, with the column types it can stand for
+   * (`numberDomain`, xlsx-document.ts). CSV has no stored kind: every cell is text.
+   */
+  readonly numbers?: Readonly<Record<string, readonly NumberColumnType[]>>;
+  /**
+   * xlsx only: literal number cells holding a date the gate does not judge, by A1 ref
+   * (`isUngradedDate`, xlsx-document.ts: 1904 serial 0, a real day the grader denies).
+   */
+  readonly ungradedDates?: readonly string[];
+}
+
 /**
- * Cells of an operator's sealed fixture (the bytes the guest was given). Throws when the
- * bytes are not UTF-8: a fixture the gate cannot read is an operator error, never a verdict.
+ * True when a saved document holds a stored number in a column whose type does not accept
+ * it (verdict 7205644970, D3 VA-VD): a number in a text or key column, a non-integer or
+ * date-styled number in an integer column, a number not date-styled as a real day in a date
+ * column, a number that is not a `$` amount in a currency column. The independent grader
+ * fails every such cell (it compares a stored number by its column's type), while the text
+ * the gate renders for it can equal the expected text, so the family refuses a document it
+ * would otherwise verify (`XLSX_NUMBER_DOMAIN`); a document the text comparison already
+ * refutes stays refuted. A column's type is the fixture schema's
+ * type for the column's header in the expected document; a column with no known header is
+ * a text column, as the grader treats it.
+ */
+export function numberDomainRefusal(
+  doc: SavedDocument,
+  expected: ReadonlyMap<string, string>,
+): boolean {
+  for (const [ref, domain] of Object.entries(doc.numbers ?? {})) {
+    const letters = /^([A-Z]+)[0-9]+$/.exec(ref)?.[1];
+    if (letters === undefined) return true;
+    const header = expected.get(`${letters}1`);
+    const type = FIXTURE_COLUMNS.find((c) => c.name === header)?.type ?? "text";
+    if (type === "text" || type === "key" || !domain.includes(type)) return true;
+  }
+  return false;
+}
+
+/** The saved bytes are not a readable document of the declared format. `code` only. */
+export class DocumentReadError extends Error {
+  override readonly name = "DocumentReadError";
+  constructor(readonly code: string) {
+    super(code);
+  }
+}
+
+/**
+ * Read saved bytes in the task's declared format into the one cell model both formats
+ * share (TIF-274 prerequisite). The format is the operator's (`spec.persistedFormat`), and
+ * the bytes must be that format: zip bytes declared CSV are `CSV_IS_ZIP`, non-zip bytes
+ * declared xlsx are `XLSX_NOT_ZIP`. The xlsx reader is `xlsx-document.ts`; its cells are the
+ * text this CSV path holds for the same content, so both formats reach `diffDocument` alike.
+ */
+export function readSavedDocument(bytes: Uint8Array, format: PersistedFormat): SavedDocument {
+  if (format === "xlsx") {
+    try {
+      return readXlsxDocument(bytes);
+    } catch (error) {
+      if (error instanceof XlsxError) throw new DocumentReadError(error.code);
+      throw error;
+    }
+  }
+  if (looksLikeZip(bytes)) throw new DocumentReadError("CSV_IS_ZIP");
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new DocumentReadError("CSV_NOT_UTF8");
+  }
+  return { ...parseDocument(text), sheetCount: 1 };
+}
+
+/**
+ * Cells of an operator's sealed fixture (the bytes the guest was given): CSV, or a
+ * one-sheet xlsx workbook read into the same cell model (zip bytes are read as xlsx). Throws
+ * when the gate cannot read it: a fixture the gate cannot read is an operator error, never
+ * a verdict.
  */
 export function fixtureCells(bytes: Uint8Array): Map<string, string> {
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  return new Map(Object.entries(parseDocument(text).cells));
+  const doc = readSavedDocument(bytes, looksLikeZip(bytes) ? "xlsx" : "csv");
+  if (doc.sheetCount !== 1)
+    throw new Error("a sealed fixture workbook must hold exactly one sheet");
+  return new Map(Object.entries(doc.cells));
 }
 
 /** One edit: "set record `rowKey`, column `column`, to `newValue`". */
