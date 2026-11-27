@@ -126,6 +126,13 @@ describe("verify on mock evidence (VA-01, VA-02, VA-13 subset)", () => {
     expect(result.verdict).toBe("refuted");
     expect(result.verifyCodes).toEqual([]);
     expect(result.calls.map((c) => c.loggedVerdictAgrees)).toEqual([null, null, null, null, true]);
+    // An S1 line is reported with its logged verdict and codes, never re-run.
+    expect(result.calls.slice(0, 4).map((c) => [c.verdictForCall, c.reasonCodes])).toEqual([
+      ["uncertain", ["UNKNOWN_FIELD"]],
+      ["uncertain", ["INVALID_REQUEST"]],
+      ["uncertain", ["ORACLE_INPUT_REJECTED", "CLAIM_RECORDED"]],
+      ["uncertain", ["UNSUPPORTED_API_VERSION"]],
+    ]);
   });
 
   it("a call that read no evidence or older evidence is not compared (v5 comparison set)", async () => {
@@ -133,7 +140,13 @@ describe("verify on mock evidence (VA-01, VA-02, VA-13 subset)", () => {
     // Before the agent saved: STATE_MISSING. Then an old save, then the final save.
     const lines: string[] = [];
     await ownLog(root, falseDone, [falseDone], lines);
-    writeState(root, "run-false", STORE, todoStore(["one old item"]));
+    // The same length as the final save, one byte different: only the digest tells them apart.
+    writeState(
+      root,
+      "run-false",
+      STORE,
+      todoStore(["update the release notez", "write the incident summary"]),
+    );
     await ownLog(root, falseDone, [falseDone], lines);
     writeState(root, "run-false", STORE, todoStore(S02_PERSISTED));
     const log = await ownLog(root, falseDone, [falseDone], lines);
@@ -308,6 +321,8 @@ describe("myco verify CLI (VA-01 subset)", () => {
       const c = capture();
       expect(await verifyMain(argv, c.io), argv.join(" ")).toBe(3);
       expect(c.err()).not.toContain(root);
+      if (argv.includes("--vault") || argv.includes("--recording"))
+        expect(c.err()).toContain("is not in this build");
     }
     expect(readdirSync(root).sort()).toEqual(["run-false", "run-honest"]);
   });
