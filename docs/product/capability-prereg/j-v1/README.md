@@ -10,6 +10,7 @@ pre-registration, and no result is claimed.**
 | Analysis script | `src/actions/j-v1-analysis.ts`, entry `analyzeJV1` |
 | Analysis script SHA-256 | `f85ab65f7acf909085e8128854805be298cfe3425f9be535a30d8bf94ceb413f` |
 | Harness side (loader, schedule, J row adapter) | `src/actions/j-v1-harness.ts` |
+| Pack writer (frozen-commit check, run loop, finalize) and run runbook | `src/actions/j-v1-pack.ts`, `RUNBOOK.md` |
 | Tests | `test/actions/j-v1-prereg.test.ts`, `test/actions/j-v1-analysis.test.ts`, `test/actions/j-v1-harness.test.ts` |
 
 ## The lead's ruling (05:39Z, relayed by the coordinator on PR #636)
