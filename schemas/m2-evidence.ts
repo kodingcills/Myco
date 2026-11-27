@@ -74,6 +74,21 @@ export const m2PackManifestSchema: JsonSchema = {
     /** R2: the expected number of task pairs across the two arms; null otherwise. */
     expectPairs: { anyOf: [positiveInt, { type: "null" }] },
     /**
+     * The pre-registration this pack was run under (#649, lead ruling 2026-11-27 06:01Z): its
+     * SHA-256. Optional here; `checkPack` (`src/m2/evidence.ts`) requires it on every pack that
+     * lists R2 or R7 (the packs that read `hcu+shell` rows as head-to-head evidence), and
+     * requires it to be one of the committed R2 pre-registrations
+     * (`R2_PREREGISTRATION_SHA256`, `src/benchmark/check.ts`). A capability pack's hash, or none,
+     * is refused: capability tracks reuse `hcu+shell` as their baseline arm, so the arm alone
+     * cannot tell their rows from R2's.
+     */
+    preregistration: {
+      type: "object",
+      additionalProperties: false,
+      required: ["sha256"],
+      properties: { sha256: { type: "string", pattern: "^[0-9a-f]{64}$" } },
+    },
+    /**
      * Committed run directories (trace.jsonl + result.json), validated with
      * `src/integration/validate-live.ts --expect`; null when the arm emits none.
      */
