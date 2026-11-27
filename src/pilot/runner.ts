@@ -23,8 +23,11 @@
  * Pacing: at most `concurrency` trials in flight; trial starts are spaced by
  * `interTrialDelayS` across all workers; a rate-limit fault holds every worker for the backoff,
  * and after `maxConsecutiveRateLimits` in a row the run pauses (exit, resumable). An `auth`
- * fault (lost login) pauses at once. Neither spends the trial's `maxAttemptsPerTrial` budget
- * (`BUDGET_EXEMPT_CLASSES`), so a limit spell never closes a trial: resume re-runs it.
+ * fault (lost login), a `billing` fault (credit, billing or quota) and an `ApiKeyPathFault`
+ * stop the run at once with a `stopCode` (fail closed, no retry loop). None of these spends
+ * the trial's `maxAttemptsPerTrial` budget (`BUDGET_EXEMPT_CLASSES`), so a resume re-runs the
+ * trial. On a live run, two identical harness faults in a row (same class and message, no
+ * decided trial between) stop it too (`stopCode` `repeat-failure`, `abortOnRepeatedFailure`).
  *
  * A live (non-simulated) driver also needs `liveLaunchSha256` equal to the config's sha256:
  * the same explicit acknowledgement the CLI demands, enforced here so no caller can start a

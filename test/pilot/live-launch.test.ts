@@ -7,7 +7,7 @@
  * file: if anything ran the real CLI by name, the trap writes a marker and the last test fails.
  * `realVmBackend` itself refuses to be built under vitest.
  */
-import type { ChildProcess, SpawnOptions } from "node:child_process";
+import { type ChildProcess, type SpawnOptions, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -834,6 +834,66 @@ describe("the heartbeat file (watchdog-friendly)", () => {
       lastLog: "trial 1 decided",
       exitCode: 0,
     });
+  });
+});
+
+describe("the real CLIs, with the trap claude first on PATH", () => {
+  // A minimal environment: no inherited API-path name, no VM lock owner, VITEST kept so the
+  // real VM backend would refuse even if a guard were bypassed.
+  const env = () => ({
+    PATH: `${TRAP_DIR}:${savedPath ?? "/usr/bin:/bin"}`,
+    HOME: tmp("myco-cli-home-"),
+    VITEST: "1",
+  });
+  const run = (script: string, args: string[]) =>
+    spawnSync("npx", ["tsx", join(ROOT, "scripts", script), ...args], {
+      cwd: ROOT,
+      env: env(),
+      encoding: "utf8",
+    });
+
+  it("R1: the flag and the right plan hash, outside vm-session.sh: refused, nothing run", {
+    timeout: 60_000,
+  }, () => {
+    const out = tmp();
+    const plan = JSON.parse(run("m2-r1-pilot.ts", ["plan", "--out", out]).stdout) as {
+      configSha256: string;
+    };
+    const r = run("m2-r1-pilot.ts", [
+      "launch",
+      "--out",
+      out,
+      "--launch-real-trials",
+      "--plan-sha256",
+      plan.configSha256,
+    ]);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/the VM session lock is not held/);
+    expect(existsSync(join(out, PROGRESS_FILE))).toBe(false);
+    expect(existsSync(TRAP_MARK)).toBe(false);
+  });
+
+  it("A/B: launch refuses with every unmet precondition, no 'not wired' reason", {
+    timeout: 60_000,
+  }, () => {
+    const sha = abPlanSha256(loadPrereg(ROOT), 0, PUBLISHED);
+    const out = tmp();
+    const r = run("m2-corrections-ab-run.ts", [
+      "launch",
+      "--stage",
+      "0",
+      "--out",
+      out,
+      "--launch-real-trials",
+      "--plan-sha256",
+      sha,
+    ]);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/no lead GO/);
+    expect(r.stderr).toMatch(/the VM session lock is not held/);
+    expect(r.stderr).not.toMatch(/no live driver is wired/);
+    expect(existsSync(join(out, "stage0", LIVE_STATUS_FILE))).toBe(false);
+    expect(existsSync(TRAP_MARK)).toBe(false);
   });
 });
 

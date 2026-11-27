@@ -243,8 +243,8 @@ export function leadGoProblems(repoRoot: string, loaded: LoadedPrereg, stage: Ab
 }
 
 /**
- * Why a REAL A/B run cannot start now. Empty only when every precondition holds; the CLI also
- * refuses afterwards because no live driver is wired (the VM-side capture is a later step).
+ * Why a REAL A/B run cannot start now. Empty only when every precondition holds; the CLI's
+ * live launch (`src/pilot/live-launch.ts`) adds the VM session lock and concurrency 1.
  *  - the pre-registration is committed and unchanged;
  *  - the lead's GO is committed (`LEAD_GO_FILE`) for this stage and pre-registration;
  *  - the gate can read the tasks' persisted format (fc-v1 persists xlsx; the gate reads CSV

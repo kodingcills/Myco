@@ -2,11 +2,16 @@
  * The live pilot transport: one headless Claude Code process per attempt, on the subscription.
  *
  * NOT exercised against a real `claude` in this repo's tests: `spawn` is injected, and the
- * tests hand it a fake that checks the argv and environment and returns canned output. The
- * runner CLI (`scripts/m2-r1-pilot.ts`) refuses a live launch unless it gets the explicit
- * flag and the printed plan's hash, and in this change it also has no `capture` (the VM-side
- * copy of the saved document is the lead-approved later step), so it cannot start a real
- * trial.
+ * tests hand it a fake that checks the argv and environment and returns canned output. Its
+ * `capture` is the VM step's host-side read of the guest document (`src/pilot/vm-capture.ts`,
+ * `liveVmDriver`); the runner CLIs build it only after every launch precondition holds
+ * (`src/pilot/live-launch.ts`).
+ *
+ * Subscription only (TIF-274): an API-path credential name in the agent's environment
+ * allowlist refuses the driver (`apiKeyPathRefusal`), and an `apiKeySource` other than `none`
+ * in the CLI's output is an `ApiKeyPathFault` that stops the run (code `api-key`). Credit,
+ * billing and quota errors are class `billing` and, like a lost login (`auth`), stop the run
+ * at once with a code: never a back-off or retry loop.
  *
  * What it does, in the order the gated harness requires (`GatedTrialTransport`):
  *  - writes `mcpConfigJson(plan)` to `plan.mcpConfigPath` (the audit pinned the argv to that
