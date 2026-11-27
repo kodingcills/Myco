@@ -257,7 +257,37 @@ function deepFreeze<T>(v: T): T {
   return v;
 }
 
-export function registerPlugin(pluginDir: string): RegistrationResult {
+/** Ask the plugin for its own self-test cases (the default registration path). */
+function pluginCases(target: SandboxTarget): SelfTestCase<unknown>[] {
+  const got = runInSandbox(
+    target,
+    { spec: PLUGIN_SPEC, op: "selftest-cases" },
+    // Self-test cases carry whole documents, so this one call has its own ceiling rather
+    // than the manifest's verdict cap; the kernel file-size limit follows it (8 MiB + one
+    // block on disk at most, E3 on #558).
+    { maxOutputBytes: MAX_SELFTEST_OUTPUT_BYTES },
+  );
+  if (!got.ok) throw new Refusal("SELFTEST_CASES_FAULT", [got.code]);
+  if (got.response.op !== "selftest-cases")
+    throw new Refusal("SELFTEST_CASES_FAULT", ["PLUGIN_MALFORMED_OUTPUT"]);
+  return got.response.cases.map((c) => ({
+    id: c.id,
+    intent: c.intent,
+    correct: fromWire(c.correct),
+    corruptions: c.corruptions.map((x) => ({ cls: x.cls, doc: fromWire(x.doc) })),
+  }));
+}
+
+export interface RegisterOptions {
+  /**
+   * Self-test cases the HOST supplies (track C, agent-written checks: the cases come from the
+   * R5 subjects of the task family, never from the check's author). When given, the plugin's
+   * `selftestCases` hook is not called. Host read corruptions are added to every case either way.
+   */
+  readonly hostCases?: readonly SelfTestCase<unknown>[];
+}
+
+export function registerPlugin(pluginDir: string, opts: RegisterOptions = {}): RegistrationResult {
   let selftest: OracleReport | null = null;
   try {
     let dir: string;
@@ -273,33 +303,19 @@ export function registerPlugin(pluginDir: string): RegistrationResult {
 
     let rows: SelfTestRow[] = [];
     if (manifest.kinds.includes("oracle")) {
-      const got = runInSandbox(
-        target,
-        { spec: PLUGIN_SPEC, op: "selftest-cases" },
-        // Self-test cases carry whole documents, so this one call has its own ceiling rather
-        // than the manifest's verdict cap; the kernel file-size limit follows it (8 MiB + one
-        // block on disk at most, E3 on #558).
-        { maxOutputBytes: MAX_SELFTEST_OUTPUT_BYTES },
-      );
-      if (!got.ok) throw new Refusal("SELFTEST_CASES_FAULT", [got.code]);
-      if (got.response.op !== "selftest-cases")
-        throw new Refusal("SELFTEST_CASES_FAULT", ["PLUGIN_MALFORMED_OUTPUT"]);
-      if (got.response.cases.length === 0)
+      const supplied = opts.hostCases ?? pluginCases(target);
+      if (supplied.length === 0)
         throw new Refusal("SELFTEST_CASES_INVALID", ["no self-test cases"]);
-      const cases: SelfTestCase<unknown>[] = got.response.cases.map((c) => {
-        const correct = fromWire(c.correct);
-        if (!manifest.formats.some((f) => f.ext === extOf(correct.fileName)))
+      const cases: SelfTestCase<unknown>[] = supplied.map((c) => {
+        if (!manifest.formats.some((f) => f.ext === extOf(c.correct.fileName)))
           throw new Refusal("SELFTEST_CASES_INVALID", [
-            `case ${c.id}: ${correct.fileName} is not a format the manifest declares`,
+            `case ${c.id}: ${c.correct.fileName} is not a format the manifest declares`,
           ]);
         return {
           id: c.id,
           intent: c.intent,
-          correct,
-          corruptions: [
-            ...c.corruptions.map((x) => ({ cls: x.cls, doc: fromWire(x.doc) })),
-            ...hostCorruptions(correct),
-          ],
+          correct: c.correct,
+          corruptions: [...c.corruptions, ...hostCorruptions(c.correct)],
         };
       });
       const faults: string[] = [];

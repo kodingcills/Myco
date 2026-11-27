@@ -18,10 +18,13 @@
  *    "insufficient evidence" instead of passing vacuously;
  *  - every count states its denominator, and the check fails on zero rows or on a row
  *    count that differs from the expected count (lesson L3: validators passed on empty
- *    input).
+ *    input);
+ *  - a row that carries an agent-written check signal (track C) is refused, always: an
+ *    agent-written check is advisory and never evidence (`src/agent-checks/label.ts`).
  */
 import { benchmarkArmRowSchema, benchmarkGradeRowSchema } from "../../schemas/benchmark-ledger.ts";
 import { validateSchema } from "../../schemas/validate.ts";
+import { agentCheckRowsError } from "../agent-checks/label.ts";
 import { wilson } from "../foundry/stats.ts";
 import type { BenchmarkGradeRow } from "./grade/row.ts";
 import { bindToTaskSet } from "./taskset-binding.ts";
@@ -327,6 +330,14 @@ export function checkBenchmark(
     if (strings(row).some((s) => HOST_PATH.test(s))) errors.push(`row ${i}: contains a host path`);
   });
 
+  // Track C: never evidence, with or without `evidence: true`.
+  for (const [rows, what] of [
+    [armInput, "arm"],
+    [gradeInput, "grade"],
+  ] as const) {
+    const signalled = agentCheckRowsError(rows, what);
+    if (signalled !== null) errors.push(signalled);
+  }
   if (armInput.length === 0) errors.push("arm ledger is empty");
   if (options.evidence === true) {
     const unproven = armRows.filter((r) => !EVIDENCE_PLANNERS.has(r.plannerModelId));
