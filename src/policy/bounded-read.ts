@@ -18,9 +18,14 @@ export type BoundedRead =
   | { readonly ok: true; readonly bytes: Buffer }
   | { readonly ok: false; readonly code: BoundedReadRefusal };
 
+// O_NOCTTY: a racing swap to a tty never becomes our controlling terminal.
 // O_NOFOLLOW and O_NONBLOCK are undefined on Windows, where a FIFO cannot be planted at a path;
 // the caller's `lstat` pre-check still refuses a symlink there.
-const FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+const FLAGS =
+  constants.O_RDONLY |
+  (constants.O_NOFOLLOW ?? 0) |
+  (constants.O_NONBLOCK ?? 0) |
+  (constants.O_NOCTTY ?? 0);
 
 export function readBoundedNoBlock(path: string, maxBytes: number, expect: Stats): BoundedRead {
   let fd: number;

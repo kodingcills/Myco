@@ -15,6 +15,7 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -439,6 +440,13 @@ describe("policed wrappers: host-side reduction of real actions", () => {
     "f10",
     "shift+f10",
     "alt+f2",
+    // The allow-list's width: F2 only with no modifier; Ctrl/Meta+Shift only redo and navigation.
+    "ctrl+f2",
+    "shift+f2",
+    "meta+f2",
+    "ctrl+shift+c",
+    "ctrl+shift+v",
+    "meta+shift+v",
     "ctrl+w",
     "ctrl+q",
     "ctrl+e",
@@ -951,6 +959,26 @@ describe("desktop transport: a launch is judged by its real path and its whole a
     expect(await p.act("s1", launch(SOFFICE, []))).toBe("delivered_unverified");
     expect(await p.act("s1", launch(SOFFICE, ["--calc"]))).toBe("delivered_unverified");
     expect(calls).toHaveLength(2);
+  });
+
+  it("a listed path that is now a symlink or a hard link (a swapped binary) is refused", async () => {
+    const f = fixture();
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "myco-policy-swap-")));
+    const swapped = join(dir, "soffice");
+    symlinkSync(realpathSync("/bin/cp"), swapped); // the listed program, replaced by a link
+    const linked = join(dir, "localc");
+    writeFileSync(join(dir, "real"), "#!/bin/sh\nexit 0\n");
+    linkSync(join(dir, "real"), linked); // a second name for one file
+    const { t, calls } = fakeDesktop();
+    const g = guardFor(f, ALL_RULES);
+    const p = policedDesktopTransport(t, g, {
+      ...desktopOpts,
+      launches: { [swapped]: { app: "soffice" }, [linked]: { app: "localc" } },
+    });
+    expect(await p.act("s1", launch(swapped))).toBe("failed");
+    expect(await p.act("s1", launch(linked))).toBe("failed");
+    expect(calls).toEqual([]);
+    expect(g.log().map((e) => e.code)).toEqual(Array(2).fill("POLICY_ACTION_UNRECOGNISED"));
   });
 
   it("no launch table: every launch is unrecognised", async () => {

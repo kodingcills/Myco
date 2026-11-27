@@ -294,9 +294,10 @@ export type LaunchTable = Readonly<Record<string, LaunchEntry>>;
 
 /** The canonical spelling of an absolute path: what the kernel would resolve, hop-free. */
 function canonicalCommand(raw: unknown): string | null {
-  if (typeof raw !== "string" || !isAbsolute(raw) || resolve(raw) !== raw) return null;
-  // `resolveScoped` refuses control characters and hard-linked files and resolves every
-  // symlink hop; a spelling that differs from its resolution is not the listed program itself.
+  // `resolveScoped` refuses control characters and hard-linked files, and resolves every symlink
+  // hop, `.`, `..` and doubled or trailing `/` to an absolute real path. A spelling that differs
+  // from that resolution (a bare or relative name included) is not the listed program itself.
+  if (typeof raw !== "string") return null;
   return resolveScoped(raw, "/") === raw ? raw : null;
 }
 
@@ -340,8 +341,10 @@ export function launchFacts(
   const path = canonicalCommand(command);
   if (path === null) throw new UnrecognisedAction();
   const entry = table.get(path);
-  if (entry === undefined || !cleanArgv(args)) throw new UnrecognisedAction();
+  if (entry === undefined || !Array.isArray(args)) throw new UnrecognisedAction();
   if (args.length > 0) {
+    // Strict element equality with a declared vector of strings: a non-string argument, an
+    // extra or missing argument, or any other spelling never matches.
     const declared = entry.argv ?? [];
     const same = (v: readonly string[]) =>
       v.length === args.length && v.every((x, k) => x === args[k]);
