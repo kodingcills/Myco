@@ -26,6 +26,8 @@
  * values stay equal; a guessed exact input can be confirmed (as in #553).
  */
 import { createHash } from "node:crypto";
+import { stripAccents } from "../export-guard/fold.ts";
+import { episodeScope, HashLedger, keepOrHash, NO_LEDGER } from "../export-guard/provenance.ts";
 import {
   EPISODE_COST_BASIS,
   EPISODE_FAULT_CLASSES,
@@ -52,8 +54,10 @@ export const ARM_GRAMMAR = /^[a-z][a-z0-9+-]{1,31}(?::[a-z0-9][a-z0-9-]{0,31})?$
 /**
  * The one hashed form (lead ruling 2026-11-26 23:06Z), the same on every export surface (the
  * episode export uses it too): `h-` plus the first 60 hex (240 bits) of the tagged sha256. It
- * carries no input text and fits the 64-character token cap. Idempotence matches exactly this
- * form; no other `h-` string (64 hex, 59 or 61 hex, upper case) counts as already hashed.
+ * carries no input text and fits the 64-character token cap. No other `h-` string (64 hex, 59
+ * or 61 hex, upper case) counts as already hashed, and even this form is kept as is ONLY when the
+ * harness produced it (#579 O3, provenance-bound: the caller's `hashLedger` records it for this
+ * episode id and path, `src/export-guard/provenance.ts`); an agent's `h-<60 hex>` is re-hashed.
  */
 export const HASHED = /^h-[0-9a-f]{60}$/;
 /**
@@ -207,15 +211,15 @@ export const templateOf = (path: string) => path.replace(/\[\d+\]/g, "[]");
  * case folding (NFKC, then upper case, then lower case, so `ß`/`ẞ` become `ss` and a dotless `ı`
  * or dotted `İ` becomes `i`), then letters and digits only (combining marks dropped). So a spaced
  * full name matches every joined form of it (`FirstLast`, `first.last`, `first_last`,
- * `First-Last`), and `GROSS` matches a configured `Groß`, in any case.
+ * `First-Last`), and `GROSS` matches a configured `Groß`, in any case. Accents are stripped too
+ * (#579 O2, `stripAccents`: NFD, combining marks removed, `ø`/`ł`/`æ`… transliterated), on both
+ * sides, so a configured `josé` matches `JOSE` and `reña` matches `rena`.
  */
 export const fold = (s: string) =>
-  s
-    .normalize("NFKC")
-    .toUpperCase()
-    .toLowerCase()
-    .replace(/ß/g, "ss")
-    .replace(/[^\p{L}\p{N}]/gu, "");
+  stripAccents(s.normalize("NFKC").toUpperCase().toLowerCase().replace(/ß/g, "ss")).replace(
+    /[^\p{L}\p{N}]/gu,
+    "",
+  );
 
 /** Whether `value` holds an identity string anywhere (folded; joined forms included). */
 const holds = (value: string, joined: readonly JoinedIdentity[]) => {
@@ -223,30 +227,43 @@ const holds = (value: string, joined: readonly JoinedIdentity[]) => {
   return joined.some(([, id]) => fold(id).length >= 3 && v.includes(fold(id)));
 };
 
+/** Where a value sits, for the provenance check (#579 O3): the scope and the harness's ledger. */
+interface Site {
+  readonly ledger: HashLedger;
+  readonly joined: readonly JoinedIdentity[];
+  /** The scope of a path: the input episode's id and the path (record paths are prefixed). */
+  readonly scope: (path: string) => string;
+}
+
+const NO_SITE: Site = { ledger: NO_LEDGER, joined: [], scope: (p) => p };
+
 function treat(
   table: Readonly<Record<string, Treatment>>,
   path: string,
   value: string,
-  joined: readonly JoinedIdentity[] = [],
+  site: Site = NO_SITE,
 ): string {
   const t = table[templateOf(path)];
   if (t === undefined) throw new OpenValueError(templateOf(path));
+  const joined = site.joined;
+  // Provenance-bound (#579 O3, src/export-guard/provenance.ts): an `h-<60 hex>` is kept as is
+  // only when the harness produced it (the ledger records it at this scope); any other one, an
+  // agent's included, is hashed like any other value.
+  const keep = () => keepOrHash(value, site.scope(path), site.ledger, hashed);
   switch (t.kind) {
     case "text":
-      // Idempotent: an already-hashed value is closed and carries nothing.
-      return HASHED.test(value) ? value : hashed(value);
+      return keep();
     // An id or token that would be kept verbatim but holds an identity string (even joined,
     // `<Name>2`) is digested instead (lead ruling 21:52Z).
     case "id":
-      // Idempotent (#556 round 3, S2): an already-hashed id is closed (it carries nothing).
-      if (HASHED.test(value)) return value;
+      // A harness-produced hashed id is closed (it carries nothing): kept (#556 r3, S2; #579).
+      if (HASHED.test(value)) return keep();
       if (HASH_LIKE.test(value)) return hashed(value);
       return (CLOSED_ID.test(value) || t.also?.test(value) === true) && !holds(value, joined)
         ? value
         : hashed(value);
     case "token":
-      // Idempotent: an exact `h-<60 hex>` is already closed (it carries nothing).
-      if (HASHED.test(value)) return value;
+      if (HASHED.test(value)) return keep();
       return t.vocabulary.test(value) && !holds(value, joined) ? value : hashed(value);
     case "closed":
       if (!t.grammar.test(value)) throw new OpenValueError(templateOf(path));
@@ -258,44 +275,94 @@ function walk(
   table: Readonly<Record<string, Treatment>>,
   node: unknown,
   path: string,
-  joined: readonly JoinedIdentity[],
+  site: Site,
 ): unknown {
-  if (typeof node === "string") return treat(table, path, node, joined);
-  if (Array.isArray(node)) return node.map((item, i) => walk(table, item, `${path}[${i}]`, joined));
+  if (typeof node === "string") return treat(table, path, node, site);
+  if (Array.isArray(node)) return node.map((item, i) => walk(table, item, `${path}[${i}]`, site));
   if (node !== null && typeof node === "object")
     return Object.fromEntries(
-      Object.entries(node).map(([k, v]) => [k, walk(table, v, `${path}.${k}`, joined)]),
+      Object.entries(node).map(([k, v]) => [k, walk(table, v, `${path}.${k}`, site)]),
     );
   return node;
 }
 
-/** The closed form of an episode; `episodeId` recomputed over the closed content. */
-export function closeEpisode(ep: Episode, joined: readonly JoinedIdentity[] = []): Episode {
+/**
+ * The closed form of an episode; `episodeId` recomputed over the closed content. `ledger` is
+ * the harness's hash ledger (#579 O3): only an `h-<60 hex>` it records for this episode id and
+ * path is kept as is.
+ */
+export function closeEpisode(
+  ep: Episode,
+  joined: readonly JoinedIdentity[] = [],
+  ledger: HashLedger = NO_LEDGER,
+): Episode {
+  const id = String(ep.episodeId);
+  const site: Site = { ledger, joined, scope: (path) => episodeScope(id, path) };
   const { episodeId: _old, ...rest } = walk(
     EPISODE_FIELD_TREATMENT,
     { ...ep, episodeId: "0".repeat(64) },
     "$",
-    joined,
+    site,
   ) as Episode;
   return { ...rest, episodeId: episodeIdOf(rest) } as Episode;
 }
 
-/** The closed form of a record's free fields (`desktop.backend`, `desktop.image`, `capture.path`). */
+/** The scope prefix of a record's free fields (bound to the record's closed episode id). */
+export const RECORD_SCOPE = "record:";
+
+/**
+ * The closed form of a record's free fields (`desktop.backend`, `desktop.image`, `capture.path`).
+ * A harness-produced `h-<60 hex>` is bound to the record's own `episode.id` (#579 O3).
+ */
 export function closeRecordFields<
   T extends { desktop: { backend: string; image: string }; capture: { path: string } },
->(record: T, joined: readonly JoinedIdentity[] = []): T {
+>(record: T, joined: readonly JoinedIdentity[] = [], ledger: HashLedger = NO_LEDGER): T {
+  const id = String((record as { episode?: { id?: unknown } }).episode?.id ?? "");
+  const site: Site = {
+    ledger,
+    joined,
+    scope: (path) => episodeScope(id, `${RECORD_SCOPE}${path}`),
+  };
   return {
     ...record,
     desktop: {
       ...record.desktop,
-      backend: treat(RECORD_FIELD_TREATMENT, "$.desktop.backend", record.desktop.backend, joined),
-      image: treat(RECORD_FIELD_TREATMENT, "$.desktop.image", record.desktop.image, joined),
+      backend: treat(RECORD_FIELD_TREATMENT, "$.desktop.backend", record.desktop.backend, site),
+      image: treat(RECORD_FIELD_TREATMENT, "$.desktop.image", record.desktop.image, site),
     },
     capture: {
       ...record.capture,
-      path: treat(RECORD_FIELD_TREATMENT, "$.capture.path", record.capture.path, joined),
+      path: treat(RECORD_FIELD_TREATMENT, "$.capture.path", record.capture.path, site),
     },
   };
+}
+
+/**
+ * The hash ledger of a CLOSED container's episodes and records (#579 O3), as a harness import
+ * records it: every `h-<60 hex>` at a field the export hashes, bound to its episode id and path
+ * (a record's to its `episode.id` and `record:` path). Only for a container the harness wrote
+ * and that validated (`containerHashLedger` in export.ts checks that first).
+ */
+export function hashLedgerOf(
+  episodes: readonly Episode[],
+  records: readonly unknown[] = [],
+  into: HashLedger = new HashLedger(),
+): HashLedger {
+  for (const ep of episodes)
+    for (const [path, v] of stringLeaves(ep)) {
+      const t = EPISODE_FIELD_TREATMENT[templateOf(path)];
+      if (t !== undefined && t.kind !== "closed" && HASHED.test(v))
+        into.record(episodeScope(String(ep.episodeId), path), v);
+    }
+  for (const r of records) {
+    const id = String((r as { episode?: { id?: unknown } } | null)?.episode?.id ?? "");
+    for (const [path, v] of stringLeaves(r)) {
+      const t = RECORD_FIELD_TREATMENT[path];
+      if (t !== undefined && t.kind !== "closed" && HASHED.test(v))
+        into.record(episodeScope(id, `${RECORD_SCOPE}${path}`), v);
+    }
+  }
+  return into;
 }
 
 function accepts(t: Treatment | undefined, value: string): boolean {

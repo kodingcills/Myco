@@ -24,7 +24,7 @@ import { EpisodeRecorder } from "../../src/episode/recorder.ts";
 import { EpisodeStore, readStoreDir } from "../../src/episode/store.ts";
 import type { Episode } from "../../src/episode/types.ts";
 import { canonicalJson, episodeIdOf, sha256Hex } from "../../src/episode/validate.ts";
-import { draft, HOST, scratch } from "./helpers.ts";
+import { draft, HOST, ledgerOf, scratch } from "./helpers.ts";
 
 const made: string[] = [];
 const dir = (p: string) => {
@@ -331,25 +331,29 @@ describe("S1-S3 and #553's full Unicode case folding", () => {
     expect(joinedIdentity(closeEpisode(withBlob, joined), joined)).toEqual([]);
   });
 
-  it("S2: an already-hashed id or token stays as it is, even when an identity's letters occur in the hash", () => {
+  it("S2: a harness-produced hashed id or token stays as it is, even when an identity's letters occur in the hash; an agent's is re-hashed (#579 O3)", () => {
     const ep = baseEpisode();
     const id = `h-${"abcd".repeat(15)}`;
     const key = `h-${"abcd".repeat(15)}`;
-    const closed = closeEpisode(
-      {
-        ...ep,
-        provenance: { ...ep.provenance, trialKey: id },
-        actions: {
-          capture: "recorded",
-          truncated: false,
-          items: [{ seq: 0, atMs: null, kind: "key", keys: key }],
-        },
-        observations: { capture: "recorded", withheld: 0, items: [] },
+    const input: Episode = {
+      ...ep,
+      provenance: { ...ep.provenance, trialKey: id },
+      actions: {
+        capture: "recorded",
+        truncated: false,
+        items: [{ seq: 0, atMs: null, kind: "key", keys: key }],
       },
-      [["username", "abcd"]],
-    );
-    expect(closed.provenance.trialKey).toBe(id);
-    expect((closed.actions.items[0] as { keys: string }).keys).toBe(key);
+      observations: { capture: "recorded", withheld: 0, items: [] },
+    };
+    // The ledger an import of a dataset holding `input` records: both values, at their paths.
+    const kept = closeEpisode(input, [["username", "abcd"]], ledgerOf(input));
+    expect(kept.provenance.trialKey).toBe(id);
+    expect((kept.actions.items[0] as { keys: string }).keys).toBe(key);
+    // With no ledger the same values are an agent's: re-hashed, never kept.
+    const agent = closeEpisode(input, [["username", "abcd"]]);
+    expect(agent.provenance.trialKey).not.toBe(id);
+    expect((agent.actions.items[0] as { keys: string }).keys).not.toBe(key);
+    expect(canonicalJson(agent).includes("abcd".repeat(15))).toBe(false);
   });
 
   it("full Unicode case folding: ß, ẞ, ı, İ and NFKC forms match their ASCII spellings, both ways", () => {
@@ -484,8 +488,20 @@ describe("the one hashed form, h-<60 hex> (lead ruling 23:06Z)", () => {
       );
   });
 
-  it("an exact h-<60 hex> is kept as is everywhere; no other h- form is treated as already hashed", () => {
-    const kept = closeEpisode(withAll(exact));
+  it("a harness-produced exact h-<60 hex> is kept as is everywhere (an agent's is re-hashed, #579 O3); no other h- form is treated as already hashed", () => {
+    const agent = closeEpisode(withAll(exact));
+    const agentItems = agent.actions.items as unknown as readonly {
+      command?: string;
+      keys?: string;
+    }[];
+    for (const v of [
+      agent.task.instruction,
+      agent.task.id,
+      agentItems[0]?.command,
+      agentItems[1]?.keys,
+    ])
+      expect(v).not.toBe(exact);
+    const kept = closeEpisode(withAll(exact), [], ledgerOf(withAll(exact)));
     const items = kept.actions.items as unknown as readonly { command?: string; keys?: string }[];
     expect([kept.task.instruction, kept.task.id, items[0]?.command, items[1]?.keys]).toEqual([
       exact,

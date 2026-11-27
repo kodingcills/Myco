@@ -236,8 +236,17 @@ the closed-schema pattern of #553:
 **One hashed form** (lead ruling 2026-11-26 23:06Z): every hashed value on every field is
 `h-` followed by the first 60 hex digits (240 bits) of sha256 under the domain tag
 `myco.episode.export-text/1`. It carries no input text, and it fits the 64-character key and app
-cap. Closing is idempotent for exactly that form: an `h-<60 hex>` value is kept as is, and no
-other `h-` string (64 hex, 59 or 61 hex, upper case) counts as already hashed. The digest is
+cap. No other `h-` string (64 hex, 59 or 61 hex, upper case) counts as already hashed.
+
+**Provenance-bound** (#579 O3; `src/export-guard/provenance.ts`): even an exact `h-<60 hex>` is
+kept as is ONLY when the harness produced it, that is when the store's hash ledger
+(`<store>/hash-ledger.jsonl`) records it for this episode id at this exact JSON path. Any other
+`h-<60 hex>` (an agent typed it, or it sits at another path or in another episode) is re-hashed
+like any other value, so an agent cannot hex-encode a path or a name (up to 30 bytes) into a
+hashed field, and a hex-letter identity (`cafe`) cannot ride inside one. Only `importDataset`
+writes the ledger, after the dataset validated, so export, import, export stays byte-identical. A
+malformed ledger line refuses the read. An imported dataset is trusted as harness output: a
+dataset written before #579 must be re-exported from its source store, not re-imported. The digest is
 unsalted, so equal values stay equal (one run's episodes share a hashed `runId`). A digest does
 not reveal its input, but someone who guesses the exact input can confirm the guess. Every string path an
 episode can hold is listed in `FIELD_TREATMENT`. A string at any other path refuses the
@@ -274,11 +283,14 @@ The host values are read from `os` at export and validate time and are ALWAYS me
 caller passes (#553). Fake host facts, or a short or generic extra name, never switch them off.
 
 Matching is stricter than #560's word match: full Unicode case folding (NFKC, then upper, then
-lower case: `ß`/`ẞ` become `ss`, `ı`/`İ` become `i`), then letters and digits only, by
+lower case: `ß`/`ẞ` become `ss`, `ı`/`İ` become `i`), then accents stripped on both sides (#579
+O2: NFD, combining marks removed, `ø`/`ł`/`æ` transliterated, so `JOSE` matches a configured
+`josé` and `rena` matches `reña`), then letters and digits only, by
 substring. So joined forms are caught (`<name>_trial`, `<Name>2`, `xx<name>`, `<name>Trial`), a
 spaced full name matches `FirstLast`, `first.last`, `first_last` and `First-Last`, and `GROSS`
 matches a configured `Groß`. Enum values, digests and content-addressed blob names are exempt,
-because a match there could only be a false refusal. An already-hashed id or token is kept as is,
+because a match there could only be a false refusal. A harness-produced hashed id or token is kept
+as is (the hash ledger above),
 so a re-export stays byte-identical. On a CI runner the account is the generic `runner`, so CI
 proves the check with planted identities in every field and with an os-mocked test
 (`test/episode/identity-os.test.ts`).

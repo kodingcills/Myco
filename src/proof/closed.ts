@@ -31,9 +31,18 @@
  * but a party who GUESSES the exact input (a likely path with a likely username) can confirm
  * the guess. That is the price of keeping equality checkable; it is stated in the doc.
  */
+
+import { type HashLedger, NO_LEDGER } from "../export-guard/provenance.ts";
 import { REASON_CODES } from "../gate/api.ts";
 import { POLICY_AGENT_CODES, POLICY_DECISION_CODES } from "../policy/codes.ts";
-import { HASHED_SOURCE, hashedId, hashValue, RESERVED_PREFIX, textDigest } from "./hashed.ts";
+import {
+  HASHED_SOURCE,
+  hashedId,
+  hashValue,
+  isHashed,
+  RESERVED_PREFIX,
+  textDigest,
+} from "./hashed.ts";
 import type { IdentityGuard } from "./identity.ts";
 import { closedApp, closedSubject, closedTool, isClosedKeys } from "./vocab.ts";
 
@@ -145,32 +154,50 @@ export interface Allowlist {
   readonly subject: (raw: string) => string;
 }
 
-export function allowlist(guard: IdentityGuard): Allowlist {
-  const id = (raw: string) => (isPlainId(raw) && guard.hit(raw) === null ? raw : hashValue(raw));
+/**
+ * The ledger scope of every id field (#579 O3). Ids cross-reference (a verdict's `evidence`
+ * names evidence ids, its `taskId` the run's), so they share one scope: a harness-produced hash
+ * kept in one id field is kept in all of them, and the bindings still hold.
+ */
+export const ID_SCOPE = "id";
+
+/**
+ * `ledger` is the harness's hash ledger (#579 O3; `bundleHashLedger`): an exact `h-<60hex>` is
+ * kept as is only when it records it for that field's scope (`ID_SCOPE` for every id; the field
+ * name for a vocabulary field: `action.tool`, `action.keys`, `action.app`, `policy.subject`,
+ * `policy.reasonCode`, `evidence.mediaType`). With none (the default), every `h-<60hex>` input
+ * is an agent's as far as the exporter knows, and is re-hashed.
+ */
+export function allowlist(guard: IdentityGuard, ledger: HashLedger = NO_LEDGER): Allowlist {
+  const id = (raw: string) =>
+    isPlainId(raw) && guard.hit(raw) === null ? raw : hashValue(raw, ID_SCOPE, ledger);
   return {
     id,
     arm: (raw) => ((KNOWN_ARMS as readonly string[]).includes(raw) ? raw : id(raw)),
-    policyCode: closedPolicyCode,
-    mediaType: closedMediaType,
-    tool: closedTool,
-    app: closedApp,
-    keys: (raw) => (isClosedKeys(raw) && guard.hit(raw) === null ? raw : hashValue(raw)),
-    subject: closedSubject,
+    policyCode: (raw) => closedPolicyCode(raw, ledger),
+    mediaType: (raw) => closedMediaType(raw, ledger),
+    tool: (raw) => closedTool(raw, ledger),
+    app: (raw) => closedApp(raw, ledger),
+    keys: (raw) =>
+      isClosedKeys(raw) && guard.hit(raw) === null ? raw : hashValue(raw, "action.keys", ledger),
+    subject: (raw) => closedSubject(raw, ledger),
   };
 }
 
 /**
- * The grammar-only id closer (no identity guard). The exporter never uses it to WRITE a
- * value (it uses `allowlist(guard).id`); verify uses `sameId` to compare.
+ * The grammar-only id closer (no identity guard), for COMPARISON only: verify uses it through
+ * `sameId` to ask whether an emitted value could have been written for a raw one. An exact
+ * `h-<60hex>` raw value is returned as is, because an exporter holding the harness's ledger
+ * keeps it (#579 O3). The exporter never uses this to WRITE a value (`allowlist(guard).id`).
  */
 export function closedId(raw: string): string {
-  return isPlainId(raw) ? raw : hashValue(raw);
+  return isPlainId(raw) || isHashed(raw) ? raw : hashedId(raw);
 }
 
 /**
  * Whether an id may be written as is by grammar: it matches `CLOSED_ID` and does not start
- * with the reserved `h-` prefix. An exact `h-<60hex>` is kept by `hashValue` instead; any
- * other `h-` form is hashed (lead ruling 23:06Z).
+ * with the reserved `h-` prefix. An exact `h-<60hex>` is kept only when harness-produced
+ * (`hashValue` with the ledger); any other `h-` form is hashed (lead ruling 23:06Z).
  */
 function isPlainId(raw: string): boolean {
   return CLOSED_ID.test(raw) && !RESERVED_PREFIX.test(raw);
@@ -178,21 +205,26 @@ function isPlainId(raw: string): boolean {
 
 /**
  * Whether `emitted` is what an exporter could have written for `raw`: the raw value itself
- * (a closed id with no identity) or its hashed form (any other value). Either way it binds
- * the two, and the verifier needs no copy of the exporting host's identity.
+ * (a closed id with no identity, or a harness-produced hash) or its hashed form (any other
+ * value). Either way it binds the two, and the verifier needs no copy of the exporting host's
+ * identity.
  */
 export function sameId(raw: string, emitted: string | undefined): boolean {
   return emitted !== undefined && (emitted === closedId(raw) || emitted === hashedId(raw));
 }
 
 /** A policy code: as is when it is a member of `POLICY_REASON_CODES`, else hashed. */
-export function closedPolicyCode(raw: string): string {
-  return (POLICY_REASON_CODES as readonly string[]).includes(raw) ? raw : hashValue(raw);
+export function closedPolicyCode(raw: string, ledger: HashLedger = NO_LEDGER): string {
+  return (POLICY_REASON_CODES as readonly string[]).includes(raw)
+    ? raw
+    : hashValue(raw, "policy.reasonCode", ledger);
 }
 
 /** A media type: as is when it is a member of `MEDIA_TYPES` (exact match), else hashed. */
-export function closedMediaType(raw: string): string {
-  return (MEDIA_TYPES as readonly string[]).includes(raw) ? raw : hashValue(raw);
+export function closedMediaType(raw: string, ledger: HashLedger = NO_LEDGER): string {
+  return (MEDIA_TYPES as readonly string[]).includes(raw)
+    ? raw
+    : hashValue(raw, "evidence.mediaType", ledger);
 }
 
 /** The arms an arm field may carry as is (#518's ledger arms); any other value is an id. */
