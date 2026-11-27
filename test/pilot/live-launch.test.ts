@@ -58,8 +58,10 @@ import {
   CLEAN_RESULT_TASK_DATA,
   config,
   FAULT_WORDING,
+  FOLDED_CLAIM_LINES,
   FOLDED_USAGE_PHRASES,
   NBSP,
+  NON_CLAIM_LINES,
   PUBLISHED,
   ROOT,
   SOURCES,
@@ -1657,6 +1659,44 @@ describe("#606 S1+S2: stderr-only quota wording on a claimless clean result, and
       ])
         expect([t, await launchWith(output)]).toEqual([t, decidedAs("no-claim")]);
   });
+
+  // #611: the claim line is folded as the vocabularies are, and a folded claim line is never
+  // reclassified by the quota, billing or auth exceptions (in the text or on stderr).
+  const CLAIMLESS_FAULTS: readonly (readonly [string, string])[] = [
+    ...USAGE_LIMIT_PHRASES.map((p) => [p, "usage-limit"] as const),
+    ...CLEAN_RESULT_FAULT_PHRASES,
+  ];
+
+  it.each(FOLDED_CLAIM_LINES)(
+    "#611: claim line %s is read as the claim, with and without quota, billing or auth wording in the text and on stderr",
+    async (_name, line, claim) => {
+      expect(await launchWith({ stdout: resultJson(`Edited.\n${line}`), code: 0 })).toEqual(
+        decidedAs(claim),
+      );
+      for (const [t] of CLAIMLESS_FAULTS)
+        for (const [shape, output] of [
+          ["text", { stdout: resultJson(`${t}\n${line}`), code: 0 }],
+          ["stderr", { stdout: resultJson(`Edited.\n${line}`), stderr: t, code: 0 }],
+          ["text and stderr", { stdout: resultJson(`${t}\n${line}`), stderr: t, code: 0 }],
+        ] as const)
+          expect([t, shape, await launchWith(output)]).toEqual([t, shape, decidedAs(claim)]);
+    },
+  );
+
+  it.each(NON_CLAIM_LINES)(
+    "#611 negatives: last line %s is still no claim: no-claim alone, stopped with quota, billing or auth wording",
+    async (line) => {
+      expect(await launchWith({ stdout: resultJson(`Edited.\n${line}`), code: 0 })).toEqual(
+        decidedAs("no-claim"),
+      );
+      for (const [t, cls] of CLAIMLESS_FAULTS)
+        for (const [shape, output] of [
+          ["text", { stdout: resultJson(`${t}\n${line}`), code: 0 }],
+          ["stderr", { stdout: resultJson(`Edited.\n${line}`), stderr: t, code: 0 }],
+        ] as const)
+          expect([t, shape, await launchWith(output)]).toEqual([t, shape, expectedFor(cls)]);
+    },
+  );
 
   it("the A/B launch's live driver shares the classifier: stderr-only and NBSP quota wording is usage-limit there too", async () => {
     const LOADED = loadPrereg(ROOT);
