@@ -80,8 +80,23 @@ It shows that the wiring works end to end and that live state is not proof. It i
 measurement: there is one scripted policy, no model and no baseline arm. It produces no
 capability row.
 
+## Pre-registration and the Ultra arms
+
+The bar is frozen, as proposed with the lead's ruling pending, in
+`docs/product/capability-prereg/i-v1/` (see its README). The analysis is
+`scripts/capability-i-analysis.ts`. The pre-registered arms are the spec's `C1+I` vs `C1`
+on the Ultra (Claude Code) harness, gate-less in both. Their audited launch plans are in
+`src/state/c1-ultra.ts`: the C1 vocabulary through a `myco-c1` server, plus the four state
+tools for `C1+I`. The `screenshot-only` / `structured-state` arms above grant the gate tool
+and the `myco-rt` surface. They predate the spec's §1.3 gate-less default and are not the
+pre-registered arms.
+
 ## Not done yet
 
+- The rest of the C1 port onto the Ultra harness: the `myco-c1` MCP server process and its
+  backend (Cua on the Windows VM, run by the local VM owner; or the Linux path), a driver that
+  runs the `c1-ultra.ts` plans through the src/pilot runner, step counting from the
+  transcript, the per-row tool-output scan, and the pack writer for the analysis.
 - A live harness that runs a model in each arm and writes the rows. It needs a transport
   that starts Claude Code with the audited plan, as `GatedTrialTransport` does for the gate.
 - A Windows `windows-uia` backend. The VM work is local, single-owner and under the lock.

@@ -32,6 +32,7 @@
     "scripts/linux-run.ts",
     "scripts/myco-gate.ts",
     "scripts/myco-state.ts",
+    "scripts/capability-i-analysis.ts",
     "scripts/m2-fault-suite.ts",
     "scripts/m2-evidence-check.ts",
     "scripts/parallel-run.ts",

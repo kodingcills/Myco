@@ -212,7 +212,7 @@ export function auditCapabilityArmLaunch(
 }
 
 /** `myco-state`'s withheld list names `trialDir` or an ancestor of it; fails closed. */
-function withheldCoversTrial(plan: AgentLaunchPlan, trialDir: string): boolean {
+export function withheldCoversTrial(plan: AgentLaunchPlan, trialDir: string): boolean {
   if (!isAbsolute(trialDir) || trialDir !== normalize(trialDir)) return false;
   const raw = plan.mcpServers[STATE_SERVER_NAME]?.env?.[MYCO_STATE_WITHHELD_ENV];
   if (typeof raw !== "string") return false;
