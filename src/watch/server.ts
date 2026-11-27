@@ -27,6 +27,8 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
+import { guardWithHost, type IdentityContext } from "../proof/identity.ts";
+import { exportMockPreview } from "./clip/mock-preview.ts";
 import { DecisionLogTail } from "./decision-log.ts";
 import { projectDecisions, type WatchEvent } from "./events.ts";
 import { type FrameSource, readRegular } from "./frames.ts";
@@ -39,6 +41,7 @@ import {
   joinTimeline,
   readManifest,
   type TimelineCode,
+  type TimelineJoin,
 } from "./timeline.ts";
 
 export interface WatchServerOptions {
@@ -62,6 +65,11 @@ export interface WatchServerOptions {
    */
   readonly decisionLogs?: ReadonlyMap<string, string>;
   readonly frames?: FrameSource;
+  /**
+   * Extra identity strings for the clip export's id guard (`--identity-file`, `--user-file`),
+   * merged with the host's own. Never printed or served.
+   */
+  readonly identity?: IdentityContext;
   /** How often the log and frames are re-read. Default 250 ms. */
   readonly pollMs?: number;
   /** Most events the state carries (the latest ones). Default 2000. */
@@ -196,6 +204,8 @@ function send(
 
 const TEXT = "text/plain; charset=utf-8";
 const TIMELINE_ROUTE = /^\/timeline\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/;
+const CLIP_ROUTE =
+  /^\/clip\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/(0|[1-9]\d{0,5})\/(0|[1-9]\d{0,5})\.gif$/;
 const FRAME_ROUTE = /^\/frames\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/(0|[1-9]\d{0,5})$/;
 
 export async function startWatchServer(opts: WatchServerOptions): Promise<WatchServer> {
@@ -233,6 +243,30 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
   const trustOf = (runId: string) =>
     runTrust({ runId, frames: frames?.provenance ?? "rendered", verified: null });
 
+  /** The task every listed run's gate is bound to: the one listed task, or undefined. */
+  const boundTask = opts.tasks?.length === 1 ? opts.tasks[0] : undefined;
+  /** The identity guard clip ids are checked with: the host's identity plus the operator's. */
+  const guard = guardWithHost(opts.identity);
+
+  /** The replay join of one listed run (§2.2), from its own log, frames and manifest. */
+  const joinFor = (runId: string): TimelineJoin => {
+    const logPath = ownLogOf(runId);
+    const manifestPath = frames?.timelineFile?.(runId) ?? null;
+    if (logPath === null || manifestPath === null || frames === undefined)
+      return { ok: false, code: "TL_NO_TIMELINE" };
+    // The task the run's gate is bound to comes from the operator, never from the log. With
+    // no single listed task the binding cannot be checked, so the join is refused.
+    if (boundTask === undefined) return { ok: false, code: "TL_LOG_BINDING" };
+    return joinTimeline({
+      binding: { taskId: boundTask, runId },
+      listedRuns: runs,
+      manifest: readManifest(manifestPath),
+      frameCount: frames.count(runId),
+      frameBytes: (index) => frames.read(runId, index)?.bytes ?? null,
+      log: readRegular(logPath) ?? Buffer.alloc(0),
+    });
+  };
+
   /** The joined timeline of one listed run, as `/timeline/<run>` serves it. */
   const timelineView = (runId: string): TimelineView => {
     const trust = trustOf(runId);
@@ -247,22 +281,7 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
       frames: [],
       decisions: [],
     });
-    const logPath = ownLogOf(runId);
-    const manifestPath = frames?.timelineFile?.(runId) ?? null;
-    if (logPath === null || manifestPath === null || frames === undefined)
-      return unjoined("TL_NO_TIMELINE");
-    // The task the run's gate is bound to comes from the operator, never from the log. With
-    // no single listed task the binding cannot be checked, so the join is refused.
-    const taskId = opts.tasks?.length === 1 ? opts.tasks[0] : undefined;
-    if (taskId === undefined) return unjoined("TL_LOG_BINDING");
-    const join = joinTimeline({
-      binding: { taskId, runId },
-      listedRuns: runs,
-      manifest: readManifest(manifestPath),
-      frameCount,
-      frameBytes: (index) => frames.read(runId, index)?.bytes ?? null,
-      log: readRegular(logPath) ?? Buffer.alloc(0),
-    });
+    const join = joinFor(runId);
     if (!join.ok) return unjoined(join.code);
     return {
       runId,
@@ -466,6 +485,34 @@ export async function startWatchServer(opts: WatchServerOptions): Promise<WatchS
         "application/json; charset=utf-8",
         JSON.stringify(timelineView(timeline[1] as string)),
       );
+      return;
+    }
+    const clip = CLIP_ROUTE.exec(url);
+    const clipRun = clip?.[1] as string;
+    // Mock runs only: the server holds no key and opens no sealed file, so it never renders an
+    // evidence clip (§2.8). Any run that is not mock gets 404, like an unlisted one.
+    if (clip && frames !== undefined && runs.has(clipRun) && trustOf(clipRun).mock) {
+      // The render is synchronous, so one request renders at a time by construction, within
+      // the §2.9 budget (at most 125 source frames, at most 5 MiB of output).
+      const preview = exportMockPreview({
+        runId: clipRun,
+        taskId: boundTask ?? "",
+        from: Number(clip[2]),
+        to: Number(clip[3]),
+        join: joinFor(clipRun),
+        frame: (index) => frames.read(clipRun, index),
+        needles,
+        guard,
+      });
+      if (!preview.ok) {
+        // Codes only: never a path, a name or a value from the inputs.
+        send(res, 422, TEXT, `${preview.code}\n`, { "X-Myco-Mock": "1" });
+        return;
+      }
+      send(res, 200, "image/gif", preview.gif, {
+        "Content-Disposition": 'attachment; filename="myco-mock-clip.gif"',
+        "X-Myco-Mock": "1",
+      });
       return;
     }
     const match = FRAME_ROUTE.exec(url);

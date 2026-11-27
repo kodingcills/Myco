@@ -522,6 +522,9 @@ describe("watch: passive (changes no file, holds no gate handle)", () => {
             "./sanitize-frame.ts",
             "./timeline.ts",
             "./run-trust.ts",
+            // Replay B5: the pure clip renderer (scanned in clip-cli.test.ts) and the shared identity guard.
+            "./clip/mock-preview.ts",
+            "../proof/identity.ts",
             "../gate/api.ts",
             "../core/state.ts",
             "../discovery/live-runner.ts",

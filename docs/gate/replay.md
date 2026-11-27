@@ -84,3 +84,32 @@ by a flag. Only a verified real-run record removes the watermark. Records are re
 the module that issues them, and nothing in this stack issues one yet: it will be the
 sealed-capture opener (build PR B6, receipt-bound). Until then every run is mock, and a
 hand-built record of the same shape is refused.
+
+## Clip export: a MOCK preview GIF (build PR B5)
+
+```
+myco clip export --run <runId> --task <taskId> --from <i> --to <j> \
+                 --decision-log <file> --frames <dir> --out <path.gif> [--json]
+```
+
+This exports frames `i..j` of a recorded run as a GIF. The verdict band is burned into every
+frame: the run, the task, the frame number, the latest decision pinned at or before that frame,
+and `GATE MYCO.GATE/V1  MOCK · NOT EVIDENCE`. A sheared, checkered `MOCK` watermark covers the
+content of every frame, and a 2.5 s end card shows the verdict. The band is drawn in a fixed
+in-repo bitmap font from closed fields only. An id that carries an identity string is shown as
+`H-` and 12 hex digits. The GIF is deterministic, carries no metadata (no comment or other
+extension), and fits the postable budget: at most 5 MiB, at most 15 s, at most 125 source
+frames, 720 px wide by default. Over budget is refused with `CLIP_BUDGET`, never downscaled.
+
+The export writes one file, `--out`, created exclusively (an existing path or a symlink is
+refused). There is no sidecar. The summary it prints is machine-marked `"mock": true`. No flag
+turns the watermark off or marks a run real. The watch server serves the same preview at
+`GET /clip/<runId>/<from>/<to>.gif` (an attachment marked `X-Myco-Mock: 1`), for mock runs only.
+
+Refusals are codes only: `CLIP_TIMELINE` (the join is invalid, or a decision came before the
+first frame), `CLIP_FRAMES`, `CLIP_FRAME_REFUSED` (a frame that is not a PNG the watch view
+serves, such as the demo's SVG frames), and `CLIP_BUDGET`.
+
+`myco clip verify <clip.gif> --sidecar <file> --decision-log <file>` refuses a mock preview
+with `CLIP_NO_SIDECAR`, since it has no sidecar. It never exits 0 in this stack: the evidence
+clip and its sidecar (build PR B6) wait on the sealed run record.
