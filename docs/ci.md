@@ -16,9 +16,10 @@ nothing is skipped or fails for lack of one.
 | `ci.yml` | `ci plan (path classes)` | yes | no |
 | `ci.yml` | `secret scan (gitleaks)` | yes | yes |
 | `ci.yml` | `ci hygiene (workflows)` | yes | no |
-| `ci.yml` | `check (ubuntu-latest)`, `check (macos-latest)` | yes | yes |
+| `ci.yml` | `check (ubuntu-latest)`, `check (macos-latest)` | yes (every run except a draft's `affected` run) | yes |
+| `ci.yml` | `check affected (ubuntu-latest)` | only a draft PR's `affected` run ([Draft PRs](#draft-prs-affected-mode)) | no, by design |
 | `ci.yml` | `myco-agent tests (ubuntu-latest)` | yes | yes |
-| `ci.yml` | `myco-agent tests (macos-latest)` | yes | no |
+| `ci.yml` | `myco-agent tests (macos-latest)` | pushes to `main`; PRs that change `agent/` or `.github/` | no |
 | `ci.yml` | `runtime guest agent tests (ubuntu-latest)` | yes | yes |
 | `ci.yml` | `linux path (ubuntu-latest)` | yes, when the plan says so | no |
 | `ci.yml` | `newcomer path (ubuntu-latest)` | yes, when the plan says so (same condition as `linux path`) | no |
@@ -68,14 +69,19 @@ nothing is skipped or fails for lack of one.
 ## Targeted CI (test audit, TIF-265 follow-up)
 
 The `ci plan (path classes)` job runs `scripts/ci-plan.py` on the PR's changed files,
-labels, title and body, and every other job reads its decision. It picks one of three
-modes.
+labels, title, body and draft state, and every other job reads its decision. It picks one
+of four modes (`affected` is for draft PRs only; see
+[Draft PRs: affected mode](#draft-prs-affected-mode)).
 
 | Mode | When | `check` runs | agent, runtime jobs |
 | --- | --- | --- | --- |
 | `full` | Pushes to `main`; any Tier 2 signal (below); any changed path in a Tier 2 or tooling class; **any change under `src/` or `viewer/src/`**; TypeScript outside `test/` and `viewer/test/`; a test file a script can reach or a source names outside an import (below); any other file kind (yaml, json, py, sh, html, css, fixtures); a doc that a non-test source names; a diff it cannot compute, or over 300 files; no readable test sources | typecheck, lint, `pnpm test`, build: exactly what it ran before the planner existed | run |
 | `targeted` | Only `.md` docs and TypeScript under `test/` or `viewer/test/` | typecheck, lint, `vitest run --changed <PR base>` (the changed test files and every test importing them), the forked s0 launcher test, the core smoke set, **every directory-scanning test**, the doc tests, `pnpm schema-validate`, build | steps skipped, job green |
 | `docs` | Only `.md` docs, none of them named by a non-test source | the forked s0 launcher test, the core smoke set, **every directory-scanning test**, and the test files that name a changed doc | steps skipped, job green |
+| `affected` | A **draft** PR, any tier, unless it changes a tooling path (below), carries `full-ci`, or its diff is unknown or over 300 files | `check` is skipped; `check affected (ubuntu-latest)` runs typecheck, lint, `vitest run --changed <PR base>`, the related tests, the forked s0 launcher test, the core smoke set, the direct directory-scanning tests, `pnpm schema-validate`, build; past 150 related test files, `pnpm test` instead | run in full |
+
+Every narrow mode also runs the **safety set** (below): the gate-integrity, oracle-mutation
+(R5), fault-injection and security tests.
 
 **Only test-only and docs-only changes are narrowed.** Every change under `src/` or
 `viewer/src/` runs the full suite. The reason (verifier round 2, D7): guard tests such as
@@ -97,28 +103,51 @@ docs mode run every test file that lists or walks a directory, found mechanicall
 depth), or a `scripts/` or `schemas/` file it spawns calls `readdir`, `readdirSync`,
 `opendir`, `glob`, `globSync`, `readDirectory`, Python's `os.walk`/`listdir`/`scandir`/
 `glob`/`rglob`/`iterdir`, `git ls-files`/`ls-tree`, or runs `find`, `rg` or `grep`. A new
-scanning test joins with no list edit. Today that is about 65 files, about 2 minutes
-locally. The plan job exports them as `scanners`; if a narrow plan lists none, `check`
+scanning test joins with no list edit. On 2026-11-27 that was 196 of 318 test files (the
+walk follows imports into product modules that list run directories), about 4 minutes
+locally on 4 cores. The plan job exports them as `scanners`; if a narrow plan lists none, `check`
 runs the full suite. The test file pins every known repo guard (grader independence, the
 hidden split, required instructions, the probe directory, home paths, claim isolation,
 secret hygiene) into that set, and checks it against an independent detector.
 
 **The secret scan always runs.** It does not depend on the plan.
 
-**Required checks never hang.** The five required checks keep their names, and their
-jobs are never skipped at the job level. A skipped matrix job reports as
-`check (${{ matrix.os }})`, which would leave `check (macos-latest)` pending forever. Each
-required job starts, reads the plan in its first step, and skips only its own later
+**The safety set always runs** (CI speed, #678; the approved audit: gate-integrity,
+oracle-mutation, fault-injection and security tests are never dropped). Every narrow mode
+runs it; `full` runs it inside `pnpm test`. It is `safety_tests()` in
+`scripts/ci-plan.py`: every test file under `test/gate/`, `test/integrity/`,
+`test/oracle-selftest/`, `test/agent-checks/` (R5 for agent-written checks),
+`test/fault-classes/` and `test/export-guard/`; the files `test/faults.test.ts`,
+`test/claim-isolation.test.ts`, `test/no-home-paths.test.ts`,
+`test/baseline/secret-file.test.ts`, `test/plugins/sandbox.test.ts`,
+`test/plugins/sandbox-os.test.ts`, `test/policy/guard.test.ts`,
+`test/watch/server-security.test.ts`, `test/pilot/launch-guard.test.ts` and
+`test/guest-egress.test.ts`; and any test whose file name says what it guards (`secur`,
+`secret`, `sandbox`, `fault`, `mutat`, `tamper`, `egress`, `guard`, `forg`, `leak`), so a
+new one joins without a list edit. The plan job exports it as `safety`; a narrow plan that
+lists none runs the full suite. About 40 files; R5 for agent-written checks is most of
+their time (`test/agent-checks/propose.test.ts` alone is about 150 s on ubuntu).
+
+**Required checks never hang.** The five required checks keep their names. Their jobs are
+never skipped at the job level, with one deliberate exception: `check` in a draft's
+`affected` run (below). A skipped matrix job reports as `check (${{ matrix.os }})`, not as
+`check (macos-latest)`, which leaves the required check unreported for that commit. In
+`affected` mode that is the point (the draft cannot merge on that run, and marking it ready
+starts a run that reports it); anywhere else it would leave the check pending forever.
+Each required job starts, reads the plan in its first step, and skips only its own later
 steps. If the plan job fails, is skipped or cancelled, or its mode is empty or anything
-but `full`, `targeted` or `docs`, every required job runs in full; the agent and runtime
-jobs skip their steps only on a successful plan whose mode is exactly `targeted` or
-`docs`. `test/ci-hygiene/test_ci_plan.py` (run by `ci hygiene (workflows)`) executes each
+but `full`, `targeted` or `docs`, every required job runs in full (`check` skips only on a
+successful plan whose mode is exactly `affected`); the agent and runtime jobs skip their
+steps only on a successful plan whose mode is exactly `targeted` or `docs`. `test/ci-hygiene/test_ci_plan.py` (run by `ci hygiene (workflows)`) executes each
 job's `CI plan` step with every combination of plan result and mode (including empty,
 garbage and multi-line modes), evaluates every step's `if:` and the side jobs' job-level
-`if:`, and fails if a required name changes, a required job gains a job-level condition,
-a fallback does not reach full, or a mode runs the wrong steps.
+`if:`, and fails if a required name changes, a required job gains a job-level condition
+(beyond `check`'s `affected` skip, evaluated for every plan result and mode), a fallback
+does not reach full, or a mode runs the wrong steps.
 
-**Tier 2 always gets the full suite.** Any one of these forces `full`:
+**Tier 2 always gets the full suite before merge.** Outside a draft, any one of these forces
+`full` (in a draft, only tooling paths and `full-ci` do, and the draft's `affected` run cannot
+satisfy the required checks; see [Draft PRs](#draft-prs-affected-mode)):
 
 - the `tier-2` label (or `full-ci`);
 - a PR title or a body line that states the tier as 2 (`Tier: 2`, `**Tier 2.**`, `Tier 2 (locks)`),
@@ -154,7 +183,88 @@ See what the planner would do for your branch:
 
 ```sh
 python3 scripts/ci-plan.py --event pull_request --files $(git diff --name-only origin/main...HEAD)
+# add --draft true to see what a draft would run
 ```
+
+## Draft PRs: affected mode
+
+CI speed, #678. While a PR is a draft, CI runs only what the change can affect, on ubuntu
+only, whatever the tier. Three things still run the full jobs in a draft:
+
+- a tooling path (`.github/`, `.githooks/`, `package.json`, the lockfile, `tsconfig*`,
+  `vitest.config.ts`, `biome.json`, `test/setup/`, `test/ci-hygiene/`), because those change
+  CI itself;
+- the `full-ci` label;
+- a diff the planner cannot read, or one over 300 files.
+
+Ready PRs and pushes to `main` are unchanged. Tier 2 narrows in a draft because an
+`affected` run can never satisfy the required checks (below): the full suite is still
+required before any Tier 2 PR merges, and the safety set still runs on every push.
+
+**What runs.** `check affected (ubuntu-latest)` runs typecheck, lint, build and
+`pnpm schema-validate`, plus these tests:
+
+- `vitest run --changed <PR base>`, vitest's own import graph;
+- the related tests, from `related_tests()` in `scripts/ci-plan.py`: every test that
+  reaches a changed file through relative imports, or through a test, test helper or
+  script naming its file outside an import (a spawned `tsx scripts/x.ts`, a child-process
+  helper);
+- the safety set, the core smoke set and the forked s0 launcher test;
+- the direct directory-scanning tests: tests that list a directory themselves, through a
+  test helper, or through a spawned script.
+
+The required-check modes (`targeted`, `docs`) instead keep the full scanning set, which
+also follows product modules. With more than 150 related test files, narrowing would save
+little, so the job runs `pnpm test` instead (`affected_all`), still on ubuntu and still under
+the non-required name. The myco-agent and runtime jobs run in full. No macOS runner is
+taken (the macOS agent job only if `agent/` changed).
+
+Replayed over the last 40 merged PRs' file lists (2026-11-27), a draft push would have been
+`affected` for 33 of them (32 narrowed, 1 whole suite, all without macOS). The other 7
+touched tooling.
+
+**Why a PR can never merge on it.** Branch protection requires `check (macos-latest)` and
+`check (ubuntu-latest)` for the PR's head commit. Neither is ever reported by an
+`affected` run:
+
+1. In that mode `check` is skipped at the job level. A skipped matrix job reports under
+   its unexpanded name, `check (${{ matrix.os }})`. The job that runs instead is named
+   `check affected (ubuntu-latest)`. Neither name is required, so the commit's required
+   checks stay "expected" and the merge button stays blocked.
+2. GitHub never merges a draft.
+3. Marking the PR ready (`ready_for_review`, a trigger of this workflow) starts a new run
+   on the same commit. That run is never `affected` (a ready PR is not a draft), so it is
+   `full`, unless the change is docs-only or test-only. It reports the required names on
+   the PR's merge commit with `main`. Every later push to the ready PR runs `full` too.
+   Converting back to draft does not erase those results, and a new push to the draft
+   starts again at step 1.
+
+Together with "Require branches to be up to date before merging", the run that satisfies
+the required checks is the full suite on the merge result. Without that setting it is the
+full suite on the PR's merge with `main` as of its last push, and the full run on `main`
+after the merge is the backstop, as it was before this change.
+
+**Why not a merge queue.** GitHub's merge queue is available only to repositories owned by
+an organization. `kodingcills/Myco` is owned by a user account. The workflow does not
+listen for `merge_group`; add it (the planner already runs `full` on every non-PR event) if
+the repository moves to an organization.
+
+**Seeing it.** The plan job's summary says `affected (draft)`, lists the related tests,
+and says "mark ready for the full suite". The PR's checks list shows
+`check (${{ matrix.os }})` as skipped and `check affected (ubuntu-latest)` with the
+result.
+
+## macOS jobs on PRs
+
+From PR #642's run (45970632580), a typical run spent 19.5 min waiting for a macOS runner
+for `myco-agent tests (macos-latest)` (17 s of tests), and that wait was the run's wall
+time. That job is not required. It now runs on every push to `main`, and on a PR only when
+the PR changes `agent/` or `.github/` (`agent_macos` in the plan), or the plan did not
+succeed. A PR therefore takes one macOS job (`check (macos-latest)`), or none while it is
+an `affected` draft. `viewer verdict budget (…)` was already off the PR path (pushes to
+`main` and the `perf` label), and its samples are in each `main` run's job summary and
+artifacts. A red non-required job on `main` does not block the R1 pilot launch gate,
+`scripts/ci-required-green.sh` (see `docs/benchmark/pilot-runbook.md`).
 
 ## Security posture
 

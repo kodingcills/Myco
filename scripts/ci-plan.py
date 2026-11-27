@@ -13,19 +13,34 @@ Modes, strongest first:
             directory-scanning test, schema-validate
   docs      the core smoke set, every directory-scanning test, and the test files
             that name a changed doc
+  affected  DRAFT PRs (CI speed, #678), unless the draft touches CI tooling (TOOLING),
+            carries the `full-ci` label, or its diff cannot be read: typecheck + lint +
+            build, `vitest run --changed <base>`, every test that reaches a changed file
+            (related_tests: imports, spawns and file-name reads, to a fixed point), the
+            safety set, the core smoke set, the direct directory-scanning tests and
+            schema-validate; or, past AFFECTED_MAX_TESTS related tests, the whole suite.
+            On ubuntu only, under the NON-required check name
+            `check affected (ubuntu-latest)`. The required `check (...)` jobs are
+            skipped, so they are never reported for that commit and the PR cannot merge
+            on this run; marking the PR ready for review starts a new run, which is
+            never `affected` (a ready PR is not a draft). Tier 2 paths and statements
+            narrow here too, because the full suite is still required before merge.
 
-Only test-only and docs-only changes are ever narrowed. Every change under src/ or
-viewer/src/ runs the full suite (verifier round 2 D7: guard tests that scan a source
-directory, such as the hcu+shell import boundary and the hidden-split leak check, never
-import the module they guard, so `vitest run --changed` cannot find them). And because a
-guard can scan test/ or docs/ too, every directory-scanning test (see scanning_tests)
-runs in targeted and docs mode, whatever changed.
+Every narrow mode (targeted, docs, affected) also runs the safety set (safety_tests:
+gate integrity, oracle mutation / R5, fault injection, security), the approved audit's
+"never dropped" tests, and the directory-scanning tests (see scanning_tests), whatever
+changed.
+
+Outside a draft, only test-only and docs-only changes are narrowed: every change under
+src/ or viewer/src/ in a ready PR runs the full suite (verifier round 2 D7: guard tests
+that scan a source directory never import the module they guard, so an import graph
+cannot find them; affected mode is never what a PR merges on).
 
 Fail safe: anything not positively classified as safe to narrow forces `full`.
-`full` is forced by
+Outside a draft, `full` is forced by
 
   - any event other than `pull_request` (pushes to main always run everything)
-  - the `tier-2` or `full-ci` label
+  - the `tier-2` or `full-ci` label (`full-ci` in a draft too)
   - a PR title or a body line that states Tier 2 ("Tier: 2", "**Tier 2**", ...)
   - a changed path in a Tier 2 or tooling class (TIER2 / TOOLING below; all of
     scripts/ and src/benchmark/ are Tier 2)
@@ -40,6 +55,9 @@ Fail safe: anything not positively classified as safe to narrow forces `full`.
   - a doc that a non-test source names (a script may check it)
   - a diff that could not be computed, or one over MAX_FILES files
   - no test sources could be read (the directory-scanning set would be empty)
+
+In a draft, `full` is forced only by the `full-ci` label, a changed TOOLING path, an
+unreadable or oversized diff, or no readable test sources.
 
 Standard library only. `python3 scripts/ci-plan.py --help` for local use.
 """
@@ -166,6 +184,43 @@ SMOKE = (
     "test/oracle-selftest/selftest.test.ts",
 )
 
+# The safety set (approved audit, m2-plan-draft.md §7: "Gate-integrity, oracle-mutation,
+# fault-injection and security tests are never weakened"; CI-speed workstream #678: they
+# run on every PR). Every narrow mode runs all of them. A test file is in the set when it
+# sits under SAFETY_DIRS, is listed in SAFETY_FILES, or its file name says what it guards
+# (SAFETY_NAME), so a new security or fault test joins without a list edit.
+# test_ci_plan.py pins every entry to a tracked file and to docs/ci.md.
+SAFETY_DIRS = (
+    "test/gate/",  # gate integrity: verdicts, sealing, caller isolation, the xlsx oracle
+    "test/integrity/",  # trial integrity: isolation, launch, surface
+    "test/oracle-selftest/",  # R5 oracle mutation self-test
+    "test/agent-checks/",  # R5 for agent-written checks (track C)
+    "test/fault-classes/",  # fault injection and tamper
+    "test/export-guard/",  # episode export: provenance, seal, identity leaks
+)
+SAFETY_FILES = (
+    "test/faults.test.ts",
+    "test/claim-isolation.test.ts",
+    "test/no-home-paths.test.ts",
+    "test/baseline/secret-file.test.ts",
+    "test/plugins/sandbox.test.ts",
+    "test/plugins/sandbox-os.test.ts",
+    "test/policy/guard.test.ts",
+    "test/watch/server-security.test.ts",
+    "test/pilot/launch-guard.test.ts",
+    "test/guest-egress.test.ts",
+)
+SAFETY_NAME = re.compile(r"secur|secret|sandbox|fault|mutat|tamper|egress|guard|forg|leak", re.IGNORECASE)
+
+# A draft PR's `affected` run narrows only when that saves real work: past this many
+# related test files it runs the full suite instead.
+AFFECTED_MAX_TESTS = 150
+
+# The `check` job's macOS leg and `myco-agent tests (macos-latest)` are the macOS queue.
+# The agent's macOS job (not required) runs on pushes to main and on PRs that change
+# agent/ or the workflows; AGENT_MACOS_PATHS lists the paths.
+AGENT_MACOS_PATHS = ("agent/", ".github/")
+
 # `pnpm test` runs this file on its own in a forked pool, so `vitest run --changed`
 # excludes it; targeted mode reruns it the same way when one of these paths changes.
 LAUNCHER_TEST = "test/discovery/s0-live-launcher.test.ts"
@@ -197,6 +252,10 @@ class Plan:
     launcher: bool = True
     doc_tests: list[str] = field(default_factory=list)
     scanners: list[str] = field(default_factory=list)
+    safety: list[str] = field(default_factory=list)
+    related: list[str] = field(default_factory=list)
+    affected_all: bool = False
+    agent_macos: bool = True
 
     def outputs(self) -> dict[str, str]:
         return {
@@ -208,6 +267,10 @@ class Plan:
             "doc_tests": " ".join(self.doc_tests),
             "smoke": " ".join(SMOKE),
             "scanners": " ".join(self.scanners),
+            "safety": " ".join(self.safety),
+            "related": " ".join(self.related),
+            "affected_all": str(self.affected_all).lower(),
+            "agent_macos": str(self.agent_macos).lower(),
         }
 
 
@@ -311,13 +374,18 @@ SPAWNED_NAME = re.compile(r"(?<![\w.-])([\w.-]+\.(?:ts|mts|tsx|py|sh))(?![\w-])"
 SPAWN_ROOTS = ("scripts/", "schemas/")
 
 
-def scanning_tests(sources: dict[str, str]) -> list[str]:
+def scanning_tests(sources: dict[str, str], through_source: bool = True) -> list[str]:
     """Every test file (test/, viewer/test/) that lists or walks a directory, itself or
     through what it loads: its relative imports, transitively, and any scripts/ or
     schemas/ file it names outside an import (a script it spawns), with that script's own
     imports and spawns. A guard that scans src/, test/ or docs/ never imports what it
     scans, so `vitest run --changed` cannot select it; targeted and docs mode run all of
-    these instead. Mechanical on purpose: a new scanning test joins without a list edit."""
+    these instead. Mechanical on purpose: a new scanning test joins without a list edit.
+
+    With through_source=False (affected mode's direct scanners) the walk does not enter
+    product source (src/, viewer/src/): a guard scans the repo itself or through a test
+    helper or a spawned script, while product modules list run directories at run time.
+    About a third of the full set; affected mode is never what a PR merges on."""
     files = set(sources)
     by_base: dict[str, list[str]] = {}
     for f in files:
@@ -337,6 +405,8 @@ def scanning_tests(sources: dict[str, str]) -> list[str]:
             for name in set(SPAWNED_NAME.findall(strip_imports(text))):
                 deps += by_base.get(name, [])
             for dep in deps:
+                if dep and not through_source and starts(dep, SOURCE):
+                    continue
                 if dep and dep != SELF and dep not in seen:
                     seen.add(dep)
                     queue.append(dep)
@@ -384,6 +454,79 @@ def doc_references(doc: str, sources: dict[str, str]) -> tuple[list[str], list[s
     return sorted(tests), sorted(others)
 
 
+def is_test(path: str) -> bool:
+    return is_test_file(path) and bool(TEST_FILE.search(path))
+
+
+def safety_tests(sources: dict[str, str]) -> list[str]:
+    """Every test file in the safety set: under SAFETY_DIRS, in SAFETY_FILES, or named for
+    what it guards (SAFETY_NAME on the file name)."""
+    out = []
+    for f in sorted(sources):
+        if not is_test(f):
+            continue
+        if starts(f, SAFETY_DIRS) or f in SAFETY_FILES or SAFETY_NAME.search(os.path.basename(f)):
+            out.append(f)
+    return out
+
+
+# Files that run other files: a name in their text (outside an import) is a spawn or a
+# read. Product source names files mostly in comments, so a source file counts as a
+# runner only when the file it names is a script (src spawning scripts/x.sh).
+RUNNERS = ("test/", "viewer/test/", "scripts/")
+
+
+def related_tests(changed: list[str], sources: dict[str, str]) -> list[str]:
+    """Every test file that can reach a changed file, by the edges the planner can see,
+    followed backwards from the changed files to a fixed point:
+
+      - a relative import of it (static, dynamic, re-export, require);
+      - a test, test helper or script naming its file name outside an import (a spawned
+        `tsx scripts/x.ts`, an fs read, a child process helper), together with its
+        directory name unless the two sit in the same directory (`join("scripts",
+        "x.ts")`, `join(__dirname, "child.ts")`); or any source naming a scripts/ file.
+
+    A test file is a leaf: being named by another file runs nothing. This is the draft
+    loop's fast signal, not what a PR merges on (the full run at ready for review is), and
+    `vitest run --changed` runs beside it with vitest's own import graph."""
+    files = set(sources)
+    importers: dict[str, set[str]] = {}
+    for f, text in sources.items():
+        for m in IMPORT_SPEC.finditer(text):
+            dep = resolve_import(f, m.group(3), files)
+            if dep and dep != f:
+                importers.setdefault(dep, set()).add(f)
+    stripped = {f: strip_imports(t) for f, t in sources.items() if f != SELF}
+
+    def word(s: str) -> re.Pattern[str]:
+        return re.compile(r"(?<![\w.-])" + re.escape(s) + r"(?![\w-])")
+
+    def named_by(target: str) -> list[str]:
+        base, parent_dir = os.path.basename(target), os.path.dirname(target)
+        base_pat, parent_pat = word(base), word(os.path.basename(parent_dir))
+        out = []
+        for f, text in stripped.items():
+            if f == target or base not in text or not base_pat.search(text):
+                continue
+            if not (f.startswith(RUNNERS) or target.startswith("scripts/")):
+                continue
+            if os.path.dirname(f) == parent_dir or parent_pat.search(text):
+                out.append(f)
+        return out
+
+    reach = set(changed)
+    queue = list(changed)
+    while queue:
+        cur = queue.pop()
+        if is_test(cur) and cur not in changed:
+            continue
+        for nxt in sorted(importers.get(cur, ())) + named_by(cur):
+            if nxt not in reach:
+                reach.add(nxt)
+                queue.append(nxt)
+    return sorted(f for f in reach if is_test(f))
+
+
 def plan(
     event: str,
     files: list[str] | None,
@@ -391,11 +534,25 @@ def plan(
     title: str = "",
     body: str = "",
     sources: dict[str, str] | None = None,
+    draft: bool = False,
 ) -> Plan:
     p = Plan()
+    # The agent's macOS job: on every non-PR run, and on a PR that touches agent/ or the
+    # workflows, or whose diff is unknown or too large to read.
+    p.agent_macos = (
+        event != "pull_request"
+        or files is None
+        or len(files) > MAX_FILES
+        or any(starts(f, AGENT_MACOS_PATHS) for f in files)
+    )
     if event != "pull_request":
         p.reasons.append(f"event {event or 'unknown'}: full on every non-PR run")
         return p
+    if "full-ci" in labels:
+        p.reasons.append("label full-ci")
+        return p
+    if draft:
+        return draft_plan(p, files, sources if sources is not None else {})
     hit = sorted(FULL_LABELS & set(labels))
     if hit:
         p.reasons.append(f"label {', '.join(hit)}")
@@ -450,6 +607,7 @@ def plan(
     scanners = scanning_tests(srcs)
     p.launcher = any(starts(f, LAUNCHER_PATHS) for f in files) or LAUNCHER_TEST in scanners
     p.scanners = [f for f in scanners if f not in SMOKE and f != LAUNCHER_TEST]
+    p.safety = [f for f in safety_tests(srcs) if f not in SMOKE and f not in p.scanners and f != LAUNCHER_TEST]
     p.doc_tests = sorted(doc_tests)
     if all(c == "docs" for c in classes.values()):
         p.mode = "docs"
@@ -461,6 +619,60 @@ def plan(
             counts[c] = counts.get(c, 0) + 1
         p.reasons.append("targeted: " + ", ".join(f"{n} {c}" for c, n in sorted(counts.items())))
     return p
+
+
+def draft_plan(p: Plan, files: list[str] | None, srcs: dict[str, str]) -> Plan:
+    """A draft PR (CI speed, #678): `affected` unless the draft touches CI tooling or the
+    diff cannot be read. Tier 2 paths and Tier 2 statements narrow here too, because an
+    `affected` run never reports the required `check (...)` names: the full suite is still
+    required before any PR merges, and runs when the PR is marked ready."""
+    if files is None:
+        p.reasons.append("changed files unknown")
+        return p
+    if not files:
+        p.reasons.append("no changed files reported")
+        return p
+    if len(files) > MAX_FILES:
+        p.reasons.append(f"{len(files)} changed files (> {MAX_FILES})")
+        return p
+    tooling = [f for f in files if starts(f, TOOLING)]
+    if tooling:
+        p.reasons.append(f"draft changes CI tooling: {', '.join(tooling[:5])}")
+        return p
+    if not any(is_test_file(f) for f in srcs):
+        p.reasons.append("no test sources read (the directory-scanning guard set would be empty)")
+        return p
+
+    related = related_tests(files, srcs)
+    p.mode = "affected"
+    p.linux_path = any(starts(f, LINUX_PATH) for f in files)
+    p.m2 = any(starts(f, M2) for f in files)
+    if len(related) > AFFECTED_MAX_TESTS:
+        # Narrowing would not save much; run every test, still on ubuntu only and still
+        # under the non-required name.
+        p.affected_all = True
+        p.reasons.append(
+            f"affected (draft): {len(related)} related test files (> {AFFECTED_MAX_TESTS}), so the whole "
+            "suite on ubuntu; the required check jobs are skipped, so this run cannot satisfy them"
+        )
+        return p
+    # Direct scanners only: this run never reports the required checks (see scanning_tests).
+    scanners = scanning_tests(srcs, through_source=False)
+    p.launcher = any(starts(f, LAUNCHER_PATHS) for f in files) or LAUNCHER_TEST in scanners or LAUNCHER_TEST in related
+    p.scanners = [f for f in scanners if f not in SMOKE and f != LAUNCHER_TEST]
+    p.safety = [f for f in safety_tests(srcs) if f not in SMOKE and f not in p.scanners and f != LAUNCHER_TEST]
+    doc_tests: set[str] = set()
+    for doc in (f for f in files if f.endswith(".md")):
+        doc_tests.update(doc_references(doc, srcs)[0])
+    p.doc_tests = sorted(doc_tests)
+    listed = set(SMOKE) | set(p.scanners) | set(p.safety) | set(p.doc_tests) | {LAUNCHER_TEST}
+    p.related = [f for f in related if f not in listed]
+    p.reasons.append(
+        f"affected (draft): {len(files)} file(s), {len(related)} related test file(s); "
+        "the required check jobs are skipped, so this run cannot satisfy them"
+    )
+    return p
+
 
 
 SOURCE_ROOTS = ("test", "src", "scripts", "schemas", "viewer/src", "viewer/test", "viewer/e2e", "agent", "runtime")
@@ -507,6 +719,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--labels", default=os.environ.get("PR_LABELS", "[]"), help="JSON array of label names")
     ap.add_argument("--title", default=os.environ.get("PR_TITLE", ""))
     ap.add_argument("--body", default=os.environ.get("PR_BODY", ""))
+    ap.add_argument(
+        "--draft",
+        default=os.environ.get("PR_DRAFT", ""),
+        help="'true' when the PR is a draft (github.event.pull_request.draft); anything else is not",
+    )
     ap.add_argument("--files", nargs="*", help="changed files (skips git diff)")
     ap.add_argument("--root", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     args = ap.parse_args(argv)
@@ -516,7 +733,9 @@ def main(argv: list[str] | None = None) -> int:
     except (json.JSONDecodeError, TypeError):
         labels = []
     files = args.files if args.files is not None else changed_files(args.base, args.root)
-    result = plan(args.event, files, labels, args.title, args.body, read_sources(args.root))
+    # Exactly "true": an empty, missing or garbled value is not a draft (not narrowed).
+    draft = args.draft == "true"
+    result = plan(args.event, files, labels, args.title, args.body, read_sources(args.root), draft)
     outputs = result.outputs()
 
     for key, value in outputs.items():
@@ -532,6 +751,11 @@ def main(argv: list[str] | None = None) -> int:
             fh.write(f"### CI plan: `{result.mode}`\n\n- {outputs['reason']}\n")
             fh.write(f"- linux path: {outputs['linux_path']}, m2: {outputs['m2']}, launcher: {outputs['launcher']}\n")
             fh.write(f"- directory-scanning tests: {len(result.scanners)}\n")
+            fh.write(f"- safety tests (gate, R5, faults, security): {len(result.safety)}\n")
+            if result.mode == "affected":
+                what = "the whole suite" if result.affected_all else f"{len(result.related)} related tests"
+                fh.write(f"- {what}, ubuntu only (draft; mark the PR ready for the full run it can merge on)\n")
+            fh.write(f"- myco-agent tests (macos-latest): {outputs['agent_macos']}\n")
             if result.doc_tests:
                 fh.write(f"- doc tests: {outputs['doc_tests']}\n")
             if files is not None:

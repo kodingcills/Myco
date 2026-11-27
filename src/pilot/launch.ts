@@ -18,70 +18,15 @@ import { SERVER_NAME } from "../gate/mcp-server.ts";
 import type { AgentLaunchPlan } from "../integrity/launch.ts";
 import { correctionPolicy, type PilotConfig } from "./config.ts";
 
-/**
- * Environment variable names that put Claude Code (or an SDK it spawns) on a paid API path or
- * another provider instead of the subscription. Matched by name only.
- */
-export const API_CREDENTIAL_NAMES: readonly string[] = [
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_AUTH_TOKEN",
-  "ANTHROPIC_BASE_URL",
-  "ANTHROPIC_BEDROCK_BASE_URL",
-  "ANTHROPIC_VERTEX_BASE_URL",
-  "ANTHROPIC_VERTEX_PROJECT_ID",
-  "ANTHROPIC_FOUNDRY_API_KEY",
-  "ANTHROPIC_FOUNDRY_RESOURCE",
-  "ANTHROPIC_FEDERATION_RULE_ID",
-  "ANTHROPIC_IDENTITY_TOKEN",
-  "ANTHROPIC_IDENTITY_TOKEN_FILE",
-  "ANTHROPIC_PROFILE",
-  "CLAUDE_CODE_USE_BEDROCK",
-  "CLAUDE_CODE_USE_VERTEX",
-  "CLAUDE_CODE_USE_FOUNDRY",
-  "AWS_BEARER_TOKEN_BEDROCK",
-  /** This repo's own key-file pointer (`src/baseline/secret-file.ts`). */
-  "MYCO_ANTHROPIC_KEY_FILE",
-];
-
-export interface PreflightResult {
-  readonly ok: boolean;
-  /** Names (never values) of the API-path variables that are configured. */
-  readonly configured: readonly string[];
-}
-
-/**
- * Names only: a variable counts as configured when its name is present (even empty: an empty
- * `ANTHROPIC_API_KEY` still shadows other credentials in some clients). Values are not read.
- */
-export function subscriptionPreflight(envNames: Iterable<string>): PreflightResult {
-  const present = new Set(envNames);
-  const configured = API_CREDENTIAL_NAMES.filter((n) => present.has(n));
-  return { ok: configured.length === 0, configured };
-}
-
-/** Refusal text for a failed preflight: names the variables, never a value. */
-export function preflightRefusal(r: PreflightResult): string {
-  return (
-    `refusing to start: API-path credential variable(s) configured: ${r.configured.join(", ")}. ` +
-    "The pilot runs on the Claude subscription only; unset them (names checked, values never read) and re-run."
-  );
-}
-
-/**
- * The agent's environment: the allowlisted names copied from `env`, nothing else. Runs only in
- * the live transport; the harness never logs the result.
- */
-export function childEnv(
-  env: Readonly<Record<string, string | undefined>>,
-  allowlist: readonly string[],
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const name of allowlist) {
-    const v = env[name];
-    if (v !== undefined) out[name] = v;
-  }
-  return out;
-}
+// The subscription preflight and the environment allowlist builder live in `claude-cli.ts`
+// (dependency-free, TIF-268) and are re-exported here unchanged.
+export {
+  API_CREDENTIAL_NAMES,
+  childEnv,
+  type PreflightResult,
+  preflightRefusal,
+  subscriptionPreflight,
+} from "./claude-cli.ts";
 
 export interface TrialIds {
   readonly runId: string;
