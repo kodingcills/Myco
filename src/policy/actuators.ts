@@ -1,7 +1,9 @@
 /**
  * Track O: policed wrappers, one per actuator entry point.
  *
- * Every path by which an agent action reaches an app or the guest is one of these interfaces:
+ * Every host actuator interface by which an agent action reaches an app or the guest is one of
+ * these (the `myco-rt` MCP tools the agent calls directly are not wrapped; `./surface.ts` keeps
+ * them out of policed trials):
  *
  *   app-adapter.act          `AppAdapter.act`              (src/core/adapter.ts)       async
  *   desktop-transport.act    `DesktopTransport.act`        (src/discovery/live-runner.ts) async
@@ -36,6 +38,15 @@
  *
  * A forwarded action's destructive slot stays spent even if the app then fails: the policy
  * cannot know whether the write happened, so it counts it.
+ *
+ * What runs is what was judged (#605 item 2). Each async wrapper takes a frozen copy of the
+ * action when it is called, reading every field once (`frozenAdapterAction`,
+ * `frozenDesktopAction`), reduces THAT copy, and forwards THAT copy. The caller's object can be
+ * changed while the action waits on the pause gate or a human's approval, or can carry getters
+ * that answer differently on each read; neither reaches the inner actuator. A copy that cannot be
+ * taken (a getter throws, a field has the wrong type) is `POLICY_ACTION_UNRECOGNISED`. The sync
+ * wrappers take primitives only and run with no wait between judging and forwarding; the router
+ * wrapper returns a frozen copy of the decision whose writes it judged.
  */
 
 import { existsSync } from "node:fs";
@@ -153,6 +164,72 @@ export function adapterFacts(
   }
 }
 
+/** A frozen copy of a target ref: a string, or `{ nodeId }` with nothing else carried over. */
+function frozenRef(ref: unknown): TargetRef | null {
+  if (typeof ref === "string") return ref;
+  if (typeof ref !== "object" || ref === null) return null;
+  const nodeId: unknown = (ref as { nodeId?: unknown }).nodeId;
+  return typeof nodeId === "string" ? Object.freeze({ nodeId }) : null;
+}
+
+/**
+ * A frozen copy of an `AppAdapter` action, each field read once; null when it is malformed or a
+ * read throws. The policy judges this copy and the wrapper forwards this copy.
+ */
+export function frozenAdapterAction(action: unknown): ProgramAction | null {
+  try {
+    if (typeof action !== "object" || action === null) return null;
+    const a = action as Record<string, unknown>;
+    const kind = a.kind;
+    switch (kind) {
+      case "click": {
+        const ref = frozenRef(a.ref);
+        return ref === null ? null : Object.freeze({ kind, ref });
+      }
+      case "typeText": {
+        const ref = frozenRef(a.ref);
+        const text = a.text;
+        return ref === null || typeof text !== "string" ? null : Object.freeze({ kind, ref, text });
+      }
+      case "setValue": {
+        const ref = frozenRef(a.ref);
+        const value = a.value;
+        return ref === null || typeof value !== "string"
+          ? null
+          : Object.freeze({ kind, ref, value });
+      }
+      case "keyPress": {
+        const keys = a.keys;
+        return typeof keys === "string" ? Object.freeze({ kind, keys }) : null;
+      }
+      case "waitFor": {
+        // Has no file effect; the predicate is the host's own function and is passed as is.
+        const predicate = a.predicate;
+        const timeoutMs = a.timeoutMs;
+        return typeof predicate === "function" && typeof timeoutMs === "number"
+          ? Object.freeze({
+              kind,
+              predicate: predicate as Extract<ProgramAction, { kind: "waitFor" }>["predicate"],
+              timeoutMs,
+            })
+          : null;
+      }
+      default:
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** Reduce a frozen copy, or refuse a copy that could not be taken. */
+function reduceFrozen<A>(frozen: A | null, reduce: (a: A) => ActionFacts): () => ActionFacts {
+  return () => {
+    if (frozen === null) throw new UnrecognisedAction();
+    return reduce(frozen);
+  };
+}
+
 function policedCode(decided: GuardDecision | null): PolicedCode {
   if (decided === null) return "ATTEMPT_ENDED";
   return decided.agent?.code ?? "POLICY_DENIED";
@@ -234,11 +311,18 @@ export function policedAppAdapter(
     observe: () => inner.observe(),
     capabilities: () => inner.capabilities(),
     async act(action: ProgramAction): Promise<ActResult> {
-      const r = await guardAsync(guard, options.trigger, "app-adapter.act", () =>
-        adapterFacts(action, guard.scope, options.isCredentialTarget),
+      // Copied before any wait: the copy is judged, and the copy is what runs.
+      const frozen = frozenAdapterAction(action);
+      const r = await guardAsync(
+        guard,
+        options.trigger,
+        "app-adapter.act",
+        reduceFrozen(frozen, (a) => adapterFacts(a, guard.scope, options.isCredentialTarget)),
       );
       if (!r.ok) return { outcome: "failed", details: refusalText(r.code, r.policyId) };
-      return inner.act(action);
+      // Unreachable (a null copy is unrecognised, so denied); kept so nothing else is forwarded.
+      if (frozen === null) return { outcome: "failed", details: "POLICY_DENIED" };
+      return inner.act(frozen);
     },
   };
   if (inner.issueRef) {
@@ -353,6 +437,47 @@ export function launchFacts(
   return { ...NO_FACTS, launches: [entry.app] };
 }
 
+/**
+ * A frozen copy of a desktop action, each field read once; null when it is malformed or a read
+ * throws. A launch's arguments are copied into a frozen array of strings.
+ */
+export function frozenDesktopAction(action: unknown): GuardedDesktopAction | null {
+  try {
+    if (typeof action !== "object" || action === null) return null;
+    const a = action as Record<string, unknown>;
+    const kind = a.kind;
+    switch (kind) {
+      case "launch": {
+        const command = a.command;
+        const raw = a.args;
+        if (typeof command !== "string" || !Array.isArray(raw) || raw.length > 64) return null;
+        const args: unknown[] = Array.from(raw);
+        if (!args.every((x) => typeof x === "string")) return null;
+        return Object.freeze({ kind, command, args: Object.freeze(args as string[]) });
+      }
+      case "typeTextGlobal": {
+        const text = a.text;
+        return typeof text === "string" ? Object.freeze({ kind, text }) : null;
+      }
+      case "clickAt": {
+        const x = a.x;
+        const y = a.y;
+        return Number.isFinite(x) && Number.isFinite(y)
+          ? Object.freeze({ kind, x: x as number, y: y as number })
+          : null;
+      }
+      case "keyPress": {
+        const keys = a.keys;
+        return typeof keys === "string" ? Object.freeze({ kind, keys }) : null;
+      }
+      default:
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
 export function desktopFacts(
   action: GuardedDesktopAction,
   scope: TrialScope,
@@ -385,28 +510,38 @@ export interface DesktopGuardOptions<S> {
 /**
  * The transport's `act` has no code channel: a refusal is `failed` (the guard's log keeps the
  * code). Every other method passes through; none of them acts on the agent's behalf.
+ *
+ * The result is a fresh object with exactly the six interface methods (#605 item 4). It never
+ * spreads the inner transport, so none of its own fields (a class's raw MCP client, say) is
+ * reachable through the policed transport, and the type claims nothing more than it has.
  */
-export function policedDesktopTransport<S, T extends GuardedDesktopTransport<S>>(
-  inner: T,
+export function policedDesktopTransport<S>(
+  inner: GuardedDesktopTransport<S>,
   guard: PolicyGuard,
   options: DesktopGuardOptions<S>,
-): T {
+): GuardedDesktopTransport<S> {
   const launches = freezeLaunchTable(options.launches);
-  return {
-    ...inner,
+  return Object.freeze({
     create: () => inner.create(),
     observe: (s: S) => inner.observe(s),
     readFile: (s: S, p: string) => inner.readFile(s, p),
     reset: (s: S) => inner.reset(s),
     destroy: (s: S) => inner.destroy(s),
     async act(session: S, action: GuardedDesktopAction): Promise<GuardedOutcome> {
-      const r = await guardAsync(guard, options.trigger, "desktop-transport.act", () =>
-        desktopFacts(action, guard.scope, () => options.focusIsCredential(session), launches),
+      // Copied before any wait: the copy is judged, and the copy is what runs.
+      const frozen = frozenDesktopAction(action);
+      const r = await guardAsync(
+        guard,
+        options.trigger,
+        "desktop-transport.act",
+        reduceFrozen(frozen, (a) =>
+          desktopFacts(a, guard.scope, () => options.focusIsCredential(session), launches),
+        ),
       );
-      if (!r.ok) return "failed";
-      return inner.act(session, action);
+      if (!r.ok || frozen === null) return "failed";
+      return inner.act(session, frozen);
     },
-  };
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -484,9 +619,17 @@ export function guardedActionPolicy(inner: ActionPolicy, guard: PolicyGuard): Ac
     check(request: PolicyRequest) {
       const base = inner.check(request);
       if (!base.allow) return base;
-      const d = guard.decide("action-router.policy", () => writeFacts(base.writes));
+      // One frozen copy of J's decision: its writes are judged, and it is what the router runs.
+      const writes = Object.freeze(Array.from(base.writes));
+      const reads = Object.freeze(Array.from(base.reads));
+      const argv = base.argv === undefined ? undefined : Object.freeze(Array.from(base.argv));
+      const d = guard.decide("action-router.policy", () => writeFacts(writes));
       if (!settle(d)) return { allow: false, code: policedCode(d) as PolicyAgentCode };
-      return base;
+      return Object.freeze(
+        argv === undefined
+          ? { allow: true, code: "ALLOWED", reads, writes }
+          : { allow: true, code: "ALLOWED", reads, writes, argv },
+      );
     },
   };
 }
