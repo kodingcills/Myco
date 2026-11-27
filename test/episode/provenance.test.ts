@@ -176,6 +176,27 @@ describe("O3: a harness-produced h-<60 hex> is kept, only where the harness prod
       expect(out, path).toBe(path === "$.actions.items[1].command" ? AGENT_HEX : hashed(AGENT_HEX));
   });
 
+  it("#602 N-a: recorded at $.actions.items[0].text, re-hashed at items[1].text (same template)", () => {
+    const base = everywhere(AGENT_HEX);
+    const input: Episode = {
+      ...base,
+      actions: {
+        ...base.actions,
+        items: [
+          { seq: 0, atMs: null, kind: "type", text: AGENT_HEX },
+          { seq: 1, atMs: null, kind: "type", text: AGENT_HEX },
+        ],
+      },
+    };
+    const ledger = new HashLedger();
+    ledger.record(episodeScope(input.episodeId, "$.actions.items[0].text"), AGENT_HEX);
+    const items = closeEpisode(input, [], ledger).actions.items as unknown as Array<
+      Record<string, string>
+    >;
+    expect(items[0]?.text).toBe(AGENT_HEX);
+    expect(items[1]?.text).toBe(hashed(AGENT_HEX));
+  });
+
   it("re-hashed when the ledger holds a DIFFERENT h-<60 hex> at this same episode and path", () => {
     const input = everywhere(AGENT_HEX);
     const other = new HashLedger();
