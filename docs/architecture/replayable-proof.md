@@ -229,12 +229,29 @@ first 60 hex characters (240 bits) of that digest (`src/proof/hashed.ts`). Only 
 kept, so no input text survives. Every `h-` form other than exactly `h-<60hex>` (`h-<64hex>`,
 59 or 61 digits, upper case) is a plain value and is hashed. Even an exact `h-<60hex>` input is
 kept as is ONLY when the harness produced it (#579 O3, provenance-bound;
-`src/export-guard/provenance.ts`): the exporter's hash ledger records it for that field's scope
-(one scope for every id, since ids cross-reference; the field name for a vocabulary field).
-`bundleHashLedger(text)` builds the ledger from a bundle the harness wrote, after it verifies, so
-re-exporting a run from a bundle's own values is byte-identical. With no ledger every
+`src/export-guard/provenance.ts`): the exporter's hash ledger records it at that field's scope,
+which is the RUN id plus the field's exact JSON path in the bundle, array indexes included
+(`$.run.runId`, `$.records[3].body.tool`, `$.records[5].body.evidence[0]`; `proofScope`, #599
+O-a and #602 N-a). That is the binding the episode export and track U use (episode id plus exact
+path): a harness hash recorded for one run, field or record is re-hashed in any other. Ids
+cross-reference (a verdict's `evidence` names evidence ids), and each position records its own
+value, so a re-export keeps every copy; a copy that is not kept is re-hashed and the self-verify
+refuses the export.
+
+**The importer trust boundary** (#599 follow-up 2; `src/export-guard/seal.ts`). A validator
+cannot tell who wrote a value, so a hand-edited bundle whose chain was recomputed still verifies.
+The harness therefore SEALS each bundle it writes: `sealProofBundle(text, key)` is
+`HMAC-SHA256(key, "myco.proof.seal/1" NUL sha256(text))`, stored next to the bundle.
+`bundleHashLedger(text, { key, seal })` refuses (`PROOF_SEAL`) unless the seal holds for exactly
+those bytes under the harness key, before it trusts any value; then the bundle must verify; then
+its hashed values are recorded at their scopes. So re-exporting a run from a sealed bundle's own
+values is byte-identical, and an agent's `h-<60hex>` planted in a bundle never reaches a ledger.
+The key is harness-private: it is loaded at the point of use from a key file (`loadSealKey(path)`,
+at least 32 bytes, refused if group- or world-accessible on POSIX), is never printed, and every
+refusal is a code. The seal is NOT a public signature: only the key holder can check it, and a
+third party still verifies a bundle by its chain and an out-of-band head. With no ledger every
 `h-<60hex>` input (an agent's) is re-hashed, so it cannot carry hex-encoded text or a hex-letter
-identity. A bundle written before #579 is trusted by `bundleHashLedger`, so re-export from the
+identity. A bundle written before #599 has no seal and cannot be imported: re-export it from the
 source run instead. A bundle whose hashed-value field holds any other `h-`
 form is refused (`PROOF_SCHEMA`). Full content digests are NOT truncated: `TextRef.sha256`,
 `evidence.sha256`, `prevSha256`, the head, the ledger head and the episode digest stay the full
