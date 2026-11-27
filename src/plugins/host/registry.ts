@@ -25,6 +25,7 @@ import { join, relative, sep } from "node:path";
 import { type OracleReport, runSelfTest, type SelfTestRow } from "../../oracle-selftest/run.ts";
 import type {
   CorruptionClass,
+  Draw,
   OracleUnderTest,
   OracleVerdict,
   SavedDocument,
@@ -228,19 +229,41 @@ function fromWire(doc: WireDocument): SavedDocument {
 }
 
 /**
+ * Up to three distinct offsets in `[0, n)` drawn by `draw`. A source that repeats itself
+ * throws (bounded draws) rather than loop forever; registration then refuses.
+ */
+function drawnOffsets(draw: Draw, n: number): number[] {
+  const at = new Set<number>();
+  for (let tries = 0; at.size < Math.min(3, n); tries++) {
+    if (tries >= 1000) throw new Error("the random source gives no usable draw");
+    at.add(draw(n));
+  }
+  return [...at];
+}
+
+/**
  * Read corruptions the host derives from a correct document, independent of the plugin:
- * three truncations, three single-byte flips, and a missing file.
+ * three truncations, three single-byte flips, and a missing file. With `draw` (a host-side
+ * random source; track C passes one) the truncation and flip offsets are random, so a check
+ * cannot compute the corrupted documents in advance; without it they are fixed.
  */
 export function hostCorruptions(
   correct: SavedDocument,
+  draw?: Draw,
 ): { cls: CorruptionClass; doc: SavedDocument }[] {
   const bytes = correct.bytes;
   if (bytes === null || bytes.length === 0) return [];
   const n = bytes.length;
   const out: { cls: CorruptionClass; doc: SavedDocument }[] = [];
-  for (const at of new Set([n - 1, Math.floor(n / 2), Math.floor(n / 4)]))
+  const cuts =
+    draw === undefined ? [n - 1, Math.floor(n / 2), Math.floor(n / 4)] : drawnOffsets(draw, n);
+  const flips =
+    draw === undefined
+      ? [Math.floor(n / 3), Math.floor((2 * n) / 3), n - 1]
+      : drawnOffsets(draw, n);
+  for (const at of new Set(cuts))
     out.push({ cls: "truncated", doc: { fileName: correct.fileName, bytes: bytes.slice(0, at) } });
-  for (const at of new Set([Math.floor(n / 3), Math.floor((2 * n) / 3), n - 1])) {
+  for (const at of new Set(flips)) {
     const flipped = bytes.slice();
     flipped[at] = (flipped[at] as number) ^ 0x01;
     out.push({ cls: "corrupt-byte", doc: { fileName: correct.fileName, bytes: flipped } });
@@ -257,7 +280,42 @@ function deepFreeze<T>(v: T): T {
   return v;
 }
 
-export function registerPlugin(pluginDir: string): RegistrationResult {
+/** Ask the plugin for its own self-test cases (the default registration path). */
+function pluginCases(target: SandboxTarget): SelfTestCase<unknown>[] {
+  const got = runInSandbox(
+    target,
+    { spec: PLUGIN_SPEC, op: "selftest-cases" },
+    // Self-test cases carry whole documents, so this one call has its own ceiling rather
+    // than the manifest's verdict cap; the kernel file-size limit follows it (8 MiB + one
+    // block on disk at most, E3 on #558).
+    { maxOutputBytes: MAX_SELFTEST_OUTPUT_BYTES },
+  );
+  if (!got.ok) throw new Refusal("SELFTEST_CASES_FAULT", [got.code]);
+  if (got.response.op !== "selftest-cases")
+    throw new Refusal("SELFTEST_CASES_FAULT", ["PLUGIN_MALFORMED_OUTPUT"]);
+  return got.response.cases.map((c) => ({
+    id: c.id,
+    intent: c.intent,
+    correct: fromWire(c.correct),
+    corruptions: c.corruptions.map((x) => ({ cls: x.cls, doc: fromWire(x.doc) })),
+  }));
+}
+
+export interface RegisterOptions {
+  /**
+   * Self-test cases the HOST supplies (track C, agent-written checks: the cases come from the
+   * R5 subjects of the task family, never from the check's author). When given, the plugin's
+   * `selftestCases` hook is not called. Host read corruptions are added to every case either way.
+   */
+  readonly hostCases?: readonly SelfTestCase<unknown>[];
+  /**
+   * A host-side random source for the host read corruptions' offsets (track C passes
+   * `node:crypto` `randomInt`). Absent: the fixed offsets.
+   */
+  readonly draw?: Draw;
+}
+
+export function registerPlugin(pluginDir: string, opts: RegisterOptions = {}): RegistrationResult {
   let selftest: OracleReport | null = null;
   try {
     let dir: string;
@@ -273,33 +331,25 @@ export function registerPlugin(pluginDir: string): RegistrationResult {
 
     let rows: SelfTestRow[] = [];
     if (manifest.kinds.includes("oracle")) {
-      const got = runInSandbox(
-        target,
-        { spec: PLUGIN_SPEC, op: "selftest-cases" },
-        // Self-test cases carry whole documents, so this one call has its own ceiling rather
-        // than the manifest's verdict cap; the kernel file-size limit follows it (8 MiB + one
-        // block on disk at most, E3 on #558).
-        { maxOutputBytes: MAX_SELFTEST_OUTPUT_BYTES },
-      );
-      if (!got.ok) throw new Refusal("SELFTEST_CASES_FAULT", [got.code]);
-      if (got.response.op !== "selftest-cases")
-        throw new Refusal("SELFTEST_CASES_FAULT", ["PLUGIN_MALFORMED_OUTPUT"]);
-      if (got.response.cases.length === 0)
+      const supplied = opts.hostCases ?? pluginCases(target);
+      if (supplied.length === 0)
         throw new Refusal("SELFTEST_CASES_INVALID", ["no self-test cases"]);
-      const cases: SelfTestCase<unknown>[] = got.response.cases.map((c) => {
-        const correct = fromWire(c.correct);
-        if (!manifest.formats.some((f) => f.ext === extOf(correct.fileName)))
+      const cases: SelfTestCase<unknown>[] = supplied.map((c) => {
+        if (!manifest.formats.some((f) => f.ext === extOf(c.correct.fileName)))
           throw new Refusal("SELFTEST_CASES_INVALID", [
-            `case ${c.id}: ${correct.fileName} is not a format the manifest declares`,
+            `case ${c.id}: ${c.correct.fileName} is not a format the manifest declares`,
           ]);
+        let host: ReturnType<typeof hostCorruptions>;
+        try {
+          host = hostCorruptions(c.correct, opts.draw);
+        } catch {
+          throw new Refusal("SELFTEST_CASES_INVALID", [`case ${c.id}: no usable host draw`]);
+        }
         return {
           id: c.id,
           intent: c.intent,
-          correct,
-          corruptions: [
-            ...c.corruptions.map((x) => ({ cls: x.cls, doc: fromWire(x.doc) })),
-            ...hostCorruptions(correct),
-          ],
+          correct: c.correct,
+          corruptions: [...c.corruptions, ...host],
         };
       });
       const faults: string[] = [];
