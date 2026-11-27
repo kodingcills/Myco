@@ -411,7 +411,11 @@ describe("demo replay + verify-any-agent spec: checkpointed capture, #596 nits, 
   it("C1 waits for the trial run and names the held gate files; C1, V5 and B7 need no VM", () => {
     const row = (id: string) => buildRows.find((r) => r[0] === id);
     const c1 = row("C1");
-    expect(c1?.[5]).toBe("V1, the trial run");
+    expect(c1?.[5]).toBe("V1, B1, the trial run");
+    expect(DOC).toContain(
+      "C1 also waits for B1, because a checkpoint manifest's `logBefore` is computed by B1's shared line-count and prefix function.",
+    );
+    expect(cp).toContain("computed by B1's shared function");
     for (const p of ["src/gate/sealed.ts", "src/gate/gated-trial.ts", "src/integrity/vault.ts"]) {
       expect(c1?.[6], p).toContain(`\`${p}\``);
       expect(existsSync(join(ROOT, p)), p).toBe(true);
@@ -517,6 +521,141 @@ describe("demo replay + verify-any-agent spec: checkpointed capture, #596 nits, 
     const rs10 = flat(criterionText("RS-10"));
     expect(rs10).toContain("an agent-supplied `h-<60hex>` in any id field");
     expect(rs10).not.toContain("an existing `h-<60hex>` value is kept, while");
+  });
+
+  // Round 2 (verdict D1, D2, N1, N3, N4 on #634): each sentence below is a claim the PR body
+  // makes; each was a surviving mutant (V01-V12) before it was pinned here.
+  it("D1: the three refusals give byte-identical agent-facing results; the case goes to the operator only", () => {
+    expect(cp).not.toContain("operator-only detail");
+    expect(cp).toContain(
+      "the budget-spent, in-flight and copy-failed cases give byte-identical agent-facing results: the same codes, the same single reason `could not look: no checkpoint taken`, and no `evidenceRefs`.",
+    );
+    expect(cp).toContain(
+      "The reader's `detail` reaches the agent (`could not look: <detail>`, `src/gate/gate.ts`), so it never names the case.",
+    );
+    expect(cp).toContain(
+      "Which case it was goes to the operator only, through a new operator-only callback `onCheckpoint` on the sealed reader's options, beside `onIntegrity` (`src/gate/sealed.ts`)",
+    );
+    expect(cp).toContain("`onCheckpoint` never feeds a result, a reason or the decision log.");
+    // The grounding: main's reader detail is agent-facing, and onIntegrity is operator-only.
+    const gate = read("src/gate/gate.ts");
+    expect(gate).toContain(
+      '`detail` of a failed outcome reaches the agent (as "could not look: <detail>")',
+    );
+    expect(gate).toContain("reasons: [`could not look: ${read.detail}`],");
+    const sealed = read("src/gate/sealed.ts");
+    expect(sealed).toContain("The full violations go to the operator through `onIntegrity`.");
+    expect(sealed).not.toContain("onCheckpoint");
+    const va16 = flat(criterionText("VA-16"));
+    expect(va16).toContain(
+      "the budget-spent, in-flight and copy-failed cases give byte-identical agent-facing results (codes, reasons and refs) while `onCheckpoint` tells the operator which case each was",
+    );
+    expect(va16).toContain(
+      "an agent-facing result that differs between the budget-spent, in-flight and copy-failed cases or names which one it was",
+    );
+  });
+
+  it("N3: an absent state file on an opted-in trial gets STATE_MISSING, after the budget checks", () => {
+    expect(cp).toContain(
+      "the call is answered as the gate answers a missing file today, `uncertain` `STATE_MISSING` with the gate's missing-state corrections (`src/gate/gate.ts`). No checkpoint is sealed and the budget is not spent.",
+    );
+    expect(cp).toContain(
+      "Before it asks for a copy, the reader checks the budget, then whether another checkpoint is being taken.",
+    );
+    expect(cp).toContain(
+      "a call past the budget or during a checkpoint gets the fixed `STATE_UNREADABLE` answer whether or not the file exists.",
+    );
+    expect(read("src/gate/gate.ts")).toContain(
+      'codes: [read.cause === "missing" ? "STATE_MISSING" : "STATE_UNREADABLE"],',
+    );
+    expect(flat(criterionText("VA-16"))).toContain(
+      "on an opted-in trial a state file that does not exist yet gives `uncertain` `STATE_MISSING`, seals no checkpoint and spends no budget",
+    );
+  });
+
+  it("N1: off by default changes only the outcome's captureCheckpoints field, as VA-16 states", () => {
+    expect(cp).not.toContain("byte for byte as on `main`");
+    expect(cp).toContain(
+      "Without it the trial's decision log and vault tree are byte-identical to `main`'s, with no checkpoint and every mid-run call `uncertain`; the only difference is that its outcome records `captureCheckpoints: \"off\"` (VA-16).",
+    );
+    expect(flat(criterionText("VA-16"))).toContain(
+      'its outcome differs from `main`\'s only by `captureCheckpoints: "off"`',
+    );
+  });
+
+  it("sealing: the vault assigns k, the manifest is receipt-bound, and a torn copy fails closed (V07, V08, V11)", () => {
+    expect(cp).toContain("(`k` = 1, 2, … assigned by the vault, never by a caller)");
+    expect(cp).toContain(
+      "The manifest is MAC'd with the trial's seal key and bound to the receipt's `sealDigest`, as the final capture is.",
+    );
+    expect(cp).not.toMatch(/not bound to the receipt|assigned by the caller/);
+    expect(cp).toContain(
+      "The oracle then reads what was copied and answers `uncertain` or `refuted`; it is never repaired or retried silently.",
+    );
+  });
+
+  it("isolation: linux-plain refuses captureCheckpoint (V02)", () => {
+    expect(cp).toContain(
+      "on `linux-plain` (where the agent could rewrite the copy) `captureCheckpoint()` is refused and every mid-run call stays `uncertain`.",
+    );
+    expect(cp).not.toContain("`captureCheckpoint()` is allowed");
+  });
+
+  it("the budget and C1 timing stay lead ruling pending in both §1.4 and §8 question 5 (V05, V10)", () => {
+    expect(cp).toContain(
+      "At most `max` checkpoints per trial (proposed 4, lead ruling pending, [§8](#8-open-questions-for-the-lead) question 5).",
+    );
+    expect(cp).not.toMatch(/fixed at 4|[Rr]atified/);
+    const open = flat(section("## 8. Open questions for the lead"));
+    const q5 = open.slice(open.indexOf("5. **Checkpointed capture"));
+    expect(q5).toContain(
+      "5. **Checkpointed capture (version 5, issue #588).** Proposals, all lead ruling pending:",
+    );
+    expect(q5).not.toMatch(/[Rr]atified/);
+  });
+
+  it("verify matches checkpoints by order and digest, never by a clock (V03, V04)", () => {
+    expect(step4).toContain(
+      "its `persisted-state` ref has checkpoint `k`'s `sha256` and `bytes`; and matched ordinals strictly increase with `k`.",
+    );
+    expect(step4).toContain(
+      "Identical bytes at two checkpoints are resolved by the order rule, never by a clock.",
+    );
+    expect(step4).not.toMatch(/may be in any order|resolved by a clock/);
+  });
+
+  it("RS-18: the watch page never opens the vault (V06)", () => {
+    const s23 = flat(section("### 2.3 What real runs show today"));
+    expect(s23).toContain(
+      "The page takes the label from the log line alone (an S3 line with a `persisted-state` ref, before the run's last line) and never opens the vault",
+    );
+    expect(s23).not.toMatch(/\band opens the vault/);
+  });
+
+  it("checkpoint-on is never evidence: P6 and VA-16 say so (V01, V09)", () => {
+    const p6 = rows(section("### 3.6 Pre-registered proofs")).find((r) => r[0] === "P6");
+    const p6Row = p6 ? flat(p6.join(" | ")) : "";
+    expect(p6Row).toContain(
+      'The outcome records `captureCheckpoints: "on"`, and the R1 evidence check refuses it',
+    );
+    expect(p6Row).not.toContain("the R1 evidence check accepts it");
+    const va16 = flat(criterionText("VA-16"));
+    expect(va16).toContain("or a checkpoint-on trial accepted as R1 or A/B evidence.");
+    expect(va16).toContain(
+      "every R1 and A/B evidence check refuses such a trial, as it refuses corrections `on`.",
+    );
+  });
+
+  it("N4: P6 reuses slip-then-repair's edits, not its harness restore", () => {
+    const p6 = rows(section("### 3.6 Pre-registered proofs")).find((r) => r[0] === "P6");
+    const p6Row = p6 ? flat(p6.join(" | ")) : "";
+    expect(p6Row).toContain(
+      "P6 reuses the scenario's edits (which step slips and how it is repaired), not its harness restore of oracle checkpoint 1: here the scripted agent repairs step 2 itself, and every checkpoint in P6 is a §1.4 capture, not one of the oracle's per-step checkpoints.",
+    );
+    // The grounding: on main, slip-then-repair's retry is a harness restore of checkpoint 1.
+    expect(flat(read("src/gate/multistep-demo.ts"))).toContain(
+      "retry restores checkpoint 1 and the agent redoes steps 2-3",
+    );
   });
 
   it("P6 cites the demo's real task and scenario", () => {
