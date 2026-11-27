@@ -519,6 +519,13 @@ describe("demo replay + verify-any-agent spec: checkpointed capture, #596 nits, 
       "define no fold, needle rule, hashed-form pattern or ledger of their own",
     );
     expect(privacy).not.toContain("Issue #579 proposes");
+    // Round 3: the identity set is the shared mergeIdentity, with the host's identity always in it.
+    expect(privacy).toContain(
+      "The guard is `mergeIdentity(hostIdentity(), extra)` (`src/proof/identity.ts`), so the host's identity is always in it.",
+    );
+    const identity = read("src/proof/identity.ts");
+    expect(identity).toMatch(/export function mergeIdentity\(/);
+    expect(identity).toMatch(/export function hostIdentity\(/);
     const rs10 = flat(criterionText("RS-10"));
     expect(rs10).toContain("an agent-supplied `h-<60hex>` in any id field");
     expect(rs10).not.toContain("an existing `h-<60hex>` value is kept, while");
