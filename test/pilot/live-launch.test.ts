@@ -2185,6 +2185,28 @@ describe("#733 B1 (lead ruling 13:38Z): the pre-agent HCU check is a harness fau
     expect(vm.events.at(-1)).toBe("close");
   });
 
+  it("a failed probe makes the VM step itself close the guest channel (not only the driver)", async () => {
+    for (const mode of ["unreachable", "no-screenshot"] as const) {
+      const vm = fakeVm({ hcu: mode });
+      const step = new VmTrialStep(
+        { backend: vm.backend, repoRoot: ROOT },
+        {
+          task: task1(),
+          runId: "k",
+          trialKey: "r1p-fc-v1-001-a1",
+          trialDir: tmp(),
+          signal: new AbortController().signal,
+        },
+      );
+      const fault = await step.prepare().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect((fault as HarnessFault).message).toBe(VM_FAULT.hcu);
+      expect(vm.events.slice(-2)).toEqual(["hcu-probe", "close"]);
+    }
+  });
+
   it("the fault messages are fixed and code-only", () => {
     expect(VM_FAULT.hcu).toMatch(/^hcu-unreachable: /);
     expect(VM_FAULT.hcu).not.toMatch(/[\\/]|myco-win11|ssh/i);

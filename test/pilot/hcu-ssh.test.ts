@@ -124,6 +124,20 @@ describe("probeHcuDesktop: connect plus ONE successful screenshot (lead ruling 1
     expect(hcu.log).toContain("hcu-screenshot");
   });
 
+  it("a silent HCU is cut off by the bound, promptly (asserted, never left to a test timeout)", async () => {
+    const hcu = fakeHcuSession("hang");
+    const sentinel = new Promise<string>((r) => setTimeout(() => r("still waiting"), 1000));
+    const winner = await Promise.race([
+      probeHcuDesktop(hcu.open, 50).then(
+        () => "resolved",
+        (e: unknown) => (e as Error).message,
+      ),
+      sentinel,
+    ]);
+    expect(winner).toBe("hcu-unreachable");
+    expect(hcu.closed()).toBe(1);
+  });
+
   it("is bounded (60 s by default)", () => {
     expect(HCU_PROBE_TIMEOUT_MS).toBe(60_000);
   });
