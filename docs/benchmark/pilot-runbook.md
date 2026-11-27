@@ -106,6 +106,10 @@ start hitting limits, raise `--delay-s`. Override per invocation with `--concurr
   429) is class `usage-limit`. The run stops at once with exit **7** (`stopCode`
   `usage-limit`): no retry, no back-off, no attempt spent. The CLI prints `USAGE LIMIT: ...
   This must go to the lead`; take it to the lead and do not resume until the lead decides.
+  Before matching, every Unicode whitespace run (no-break space U+00A0, U+2000-U+200A,
+  U+202F, U+3000, tabs, newlines, repeated spaces) is folded to one space (`namesUsageLimit`;
+  #606 S2), on every path: stderr, plain stdout, error results, structured limits and the
+  clean-result exception below. The vocabulary itself is unchanged and has no bare numbers.
 - **Two identical failures:** on a live run, two harness faults in a row with the same class
   and message (no decided trial between) stop the run with exit **6** (`stopCode`
   `repeat-failure`), before a third attempt. Rate limits are excluded (they back off). The
@@ -125,9 +129,10 @@ start hitting limits, raise `--delay-s`. Override per invocation with `--concurr
   structured error), never to a clean result: fc-v1's fixtures hold values such as qty 401,
   403 and 429, so a clean result with no `DONE`/`NOT DONE` line is the agent's "no claim",
   decided and never re-run. One narrow, fail-closed exception (PR #598 round 3): a clean
-  result with no claim line whose text matches the usage-limit vocabulary (no bare numbers)
-  is `usage-limit` (exit 7, nothing counted); a clean result with a claim line is never
-  reclassified. Under the
+  result with no claim line whose text **or stderr** matches the usage-limit vocabulary (no
+  bare numbers; stderr since #606 S1, lead ruling 03:58Z) is `usage-limit` (exit 7, nothing
+  counted); a clean result with a claim line is never reclassified, whatever stderr says.
+  Under the
   topped-up-run ruling (lead, 2026-11-26 12:22Z) the faulted attempt stays in the ledger with
   its arm row (cause `harness`) and its cost estimate, and the re-run's `start` line names it
   in `supersedes`. Its cost counts toward R7.
