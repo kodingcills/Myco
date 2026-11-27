@@ -110,8 +110,8 @@ export function preregProblems(
     out.push("a ratified pre-registration has no pending rulings");
   const ts = p.taskSet;
   if (ts?.version !== "rep-v1") out.push("taskSet.version");
-  if (ts?.learn !== 20 || ts.repeat !== 20 || ts.similar !== 20 || ts.testUnits !== 40)
-    out.push("taskSet counts are not the spec's 20/20/20 (40 test units)");
+  if (ts?.learn !== 30 || ts.repeat !== 30 || ts.similar !== 30 || ts.testUnits !== 60)
+    out.push("taskSet counts are not the ruled 30/30/30 (60 test units, lead 06:30Z)");
   if (ts?.manifestSha256 !== repManifestSha256(manifest))
     out.push("taskSet.manifestSha256 does not match the committed manifest");
   if (manifest.buildSeed !== p.seeds?.taskBuild)

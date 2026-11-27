@@ -4,8 +4,8 @@
  * Built deterministically from the published fc-v1 tasks with a pre-registered build seed, so
  * the committed manifest (`docs/product/capability-prereg/m-v1/rep-v1-manifest.json`) can be
  * re-derived and compared byte for byte:
- *  - learn split: 20 tasks, run in the learn phase to fill the store;
- *  - test split: 20 REPEAT units (the same task as a learn task, a new run) and 20 SIMILAR
+ *  - learn split: 30 tasks, run in the learn phase to fill the store;
+ *  - test split: 30 REPEAT units (the same task as a learn task, a new run) and 30 SIMILAR
  *    units (same family, a different fc-v1 task whose fixture seed, record and column all
  *    differ from its learn task's, and whose fixture seed no learn task uses).
  *
@@ -23,9 +23,9 @@ import { canonicalJson, sha256 } from "./record.ts";
 
 export const REP_TASKSET_VERSION = "rep-v1";
 export const REP_MANIFEST_SCHEMA = "myco.skills.rep-taskset/1";
-export const REP_LEARN_N = 20;
-export const REP_REPEAT_N = 20;
-export const REP_SIMILAR_N = 20;
+export const REP_LEARN_N = 30;
+export const REP_REPEAT_N = 30;
+export const REP_SIMILAR_N = 30;
 
 export type RepKind = "repeat" | "similar";
 
@@ -38,7 +38,7 @@ export interface RepTaskRef {
 }
 
 export interface RepTestUnit extends RepTaskRef {
-  /** `rep-v1-repeat-01` .. `rep-v1-similar-20`: the paired unit of the McNemar test. */
+  /** `rep-v1-repeat-01` .. `rep-v1-similar-30`: the paired unit of the McNemar test. */
   readonly unitId: string;
   readonly kind: RepKind;
   /** The learn task this unit repeats, or is similar to. */
@@ -106,21 +106,34 @@ export function buildRepTaskSet(
   const candidates = pick(seeds.slice(half), seeds.slice(half).length * 3).filter(
     (t) => !learn.some((l) => l.taskId === t.taskId),
   );
-  const used = new Set<string>();
-  const similar: { t: BenchmarkTask; learn: BenchmarkTask }[] = [];
-  for (const l of learn) {
-    const s = candidates.find(
-      (c) =>
-        !used.has(c.taskId) &&
-        c.family === l.family &&
-        c.fixtureSeed !== l.fixtureSeed &&
-        c.intent.rowKey !== l.intent.rowKey &&
-        c.intent.column !== l.intent.column,
-    );
-    if (s === undefined) throw new Error(`rep-v1: no similar task for ${l.taskId}`);
-    used.add(s.taskId);
-    similar.push({ t: s, learn: l });
-  }
+  const fits = (l: BenchmarkTask, c: BenchmarkTask) =>
+    c.family === l.family &&
+    c.fixtureSeed !== l.fixtureSeed &&
+    c.intent.rowKey !== l.intent.rowKey &&
+    c.intent.column !== l.intent.column;
+  // Exact matching (augmenting paths, in the seeded order) so every learn task gets a distinct
+  // similar task even when there are no spare candidates; deterministic for a given seed.
+  const owner = new Map<string, number>();
+  const assign = (li: number, seen: Set<string>): boolean => {
+    const l = learn[li] as BenchmarkTask;
+    for (const c of candidates) {
+      if (!fits(l, c) || seen.has(c.taskId)) continue;
+      seen.add(c.taskId);
+      const prev = owner.get(c.taskId);
+      if (prev === undefined || assign(prev, seen)) {
+        owner.set(c.taskId, li);
+        return true;
+      }
+    }
+    return false;
+  };
+  for (const [li, l] of learn.entries())
+    if (!assign(li, new Set())) throw new Error(`rep-v1: no similar task for ${l.taskId}`);
+  const matched = new Map([...owner].map(([taskId, li]) => [li, taskId]));
+  const similar = learn.slice(0, REP_SIMILAR_N).map((l, li) => ({
+    t: candidates.find((c) => c.taskId === matched.get(li)) as BenchmarkTask,
+    learn: l,
+  }));
   const unit = (kind: RepKind, i: number) =>
     `${REP_TASKSET_VERSION}-${kind}-${String(i + 1).padStart(2, "0")}`;
   const test: RepTestUnit[] = [

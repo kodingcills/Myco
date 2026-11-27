@@ -1,6 +1,6 @@
 # Track M pre-registration, m-v1
 
-**Status: frozen as proposed, not ratified.** No measurement has run. Nothing here is a result.
+**Status: frozen and ratified** (lead rulings 2026-11-27 06:21Z and 06:30Z). No measurement has run. Nothing here is a result.
 
 This folder holds track M's pre-registration, as `docs/product/capability-spec.md` §3 asks.
 Track M is "Learning from verified outcomes".
@@ -8,12 +8,12 @@ Track M is "Learning from verified outcomes".
 | File | What it is |
 | --- | --- |
 | `prereg.json` | The pre-registration. Its SHA-256 over canonical JSON is the **pre-registration hash**, and every pack must record it. |
-| `rep-v1-manifest.json` | The `rep-v1` task set: 20 learn tasks, 20 repeat units and 20 similar units, all from fc-v1. The builder is `src/skills/rep-taskset.ts`, run with `seeds.taskBuild`. |
+| `rep-v1-manifest.json` | The `rep-v1` task set: 30 learn tasks, 30 repeat units and 30 similar units, all from fc-v1. The builder is `src/skills/rep-taskset.ts`, run with `seeds.taskBuild`. |
 
 ## What it fixes before any run
 
 - **The bar.** The spec's bar, as written: an exact one-sided McNemar test, skills-on against
-  cold, on the 40 test units. The bar is shown only at p ≤ 0.05 with at least 5 discordant
+  cold, on the 60 test units. The bar is shown only at p ≤ 0.05 with at least 5 discordant
   units. Repeat and similar units are also reported separately; they are not part of the bar.
 - **The arms.** skills-on reads the store frozen after the learn phase. cold runs the same
   surface with an empty store.
@@ -55,9 +55,10 @@ The analysis refuses a pack in each of these cases:
 
 A simulated pack is plumbing. Its result is `simulated`, never `shown`.
 
-## Lead rulings (2026-11-27 06:21Z)
+## Lead rulings (2026-11-27 06:21Z and 06:30Z)
 
-The lead's rulings are recorded in `leadRulings`. Four are applied as they were proposed:
+The lead's rulings are recorded in `leadRulings`, and they ratify this pre-registration. Four
+06:21Z rulings match what was proposed:
 
 - `rep-v1`, `calc-record-edit` only;
 - the base-surface tie-break: whichever of I or J has the higher grader-verified rate, and a
@@ -65,19 +66,19 @@ The lead's rulings are recorded in `leadRulings`. Four are applied as they were 
 - the model, `claude-sonnet-5-5`;
 - harness-side advice delivery, with the cold arm on an empty store.
 
-One item is still pending: **n**. The lead ruled n = 90. But `rep-v1`, which the lead also
-accepted, allows at most n = 60. fc-v1 has 60 no-fault tasks on 20 fixture seeds, and a
-similar task may share no fixture seed with a learn task. The coordinator is asked to choose
-one of these options (`ratification.pending`):
+**n = 60, confirmatory, k = 1** (06:30Z, option B). This ruling replaces the 06:21Z n = 90 for
+track M. `rep-v1` allows at most n = 60, because:
 
-- **A:** add fc-v1's fault-class tasks;
-- **B:** n = 60;
-- **C:** a new task set with generated tasks;
-- **D:** n = 40, pre-registered as exploratory.
+- fc-v1 has 60 no-fault tasks on 20 fixture seeds, 3 tasks each;
+- a similar task may share no fixture seed with a learn task.
 
-`vmHoursEstimate` gives each option's VM hours at the repo's measured 375 s per trial: 23.4 h
-for n = 90, 15.6 h for n = 60, 10.4 h for n = 40. Until n is settled, the status stays
-`proposed`, and the analysis refuses every real pack.
+So the learn split uses all 30 tasks on 10 fixture seeds. The 30 similar units use the other
+10 seeds, and the 30 repeat units re-run the learn tasks. The ruling chose B over the other
+options: A (adding fc-v1's fault-class tasks) changes what is measured, and C (generating new
+tasks) adds a task-set build.
 
-Ratifying changes the hash, and it must happen before the first run. Any change after the
-first run is a new version, `m-v2` (spec §3.3).
+`vmHoursEstimate` gives 150 trials, 15.6 VM-hours at the repo's measured 375 s per trial.
+The figure doubles if Ultra trials are twice as slow.
+
+Any change from now on, and any change after the first run, is a new version: `m-v2` (spec
+§3.3).

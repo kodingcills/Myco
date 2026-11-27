@@ -65,23 +65,30 @@ describe("m-v1 pre-registration", () => {
     expect(preregHash({ ...parsed, stepBudget: 31 })).not.toBe(LOADED.hash);
   });
 
-  it("records the 06:21Z lead rulings; only n stays pending, so it is not ratified", () => {
+  it("is ratified by the 06:21Z and 06:30Z lead rulings; 06:30Z (n = 60) supersedes n = 90", () => {
     const p = LOADED.prereg as unknown as {
       ratification: { status: string; pending: { id: string; proposed: string }[] };
       leadRulings: { id: string; time: string; ruling: string; applied: string }[];
     };
-    expect(p.ratification.status).toBe("proposed");
-    expect(p.ratification.pending.map((x) => x.id)).toEqual(["n"]);
-    expect(p.ratification.pending[0]?.proposed).toMatch(/caps? n at 60/);
-    expect(p.leadRulings.map((r) => r.id).sort()).toEqual([
-      "advice-delivery",
-      "base-surface-both-shown",
-      "learn-families",
-      "model-id",
-      "n",
+    expect(p.ratification.status).toBe("ratified");
+    expect(p.ratification.pending).toEqual([]);
+    expect(p.leadRulings.map((r) => `${r.id}@${r.time}`).sort()).toEqual([
+      "advice-delivery@2026-11-27T06:21Z",
+      "base-surface-both-shown@2026-11-27T06:21Z",
+      "learn-families@2026-11-27T06:21Z",
+      "model-id@2026-11-27T06:21Z",
+      "n@2026-11-27T06:21Z",
+      "n@2026-11-27T06:30Z",
     ]);
-    for (const r of p.leadRulings) expect(r.time).toBe("2026-11-27T06:21Z");
-    expect(p.leadRulings.find((r) => r.id === "n")?.applied).toMatch(/^Not yet/);
+    const n = p.leadRulings.filter((r) => r.id === "n");
+    expect(n[0]?.applied).toMatch(/^Superseded/);
+    expect(n[1]?.ruling).toMatch(/^Option B: n = 60 \(30 repeat \+ 30 similar/);
+    expect(LOADED.prereg.taskSet).toMatchObject({
+      learn: 30,
+      repeat: 30,
+      similar: 30,
+      testUnits: 60,
+    });
   });
 
   it("the n ceiling is real: rep-v1's rules allow at most 30 learn + 30 similar from fc-v1", () => {
@@ -168,11 +175,12 @@ describe("m-v1 pre-registration", () => {
     ],
     [
       "the test unit count",
-      (p: Record<string, unknown>) => ((p.taskSet as { testUnits: number }).testUnits = 60),
+      (p: Record<string, unknown>) => ((p.taskSet as { testUnits: number }).testUnits = 40),
     ],
     [
-      "ratified with rulings still pending",
-      (p: Record<string, unknown>) => ((p.ratification as { status: string }).status = "ratified"),
+      "ratified with a ruling still pending",
+      (p: Record<string, unknown>) =>
+        ((p.ratification as { pending: unknown[] }).pending = [{ id: "x", proposed: "y" }]),
     ],
   ])("refuses a changed %s", (_n, f) => {
     expect(preregProblems(withPrereg(f), FILES).length).toBeGreaterThan(0);
@@ -224,7 +232,7 @@ describe("schedule (seeded, ABBA over test units)", () => {
   const s = mSchedule(LOADED.manifest, seed);
   it("runs every learn task once and every test unit once per arm", () => {
     expect([...s.learn].sort()).toEqual(LOADED.manifest.learn.map((l) => l.taskId).sort());
-    expect(s.test).toHaveLength(80);
+    expect(s.test).toHaveLength(120);
     for (const u of LOADED.manifest.test)
       expect(
         s.test
@@ -234,7 +242,7 @@ describe("schedule (seeded, ABBA over test units)", () => {
       ).toEqual(["cold", "skills-on"]);
   });
   it("alternates arm order in ABBA blocks", () => {
-    for (let i = 0; i < 80; i += 4) {
+    for (let i = 0; i < 120; i += 4) {
       const a = s.test.slice(i, i + 4).map((t) => t.arm);
       expect(a[0]).toBe(a[3]);
       expect(a[1]).toBe(a[2]);
