@@ -167,6 +167,22 @@ describe("the audit refuses", () => {
       expect(a.violations.map((v) => v.detail).join("; ")).toMatch(want);
     });
 
+  it("a grant wider than the arm's allowlist, named by the grant check itself", () => {
+    // The gate tool is granted but its server is not started, so the effective surface still
+    // equals C1's; only the grant check (not the effective-surface check) can name this.
+    const a = audit(
+      mutate(plan("C1"), (m) => {
+        m.argv[m.argv.indexOf("--allowedTools") + 1] =
+          `${allowedOf(plan("C1"))},mcp__myco-gate__myco_gate_check`;
+      }),
+      "C1",
+    );
+    expect(a.ok).toBe(false);
+    expect(a.violations.map((v) => v.detail)).toContain(
+      "granted tools are not exactly the C1 arm's allowlist",
+    );
+  });
+
   it("an extra MCP server (the state server on C1), named by the server-set check itself", () => {
     const a = audit(
       mutate(plan("C1"), (m) => {
