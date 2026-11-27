@@ -353,4 +353,12 @@ describe("s-v1 analysis: input that cannot be analysed is refused", () => {
       "MUTATION_SCRIPT_MISMATCH",
     );
   });
+
+  it("a mutation row without its file is refused", () => {
+    const m = mutation();
+    const rows = m.rows.map(({ label, status }) => ({ label, status }));
+    expect(refusal(() => analyzeSV1(FROZEN, CORPUS, perfectResults(), { ...m, rows }))).toBe(
+      "MUTATION_SCHEMA",
+    );
+  });
 });
