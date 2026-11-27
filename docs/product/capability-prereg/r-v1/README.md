@@ -23,8 +23,12 @@ A pack directory holds `pack.json` (`myco.capability.r-pack/1`), `trials.jsonl`
 (`myco.capability.r-trial/1`, one row per trial) and `grades.jsonl` (the independent grader's
 `myco.benchmark.grade-row/1` rows). VERIFIED is a `done` claim the grader graded `pass`. The
 derived oracle's verdict counts only toward the R5 prerequisite and the false-accept guardrail.
-The analysis refuses to run if this script or the analysis module no longer matches the
-SHA-256 frozen in `prereg.json`.
+The analysis refuses to run if this script, the analysis module or the planted-marker
+scanner (`src/recording/scrub.ts`) no longer matches the SHA-256 frozen in `prereg.json`.
+While `leadRulingPending` lists anything, the analysis reports `LEAD_RULING_PENDING`: the
+statistics are computed as numbers, but nothing is reported as shown and `barShown` is false.
+A trial or grade row whose `simulated` field is anything but exactly `false` is refused
+`ROW_SIMULATED`.
 
 ## Before the first trial (queued; not done in this change)
 

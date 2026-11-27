@@ -14,8 +14,13 @@
     "modelId: claude-sonnet-5-5, the planner of the hcu+shell Ultra head-to-head",
     "demonstration.publication: recordings are made after this freeze and declared by SHA-256 in every pack; the analysis refuses a workflow from an undeclared recording",
     "arms.secondary C1: reported only when C1 runs on the same Ultra harness; its absence leaves the primary unchanged",
-    "statistics: one-sided exact McNemar with 5 discordant minimum (capability-spec 1.5), not #532's two-sided sign test with 6"
+    "statistics: one-sided exact McNemar with 5 discordant minimum (capability-spec 1.5), not #532's two-sided sign test with 6",
+    "planted-marker-scan coverage: the spec scans recordings, workflows, oracles and reports; the frozen analysis scans only what a pack carries (pack.json, trials.jsonl, grades.jsonl). Recordings, workflows and derived oracles are not in the pack yet, so their scan is not done by this analysis; the lead rules whether to add them to the pack (bound by SHA-256 to pack.demonstrations) or to accept the narrower scan",
+    "assignment: capability-spec 1.3 says ABBA blocks per task; with three arms and k = 1 rV1Schedule runs each task's three arm trials back to back in one of the six arm orders, balanced and seeded, so in 2 of the 6 orders C1 sits between the primary arms",
+    "seeds.bootstrap: null, because no R bar component is a ratio metric and the secondary ratios are point values; capability-spec 3.1 lists a bootstrap seed"
   ],
+  "leadRulings": [],
+  "leadRulingsRule": "each lead ruling posted on the PR is recorded here with its timestamp and source before the freeze, and its item leaves leadRulingPending; while leadRulingPending is non-empty the analysis reports LEAD_RULING_PENDING and never shown",
   "question": "After one real operator demonstration per family, does the hcu+shell agent with Myco's recorded workflow complete more fr-v1 tasks, as the independent grader judges them, than the same agent without it?",
   "arms": {
     "primary": { "capability": "hcu+shell+R", "baseline": "hcu+shell" },
@@ -106,10 +111,11 @@
       },
       {
         "id": "planted-marker-scan",
-        "text": "the planted-marker scan of the pack (recordings' declarations, trials, grades) finds nothing"
+        "text": "planted-marker scan of recordings, workflows, oracles and reports finds nothing (capability-spec-2 section R, as written)",
+        "analysisScans": "pack.json, trials.jsonl and grades.jsonl only; the rest of the spec's scan is listed under leadRulingPending, which blocks shown"
       }
     ],
-    "notShown": "p > 0.05; fewer than 5 discordant tasks ('underpowered at n = 30'); the prerequisite failed; a guardrail breached; a parity check failed; or the pack's pre-registration hash does not match"
+    "notShown": "any value still listed under leadRulingPending (reported LEAD_RULING_PENDING); p > 0.05;fewer than 5 discordant tasks ('underpowered at n = 30'); the prerequisite failed; a guardrail breached; a parity check failed; or the pack's pre-registration hash does not match"
   },
   "secondary": [
     "hcu+shell+R vs C1 on verified (same test, reported)",
@@ -130,11 +136,15 @@
     "files": [
       {
         "path": "src/recording-eval/analysis.ts",
-        "sha256": "9718b6cad06e88bd7fc200ba1163713f8a53b45e3fe27d56e1f4a39fe3b9e695"
+        "sha256": "d113faa5185422a10efda25c326f86f24f41cc9b61b5c076f3fdce9fbae599ed"
       },
       {
         "path": "src/recording-eval/canonical.ts",
         "sha256": "b285c3651206b1c78a5d97639ea8184c79b11822ce5834eaf0751c466c3c4048"
+      },
+      {
+        "path": "src/recording/scrub.ts",
+        "sha256": "a0b50bbaaefc24df2bd57989c0e59b67ee59697310bb906ec433ae3ac3c24038"
       },
       {
         "path": "scripts/r-v1-analysis.ts",

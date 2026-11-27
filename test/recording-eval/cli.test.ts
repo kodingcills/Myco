@@ -74,39 +74,64 @@ describe("r-v1-analysis CLI", () => {
     });
   }, 60_000);
 
-  it("a copy of the tree with the analysis module edited refuses ANALYSIS_CODE_CHANGED", () => {
-    const tree = join(dir, "tree");
-    const files = [
-      "scripts/r-v1-analysis.ts",
-      "src/recording-eval/analysis.ts",
-      "src/recording-eval/canonical.ts",
-      "src/recording-eval/fr-v1.ts",
-      "src/recording/scrub.ts",
-      "src/tasks/fixture.ts",
-      "src/tasks/intent.ts",
-      "src/tasks/task-text.ts",
-      "docs/product/capability-prereg/r-v1/prereg.json",
-      "docs/product/capability-prereg/r-v1/fr-v1-manifest.json",
-    ];
-    for (const f of files) {
-      mkdirSync(dirname(join(tree, f)), { recursive: true });
-      cpSync(join(ROOT, f), join(tree, f));
-    }
-    const p = writePack("tree-pack", buildPack({ outcome: discordant(8, 0) }));
-    const runIn = () =>
-      spawnSync(
-        process.execPath,
-        ["--import", "tsx", join(tree, "scripts", "r-v1-analysis.ts"), "analyse", "--pack", p],
-        { cwd: ROOT, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], timeout: 60_000 },
-      );
-    // Control: the unmodified copy analyses.
-    const ok = runIn();
-    expect(ok.status, ok.stdout + ok.stderr).toBe(0);
-    appendFileSync(join(tree, "src/recording-eval/analysis.ts"), "\n// edited after freeze\n");
-    const r = runIn();
-    expect(r.status).toBe(1);
-    expect(JSON.parse(r.stdout)).toEqual({ status: "refused", codes: ["ANALYSIS_CODE_CHANGED"] });
+  it("B1 (round 1): the verifier's 8-vs-1 real-model pack under --evidence reports LEAD_RULING_PENDING, never shown", () => {
+    const p = writePack(
+      "real-8v1",
+      buildPack({ planner: "claude-sonnet-5-5", outcome: discordant(8, 1) }),
+    );
+    const r = run(["analyse", "--pack", p, "--evidence"]);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out).toMatchObject({ status: "analysed", evidence: true, barShown: false });
+    expect(out.leadRulingPending).toBeGreaterThan(0);
+    expect(out.primary).toMatchObject({ capabilityOnly: 8, baselineOnly: 1, shown: false });
+    expect(out.reading).toMatch(/^LEAD_RULING_PENDING: /);
+    expect(out.reading).not.toMatch(/\bshown\b/);
   }, 60_000);
+
+  it.each([
+    ["the analysis module", "src/recording-eval/analysis.ts"],
+    ["the marker scanner (N5)", "src/recording/scrub.ts"],
+  ])(
+    "a copy of the tree with %s edited refuses ANALYSIS_CODE_CHANGED",
+    (_what, edited) => {
+      const tree = join(dir, `tree-${edited.replace(/\W/g, "-")}`);
+      const files = [
+        "scripts/r-v1-analysis.ts",
+        "src/recording-eval/analysis.ts",
+        "src/recording-eval/canonical.ts",
+        "src/recording-eval/fr-v1.ts",
+        "src/recording/scrub.ts",
+        "src/tasks/fixture.ts",
+        "src/tasks/intent.ts",
+        "src/tasks/task-text.ts",
+        "docs/product/capability-prereg/r-v1/prereg.json",
+        "docs/product/capability-prereg/r-v1/fr-v1-manifest.json",
+      ];
+      for (const f of files) {
+        mkdirSync(dirname(join(tree, f)), { recursive: true });
+        cpSync(join(ROOT, f), join(tree, f));
+      }
+      const p = writePack(
+        `${tree}-pack`.slice(dir.length + 1),
+        buildPack({ outcome: discordant(8, 0) }),
+      );
+      const runIn = () =>
+        spawnSync(
+          process.execPath,
+          ["--import", "tsx", join(tree, "scripts", "r-v1-analysis.ts"), "analyse", "--pack", p],
+          { cwd: ROOT, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], timeout: 60_000 },
+        );
+      // Control: the unmodified copy analyses.
+      const ok = runIn();
+      expect(ok.status, ok.stdout + ok.stderr).toBe(0);
+      appendFileSync(join(tree, edited), "\n// edited after freeze\n");
+      const r = runIn();
+      expect(r.status).toBe(1);
+      expect(JSON.parse(r.stdout)).toEqual({ status: "refused", codes: ["ANALYSIS_CODE_CHANGED"] });
+    },
+    60_000,
+  );
 
   it("usage errors exit 3; an unreadable pack is refused, not crashed", () => {
     expect(run(["analyse"]).status).toBe(3);

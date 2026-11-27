@@ -27,6 +27,7 @@ interface PreregDoc {
   seeds: { assignment: string };
   verified: string;
   leadRulingPending: string[];
+  leadRulings: { at: string; source: string }[];
   ratification: string;
 }
 const prereg = readPrereg() as unknown as PreregDoc;
@@ -50,9 +51,11 @@ describe("r-v1 pre-registration hash", () => {
 
   it("every analysis file still hashes to its frozen SHA-256", () => {
     const files = prereg.analysis.files as { path: string; sha256: string }[];
+    // N5 (round 1): the planted-marker scanner the analysis imports is frozen with it.
     expect(files.map((f) => f.path)).toEqual([
       "src/recording-eval/analysis.ts",
       "src/recording-eval/canonical.ts",
+      "src/recording/scrub.ts",
       "scripts/r-v1-analysis.ts",
     ]);
     for (const f of files)
@@ -107,5 +110,38 @@ describe("r-v1 values match the spec's bar and the code", () => {
     expect(prereg.leadRulingPending.length).toBeGreaterThanOrEqual(4);
     expect(prereg.ratification).toMatch(/^proposed/);
     expect(JSON.stringify(prereg)).not.toMatch(/\bratified\b/i);
+  });
+
+  it("lead rulings are recorded with a timestamp and source; none has been posted yet", () => {
+    expect(Array.isArray(prereg.leadRulings)).toBe(true);
+    for (const r of prereg.leadRulings) {
+      expect(r.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+      expect(r.source).toMatch(/^https:\/\/github\.com\/kodingcills\/Myco\//);
+    }
+    expect(prereg.leadRulings).toHaveLength(0);
+  });
+
+  it("B2 (round 1): the marker-scan guardrail is the spec's text, and its narrowing is pending", () => {
+    const spec = readFileSync(join(ROOT, "docs/product/capability-spec-2.md"), "utf8").replace(
+      /\s+/g,
+      " ",
+    );
+    const phrase =
+      "Planted-marker scan of recordings, workflows, oracles and reports finds nothing";
+    expect(spec).toContain(phrase);
+    const scan = prereg.bar.guardrails.find((g) => g.id === "planted-marker-scan") as {
+      text: string;
+      analysisScans: string;
+    };
+    expect(scan.text.toLowerCase()).toContain(phrase.toLowerCase());
+    expect(scan.analysisScans).toMatch(/leadRulingPending/);
+    expect(
+      prereg.leadRulingPending.some((p) => p.startsWith("planted-marker-scan coverage:")),
+    ).toBe(true);
+  });
+
+  it("N2 / N3 (round 1): the assignment's departure from ABBA and the null bootstrap seed are pending", () => {
+    expect(prereg.leadRulingPending.some((p) => /^assignment: .*ABBA/.test(p))).toBe(true);
+    expect(prereg.leadRulingPending.some((p) => p.startsWith("seeds.bootstrap: null"))).toBe(true);
   });
 });
