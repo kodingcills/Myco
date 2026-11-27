@@ -39,6 +39,8 @@
     "scripts/myco-schedule.ts",
     "scripts/ci-required-green.ts",
     "scripts/myco-record.ts",
-    "scripts/upstream-import.ts"
+    "scripts/upstream-import.ts",
+    "scripts/benchmark-release-package.ts",
+    "scripts/benchmark-release-check-archive.ts"
   ]
 }
