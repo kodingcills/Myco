@@ -205,6 +205,32 @@ Any status other than `verified` is a catch.
   agent-facing tool that would expose a plugin reader to an agent lands with I's `myco-cap`
   server (capability-spec §1.2).
 
+### 4.1 The grader for the ledger family: `ledger-csv/1` (proposed, #617)
+
+The reader experiment (`docs/product/capability-t-byoa.md`) is graded by
+`src/benchmark/grade/ledger.ts` (`gradeLedger`), never by the plugin. **Status: proposed; the
+rule is frozen by T's pre-registration, and any change after that is a new grader version.**
+
+- **Inputs:** the pristine ledger bytes as handed to the guest (checked against the task set's
+  SHA-256), the captured bytes, and the intent `{ id, column, value }`. No claim, no plugin
+  verdict, no reader state, no trace.
+- **Rule:** `pass` only when the captured ledger equals the pristine one with the one target
+  field set to `value`, line for line and field for field, exact text (the trailer included). Two
+  editor encodings are tolerated and recorded in `reasons` as `tolerated: ...`: a leading UTF-8
+  byte order mark, and CRLF on every line. Everything else is a difference, including the final
+  newline, numeric look-alikes (`460.0` for `460`) and changes outside the target row.
+- **`fail`:** the document differs (target, collateral, extra or missing rows, reordering), the
+  captured bytes are not a well-formed ledger (not UTF-8, no trailer, mixed line endings), or the
+  intent cannot be satisfied (id or column not in the fixture, or the `id` column): the 12
+  invalid-target tasks never pass.
+- **`ungradable`:** nothing was captured, the fixture is not the pinned one or not a ledger, the
+  fixture is ambiguous (duplicate id or header), the value cannot be written in the format, or an
+  internal error. Never a pass; T-oracle counts a plugin `verified` against it.
+- **The check the plugin does not make:** the example's oracle reads the target only, so it says
+  `verified` on a collateral edit or a flipped byte in another row; this grader fails both
+  (`test/benchmark/ledger-grade.test.ts`, on the plugin's own self-test cases). Those trials are
+  what the T-oracle guardrail counts.
+
 ## 5. Tests ($0)
 
 | Test | Proves |
@@ -216,3 +242,4 @@ Any status other than `verified` is a catch.
 | `test/plugins/csv-ledger-e2e.test.ts` | scripted agent + example plugin end to end; plugin never verifies where an independent check does not pass |
 | `test/plugins/sdk-boundary.test.ts` | SDK loads in the sandbox; no plugin module reaches the gate |
 | `test/benchmark/independence.test.ts` | plugins and grader share no code |
+| `test/benchmark/ledger-grade.test.ts` | `ledger-csv/1`: pass only on the exact edit; collateral, corrupt bytes, broken saves and invalid targets fail; ungradable only when it could not look |
