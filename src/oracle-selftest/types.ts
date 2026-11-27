@@ -53,6 +53,12 @@ export const EXPECTED_STATUS: Readonly<
   "missing-file": "uncertain",
 };
 
+/**
+ * A host-side random source: a uniform integer in `[0, n)` (`node:crypto` `randomInt`). Track C
+ * draws its self-test corruptions from one so a check's author cannot compute them in advance.
+ */
+export type Draw = (n: number) => number;
+
 /** A saved document handed to an oracle: its bytes, or null when nothing was saved. */
 export interface SavedDocument {
   readonly fileName: string;
