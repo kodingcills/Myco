@@ -258,9 +258,9 @@ export default {
         "AGENT_CHECK_BINDING_INVALID",
       );
     for (const family of ["todo-items", "writer-doc-edit", "toString", "__proto__"])
-      expect((proposeAgentCheck(dir, { ...BINDING, family } as never) as { code?: string }).code).toBe(
-        "AGENT_CHECK_FAMILY_UNSUPPORTED",
-      );
+      expect(
+        (proposeAgentCheck(dir, { ...BINDING, family } as never) as { code?: string }).code,
+      ).toBe("AGENT_CHECK_FAMILY_UNSUPPORTED");
   });
 });
 
@@ -287,7 +287,11 @@ describe("track C: an accepted check runs only as itself, only for its own task,
       }
       const forged = { ...check } as AgentCheck;
       const f = runAgentCheck(forged, BINDING, doc, SPEC);
-      expect([f.status, f.code, f.provenance]).toEqual(["uncertain", "AGENT_CHECK_NOT_ACCEPTED", null]);
+      expect([f.status, f.code, f.provenance]).toEqual([
+        "uncertain",
+        "AGENT_CHECK_NOT_ACCEPTED",
+        null,
+      ]);
       appendFileSync(join(dir, "check.mjs"), "\n// edited after acceptance\n");
       const e = runAgentCheck(check, BINDING, doc, SPEC);
       expect([e.status, e.code, e.codeSource]).toEqual(["uncertain", "PLUGIN_CHANGED", "host"]);

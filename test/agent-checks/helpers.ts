@@ -63,7 +63,11 @@ export function makeCheck(source: string, manifest: Record<string, unknown> = {}
 export const SEED = "track-c-seed";
 export const INTENT = { rowKey: "EMP-0003", column: "qty", newValue: "4242" };
 export const SPEC = { fixtureSeed: SEED, ...INTENT };
-export const BINDING = { taskId: "track-c-task", runId: "run-1", family: "calc-record-edit" } as const;
+export const BINDING = {
+  taskId: "track-c-task",
+  runId: "run-1",
+  family: "calc-record-edit",
+} as const;
 
 /** The exact document: the edit and nothing else. */
 export const exactCsv = documentCsv(SEED, [INTENT]);
