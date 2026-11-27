@@ -155,6 +155,14 @@ describe("the output limit is part of the OS layer (D3)", () => {
     20_000,
   );
 
+  // #574 N3 (W4 / O5 on #558): detection's probe also requires node to see the expected HARD
+  // file-size limit (`file_size_blocks.hard` in `limitProbe`, src/plugins/host/sandbox.ts). No
+  // test here bites on that half alone: a layer that leaves the soft limit right but the hard
+  // limit different would have to RAISE the hard limit above what the wrapper set, which needs
+  // CAP_SYS_RESOURCE (a `ulimit -f` raise is EPERM even as uid 0 in CI and in this container).
+  // Lowering it below the soft limit is impossible (EINVAL), and the wrapper's `ulimit -f`
+  // sets both. So dropping the hard-limit check is equivalent in practice; the soft-only
+  // mutant (`ulimit -S -f`) is still killed by detection.
   it.runIf(SUPPORTED)(
     "a layer under which node sees another file-size limit is refused",
     () => {
