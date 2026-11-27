@@ -107,11 +107,6 @@ export function keyFacts(keys: unknown, scope: TrialScope): ActionFacts {
   return NO_FACTS;
 }
 
-function credential(v: unknown): boolean {
-  if (typeof v !== "boolean") throw new UnrecognisedAction();
-  return v;
-}
-
 /** Reduce an `AppAdapter` action. */
 export function adapterFacts(
   action: ProgramAction,
@@ -125,7 +120,7 @@ export function adapterFacts(
       return NO_FACTS;
     case "typeText":
     case "setValue":
-      return { ...NO_FACTS, credentialInput: credential(isCredentialTarget(action.ref)) };
+      return { ...NO_FACTS, credentialInput: isCredentialTarget(action.ref) };
     case "keyPress":
       return keyFacts(action.keys, scope);
     default:
@@ -244,7 +239,7 @@ export function desktopFacts(
     case "launch":
       return { ...NO_FACTS, launches: [launchedApp(action.command)] };
     case "typeTextGlobal":
-      return { ...NO_FACTS, credentialInput: credential(focusIsCredential()) };
+      return { ...NO_FACTS, credentialInput: focusIsCredential() };
     case "clickAt":
       return NO_FACTS;
     case "keyPress":

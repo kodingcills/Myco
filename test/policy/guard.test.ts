@@ -77,6 +77,18 @@ describe("policy guard: fail closed", () => {
     });
   });
 
+  it("a sync path given a rejecting async sensor denies and leaves no unhandled rejection", async () => {
+    const g = guardFor(fixture(), ALL_RULES, {
+      screen: () => Promise.reject(new Error("sensor down")),
+    });
+    expect(g.decide("linux-actuator.act", () => NONE)).toMatchObject({
+      decision: "deny",
+      code: "POLICY_ENGINE_ERROR",
+    });
+    // Give the rejection a turn to surface; vitest fails the run on an unhandled rejection.
+    await new Promise((r) => setTimeout(r, 10));
+  });
+
   it("an engine that takes longer than the timeout denies with POLICY_ENGINE_TIMEOUT", async () => {
     const g = guardFor(fixture(), ALL_RULES, {
       screen: () => new Promise<boolean>(() => {}),

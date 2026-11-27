@@ -69,6 +69,10 @@ describe("policy engine: the spec's example policies", () => {
     expect(e.evaluate({ ...NONE, writes: [`${e.scope.documentDir}-evil/x`] })).toMatchObject({
       code: "POLICY_WRITE_OUTSIDE_SCOPE",
     });
+    // A name inside the directory that merely starts with two dots is inside.
+    expect(e.evaluate({ ...NONE, writes: [join(e.scope.documentDir, "..notes")] })).toMatchObject({
+      decision: "allow",
+    });
   });
 
   it("no typing into a credential field", () => {
