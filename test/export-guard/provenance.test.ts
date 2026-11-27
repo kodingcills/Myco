@@ -30,6 +30,14 @@ describe("HashLedger and keepOrHash (O3)", () => {
     expect(harnessHashed(H, "a", new HashLedger())).toBe(false);
   });
 
+  it("a different h-<60 hex> at a recorded scope is re-hashed (the value is bound, not just the scope)", () => {
+    const l = new HashLedger();
+    l.record("a", H);
+    const other = `h-${"f".repeat(60)}`;
+    expect(keepOrHash(other, "a", l, hash)).toBe(hash(other));
+    expect(harnessHashed(other, "a", l)).toBe(false);
+  });
+
   it("never keeps a value that is not exactly h-<60 hex>, recorded or not", () => {
     const l = new HashLedger();
     l.record("a", H);

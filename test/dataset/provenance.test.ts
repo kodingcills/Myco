@@ -156,6 +156,21 @@ describe("O3: a harness-produced h-<60 hex> is kept, only where the harness prod
     expect(closeRecordFields(recordOf(c), [], asRecord).desktop.backend).toBe(AGENT_HEX);
   });
 
+  it("re-hashed when the ledger holds a DIFFERENT h-<60 hex> at this same episode, path or record field", () => {
+    const c = everywhere(AGENT_HEX);
+    const other = new HashLedger();
+    for (const [path] of episodeFields(c.episode))
+      other.record(episodeScope(c.episode.episodeId, path), CAFE);
+    for (const f of ["$.desktop.backend", "$.desktop.image", "$.capture.path"])
+      other.record(episodeScope("e".repeat(64), `${RECORD_SCOPE}${f}`), CAFE);
+    for (const [path, out] of episodeFields(closeEpisode(c.episode, [], other)))
+      expect(out, path).toBe(hashed(AGENT_HEX));
+    const rec = closeRecordFields({ ...recordOf(c), capture: { path: AGENT_HEX } }, [], other);
+    expect([rec.desktop.backend, rec.desktop.image, rec.capture.path]).toEqual(
+      Array(3).fill(hashed(AGENT_HEX)),
+    );
+  });
+
   it("containerHashLedger refuses a container that does not validate", () => {
     const out = join(tmp("bad"), "ds");
     exportDataset([everywhere(AGENT_HEX, { taskId: "task-1", runId: "run-1" })], {

@@ -140,6 +140,16 @@ describe("O3: a harness-produced h-<60hex> is kept, only where the harness produ
       expect(out, field).toBe(vocab.has(field) ? hashedId(AGENT_HEX) : AGENT_HEX);
   });
 
+  it("re-hashed when the ledger holds a DIFFERENT h-<60hex> at the same scope (ID_SCOPE is shared)", () => {
+    const harness = bundleHashLedger(harnessBundle(CAFE));
+    const idOnly = new HashLedger();
+    idOnly.record(ID_SCOPE, CAFE);
+    for (const ledger of [harness, idOnly]) {
+      const b = exportProofBundle(everywhere(AGENT_HEX), NO_CTX, undefined, ledger);
+      for (const [field, out] of hashedFields(b)) expect(out, field).toBe(hashedId(AGENT_HEX));
+    }
+  });
+
   it("bundleHashLedger refuses a bundle that does not verify (codes only)", () => {
     const text = harnessBundle(AGENT_HEX);
     const tampered = text.replace('"seq": 1', '"seq": 7');

@@ -14,7 +14,7 @@
 import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { closeEpisode, hashed, joinedIdentity } from "../../src/episode/closed.ts";
+import { closeEpisode, hashed, hashedLeaves, joinedIdentity } from "../../src/episode/closed.ts";
 import {
   exportDataset,
   importDataset,
@@ -174,6 +174,23 @@ describe("O3: a harness-produced h-<60 hex> is kept, only where the harness prod
     const closed = closeEpisode(input, [], one);
     for (const [path, out] of hashedFields(closed))
       expect(out, path).toBe(path === "$.actions.items[1].command" ? AGENT_HEX : hashed(AGENT_HEX));
+  });
+
+  it("re-hashed when the ledger holds a DIFFERENT h-<60 hex> at this same episode and path", () => {
+    const input = everywhere(AGENT_HEX);
+    const other = new HashLedger();
+    for (const [path] of hashedFields(input))
+      other.record(episodeScope(input.episodeId, path), CAFE);
+    for (const [path, out] of hashedFields(closeEpisode(input, [], other)))
+      expect(out, path).toBe(hashed(AGENT_HEX));
+  });
+
+  it("hashedLeaves records hashed fields only, never a closed path (N1)", () => {
+    const base = everywhere(AGENT_HEX);
+    const ep = { ...base, task: { ...base.task, family: CAFE } };
+    const paths = hashedLeaves(ep).map((l) => l.path);
+    expect(paths).toContain("$.task.id");
+    expect(paths).not.toContain("$.task.family");
   });
 
   it("the ledger records only the hashed form", () => {
