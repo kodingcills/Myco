@@ -274,6 +274,10 @@ export function realRunRefusals(
     out.push(
       `#518's attempt-event vocabulary cannot name the pilot's harness faults (${unnameable.join(", ")}): real runs wait until it does (TO FILE), so every attempt's end is in #518's ledger`,
     );
+  // Kept although #546 has merged (#572, V5): it always passes today, but if the trial-ops
+  // schema ever loses `resetBootClass` (a rename, a revert) the boot-class halt would read
+  // `undefined` for every trial, so a live run refuses here first. Pinned by
+  // test/pilot/ab-prereg-probe.test.ts, which mocks the schema without the field.
   const props = (m2TrialOpsSchema as { properties?: Record<string, unknown> }).properties ?? {};
   if (!Object.hasOwn(props, "resetBootClass"))
     out.push(
