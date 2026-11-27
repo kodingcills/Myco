@@ -177,11 +177,43 @@ faulted ones included); the denominator is the graded verified count from `bench
 `costPerVerifiedTask` sums `arm.jsonl` only (it leaves out the faulted attempts in
 `faulted-attempts.jsonl`), so neither is R7 by itself.
 
+## Launch gate: the commit's required checks are green (default)
+
+Launch only from a commit on `main` whose CI run from the push to `main` passed all five
+**required** checks. This is the default launch gate (CI speed, #678):
+
+```sh
+sha=$(git rev-parse HEAD)            # the commit you are about to launch from, on main
+scripts/ci-required-green.sh "$sha"  # 0: launch; anything else: do not
+```
+
+It looks up that commit's `ci.yml` run from the push to `main` (the newest one, if there was
+a re-run) through `gh api` (read-only, your existing `gh` login; it never reads or prints a
+token). It exits 0 only when each of these jobs finished with conclusion `success`:
+`check (macos-latest)`, `check (ubuntu-latest)`, `myco-agent tests (ubuntu-latest)`,
+`runtime guest agent tests (ubuntu-latest)`, `secret scan (gitleaks)` (the list is
+`scripts/ci-required-checks.json`, the same one `docs/ci.md` and branch protection use).
+
+It ignores every non-required job. A red `viewer verdict budget (…)` timing job,
+`linux path`, the macOS agent tests and similar jobs do not block a launch. The run's overall
+conclusion is ignored for the same reason.
+
+| Exit | Meaning | What to do |
+| --- | --- | --- |
+| 0 | `REQUIRED_GREEN <sha> run <id>` | Launch. |
+| 1 | `NOT_GREEN`: no main push run for the commit (`RUN_NOT_FOUND`), or a required check is missing, failed, skipped, cancelled or still running (`MISSING <name>`, `NOT_SUCCESS <name>=<state>`) | Do not launch. Wait for a running check, or fix main. |
+| 2 | Usage: the commit must be a full 40-hex sha | Pass `git rev-parse HEAD`. |
+| 3 | Lookup failed: `gh` failed, or its answer was unreadable or truncated | Do not launch. Check `gh auth status` (it prints no token), then retry. |
+
+It prints one line per required check plus the verdict, all codes and check names. Tests:
+`test/ci-required-green.test.ts`.
+
 ## Preflight checklist (before a real launch)
 
 `launch` checks items 2, 8 and 9 itself and refuses (exit 3, every reason listed) before any VM,
 guest channel or `claude` process is touched. The other items are the operator's.
 
+0. The launch gate above exits 0 for the commit you launch from.
 1. The lead has approved the pilot launch. The R1 runner has no GO file of its own; the
    approval is the lead's word. The corrections A/B does need its committed GO file (below).
 2. No API-path credential is configured. The runner checks variable **names only** and refuses
