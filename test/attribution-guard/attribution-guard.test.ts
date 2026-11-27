@@ -191,7 +191,10 @@ describe("attribution-guard CLI", () => {
 
   it("a malformed or unknown BASE_REF fails closed: exit 2", () => {
     const { cwd, base, head } = repoWith(CLEAN_COMMITS);
-    for (const ref of ["../main", "-main", "main branch", "nosuchbranch"]) {
+    git(cwd, "update-ref", "refs/remotes/origin/main", base);
+    expect(runGuard(cwd, { ...cleanPr(base, head), BASE_REF: "main" }).status).toBe(0);
+    // `main~0` and `main@{0}` are revisions git would resolve; only plain names pass.
+    for (const ref of ["main~0", "main@{0}", "../main", "-main", "main branch", "nosuchbranch"]) {
       const r = runGuard(cwd, { ...cleanPr(base, head), BASE_REF: ref });
       expect(r.out).toContain("ATTRIBUTION GUARD ERROR");
       expect(r.status).toBe(2);
