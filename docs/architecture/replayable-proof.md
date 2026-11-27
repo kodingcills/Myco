@@ -61,6 +61,7 @@ events, which must carry the run's task and the run's arm (an anchored run must 
 
 ```
 npx tsx scripts/proof.ts export RUN.json --out bundle.json [--forbid-file F] [--user-file U] [--identity-file I]
+npx tsx scripts/proof.ts export-pilot RUN_DIR --trial KEY --out bundle.json [--forbid-file F] [--user-file U] [--identity-file I]
 npx tsx scripts/proof.ts verify bundle.json [--evidence-dir D] [--episode E] [--expect-head H] [--expect-ledger-head H] [--user-file U] [--identity-file I]
 npx tsx scripts/proof.ts report bundle.json --out report.html [verify flags]
 ```
@@ -76,6 +77,47 @@ closed. Register the guest's account name in `--user-file`. Neither file's conte
 printed. `--identity-file` lines (a full name, other names) and `--user-file` lines are also
 **identity strings** for the identity guard (below), with the host's account name, hostname
 and home directory.
+
+### From an R1 pilot run directory (#674)
+
+`export-pilot` (`src/proof/from-pilot.ts`, `pilotProofInput`) builds the `ProofRunInput` of one
+trial from what the R1 runner already leaves on disk, so no hand-written `RUN.json` is needed.
+`RUN_DIR` is the R1 pilot's `--out`, or one corrections A/B arm directory (the same runner writes
+both). It only reads; no runner file changes. The result goes through `exportProofBundle` like
+any `RUN.json`, so the allowlist, the identity guard and the self-verify all still apply.
+
+| Source (in `RUN_DIR`) | Becomes |
+|---|---|
+| `pilot-progress.jsonl` (read by the runner's own `loadLedger`) | `run.runId` and `run.taskId` from the trial's start line, `run.arm` from its end line's arm row, `run.simulated` from the header |
+| `SIMULATED` marker | `run.simulated: true`, whatever the header says (fail toward "never evidence") |
+| `trials/<KEY>/gate-tasks.json` | evidence `gate-tasks` (kind `gate-registry`, `application/json`) |
+| `trials/<KEY>/doc.csv` | evidence `persisted-doc` (kind `persisted-document`, `text/csv`); it must hash to the arm row's `persistedSha256`, and must be absent when that is null |
+| `attempts.jsonl` (#518), when present | the ledger, with its head taken from the **external** anchor (`anchorPathFor`, outside `RUN_DIR`) and checked by #518's own `verifyAnchor` |
+
+Evidence paths are relative to the trial directory, so
+`verify bundle.json --evidence-dir RUN_DIR/trials/KEY` re-checks the files. The R1 pilot alone
+writes no #518 ledger (only the A/B arm directories do), so its bundles carry no ledger anchor.
+
+**No verdict record (stated gap).** The runner records the gate's verdict on the arm row, but
+not the reason codes, evidence refs or oracle of its post-stop check. A verdict record needs the
+codes (`verified` requires `ORACLE_PASS`), and codes are never inferred. So a bundle from a
+pilot directory has no verdict record (`verdictCarried: false`) until the runner persists the
+gate result per trial. That change is in `src/pilot/runner.ts`, the critical path, and is left
+to its owner (#674).
+
+`export-pilot` refuses, with a code and a structural message (never a path, a key or a value):
+
+| Export code | Refused when |
+|---|---|
+| `PROOF_PILOT_TRIAL` | the trial key is not a closed id (it names a directory, so no separator and no `..` is ever joined), or it is not in the progress ledger exactly once |
+| `PROOF_PILOT_PROGRESS` | no progress ledger, one that does not load, or one with no header |
+| `PROOF_PILOT_OPEN` | the trial has no end, or its end has no arm row (a crash closure) |
+| `PROOF_PILOT_MISMATCH` | the arm row names another trial or task |
+| `PROOF_PILOT_EVIDENCE` | `doc.csv` differs from the arm row's digest, is missing when recorded, or is present when none was recorded; an evidence file is not a regular file (a symlink, even a dangling one); no evidence at all |
+| `PROOF_LEDGER_CHAIN` / `PROOF_LEDGER_ANCHOR` | #518's ledger fails its own check, has no external anchor or disagrees with it (a consistent rewrite that was not re-anchored); a trial whose fault class #518 cannot name has no end there, so its export is refused |
+
+Every bundle built from a pilot directory so far comes from a SIMULATED dry run (the tests).
+Simulated rows are never evidence.
 
 ## The verifier
 
@@ -330,8 +372,11 @@ passes the result of verifying the same bytes.
   records map onto these shapes, never the reverse. TO FILE: once `myco.episode/1` carries the
   handoff log (N, #528's `handoffs` field) and policy decisions (O), the bundle references them
   through the episode instead of restating them.
-- **Live runner wiring.** The live harness must write `RUN.json` as the trial runs. That needs
-  the VM, so it is out of this PR (TO FILE, a local single-owner task under the VM lock).
+- **Live runner wiring.** `export-pilot` (#674) reads `RUN.json`'s content from an R1 run
+  directory after the run, so the runner needs no Q-specific writer. What is still missing is
+  the gate result of each trial's post-stop check (reason codes, evidence refs, oracle), which
+  the runner does not persist; until it does, pilot bundles carry no verdict record (#674's
+  follow-up, for the critical path's owner).
 
 ## Proposed pre-registered measurement bar (for `docs/product/capability-spec.md`)
 
