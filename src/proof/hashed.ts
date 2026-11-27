@@ -11,8 +11,9 @@
  *
  * PROVENANCE-BOUND (#579 O3, `src/export-guard/provenance.ts`): a value that is EXACTLY
  * `h-<60hex>` (lower-case hex, nothing before or after) is kept as is ONLY when the harness
- * produced it, that is when the harness's `HashLedger` records it for this field (`bundleHashLedger`
- * builds one from a bundle the harness wrote and that verified). Any other `h-<60hex>` (an
+ * produced it, that is when the harness's `HashLedger` records it for this run and this exact
+ * field path (`bundleHashLedger` builds one from a bundle the harness wrote, sealed under the
+ * harness key, and that verified). Any other `h-<60hex>` (an
  * agent's) is re-hashed, so it can never carry agent-chosen hex out. Every other `h-` form
  * (`h-<64hex>`, 59 or 61 hex digits, upper-case hex, `H-...`) is a plain value and is hashed
  * like any other.
@@ -57,8 +58,9 @@ export function hashedId(raw: string): string {
 
 /**
  * Hash a value that may not be written as is. An exact `h-<60hex>` is kept as is only when
- * `ledger` records it for `field` (harness-produced, #579 O3); with no ledger it is re-hashed.
+ * `ledger` records it at `scope` (harness-produced, #579 O3; `proofScope`: run id + exact path);
+ * with no ledger it is re-hashed.
  */
-export function hashValue(raw: string, field = "", ledger: HashLedger = NO_LEDGER): string {
-  return keepOrHash(raw, field, ledger, hashedId);
+export function hashValue(raw: string, scope = "", ledger: HashLedger = NO_LEDGER): string {
+  return keepOrHash(raw, scope, ledger, hashedId);
 }
