@@ -3,6 +3,8 @@
  *
  *   npx tsx scripts/proof.ts export RUN.json --out BUNDLE.json [--forbid-file F] [--user-file U]
  *                                   [--identity-file I]
+ *   npx tsx scripts/proof.ts export-pilot RUN_DIR --trial KEY --out BUNDLE.json [--forbid-file F]
+ *                                   [--user-file U] [--identity-file I]
  *   npx tsx scripts/proof.ts verify BUNDLE.json [--expect-head H] [--expect-ledger-head H]
  *                                   [--evidence-dir D] [--episode E] [--forbid-file F]
  *                                   [--user-file U] [--identity-file I]
@@ -45,6 +47,7 @@ import {
   type VerifyOptions,
   verifyProofBundle,
 } from "./bundle.ts";
+import { pilotProofInput } from "./from-pilot.ts";
 import { hostIdentity, type IdentityContext } from "./identity.ts";
 import { parseLedgerJsonl } from "./ledger.ts";
 import { ProofReportError, renderProofReport } from "./report.ts";
@@ -93,6 +96,7 @@ class UsageError extends Error {}
 /** Each command's flags (exported so the doc test can pin the documented usage). */
 export const KNOWN: Record<string, readonly string[]> = {
   export: ["--out", "--forbid-file", "--user-file", "--identity-file"],
+  "export-pilot": ["--trial", "--out", "--forbid-file", "--user-file", "--identity-file"],
   verify: [
     "--expect-head",
     "--expect-ledger-head",
@@ -223,7 +227,7 @@ export function main(argv: readonly string[], io: CliIo): number {
   let outCtx: RedactionContext = hostRedaction();
   try {
     if (command === undefined || !(command in KNOWN))
-      throw new UsageError("usage: proof.ts export|verify|report ...");
+      throw new UsageError("usage: proof.ts export|export-pilot|verify|report ...");
     const { positional, flags } = parseFlags(rest);
     for (const f of flags.keys())
       if (!KNOWN[command]?.includes(f)) throw new UsageError("unknown flag for this command");
@@ -245,6 +249,30 @@ export function main(argv: readonly string[], io: CliIo): number {
       const bundle = exportProofBundle(loadRunInput(input), hostRedaction(forbid, users), identity);
       writeFileSync(out, serializeProofBundle(bundle));
       emit(io, { ok: true, head: bundle.head, records: bundle.records.length }, outCtx);
+      return 0;
+    }
+
+    if (command === "export-pilot") {
+      const out = flags.get("--out");
+      const trial = flags.get("--trial");
+      if (out === undefined || trial === undefined)
+        throw new UsageError("export-pilot needs --trial and --out");
+      const pilot = pilotProofInput(input, trial);
+      const bundle = exportProofBundle(pilot.input, hostRedaction(forbid, users), identity);
+      writeFileSync(out, serializeProofBundle(bundle));
+      // The evidence directory is a host path: never printed (it is `<RUN_DIR>/trials/<trial>`).
+      emit(
+        io,
+        {
+          ok: true,
+          head: bundle.head,
+          records: bundle.records.length,
+          simulated: bundle.run.simulated,
+          ledger: bundle.ledger !== null,
+          verdictCarried: pilot.verdictCarried,
+        },
+        outCtx,
+      );
       return 0;
     }
 
