@@ -8,6 +8,9 @@
  *    build PR is Tier 2 with a revert check;
  *  - every path the grounding table and the suite-extension table cite exists on main;
  *  - the code tables agree with the tamper tables and probes that use them;
+ *  - every code the page uses is a member of exactly one closed enum in §1.1;
+ *  - §2.8 accounts for every row of docs/gate/watch.md's security model table;
+ *  - follow-ups use the GitHub Issues fallback, never a "TO FILE" note;
  *  - the pending-PR list, the pre-registered proofs and the binding lines stay as written.
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -116,7 +119,10 @@ describe("demo replay + verify-any-agent spec: build PRs", () => {
         const ref = /^([BVL]\d)$/.exec(dep)?.[1] ?? /^(#\d+)/.exec(dep)?.[1];
         if (ref?.startsWith("#")) expect(PENDING, `${r[0]} → ${dep}`).toContain(ref);
         else if (ref !== undefined) expect(names.has(ref), `${r[0]} → ${dep}`).toBe(true);
-        else expect(dep, r[0]).toMatch(/^(none|the trial run|the TIF-98 PNG redactor follow-up)$/);
+        else
+          expect(dep, r[0]).toMatch(
+            /^(none|the trial run|the TIF-98 PNG redactor follow-up issue)$/,
+          );
       }
   });
 
@@ -127,7 +133,7 @@ describe("demo replay + verify-any-agent spec: build PRs", () => {
   });
 });
 
-const PENDING = ["#550", "#559", "#560", "#562", "#566"];
+const PENDING = ["#559", "#560", "#561", "#562", "#564", "#566", "#576"];
 
 describe("demo replay + verify-any-agent spec: grounding and dependencies", () => {
   it("every path in the grounding table exists on main", () => {
@@ -168,21 +174,46 @@ describe("demo replay + verify-any-agent spec: codes and tables agree", () => {
       expect(probe, code).toContain(`\`${code}\``);
   });
 
-  it("every clip tamper row's code is a clip verify check", () => {
+  it("every clip tamper row names a check in both modes, and none exits 0", () => {
     const text = section("### 2.5 The clip digest and `myco clip verify`");
     const tables = text.split("\n\n").filter((b) => b.trim().startsWith("|"));
+    const checkRows = rows(tables[0] ?? "");
     const checks = new Set(
-      rows(tables[0] ?? "")
+      checkRows
         .map((r) => /^`(CLIP_[A-Z_]+)`$/.exec(r[0] ?? "")?.[1])
         .filter((c): c is string => c !== undefined),
     );
-    expect(checks.size).toBeGreaterThanOrEqual(9);
+    expect(checks.size).toBeGreaterThanOrEqual(15);
+    const sealedOnly = new Set(
+      checkRows
+        .filter((r) => r[1] === "sealed")
+        .map((r) => /`(CLIP_[A-Z_]+)`/.exec(r[0] ?? "")?.[1]),
+    );
     const tamper = rows(tables[1] ?? "");
-    expect(tamper.length).toBeGreaterThanOrEqual(12);
+    expect(tamper.length).toBeGreaterThanOrEqual(20);
     for (const r of tamper) {
-      const first = /`(CLIP_[A-Z_]+)`/.exec(r[1] ?? "")?.[1];
-      expect(first !== undefined && checks.has(first), r[0]).toBe(true);
+      expect(r.length, r[0]).toBe(3);
+      const logOnly = /`(CLIP_[A-Z_]+)`/.exec(r[1] ?? "")?.[1];
+      const sealed = /`(CLIP_[A-Z_]+)`/.exec(r[2] ?? "")?.[1];
+      expect(logOnly !== undefined && checks.has(logOnly), `${r[0]} log-only`).toBe(true);
+      expect(sealed !== undefined && checks.has(sealed), `${r[0]} sealed`).toBe(true);
+      // Log-only mode never runs a sealed check; sealed mode always refuses.
+      expect(sealedOnly.has(logOnly), `${r[0]} log-only`).toBe(false);
+      expect(sealed, `${r[0]} sealed`).not.toBe("CLIP_LOG_ONLY");
+      expect(`${r[1]} ${r[2]}`, r[0]).not.toMatch(/exit 0/);
     }
+    // The D2 rows: reorder with ascending labels, a moved pin and a forged MOCK clip.
+    for (const sealed of [
+      "CLIP_TIMELINE",
+      "CLIP_SOURCE",
+      "CLIP_SEAL",
+      "CLIP_MOCK",
+      "CLIP_RECOMPUTE",
+    ])
+      expect(
+        tamper.some((r) => (r[2] ?? "").startsWith(`\`${sealed}\``)),
+        sealed,
+      ).toBe(true);
   });
 
   it("the recording tamper table has the 11 cases VA-08 names", () => {
@@ -200,6 +231,54 @@ describe("demo replay + verify-any-agent spec: codes and tables agree", () => {
   });
 });
 
+describe("demo replay + verify-any-agent spec: code enums, watch rows, trackers", () => {
+  const enums = rows(section("### 1.1 The closed code enums"));
+  const members = enums.map((r) =>
+    [...(r[1] ?? "").matchAll(/`([A-Z][A-Z_]+)`/g)].map((m) => m[1] ?? ""),
+  );
+
+  it("lists the three enums, each member once", () => {
+    expect(enums.map((r) => /`([A-Z_]+)`/.exec(r[0] ?? "")?.[1])).toEqual([
+      "TIMELINE_CODES",
+      "CLIP_CODES",
+      "VERIFY_CODES",
+    ]);
+    const all = members.flat();
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("every code the page uses is in an enum, and every enum member is used", () => {
+    const listed = new Set(members.flat());
+    const used = new Set(
+      [...RAW.matchAll(/`((?:TL|CLIP|VERIFY|PAIR)_[A-Z_]+)`/g)]
+        .map((m) => m[1] ?? "")
+        .filter((code) => !code.endsWith("_CODES")),
+    );
+    for (const code of used) expect(listed.has(code), code).toBe(true);
+    const outsideEnums = RAW.replace(section("### 1.1 The closed code enums"), "");
+    for (const code of listed) expect(outsideEnums, code).toContain(`\`${code}\``);
+  });
+
+  it("§2.8 accounts for every row of docs/gate/watch.md's security model table", () => {
+    const watch = readFileSync(join(ROOT, "docs/gate/watch.md"), "utf8");
+    const model = watch.slice(watch.indexOf("## Security model"));
+    const watchRows = rows(model.slice(0, model.indexOf("\n\n", model.indexOf("|")))).map(
+      (r) => r[0],
+    );
+    expect(watchRows.length).toBe(11);
+    const specRows = rows(section("### 2.8 Security model: what holds and what changes"));
+    expect(specRows.map((r) => r[0])).toEqual(watchRows);
+    for (const r of specRows)
+      expect(r[1] ?? "", r[0]).toMatch(/^(holds unchanged|text amended \(B\d(, B\d)?\))$/);
+    expect(DOC).not.toContain("Every row of the table in `docs/gate/watch.md` keeps holding");
+  });
+
+  it("uses the GitHub Issues fallback, never a TO FILE note", () => {
+    expect(RAW).not.toMatch(/TO\s+FILE/);
+    expect(DOC).toContain("labelled `from-linear-overflow` plus `tier-1` or `tier-2`");
+  });
+});
+
 describe("demo replay + verify-any-agent spec: binding lines", () => {
   it.each([
     "`myco.gate/v1` still takes only `taskId`, `runId` and `claim`.",
@@ -212,6 +291,10 @@ describe("demo replay + verify-any-agent spec: binding lines", () => {
     "It comes **after** the trial run and the integrity fixes, and it never delays them.",
     "`checkedAt`, frame mtimes, file names and the host clock are never join keys.",
     "**Stated limit: tamper-evident, not tamper-proof.**",
+    "**Exit 0 (verified) only in sealed mode.**",
+    "`request.runId` and `request.taskId` are never used to attribute a line.",
+    "**The watch server never loads a key, never opens the vault's sealed files and never serves an evidence clip**",
+    "`--vault` requires both `--seal-receipt` and `--vault-key-file`; without either it is a usage error (exit 3), never an offline audit.",
   ])("keeps: %s", (line) => {
     expect(DOC).toContain(flat(line));
   });
