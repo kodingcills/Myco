@@ -3,24 +3,32 @@
  * Trials here are real `runRecoveryTrial` runs against a real bound gate; the grader is a stub
  * (the multi-step grader entry is a follow-up), which is exactly what the halt rule needs.
  */
-import { readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type BenchmarkArmRow, correctionsOnError } from "../../src/benchmark/check.ts";
+import { CLAIM_LIMIT } from "../../src/gate/api.ts";
 import {
   type BatchResult,
   type BatchTrial,
   checkRecoveryPack,
   type GraderVerdict,
+  isVerifiedRow,
   mcnemarExactOneSided,
   type RecoveryRow,
   recoveryBar,
   runRecoveryBatch,
 } from "../../src/recovery/batch.ts";
-import { type RecoveryArm, runRecoveryTrial } from "../../src/recovery/trial.ts";
-import { type Agent, STEPS, world } from "./helpers.ts";
+import {
+  type RecoveryArm,
+  type RecoveryHarness,
+  runRecoveryTrial,
+} from "../../src/recovery/trial.ts";
+import { type Agent, doc, STEPS, sha, type World, world } from "./helpers.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
+const INSTRUCTION = "a".repeat(64);
+const FIXTURE = "f".repeat(64);
 
 const solves: Agent = async (_c, w) => {
   w.setGuest(STEPS);
@@ -45,6 +53,8 @@ function trial(
     faulted: false,
     simulated: true,
     plannerModelId: "simulated:scripted",
+    instructionSha256: INSTRUCTION,
+    fixtureSha256: FIXTURE,
     run: async () => {
       ran = true;
       const w = world(agent, { corrections: arm === "K", runId: key.replace("#", "-") });
@@ -56,6 +66,49 @@ function trial(
   };
 }
 
+const row = (taskId: string, arm: RecoveryArm, pass: boolean, faulted = false): RecoveryRow => ({
+  schema: "myco.recovery.arm-row/1",
+  taskSetVersion: "ms-long-v1",
+  contrast: "K-vs-nothing",
+  evidence: "never-r1",
+  arm,
+  trialKey: `${taskId}#${arm}`,
+  taskId,
+  faulted,
+  simulated: false,
+  plannerModelId: "claude-opus-5-5",
+  instructionSha256: INSTRUCTION,
+  fixtureSha256: FIXTURE,
+  claim: "done",
+  gate: {
+    called: true,
+    verdict: pass ? "verified" : "refuted",
+    corrections: arm === "K" ? "on" : "off",
+  },
+  accepted: pass,
+  harnessCodes: [],
+  retryBudget: arm === "K" ? 1 : 0,
+  recoveryTools: arm === "K",
+  attempts: 1,
+  stepBudget: 80,
+  steps: 10,
+  elapsedMs: 1,
+  costUsd: 0.1,
+  grade: pass ? "pass" : "fail",
+});
+const batch = (rows: RecoveryRow[]): BatchResult => ({
+  status: "complete",
+  rows,
+  harnessAttempts: rows.length,
+});
+/** n tasks; the first kOnly K-only, then noneOnly none-only, then both-pass. */
+const arms = (n: number, kOnly: number, noneOnly: number) => {
+  const tasks = Array.from({ length: n }, (_, i) => `ms-${i}`);
+  return [
+    batch(tasks.map((t, i) => row(t, "K", i < kOnly || i >= kOnly + noneOnly, i % 2 === 0))),
+    batch(tasks.map((t, i) => row(t, "no-recovery", i >= kOnly, i % 2 === 0))),
+  ] as const;
+};
 describe("K11. any gate miss halts the K run", () => {
   for (const [label, grade] of [
     ["fail", async () => "fail" as const],
@@ -205,45 +258,6 @@ describe("K13. the pre-registered bar: exact one-sided McNemar, p <= 0.05, >= 5 
     expect(mcnemarExactOneSided(0, 0)).toBe(1);
   });
 
-  const row = (taskId: string, arm: RecoveryArm, pass: boolean, faulted = false): RecoveryRow => ({
-    schema: "myco.recovery.arm-row/1",
-    taskSetVersion: "ms-long-v1",
-    contrast: "K-vs-nothing",
-    evidence: "never-r1",
-    arm,
-    trialKey: `${taskId}#${arm}`,
-    taskId,
-    faulted,
-    simulated: false,
-    plannerModelId: "claude-opus-5-5",
-    gate: {
-      called: true,
-      verdict: pass ? "verified" : "refuted",
-      corrections: arm === "K" ? "on" : "off",
-    },
-    retryBudget: arm === "K" ? 1 : 0,
-    recoveryTools: arm === "K",
-    attempts: 1,
-    stepBudget: 80,
-    steps: 10,
-    elapsedMs: 1,
-    costUsd: 0.1,
-    grade: pass ? "pass" : "fail",
-  });
-  const batch = (rows: RecoveryRow[]): BatchResult => ({
-    status: "complete",
-    rows,
-    harnessAttempts: rows.length,
-  });
-  /** n tasks; the first kOnly K-only, then noneOnly none-only, then both-pass. */
-  const arms = (n: number, kOnly: number, noneOnly: number) => {
-    const tasks = Array.from({ length: n }, (_, i) => `ms-${i}`);
-    return [
-      batch(tasks.map((t, i) => row(t, "K", i < kOnly || i >= kOnly + noneOnly, i % 2 === 0))),
-      batch(tasks.map((t, i) => row(t, "no-recovery", i >= kOnly, i % 2 === 0))),
-    ] as const;
-  };
-
   it("5-0 discordant passes; 4-0 does not (too few, and p > 0.05); 6-1 does not", () => {
     expect(recoveryBar(...arms(40, 5, 0)).passes).toBe(true);
     expect(recoveryBar(...arms(40, 4, 0)).passes).toBe(false);
@@ -303,5 +317,271 @@ describe("K14. grader independence: src/recovery never imports the grader", () =
       const text = readFileSync(join(dir, f), "utf8");
       expect(text, f).not.toMatch(/(?:from|import)\s*\(?\s*["'][^"']*benchmark\/grade/);
     }
+  });
+});
+
+/** A trial whose harness the test bends (a stale capture, a refusing gate, a fault). */
+function bentTrial(
+  key: string,
+  arm: RecoveryArm,
+  agent: Agent,
+  bend: (w: World) => Partial<RecoveryHarness>,
+  grade: () => Promise<GraderVerdict> = async () => "pass",
+): BatchTrial {
+  return {
+    ...trial(key, arm, agent, grade),
+    run: async () => {
+      const w = world(agent, { corrections: arm === "K", runId: key.replace("#", "-") });
+      return runRecoveryTrial({ ...w.harness, ...bend(w) }, { arm });
+    },
+  };
+}
+
+/** The capture forgot to copy: the evidence path holds a passing document from elsewhere. */
+const staleCapture = (w: World): Partial<RecoveryHarness> => ({
+  capture: async () => {
+    mkdirSync(dirname(w.capturedFile), { recursive: true });
+    writeFileSync(w.capturedFile, doc(STEPS));
+    return { sha256: sha(readFileSync(w.guestFile)) };
+  },
+});
+
+describe("K15 (D1). only a done claim the gate verified and the grader passed is a verified task", () => {
+  const pristine: Agent = async (_c, w) => {
+    w.setGuest([]);
+    return { claim: "done" };
+  };
+  const one = async (t: BatchTrial, arm: RecoveryArm = "K") => {
+    const res = await runRecoveryBatch([t], { arm });
+    expect(res.status).toBe("complete");
+    return res.rows[0] as RecoveryRow;
+  };
+
+  it("positive control: solved, claimed done, gate verified, grader pass -> verified", async () => {
+    const r = await one(trial("t1#K", "K", solves));
+    expect(r).toMatchObject({ claim: "done", accepted: true, harnessCodes: [], grade: "pass" });
+    expect(r.gate.verdict).toBe("verified");
+    expect(isVerifiedRow(r)).toBe(true);
+  });
+
+  it("fail-closed (EVIDENCE_NOT_FRESH) + grader pass -> not verified", async () => {
+    const r = await one(bentTrial("t1#K", "K", pristine, staleCapture));
+    expect(r.harnessCodes).toEqual(["EVIDENCE_NOT_FRESH"]);
+    expect(r).toMatchObject({ accepted: false, grade: "pass" });
+    expect(r.gate.verdict).toBe("uncertain");
+    expect(isVerifiedRow(r)).toBe(false);
+  });
+
+  it("gate refuted + grader pass -> not verified", async () => {
+    const r = await one(trial("t1#K", "K", fails, async () => "pass"));
+    expect(r.gate.verdict).toBe("refuted");
+    expect(r.grade).toBe("pass");
+    expect(isVerifiedRow(r)).toBe(false);
+  });
+
+  it("gate uncertain + grader pass -> not verified", async () => {
+    const t = bentTrial("t1#K", "K", solves, (w) => ({
+      checkGate: async (c) => ({
+        ...(await w.harness.checkGate(c)),
+        verdict: "uncertain",
+        accepted: false,
+      }),
+    }));
+    const r = await one(t);
+    expect(r).toMatchObject({ accepted: false, harnessCodes: [], grade: "pass" });
+    expect(r.gate.verdict).toBe("uncertain");
+    expect(isVerifiedRow(r)).toBe(false);
+  });
+
+  it("a request the real gate refuses + grader pass -> not verified", async () => {
+    const t = bentTrial("t1#K", "K", solves, (w) => ({
+      checkGate: (c) => w.harness.checkGate(`${c}${" ".repeat(CLAIM_LIMIT)}`),
+    }));
+    const r = await one(t);
+    expect(r).toMatchObject({ claim: "done", accepted: false, grade: "pass" });
+    expect(r.gate.verdict).not.toBe("verified");
+    expect(isVerifiedRow(r)).toBe(false);
+  });
+
+  it("a harness fault (CAPTURE_FAILED) + grader pass -> not verified", async () => {
+    const t = bentTrial("t1#K", "K", solves, () => ({
+      capture: async () => {
+        throw new Error("boom");
+      },
+    }));
+    const r = await one(t);
+    expect(r.harnessCodes).toEqual(["CAPTURE_FAILED"]);
+    expect(r).toMatchObject({ accepted: false, grade: "pass" });
+    expect(isVerifiedRow(r)).toBe(false);
+  });
+
+  it("no done claim + gate verified + grader pass -> correct, not claimed; not verified", async () => {
+    const notDone: Agent = async (_c, w) => {
+      w.setGuest(STEPS);
+      return { claim: "not done yet" };
+    };
+    const r = await one(trial("t1#K", "K", notDone));
+    expect(r).toMatchObject({ claim: "not-done", accepted: true, grade: "pass" });
+    expect(isVerifiedRow(r)).toBe(false);
+    const silent: Agent = async (_c, w) => {
+      w.setGuest(STEPS);
+      return { claim: "" };
+    };
+    expect((await one(trial("t2#K", "K", silent))).claim).toBe("no-claim");
+  });
+
+  it("the round-1 probe: 5 fail-closed K trials graded pass never pass the bar", async () => {
+    const tasks = ["a", "b", "c", "d", "e"];
+    const k = await runRecoveryBatch(
+      tasks.map((t) => bentTrial(`${t}#K`, "K", pristine, staleCapture)),
+      { arm: "K" },
+    );
+    const none = await runRecoveryBatch(
+      tasks.map((t) => trial(`${t}#N`, "no-recovery", fails, async () => "fail")),
+      { arm: "no-recovery" },
+    );
+    const bar = recoveryBar(k, none, { simulated: true });
+    expect(bar.all).toMatchObject({ kVerified: 0, kOnly: 0, kCorrectNotVerified: 5 });
+    expect(bar.passes).toBe(false);
+    expect(bar.perVerified.K).toEqual({ steps: null, costUsd: null });
+  });
+
+  it("each clause of the rule is load-bearing on a row", () => {
+    const good = row("t", "K", true);
+    expect(isVerifiedRow(good)).toBe(true);
+    for (const patch of [
+      { claim: "not-done" },
+      { claim: "no-claim" },
+      { accepted: false },
+      { gate: { ...good.gate, verdict: "uncertain" } },
+      { gate: { ...good.gate, verdict: "refuted" } },
+      { harnessCodes: ["EVIDENCE_NOT_FRESH"] },
+      { harnessCodes: undefined },
+      { grade: "ungradable" },
+      { grade: "fail" },
+    ] as Partial<RecoveryRow>[])
+      expect(isVerifiedRow({ ...good, ...patch }), JSON.stringify(patch)).toBe(false);
+  });
+
+  it("the bar counts by the rule: grader pass without acceptance is reported, not counted", () => {
+    const [k, none] = arms(10, 5, 0);
+    const unaccepted = batch(
+      k.rows.map((r, i) =>
+        i < 5 ? { ...r, accepted: false, gate: { ...r.gate, verdict: "uncertain" as const } } : r,
+      ),
+    );
+    const bar = recoveryBar(unaccepted, none);
+    expect(bar.all).toMatchObject({ kOnly: 0, kCorrectNotVerified: 5 });
+    expect(bar.passes).toBe(false);
+  });
+
+  it("the pack refuses a row that disagrees with itself", () => {
+    const good = row("t", "K", true);
+    for (const [patch, re] of [
+      [{ gate: { ...good.gate, verdict: "uncertain" } }, /not a clean verified/],
+      [{ harnessCodes: ["EVIDENCE_NOT_FRESH"] }, /not a clean verified/],
+      [
+        { accepted: false, harnessCodes: ["EVIDENCE_NOT_FRESH"], gate: { ...good.gate } },
+        /not uncertain/,
+      ],
+      [{ harnessCodes: ["MADE_UP"] }, /known codes/],
+      [{ harnessCodes: "none" }, /known codes/],
+      [{ accepted: "yes" }, /boolean/],
+      [{ claim: "DONE" }, /unknown claim/],
+      [{ instructionSha256: "x" }, /sha256/],
+      [{ fixtureSha256: undefined }, /sha256/],
+    ] as [Record<string, unknown>, RegExp][])
+      expect(
+        checkRecoveryPack([{ ...good, ...patch } as RecoveryRow], { harnessAttempts: 1 }).join("|"),
+        JSON.stringify(patch),
+      ).toMatch(re);
+  });
+});
+
+describe("K16 (D4). simulated rows are never evidence, on every path the bar touches", () => {
+  const good = row("t", "K", true);
+  const evidenceErrors = (r: RecoveryRow) =>
+    checkRecoveryPack([r], { harnessAttempts: 1, evidence: true }).join("|");
+
+  it("a real planner on a non-simulated row is evidence", () => {
+    expect(evidenceErrors(good)).toBe("");
+  });
+
+  it("a simulated planner is refused even when the row says simulated: false", () => {
+    expect(evidenceErrors({ ...good, plannerModelId: "simulated:scripted" })).toMatch(
+      /not a model id/,
+    );
+  });
+
+  it("near-miss planner ids are refused (allowlist, not a pattern)", () => {
+    for (const p of ["Claude-Opus-5-5", " claude-opus-5-5", "claude-opus", "", "gpt-5"])
+      expect(evidenceErrors({ ...good, plannerModelId: p }), p).toMatch(/not a model id/);
+  });
+
+  it("a row that says simulated is refused even with a real planner; so is a non-boolean flag", () => {
+    expect(evidenceErrors({ ...good, simulated: true })).toMatch(/simulated/);
+    expect(evidenceErrors({ ...good, simulated: undefined as unknown as boolean })).toMatch(
+      /simulated/,
+    );
+  });
+
+  it("the bar refuses a simulated planner unless explicitly in plumbing mode, which is never evidence", () => {
+    const [k, none] = arms(10, 5, 0);
+    const relabel = (b: BatchResult) =>
+      batch(b.rows.map((r) => ({ ...r, plannerModelId: "simulated:scripted" })));
+    expect(() => recoveryBar(relabel(k), relabel(none))).toThrow(/not a model id/);
+    const plumbing = recoveryBar(relabel(k), relabel(none), { simulated: true });
+    expect(plumbing.evidence).toBe(false);
+    expect(recoveryBar(k, none).evidence).toBe(true);
+  });
+});
+
+describe("K17 (D5). parity between and within the arms", () => {
+  it("the pack refuses mixed planners, step budgets or task sets within one arm", () => {
+    const [k] = arms(4, 0, 0);
+    const rows = k.rows;
+    for (const [patch, re] of [
+      [{ plannerModelId: "claude-sonnet-5-5" }, /mixed planners/],
+      [{ stepBudget: 500 }, /mixed step budgets/],
+      [{ taskSetVersion: "ms-long-v2" }, /mixed task sets/],
+    ] as [Partial<RecoveryRow>, RegExp][]) {
+      const mixed = rows.map((r, i) => (i === 0 ? { ...r, ...patch } : r));
+      expect(checkRecoveryPack(mixed, { harnessAttempts: 4 }).join("|")).toMatch(re);
+      expect(() => recoveryBar(batch(mixed), arms(4, 0, 0)[1])).toThrow(re);
+    }
+  });
+
+  it("the bar refuses arms with different planners, step budgets or task sets", () => {
+    const [k, none] = arms(10, 5, 0);
+    const all = (b: BatchResult, patch: Partial<RecoveryRow>) =>
+      batch(b.rows.map((r) => ({ ...r, ...patch })));
+    expect(() => recoveryBar(all(k, { plannerModelId: "claude-sonnet-5-5" }), none)).toThrow(
+      /different planners/,
+    );
+    expect(() => recoveryBar(all(k, { stepBudget: 500 }), none)).toThrow(/step budgets/);
+    expect(() => recoveryBar(k, all(none, { stepBudget: 30 }))).toThrow(/step budgets/);
+    expect(() => recoveryBar(all(k, { taskSetVersion: "other" }), none)).toThrow(/task sets/);
+  });
+
+  it("the bar refuses a task whose instruction or fixture differs between the arms", () => {
+    const [k, none] = arms(10, 5, 0);
+    const bendOne = (patch: Partial<RecoveryRow>) =>
+      batch(none.rows.map((r, i) => (i === 3 ? { ...r, ...patch } : r)));
+    expect(() => recoveryBar(k, bendOne({ instructionSha256: "b".repeat(64) }))).toThrow(
+      /instructions differ/,
+    );
+    expect(() => recoveryBar(k, bendOne({ fixtureSha256: "e".repeat(64) }))).toThrow(
+      /fixtures differ/,
+    );
+  });
+
+  it("real batches record the trial's planner, step budget and hashes on each row", async () => {
+    const res = await runRecoveryBatch([trial("t1#K", "K", solves)], { arm: "K" });
+    expect(res.rows[0]).toMatchObject({
+      plannerModelId: "simulated:scripted",
+      stepBudget: 80,
+      instructionSha256: INSTRUCTION,
+      fixtureSha256: FIXTURE,
+    });
   });
 });

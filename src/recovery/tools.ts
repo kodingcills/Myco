@@ -24,8 +24,15 @@
  * never throws and never rejects; anything unexpected fails closed with a code.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { STATE_FILE_LIMIT } from "../gate/gate.ts";
 import type { ToolClass } from "../integrity/surface.ts";
+
+/**
+ * The largest document a checkpoint holds: the gate's own `STATE_FILE_LIMIT` (16 MiB), defined
+ * here rather than imported, because `src/gate/gate.ts` pulls in the oracles, corrections,
+ * `groundTruth` and the fixture generator, which a capability module must not reach (spec
+ * §1.2.4). `test/recovery/boundary.test.ts` pins the two values equal.
+ */
+export const RECOVERY_DOCUMENT_LIMIT = 16 * 1024 * 1024;
 
 export const RECOVERY_TOOLS = [
   "checkpoint_take",
@@ -193,7 +200,7 @@ export class RecoveryTools {
     this.#handed = Uint8Array.from(opts.handed);
     this.#meter = opts.meter;
     this.#maxCheckpoints = opts.maxCheckpoints ?? MAX_CHECKPOINTS;
-    this.#maxBytes = opts.maxBytes ?? STATE_FILE_LIMIT;
+    this.#maxBytes = opts.maxBytes ?? RECOVERY_DOCUMENT_LIMIT;
   }
 
   /** The operator-side log of every call, in order. */
