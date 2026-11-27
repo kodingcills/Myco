@@ -129,7 +129,7 @@ export function namesUsageLimit(text: string): boolean {
   return USAGE_LIMIT_TEXT.test(text.replace(/\s+/g, " "));
 }
 
-export const RATE_LIMIT_TEXT =/rate[ _-]?limit|too many requests|\b429\b|\b529\b|overloaded/i;
+export const RATE_LIMIT_TEXT = /rate[ _-]?limit|too many requests|\b429\b|\b529\b|overloaded/i;
 
 /**
  * Credit, billing and quota wording ("Credit balance is too low", "out of extra usage", "quota

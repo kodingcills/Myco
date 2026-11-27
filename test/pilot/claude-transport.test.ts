@@ -476,7 +476,11 @@ describe("headless Claude Code transport (fake spawn)", () => {
         expect(interpretResult(result(`${t}\nNOT DONE`), t, 0).claim).toBe("not-done");
       }
     // Task data with 401 / 403 / 429 and NBSP is still the agent's outcome.
-    for (const text of ["qty 429 on EMP-0055", "EMP-0127 401, EMP-0090 403", "status 429 401 403"]) {
+    for (const text of [
+      "qty 429 on EMP-0055",
+      "EMP-0127 401, EMP-0090 403",
+      "status 429 401 403",
+    ]) {
       const t = spaced(text, NBSP);
       expect(interpretResult(result(t), t, 0).claim).toBe("no-claim");
     }
