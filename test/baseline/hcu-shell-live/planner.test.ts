@@ -24,8 +24,10 @@ import {
   okReply,
   result,
   stream,
+  USAGE_LIMIT_PHRASES,
   useClaudeTrap,
   useFetchTrap,
+  VERDICT_QUOTA_TEXTS,
 } from "./helpers.ts";
 
 useClaudeTrap();
@@ -244,6 +246,56 @@ describe("auth, credit, billing, quota and usage-limit faults fail closed (round
     );
     expect(codeOf(e)).toBe("planner-api-key-path");
   });
+  // Round 3 (verifier N4, mutant V8): "any message" means any, not only system/init.
+  it.each([
+    [
+      "a clean result",
+      (s: string) => stream(init(), result('{"claim":"done"}', { apiKeySource: s })),
+    ],
+    [
+      "an assistant message on a clean call",
+      (s: string) =>
+        stream(
+          init(),
+          { type: "assistant", message: {}, apiKeySource: s },
+          result('{"claim":"done"}'),
+        ),
+    ],
+    [
+      "a failed result",
+      (s: string) => stream(init(), result("", { is_error: true, apiKeySource: s })),
+    ],
+    [
+      "an assistant message on a call with no result",
+      (s: string) => stream(init(), { type: "assistant", message: {}, apiKeySource: s }),
+    ],
+  ] as const)(
+    "an apiKeySource other than none on %s halts (the init says none)",
+    async (_l, out) => {
+      for (const source of ["ANTHROPIC_API_KEY", "apiKeyHelper", "/login managed key"]) {
+        const e = await haltOf(out(source), "", 0);
+        expect([source, e instanceof PlannerHalt, codeOf(e)]).toEqual([
+          source,
+          true,
+          "planner-api-key-path",
+        ]);
+      }
+      // The same call with apiKeySource "none" is not an API-key halt.
+      expect(codeOf(await haltOf(out("none"), "", 0))).not.toBe("planner-api-key-path");
+    },
+  );
+  // Round 3 (verifier N1): a clean result with NO parseable decision that names the quota
+  // halts planner-usage-limit; the same text inside a valid decision is the agent's turn.
+  it.each(["Weekly limit column", ...VERDICT_QUOTA_TEXTS, ...USAGE_LIMIT_PHRASES])(
+    "a clean result %j with no decision halts planner-usage-limit; inside a decision it does not",
+    async (text) => {
+      const e = await haltOf(stream(init(), result(text)), "", 0);
+      expect(e).toBeInstanceOf(PlannerHalt);
+      expect(codeOf(e)).toBe("planner-usage-limit");
+      const decision = JSON.stringify({ shell: "cat", path: `C:\\Users\\Public\\${text}.txt` });
+      expect(readPlannerCall(stream(init(), result(decision)), "", 0, price).text).toBe(decision);
+    },
+  );
   it("the broad vocabulary never applies to a clean call (fc-v1 holds qty 401, 402-like text)", async () => {
     // Round 3 (N1): only the usage-quota wording, on a clean result with NO decision, stops the
     // run; "Weekly limit column" moved to the N1 tests below (it names the quota).

@@ -47,6 +47,7 @@ import {
   SIMULATED_PLANNER,
   TASK_BUNDLE,
   type TrialEnvironment,
+  transientFaultCounts,
 } from "../../../src/baseline/hcu-shell-live/runner.ts";
 import { LOAD_GATE as M2_LOAD_GATE } from "../../../src/m2/evidence.ts";
 import { DEFAULT_PACING } from "../../../src/pilot/config.ts";
@@ -605,6 +606,158 @@ describe("transient limits back off, bounded (lead ruling 02:18Z)", () => {
     expect(r).toMatchObject({ status: "paused", code: "rate-limit-repeat", failed: 0 });
     expect(fake.prepared).toHaveLength(2);
     expect(exitCodeFor(r)).toBe(EXIT.paused);
+  });
+});
+
+/**
+ * Round 3 (verifier N3; lead rulings 02:18Z and 03:05Z): the per-trial transient cap is held in
+ * the ledger across --resume, as #598's `transientFaultCounts` / `transientCapped` at
+ * fc01e69a. A persistent 529 on fc-v1-001 over the first run plus 3 --resume invocations never
+ * resets that trial more than twice in total (one extra cold reset), and a capped trial is
+ * never started again in that run directory.
+ */
+describe("the transient cap survives --resume (round 3, N3)", () => {
+  const FIRST = TASKS[0] as FcTask;
+  /** Every call on fc-v1-001 is a transient 529; every other trial is the honest agent. */
+  const persistent529 = (fake: Fake): HcuShellPlanner => ({
+    paid: true,
+    act: async (turn) => {
+      if (fake.prepared.at(-1) === FIRST.taskId)
+        throw new PlannerTransient("API Error: 529 overloaded");
+      return fake.planner.act(turn);
+    },
+  });
+  const invocations = async (plan: typeof PLAN) => {
+    const dir = tmp();
+    const fake = fakeRun({ simulated: false });
+    const results = [];
+    for (let i = 0; i < 4; i++)
+      results.push(
+        await run(
+          dir,
+          { ...fake, planner: persistent529(fake) },
+          { plan, resume: i > 0, maxTrials: 2 },
+        ),
+      );
+    return { dir, fake, results };
+  };
+  const firstResets = (fake: Fake) => fake.prepared.filter((id) => id === FIRST.taskId).length;
+
+  it("default pacing: the second limit pauses in-run; no later invocation starts the trial again", async () => {
+    const { dir, fake, results } = await invocations(PLAN);
+    expect(results.map((r) => r.code)).toEqual([
+      "rate-limit-repeat",
+      "rate-limit-capped",
+      "rate-limit-capped",
+      "rate-limit-capped",
+    ]);
+    for (const r of results) {
+      expect(r.status).toBe("paused");
+      expect(exitCodeFor(r)).toBe(EXIT.paused);
+      expect(r.transientCapped).toEqual([FIRST.taskId]);
+      expect(r.exhausted).toEqual([]);
+      expect(r.failed).toBe(0);
+    }
+    expect(firstResets(fake)).toBe(2);
+    const ledger = readLedger(dir);
+    expect(
+      ledger
+        .filter((l) => l.type === "start" && l.taskId === FIRST.taskId)
+        .map((l) => l.type === "start" && l.attempt),
+    ).toEqual([1, 2]);
+    expect(transientFaultCounts(ledger).get(FIRST.taskId)).toBe(2);
+    expect(attemptsSpent(ledger).size).toBe(0);
+    // The other trials ran: two per resumed invocation.
+    expect(results.map((r) => r.decided)).toEqual([0, 2, 4, 6]);
+  });
+  it("one limit per invocation (maxConsecutiveRateLimits 1): the re-run happens on a resume, then never again", async () => {
+    const plan = { ...PLAN, pacing: { ...PLAN.pacing, maxConsecutiveRateLimits: 1 } };
+    const { fake, results } = await invocations(plan);
+    expect(results.map((r) => r.code)).toEqual([
+      "rate-limit-pause",
+      "rate-limit-repeat",
+      "rate-limit-capped",
+      "rate-limit-capped",
+    ]);
+    expect(results.map((r) => r.transientCapped)).toEqual([
+      [],
+      [FIRST.taskId],
+      [FIRST.taskId],
+      [FIRST.taskId],
+    ]);
+    for (const r of results) expect(exitCodeFor(r)).toBe(EXIT.paused);
+    expect(firstResets(fake)).toBe(2);
+  });
+  it("transientFaultCounts counts only transient failed records, per task", () => {
+    const at = 0;
+    const counts = transientFaultCounts([
+      { type: "header", schema: "myco.hcu-shell.run-plan/1", planSha256: "x", simulated: false },
+      {
+        type: "failed",
+        trialKey: "k1",
+        taskId: "t1",
+        code: "planner-rate-limit",
+        transient: true,
+        at,
+      },
+      {
+        type: "failed",
+        trialKey: "k1",
+        taskId: "t1",
+        code: "reset-failed",
+        signature: "reset-failed",
+        at,
+      },
+      {
+        type: "failed",
+        trialKey: "k2",
+        taskId: "t2",
+        code: "planner-rate-limit",
+        transient: true,
+        at,
+      },
+      {
+        type: "failed",
+        trialKey: "k2",
+        taskId: "t2",
+        code: "planner-rate-limit",
+        transient: true,
+        at,
+      },
+      {
+        type: "decided",
+        trialKey: "k3",
+        taskId: "t3",
+        rowSha256: "r",
+        persistedSha256: null,
+        bootClass: "cold",
+        at,
+      },
+    ] as Parameters<typeof transientFaultCounts>[0]);
+    expect([...counts]).toEqual([
+      ["t1", 1],
+      ["t2", 2],
+    ]);
+  });
+  it("simulated runs stay unbounded (no VM reset to protect)", async () => {
+    const dir = tmp();
+    const fake = fakeRun();
+    let left = 3;
+    const r = await run(
+      dir,
+      {
+        ...fake,
+        planner: {
+          paid: true,
+          act: async (turn) => {
+            if (left-- > 0) throw new PlannerTransient("429");
+            return fake.planner.act(turn);
+          },
+        },
+      },
+      { maxTrials: 1, plan: { ...PLAN, pacing: { ...PLAN.pacing, maxConsecutiveRateLimits: 10 } } },
+    );
+    expect(r).toMatchObject({ decided: 1, transientCapped: [] });
   });
 });
 

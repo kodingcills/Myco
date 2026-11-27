@@ -30,21 +30,34 @@ import {
   VERIFIER_TEMP,
 } from "../../../src/baseline/hcu-shell-live/live-vm.ts";
 import {
+  createSubscriptionPlanner,
   HCU_PLANNER_MODEL,
   PROBE_SCREENSHOT,
 } from "../../../src/baseline/hcu-shell-live/planner.ts";
 import {
+  attemptsSpent,
   demoTasks,
   EXIT,
   exitCodeFor,
   type FcTask,
   hcuRunPlan,
+  LIVE_STATUS_FILE,
   loadFcV1,
   readLedger,
   runHcuShell,
+  USAGE_LIMIT_REPORT,
 } from "../../../src/baseline/hcu-shell-live/runner.ts";
 import { scripted } from "../hcu-shell/planners.ts";
-import { useClaudeTrap, useFetchTrap } from "./helpers.ts";
+import {
+  fakeClaude,
+  init,
+  result,
+  stream,
+  USAGE_LIMIT_PHRASES,
+  useClaudeTrap,
+  useFetchTrap,
+  VERDICT_QUOTA_TEXTS,
+} from "./helpers.ts";
 
 useClaudeTrap();
 useFetchTrap();
@@ -370,5 +383,102 @@ describe("the VM lock reaches the reset through FD 9 (round 2, D4)", () => {
   });
   it("the real VM seams are never built under a test runner", () => {
     expect(() => defaultLiveDeps(".")).toThrow(/never built under a test runner/);
+  });
+});
+
+/**
+ * Round 3 (verifier N1, N2; lead rulings 02:18Z and 03:05Z), end to end: the REAL subscription
+ * planner (`createSubscriptionPlanner`, a fake spawn) driving `runHcuShell` over
+ * `liveEnvironment(deps())`, `maxTrials: 2`, exactly the verifier's probe. A usage-limit notice
+ * the CLI returns as a clean result with no parseable decision, or as plain (non-JSON) stdout
+ * with exit 0 or 1, stops the run at once: exit 7, one subscription call, no row, no decided
+ * line, no failed line (no attempt spent), the lead's report on the log and as the heartbeat's
+ * lastLog. A result with a valid decision is never reclassified.
+ */
+describe("a usage-limit notice stops the run end to end (round 3, N1 / N2)", () => {
+  const quotaRun = async (replies: Parameters<typeof fakeClaude>[0]) => {
+    const dir = mkdtempSync(join(tmpdir(), "hcu-quota-"));
+    const fake = fakeClaude(replies);
+    const lines: string[] = [];
+    const planner = createSubscriptionPlanner({
+      spawn: fake.spawn,
+      command: "claude",
+      env: { HOME: "/home/op", PATH: "/usr/bin" },
+      cwd: dir,
+      price: () => 0.001,
+      callTimeoutMs: 5_000,
+      killGraceMs: 50,
+    });
+    const r = await runHcuShell({
+      outDir: dir,
+      repoRoot: ".",
+      tasks: TASKS,
+      plan: hcuRunPlan(TASKS, { hcuGuestCommand: "hcu mcp", guestShellSha256: "0".repeat(64) }),
+      env: liveEnvironment(".", deps().d),
+      planner,
+      plannerModelId: HCU_PLANNER_MODEL,
+      maxTrials: 2,
+      sleep: async () => undefined,
+      load1m: () => 0,
+      log: (l) => lines.push(l),
+    });
+    return { dir, r, fake, lines };
+  };
+  const expectUsageStop = (q: Awaited<ReturnType<typeof quotaRun>>) => {
+    expect(q.r).toMatchObject({
+      status: "halted",
+      code: "planner-usage-limit",
+      decided: 0,
+      failed: 0,
+    });
+    expect(exitCodeFor(q.r)).toBe(EXIT.usageLimit);
+    expect(q.fake.calls).toHaveLength(1);
+    expect(readdirSync(join(q.dir, "rows"))).toEqual([]);
+    const ledger = readLedger(q.dir);
+    expect(ledger.filter((l) => l.type === "decided")).toEqual([]);
+    expect(ledger.filter((l) => l.type === "failed")).toEqual([]);
+    expect(attemptsSpent(ledger).size).toBe(0);
+    expect(ledger.filter((l) => l.type === "start")).toHaveLength(1);
+    expect(ledger.at(-1)).toMatchObject({ type: "halt", code: "planner-usage-limit" });
+    expect(q.lines).toContain(USAGE_LIMIT_REPORT);
+    const status = JSON.parse(readFileSync(join(q.dir, LIVE_STATUS_FILE), "utf8"));
+    expect(status).toMatchObject({ lastLog: USAGE_LIMIT_REPORT, status: "halted" });
+  };
+  const QUOTA = [...VERDICT_QUOTA_TEXTS, ...USAGE_LIMIT_PHRASES];
+
+  it.each(QUOTA)("N1: a clean result %j with no decision halts exit 7", async (text) => {
+    expectUsageStop(await quotaRun([{ stdout: stream(init(), result(text)), code: 0 }]));
+  });
+  it.each(QUOTA.flatMap((t) => [[t, 0] as const, [t, 1] as const]))(
+    "N2: plain stdout %j, exit %d, halts exit 7",
+    async (text, code) => {
+      expectUsageStop(await quotaRun([{ stdout: text, code }]));
+    },
+  );
+  it("a result with a valid decision is never reclassified, whatever its text", async () => {
+    const decision = JSON.stringify({
+      tool: "type_text",
+      arguments: { x: 10, y: 10, text: "Weekly limit reached ∙ resets Mon" },
+    });
+    const q = await quotaRun([
+      { stdout: stream(init(), result(decision)), code: 0 },
+      { stdout: stream(init(), result('{"claim":"done"}')), code: 0 },
+    ]);
+    expect(q.r.status).not.toBe("halted");
+    expect(exitCodeFor(q.r)).not.toBe(EXIT.usageLimit);
+    expect(q.r.decided).toBeGreaterThanOrEqual(1);
+    expect(q.lines).not.toContain(USAGE_LIMIT_REPORT);
+  });
+  it("task data with 429 / 401 / 403 and no decision stays the agent's turn (planner-no-action)", async () => {
+    const q = await quotaRun([
+      { stdout: stream(init(), result("EMP-0127 401, EMP-0090 403, qty 429")), code: 0 },
+    ]);
+    expect(q.r).toMatchObject({ decided: 2, failed: 0 });
+    expect(exitCodeFor(q.r)).not.toBe(EXIT.usageLimit);
+    expect(q.fake.calls.length).toBeGreaterThan(1);
+  });
+  it("plain stdout with no quota wording is still a per-trial transport error", async () => {
+    const q = await quotaRun([{ stdout: "not json", code: 1 }]);
+    expect(q.r).toMatchObject({ status: "aborted", code: "planner-transport-error", failed: 2 });
   });
 });
