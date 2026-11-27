@@ -748,9 +748,7 @@ describe("watch --pilot: closed-vocabulary and strict-pattern fields (round 1 B1
       expect(source.poll()).toMatchObject({ layout: "ab", simulated: true });
       const s = await serve({ runs: [], pilot: source });
       await new Promise((r) => setTimeout(r, 80));
-      expect((await raw(s.port, "/api/state")).body.toString("utf8")).toContain(
-        '"simulated":true',
-      );
+      expect((await raw(s.port, "/api/state")).body.toString("utf8")).toContain('"simulated":true');
     });
 });
 
