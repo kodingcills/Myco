@@ -38,7 +38,8 @@ export const HASHED_FORM = /^h-[0-9a-f]{60}$/;
 export const isHashedForm = (value: string): boolean => HASHED_FORM.test(value);
 
 /** A scope for a value: the JSON path of a field inside one episode (`episodeId` + path). */
-export const episodeScope = (episodeId: string, path: string): string => `${episodeId}\u0000${path}`;
+export const episodeScope = (episodeId: string, path: string): string =>
+  `${episodeId}\u0000${path}`;
 
 /**
  * The hashed values the harness itself produced, each bound to the scope it was produced in.
