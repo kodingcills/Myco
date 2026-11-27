@@ -1019,7 +1019,9 @@ describe("real runs are gated", () => {
     expect(r.status).toBe(3);
     expect(JSON.parse(r.stdout).planSha256).toBe(sha);
     expect(r.stderr).toMatch(/gate cannot read the task format/);
-    expect(r.stderr).toMatch(/no live driver is wired/);
+    expect(r.stderr).not.toMatch(/no live driver is wired/);
+    // TIF-274: the live driver is wired; outside scripts/vm-session.sh the launch still refuses.
+    expect(r.stderr).toMatch(/the VM session lock is not held/);
   });
 
   /** A transport labelled live but fake (no model is called), counting transports started. */

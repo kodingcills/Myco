@@ -13,12 +13,16 @@
  *   npx tsx scripts/m2-corrections-ab-run.ts analyze  --pack PACK_DIR [--stage0-pack PACK_DIR]
  *   npx tsx scripts/m2-corrections-ab-run.ts ack-incident --out DIR --stage 0|1 --incident ID \
  *       --incident-sha256 SHA --operator NAME --statement TEXT
- *   npx tsx scripts/m2-corrections-ab-run.ts launch   --stage 0|1 --out DIR --launch-real-trials --plan-sha256 SHA
+ *   scripts/vm-session.sh -- node --import tsx scripts/m2-corrections-ab-run.ts launch \
+ *       --stage 0|1 --out DIR --launch-real-trials --plan-sha256 SHA [--token-file PATH]
  *
  * `simulate` runs one stage on the fake transport (virtual clock, chunk budget honoured, so
- * pause/resume can be practised). `launch` never starts a real trial in this change: it prints
- * the plan, checks every real-run precondition and refuses with the reasons.
- * Exit: 0 ok / complete, 1 failed, 2 usage, 3 refused, 4 paused / incomplete / halted.
+ * pause/resume can be practised). `launch` prints the plan, checks every real-run precondition
+ * (`liveAbRefusals`, plus the VM session lock and concurrency 1) and refuses with the reasons;
+ * when all hold it runs the stage on the live VM driver (`src/pilot/live-launch.ts`).
+ * Exit: 0 ok / complete, 1 failed, 2 usage, 3 refused, 4 paused / incomplete / halted,
+ * 5 fail-closed stop (auth, billing/credit/quota, API key), 6 two identical failures in a row,
+ * 7 the subscription's usage limit (stops at once; take it to the lead before resuming).
  * `analyze` exits with #547's code once it ran, 3 when the pack, the pre-registered command or
  * #547 itself is refused.
  */
@@ -38,7 +42,6 @@ import {
   exportAbPack,
   incidentStatus,
   launchPlanDiff,
-  liveAbRefusals,
   loadPrereg,
   PREREG_JSON,
   PREREG_MD,
@@ -52,6 +55,8 @@ import { abDryRun } from "../src/pilot/ab-dry-run.ts";
 import { configSha256 } from "../src/pilot/config.ts";
 import { fakeDriver, virtualClock } from "../src/pilot/dry-run.ts";
 import { preflightRefusal, subscriptionPreflight } from "../src/pilot/launch.ts";
+import { realLiveDeps } from "../src/pilot/live-deps.ts";
+import { launchAbLive } from "../src/pilot/live-launch.ts";
 import { publishedTasks } from "../src/pilot/reviewed.ts";
 
 class UsageError extends Error {}
@@ -218,23 +223,29 @@ try {
         break;
       }
       const stage = stageFlag();
-      need("--out");
+      const dir = need("--out");
       const { loaded, published } = printPlan(stage);
-      // The same preconditions runAbStage applies to any live run (one source of truth).
-      const pinnedPlan = flag("--plan-sha256");
-      const refusals = liveAbRefusals({
-        repoRoot: ROOT,
-        loaded,
-        stage,
-        published,
-        launchRealTrials: rest.includes("--launch-real-trials"),
-        ...(pinnedPlan === undefined ? {} : { liveLaunchSha256: pinnedPlan }),
-      });
-      refusals.push(
-        "no live driver is wired: the VM-side capture is a later, lead-approved step, so this change cannot start real trials",
+      // The same preconditions runAbStage applies to any live run (one source of truth), plus
+      // the VM lock and concurrency 1; runAbStage and runPilot re-check them before any trial.
+      const r = await launchAbLive(
+        {
+          loaded,
+          stage,
+          published,
+          outRoot: dir,
+          repoRoot: ROOT,
+          oracleSources: SOURCES,
+          launchRealTrials: rest.includes("--launch-real-trials"),
+          planSha256: flag("--plan-sha256"),
+        },
+        realLiveDeps(ROOT, flag("--token-file"), (l) => err(`${l}\n`)),
       );
-      err(`refusing to launch the corrections A/B:\n${refusals.map((r) => `  - ${r}\n`).join("")}`);
-      process.exitCode = 3;
+      if (r.refusals.length > 0)
+        err(
+          `refusing to launch the corrections A/B:\n${r.refusals.map((x) => `  - ${x}\n`).join("")}`,
+        );
+      else out(`LIVE corrections A/B, Stage ${stage}: ${JSON.stringify(r.result)}\n`);
+      process.exitCode = r.exitCode;
       break;
     }
     default:

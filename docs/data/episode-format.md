@@ -229,7 +229,7 @@ the closed-schema pattern of #553:
 | Field kind | Fields | Exported as |
 |---|---|---|
 | Closed value | enums, digests, timestamps, blob file names, reason codes, versions, fault codes, and the arm (a known arm, `myco-gate` or `hcu+shell`, optionally with a `:variant` of lower-case letters, digits and hyphens, such as the multi-step demo's `myco-gate:retry`) | as is when it matches its grammar; anything else **refuses the export**, naming the field, never the value |
-| Id | `task.id`, `harness.plannerModelId`, `provenance.runId`, `provenance.trialKey` | as is when it matches `CLOSED_ID` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`), else `h-<60 hex>` |
+| Id | `task.id`, `harness.plannerModelId`, `provenance.runId`, `provenance.trialKey` | as is when it matches `CLOSED_ID` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`) and does not start like a hash, else `h-<60 hex>`: an id starting `h-` or `H-` that is not exactly `h-<60 hex>` (`H-<60 HEX>`, `h-<64 hex>`, `h-<59 hex>`) is always re-hashed, and `validateDataset` refuses one (#612 D2, `src/export-guard/hash-like.ts`, the rule track U's container already had) |
 | Free text | `task.instruction`, typed text, shell commands, UI status | always `h-<60 hex>` of the raw value |
 | Key and app names (F1, lead ruling 22:18Z) | `keys`, `app` (schema cap 64) | as is ONLY from a closed vocabulary: a known key or key combination (`KNOWN_KEYS`: up to three modifiers plus a named key, any case) or a registered app id (`REGISTERED_APPS`: `localc`, `lowriter`, `soffice`, `libreoffice`, `scalc`, `swriter`); anything else `h-<60 hex>` |
 
@@ -252,6 +252,13 @@ not reveal its input, but someone who guesses the exact input can confirm the gu
 episode can hold is listed in `FIELD_TREATMENT`. A string at any other path refuses the
 export, so a new field is a reviewed change. `episodeId` is recomputed over the closed content.
 The export filter is closed too (it is written to the manifest).
+
+**Identity checks never skip a closed-pattern value** (#612 D1): the identity check skips an
+exact `h-<60 hex>` only in a field the export hashes (an id, a key or app name). In a closed
+pattern field (`task.family`, `task.taskSetVersion`, `task.faultClass`, `gate.oracle.family`)
+and in the filter, the export never hashes, so a value shaped like `h-<60 hex>` there is checked
+like any other value: a hex-letter identity inside it refuses the export, and `validateDataset`
+reports it. Track U's container applies the same rule (`src/export-guard/hash-like.ts`).
 
 Why: `redactText` rewrites host paths by pattern, and patterns miss path forms. #553's probe
 corpus (spaced folders, `Documents and Settings`, 8.3 short names, UNC, mixed separators,
@@ -288,7 +295,12 @@ O2: NFD, combining marks removed, `ø`/`ł`/`æ` transliterated, so `JOSE` match
 `josé` and `rena` matches `reña`), then letters and digits only, by
 substring. So joined forms are caught (`<name>_trial`, `<Name>2`, `xx<name>`, `<name>Trial`), a
 spaced full name matches `FirstLast`, `first.last`, `first_last` and `First-Last`, and `GROSS`
-matches a configured `Groß`. Enum values, digests and content-addressed blob names are exempt,
+matches a configured `Groß`. A configured string of several words is also matched by **each
+word of 3 or more characters alone** (#580 O1, lead ruling 02:55Z): with `First Last` configured,
+`<first>_trial`, `<Last>2`, `xx<first>`, `<first>Trial` and `run<First>` are digested in an id or
+token and refused in any other closed field, exactly as Q bundles and the track U container do
+(one shared rule, `src/export-guard/identity-words.ts`). Words are split on whitespace; a word of
+1 or 2 characters is not looked for alone. Enum values, digests and content-addressed blob names are exempt,
 because a match there could only be a false refusal. A harness-produced hashed id or token is kept
 as is (the hash ledger above),
 so a re-export stays byte-identical. On a CI runner the account is the generic `runner`, so CI
@@ -303,6 +315,26 @@ redactor may come later, in their own reviewed change with a fuzz over frame tex
 
 Cost: a dataset carries no agent text (typed text, commands and UI status are digests) and no
 screenshots or documents (digests and sizes only).
+
+### 5.2 Known limits of the identity check (accepted residual risk, #580 O4)
+
+The identity check catches only identities it knows: this host's account and host name, and the
+lines of the identity file. It does **not** catch a name nobody configured, when that name sits in
+a closed id or version that its grammar admits. Two examples, both kept verbatim today:
+- another machine's host name, such as `<name>-MacBook-Pro.local` in `task.id` or a run id,
+  when that machine is not this host and `<name>` is not in the identity file;
+- a dotted, path-like closed id with an unconfigured name, such as `Users.<name>.Documents` in
+  `task.id` or `task.taskSetVersion`.
+
+Free text is always digested, so this concerns only ids, tokens and closed pattern fields. The
+remedy is to put every name that may appear (other accounts, other machines, full names) in the
+identity file before exporting; once configured, each is caught in all its joined forms and by
+each word of 3 or more characters. A test pins this behaviour so this section stays true
+(`test/episode/identity-words.test.ts`, "O4 residual"). The same limit applies to the track U
+container and to Q bundles. The dataset README states it too
+([`docs/data/README.md`](README.md)); no exporter writes that README, so publishing it with a
+dataset is a manual release step, and this limit reaches a dataset's users only if the release
+includes it.
 
 ## 6. How tracks U and Q consume it
 

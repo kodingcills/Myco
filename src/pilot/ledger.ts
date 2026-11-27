@@ -46,6 +46,20 @@ export const PILOT_HARNESS_CLASSES = [
   "crash",
   "spawn-failed",
   "transport-error",
+  /**
+   * A credit, billing or quota error from the CLI (TIF-274 live driver). It stops the run at
+   * once with a code (fail closed, never a back-off or retry loop); like `auth`, it does not
+   * spend the trial's attempt budget, so a resume after the operator fixed the account re-runs
+   * the trial.
+   */
+  "billing",
+  /**
+   * The subscription's own usage quota ("usage limit reached", "5-hour limit", "Weekly limit
+   * reached", "resets at 3pm"; lead ruling, PR #598 round 2, D3). It does not clear by a short
+   * wait: it stops the run at once with its own code (`usage-limit`, exit 7), never a back-off
+   * or retry, and spends no attempt. The operator takes it to the lead before resuming.
+   */
+  "usage-limit",
 ] as const;
 export type PilotHarnessClass = (typeof PILOT_HARNESS_CLASSES)[number];
 
@@ -54,12 +68,55 @@ export type PilotHarnessClass = (typeof PILOT_HARNESS_CLASSES)[number];
  * runner backs off and pauses on these instead of spending the trial's attempt budget, so a
  * limit spell never closes a trial: `maxAttemptsPerTrial` counts only the other harness faults
  * (verifier round 1, D1). Ledger growth stays bounded per invocation by the pause
- * (`maxConsecutiveRateLimits` rate limits in a row; one `auth` fault pauses at once).
+ * (`maxConsecutiveRateLimits` rate limits in a row; one `auth` or `billing` fault stops the
+ * run at once).
  */
 export const BUDGET_EXEMPT_CLASSES: ReadonlySet<PilotHarnessClass> = new Set([
   "rate-limit",
   "auth",
+  "billing",
+  "usage-limit",
 ]);
+
+/** The repeat-failure rule's identity of a harness fault: its class and its message. */
+export function faultSignature(harnessClass: PilotHarnessClass, message: string): string {
+  return `${harnessClass}\u0000${message}`;
+}
+
+/**
+ * The repeat-failure signature a resumed run starts from (PR #598 round 2, D1): the last
+ * harness fault in the ledger, in file order, that the rule counts, unless a decided attempt
+ * came after it. Mirrors the live rule: budget-exempt faults (rate limits, which back off, and
+ * the immediate stops) neither set nor clear it, and an `end` appended on resume for a crashed
+ * attempt (`recovered`) is the runner's own death, not a failure of the trial, so it is skipped
+ * too. A fault end written before `faultMessage` was recorded seeds nothing (null).
+ */
+export function resumeFaultSignature(ends: readonly EndLine[]): string | null {
+  let sig: string | null = null;
+  for (const e of ends) {
+    if (e.outcome === "decided") sig = null;
+    else if (e.harnessClass !== null && !e.recovered && !BUDGET_EXEMPT_CLASSES.has(e.harnessClass))
+      sig =
+        typeof e.faultMessage === "string" ? faultSignature(e.harnessClass, e.faultMessage) : null;
+  }
+  return sig;
+}
+
+/**
+ * Transient rate-limit faults (429 / 529 / overloaded) per task id, over the whole ledger: every
+ * invocation's, so the runner's transient re-run cap is durable across `--resume` (PR #598
+ * round 3, F2; lead ruling: at most one extra cold reset per trial in total).
+ */
+export function transientFaultCounts(
+  byTask: ReadonlyMap<string, readonly AttemptRecord[]>,
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const [taskId, list] of byTask) {
+    const n = list.filter((a) => a.end?.harnessClass === "rate-limit").length;
+    if (n > 0) counts.set(taskId, n);
+  }
+  return counts;
+}
 
 export interface HeaderLine {
   readonly schema: typeof HEADER_SCHEMA;
@@ -90,6 +147,12 @@ export interface EndLine {
   readonly recovered: boolean;
   readonly armRow: BenchmarkArmRow | null;
   readonly cost: CostEstimate | null;
+  /**
+   * A harness fault's message, as the harness wrote it (never agent text, never a credential),
+   * so the repeat-failure rule survives `--resume` (PR #598 round 2, D1). Absent on decided
+   * ends, on crash closures and on ledgers written before it existed.
+   */
+  readonly faultMessage?: string;
   readonly at: string;
 }
 
@@ -108,6 +171,8 @@ export interface LedgerState {
   readonly header: HeaderLine | null;
   /** Attempts by task id, in attempt order. */
   readonly byTask: ReadonlyMap<string, readonly AttemptRecord[]>;
+  /** Every `end` line, in file order (the order the attempts finished). */
+  readonly ends: readonly EndLine[];
   /** The file ends mid-line (a torn write); the next append must close it first. */
   readonly torn: boolean;
 }
@@ -117,7 +182,7 @@ export const PROGRESS_FILE = "pilot-progress.jsonl";
 export const R1_ATTEMPT_LEDGER_FILE = "attempts.jsonl";
 
 export function loadLedger(path: string): LedgerState {
-  if (!existsSync(path)) return { header: null, byTask: new Map(), torn: false };
+  if (!existsSync(path)) return { header: null, byTask: new Map(), ends: [], torn: false };
   const text = readFileSync(path, "utf8");
   const torn = text.length > 0 && !text.endsWith("\n");
   const lines = text.split("\n");
@@ -125,6 +190,7 @@ export function loadLedger(path: string): LedgerState {
   let header: HeaderLine | null = null;
   const byTask = new Map<string, AttemptRecord[]>();
   const byKey = new Map<string, { task: string; index: number }>();
+  const ends: EndLine[] = [];
   const fail = (i: number, why: string): never => {
     throw new Error(`${path}:${i + 1}: ${why}`);
   };
@@ -191,11 +257,12 @@ export function loadLedger(path: string): LedgerState {
       if (e.outcome === "decided" && (e.armRow === null || e.harnessClass !== null))
         fail(i, `${e.trialKey}: a decided attempt carries its arm row and no harness class`);
       list[idx] = { start: rec.start, end: e };
+      ends.push(e);
       continue;
     }
     fail(i, `unknown event ${String(line.event)}`);
   }
-  return { header, byTask, torn };
+  return { header, byTask, ends, torn };
 }
 
 /** Append one line (closing a torn last line first, never rewriting it). */
