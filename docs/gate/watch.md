@@ -57,6 +57,47 @@ pnpm myco-watch --run <runId> --task <taskId> \
   ground truth, the fixtures or any manifest. The view does not verify the capture's
   hashes, because it is a viewer, not a verdict. The verdict is the gate's.
 
+## Follow an R1 pilot or A/B run (`--pilot`)
+
+```sh
+pnpm myco-watch --pilot <runDir>      # an R1 pilot run directory (scripts/m2-r1-pilot.ts --out)
+pnpm myco-watch --pilot <stageRoot>   # a corrections A/B stage root, with on/ and off/ arms
+```
+
+The page adds a **Pilot run** panel and follows the run as it happens. You can start it before
+the run begins: files that do not exist yet are waited for, never created. It reads only the
+run's existing durable outputs, as `src/pilot` writes them (`src/watch/run-dir.ts`):
+
+| File | What the page shows |
+|---|---|
+| `pilot-progress.jsonl` | Each attempt: running, decided or harness fault (class from the pilot's closed list, `other` otherwise). Also the attempt number, the attempt it re-runs in place, whether it was closed on resume, and from the arm row: what the agent said (`done` / `not-done` / `no-claim`), whether the gate was called (or the task was unregistrable), the gate's post-stop verdict, accepted (only with `verified`), corrections on or off, the cause kind and the wall-clock seconds. It also shows whether the header says SIMULATED |
+| `live-status.json` | Runner, `running` / `finished`, start and heartbeat times, **stale** when a running run's heartbeat is older than 180 s, exit code, run status and stop code |
+| `attempts.jsonl` (#518, A/B arms) | Per trial: `agrees`, `behind` or `disagrees` with the progress file (start, then end outcome and harness class) |
+| `grades.jsonl` (A/B arms) | The independent grader's status only: `pass` / `fail` / `ungradable` |
+| `trials/<trialKey>/transcript.json` | The agent's actions: turns, tool calls by closed name (the gate tool or `other`), refused tool uses, and each gate call's verdict and reason codes (`REASON_CODES` only) |
+
+The page never shows the heartbeat's `lastLog`, `error` or pid, a fault's `faultMessage`, an
+arm row's `cause.detail`, `faultClass` or digests, the agent's text or claim text, the gate's
+claim echo, corrections or evidence, or the grader's reasons and target. It never opens the
+oracle's inputs or the vault: `vault/`, `gate-evidence/`, `doc.csv`, `gate-tasks.json` and
+`mcp.json` (tested with FIFOs planted at those paths). A transcript is reached only through
+non-symlink components. An id that is not a safe id is dropped; a safe id has no `/` or `\`, so
+it cannot carry a host path such as the home or temp directory (a bare username inside an id is
+not dropped). Timestamps are shown only when they are strict ISO-8601 UTC. As a backstop, the server refuses the whole pilot view
+(`pilotRefused`) if a host needle, an absolute host path or a key-shaped string survives the
+projection. The run directory's path is never printed or served.
+
+**Limits.** The live driver writes `transcript.json` when `claude` exits, so the agent's actions
+for an attempt appear when that attempt ends. While it runs, the page shows it as running, with
+the heartbeat. With the pilot's `--output-format json`, the transcript is one result object: the
+page shows the turns and the refused tool uses, and per-call gate results only for a `--verbose`
+(message array) transcript. Pilot trials have no frames yet. `--pilot` can be combined with
+`--run` / `--decision-log` / `--frames` for a gate decision log and frames you name.
+
+Every simulated run is marked `SIMULATED · NOT EVIDENCE` on the page; an A/B stage is marked if
+either arm's header says simulated. The view is a viewer, not
+a verdict: "accepted by the gate" is not graded.
+
 ## Security model
 
 | Property | How it holds | Test (`test/watch/`) |
@@ -65,7 +106,7 @@ pnpm myco-watch --run <runId> --task <taskId> \
 | No DNS rebinding | The `Host` header must name a loopback host on the bound port, or the bind host itself (for example `127.0.0.2`). Any other host gets 421. A `[::1]` bind is passed to the socket without brackets. | foreign Host header; `round2`: `127.0.0.2` bind (where the OS has that address; macOS `lo0` has only `127.0.0.1` without an alias, and there the test asserts the OS refusal instead), `[::1]` bind, `Origin: null`. `round3`: the Host allowlist for a `127.0.0.2` bind, without binding it |
 | No CORS | No response ever carries `Access-Control-Allow-*`. A request with a foreign `Origin` gets 403. | foreign Origin, no CORS headers on any route |
 | Read-only | Every method other than GET (including HEAD and OPTIONS) gets 405 on every path, before routing. Refusing HEAD is deliberate (stricter than allowing GET and HEAD). No route reads a body. The replay route `/timeline/<run>` (B2, `docs/gate/replay.md`) is in the route list: non-GET gets 405 before routing, and it reads no body. The clip route `/clip/<run>/<from>/<to>.gif` (B5) is too. | every non-GET method × every route; `scrubber`: every non-GET method on `/timeline/<run>`; `clip-cli`: on `/clip/…` |
-| No handle on the gate | The server's only inputs are one log path per listed run (`--decision-log <file>`, or `--decision-log <runId>=<file>` with several runs), a frame source, and the timeline manifest beside the frames. The passive modules import only `node:fs` read calls, `node:http`, `node:net`, `node:path`, `node:crypto`, `src/gate/api.ts` (the reason-code list and the id check) and two type-only imports. Replay B2 adds the joiner `src/watch/timeline.ts`, which hashes frames and log prefixes with `node:crypto`'s `createHash` only (no key, no HMAC, no random), and the run-trust classifier `src/watch/run-trust.ts` (decides the MOCK watermark; it imports only `src/gate/api.ts`). They have no write call, no process spawn, no network call and no vault or secret-file import. Replay B5 lets the server import the pure clip modules (`src/watch/clip/`: the bitmap font, the band renderer, the GIF encoder, the PNG decoder and `exportMockPreview`) and the shared identity guard `src/proof/identity.ts`. None has a write call, a process spawn, a network call, a vault import or a key parameter. The one module that writes a file, `src/watch/clip/cli.ts` (`--out`, created exclusively), is never imported by the server. | static import/write scan (extended by `timeline.ts`, `run-trust.ts`, `node:crypto`, `clip/mock-preview.ts` and `proof/identity.ts`); `clip-cli`: the clip modules' write and import scan |
+| No handle on the gate | The server's only inputs are one log path per listed run (`--decision-log <file>`, or `--decision-log <runId>=<file>` with several runs), a frame source, the timeline manifest beside the frames and, with `--pilot`, a run directory read through `run-dir.ts` (the files listed in "Follow an R1 pilot or A/B run"). The passive modules import only `node:fs` read calls, `node:http`, `node:net`, `node:path`, `node:crypto`, `src/gate/api.ts` (the reason-code list and the id check) and two type-only imports. Replay B2 adds the joiner `src/watch/timeline.ts`, which hashes frames and log prefixes with `node:crypto`'s `createHash` only (no key, no HMAC, no random), and the run-trust classifier `src/watch/run-trust.ts` (decides the MOCK watermark; it imports only `src/gate/api.ts`). They have no write call, no process spawn, no network call and no vault or secret-file import. Replay B5 lets the server import the pure clip modules (`src/watch/clip/`: the bitmap font, the band renderer, the GIF encoder, the PNG decoder and `exportMockPreview`) and the shared identity guard `src/proof/identity.ts`. None has a write call, a process spawn, a network call, a vault import or a key parameter. The one module that writes a file, `src/watch/clip/cli.ts` (`--out`, created exclusively), is never imported by the server. | static import/write scan (extended by `timeline.ts`, `run-trust.ts`, `node:crypto`, `clip/mock-preview.ts` and `proof/identity.ts`); `clip-cli`: the clip modules' write and import scan |
 | Passive | The logs, the frames and the timeline manifest (`timeline.jsonl`) are opened `O_RDONLY \| O_NOFOLLOW`. Running the view, polling, and every request (including refused writes) leave every file unchanged: size, mode, mtime and sha256. Serving `/timeline` computes the join in memory and writes nothing. | tree snapshot before/after, both unit and demo e2e; `scrubber`: a full scrub leaves the run directory and the log unchanged |
 | No path traversal | A frame is addressed as `/frames/<listed runId>/<index>`. The index selects from a listing the server built itself, so a name or path from the request is never used. Requests with `%`, `?`, `\`, or `.`/`..` segments get 400. Symlinks are not listed and not followed. `/timeline/<run>` takes only a listed run id, never a name or path. The manifest is read only at its fixed name, `timeline.jsonl` in the run's frame directory (`captured/frames/` in the sealed layout), every component re-checked; a symlink or a non-regular file is never followed (the join is then `TL_NO_TIMELINE`). `/clip/<run>/<from>/<to>.gif` takes a listed run id and two decimal frame ordinals checked against the server's own listing. | `scrubber`: traversal and encoded forms on `/timeline`, a symlinked manifest; `clip-cli`: on `/clip`; 23 traversal forms, symlink to a secret; `round2`: a component that became a symlink after listing, a symlinked file, and an unlisted run on a frame source that would serve it |
 | Frame redaction | A frame's bytes are never served as they are. See "Frame redaction" below. | `round2`: a sealed capture with the planted marker and a fake `/Users/…` path inside SVG text, PNG `tEXt`/`iTXt`/`zTXt`/`eXIf`/private chunks, a suggested palette, a palette image, bytes after `IEND`, a JPEG comment and pixel bytes deflate stores verbatim; no response contains them |

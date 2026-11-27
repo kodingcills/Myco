@@ -489,6 +489,7 @@ describe("watch: passive (changes no file, holds no gate handle)", () => {
       // Replay B2 (spec #589 §2.8): the joiner and the run-trust classifier, extended, never relaxed.
       "timeline.ts",
       "run-trust.ts",
+      "run-dir.ts",
     ];
     const writes =
       /(?<!\.)\b(writeFile|writeSync|appendFile|createWriteStream|mkdir|rmSync|rmdir|unlink|rename|truncate|chmod|chown|utimes|copyFile|symlink|link|cp|cpSync|spawn|exec|fork)\w*\s*\(|["']w\+?["']|O_WRONLY|O_RDWR|O_CREAT|O_TRUNC|O_APPEND/;
@@ -525,6 +526,7 @@ describe("watch: passive (changes no file, holds no gate handle)", () => {
             // Replay B5: the pure clip renderer (scanned in clip-cli.test.ts) and the shared identity guard.
             "./clip/mock-preview.ts",
             "../proof/identity.ts",
+            "./run-dir.ts",
             "../gate/api.ts",
             "../core/state.ts",
             "../discovery/live-runner.ts",

@@ -31,8 +31,10 @@ import {
   CLEAN_RESULT_TASK_DATA,
   config,
   FAULT_WORDING,
+  FOLDED_CLAIM_LINES,
   FOLDED_USAGE_PHRASES,
   NBSP,
+  NON_CLAIM_LINES,
   PUBLISHED,
   ROOT,
   SOURCES,
@@ -146,6 +148,17 @@ describe("headless Claude Code transport (fake spawn)", () => {
     expect(parseClaim("could not\nNOT DONE\n")).toBe("not-done");
     expect(parseClaim("DONE\nmaybe")).toBe("no-claim");
     expect(parseClaim("done")).toBe("no-claim");
+  });
+
+  it("#611: folds Unicode spaces, tabs and format characters in the claim line; non-claims stay no-claim", () => {
+    for (const [name, line, claim] of FOLDED_CLAIM_LINES) {
+      expect([name, parseClaim(`Edited.\n${line}`)]).toEqual([name, claim]);
+      expect([name, parseClaim(`Edited.\n${line}\n`)]).toEqual([name, claim]);
+      // Still the last line only.
+      expect([name, parseClaim(`${line}\nmore`)]).toEqual([name, "no-claim"]);
+    }
+    for (const line of NON_CLAIM_LINES)
+      expect([line, parseClaim(`Edited.\n${line}`)]).toEqual([line, "no-claim"]);
   });
 
   // Verifier round 1, D2: every probe from the verdict, and the "uncertain is a harness fault" rule.

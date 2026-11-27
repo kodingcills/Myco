@@ -53,6 +53,11 @@ export const PAGE_HTML = `<!doctype html>
     <p id="summary"></p>
     <ol id="events"></ol>
   </section>
+  <section id="pilot" aria-label="Pilot run" hidden>
+    <div class="bar"><h2>Pilot run</h2><span id="psim" class="pill"></span><span id="plive" class="pill"></span></div>
+    <p id="psummary"></p>
+    <ol id="trials"></ol>
+  </section>
 </main>
 <script src="/watch.js"></script>
 </body>
@@ -91,11 +96,16 @@ select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 .cps{display:flex;gap:3px;margin-top:6px;align-items:center}.cp{width:22px;height:18px;border-radius:3px;font-size:11px;display:flex;align-items:center;justify-content:center;color:#fff}
 .cp.verified{background:var(--ok)}.cp.refuted{background:var(--bad)}
 .retry{color:var(--unk);font-size:12px;font-weight:600}
+#pilot{grid-column:1/-1}#pilot[hidden]{display:none}
+#trials{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:60vh;overflow:auto}
+.tr{border:1px solid var(--line);border-left:4px solid var(--line);border-radius:6px;padding:6px 8px}
+.tr.verified{border-left-color:var(--ok)}.tr.refuted{border-left-color:var(--bad)}.tr.uncertain,.tr.fault{border-left-color:var(--unk)}
+.pill.sim{color:var(--unk);border-color:var(--unk);font-weight:600}.pill.stale{color:var(--bad);border-color:var(--bad)}
 `;
 
 export const PAGE_JS = `"use strict";
 (function () {
-  var state = { runs: [], realRuns: [], events: [], omitted: 0, skipped: 0, logPresent: false };
+  var state = { runs: [], realRuns: [], events: [], omitted: 0, skipped: 0, logPresent: false, pilot: null, pilotRefused: false };
   var selected = null;
   var index = 0;
   var $ = function (id) { return document.getElementById(id); };
@@ -242,7 +252,80 @@ export const PAGE_JS = `"use strict";
       ? shown.length + " decision(s) for this run, " + acc + " accepted" + (state.skipped ? " · " + state.skipped + " other line(s) not shown" : "") + (state.omitted ? " · " + state.omitted + " earlier decision(s) not shown" : "")
       : "Waiting for the decision log…";
   }
-  function render() { renderRuns(); loadTimeline(); renderFrame(); renderEvents(); }
+  function trialLine(t) {
+    var cls = t.state === "harness-fault" ? "fault" : t.gate && t.gate.verdict ? t.gate.verdict : "";
+    var li = el("li", "tr " + cls);
+    var top = el("div", "top");
+    top.appendChild(el("span", "verdict", t.state === "decided" ? (t.gate && t.gate.verdict ? t.gate.verdict : "no verdict") : t.state));
+    if (t.state === "decided") top.appendChild(el("span", "", t.accepted ? "accepted" : "not accepted"));
+    if (t.harnessClass) top.appendChild(el("span", "code", t.harnessClass));
+    var head = [t.arm ? "arm " + t.arm : null, t.trialKey, "attempt " + t.attempt].filter(Boolean);
+    top.appendChild(el("span", "meta", head.join(" · ")));
+    if (t.supersedes) top.appendChild(el("span", "retry", "re-run of " + t.supersedes));
+    li.appendChild(top);
+    var meta = [];
+    if (t.taskId) meta.push("task " + t.taskId);
+    if (t.says) meta.push("agent says " + t.says);
+    if (t.gate) meta.push(t.gate.unregistrable ? "gate: unregistrable" : t.gate.called ? "gate called" : "gate not called");
+    if (t.gate && t.gate.corrections) meta.push("corrections " + t.gate.corrections);
+    if (t.grade) meta.push("grader " + t.grade);
+    if (t.ledger) meta.push("attempt ledger " + t.ledger);
+    if (t.wallClockS !== null) meta.push(t.wallClockS + " s");
+    if (t.recovered) meta.push("closed on resume");
+    if (meta.length) li.appendChild(el("div", "meta", meta.join(" · ")));
+    if (t.actions) {
+      var a = t.actions;
+      var act = [];
+      if (a.turns !== null) act.push(a.turns + " turn(s)");
+      act.push(a.toolCalls.gate + " gate call(s)");
+      if (a.toolCalls.other) act.push(a.toolCalls.other + " other tool call(s)");
+      if (a.denied.gate + a.denied.other) act.push((a.denied.gate + a.denied.other) + " refused tool use(s)");
+      li.appendChild(el("div", "meta", "actions: " + act.join(" · ")));
+      if (a.gateCalls.length) {
+        var codes = el("div", "codes");
+        a.gateCalls.forEach(function (g, i) {
+          codes.appendChild(el("span", "code", "call " + (i + 1) + ": " + (g.verdict || "no result") + (g.reasonCodes.length ? " " + g.reasonCodes.join(",") : "")));
+        });
+        li.appendChild(codes);
+      }
+    }
+    return li;
+  }
+  function renderPilot() {
+    var sec = $("pilot");
+    var p = state.pilot;
+    if (!p) {
+      sec.hidden = !state.pilotRefused;
+      if (state.pilotRefused) $("psummary").textContent = "The pilot view was refused by the backstop scan and is not shown.";
+      return;
+    }
+    sec.hidden = false;
+    var sim = $("psim");
+    sim.textContent = p.simulated === true ? "SIMULATED · NOT EVIDENCE" : p.simulated === false ? "live run" : "no header yet";
+    sim.className = "pill" + (p.simulated === true ? " sim" : "");
+    var live = $("plive");
+    if (p.live) {
+      var bits = [p.live.runner || "runner?", p.live.state || "state?"];
+      if (p.live.status) bits.push(p.live.status);
+      if (p.live.stopCode) bits.push("stop " + p.live.stopCode);
+      if (p.live.exitCode !== null) bits.push("exit " + p.live.exitCode);
+      if (p.live.updatedAt) bits.push("heartbeat " + p.live.updatedAt);
+      if (p.live.stale) bits.push("STALE");
+      live.textContent = bits.join(" · ");
+      live.className = "pill" + (p.live.stale ? " stale" : "");
+    } else {
+      live.textContent = "no heartbeat";
+      live.className = "pill";
+    }
+    var c = p.counts;
+    $("psummary").textContent = p.progressPresent
+      ? c.decided + " decided · " + c.accepted + " accepted by the gate (not graded) · " + c.faulted + " harness fault(s) · " + c.running + " running" + (p.skipped ? " · " + p.skipped + " line(s) not shown" : "") + (p.omitted ? " · " + p.omitted + " earlier trial(s) not shown" : "")
+      : "Waiting for the run's progress file…";
+    var list = $("trials");
+    while (list.firstChild) list.removeChild(list.firstChild);
+    p.trials.slice().reverse().forEach(function (t) { list.appendChild(trialLine(t)); });
+  }
+  function render() { renderRuns(); loadTimeline(); renderFrame(); renderEvents(); renderPilot(); }
   function apply(text) {
     try { state = JSON.parse(text); render(); } catch (err) { /* ignore a bad message */ }
   }
