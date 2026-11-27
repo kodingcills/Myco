@@ -6,6 +6,14 @@
  * pilot runner, which reaches Myco's gate and the benchmark grader. The original modules
  * re-export everything here, so every existing import and test is unchanged.
  *
+ * Round 4 (the merge of main's #598 + #607): the classifier here is main's merged one, carried
+ * verbatim, with two minimal changes so the hcu+shell arm shares it instead of a copy:
+ * `interpretResult`'s "did the run complete" check and failed-run class are extracted,
+ * unchanged, into `classOfUncleanRun` (its only caller here is `interpretResult`, with the same
+ * fault classes and messages), and `classOfFailure`, `classOfClaimlessCleanResult` and
+ * `structuredClass` are exported. `ApiKeyPathFault` moved here with it (`interpretResult`
+ * throws it); `runner.ts` re-exports it.
+ *
  * Runtime imports: none (type-only imports are erased). `test/pilot/claude-cli.test.ts`
  * pins that.
  */
