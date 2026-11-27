@@ -155,36 +155,59 @@ describe("headless Claude Code transport (fake spawn)", () => {
       expect(faultOf(() => interpretResult(result(text), "", 1))).toBe(cls);
       // And as bare stderr with no JSON result at all.
       expect(faultOf(() => interpretResult("", text, 1))).toBe(cls);
-      // A CLEAN, completed result is the agent's outcome even with this text (round 2, D4).
-      expect(faultOf(() => interpretResult(result(text), "", 0))).toBe("none");
-      expect(interpretResult(result(text), "", 0).claim).toBe("no-claim");
+      // A CLEAN, completed result WITH a claim line is the agent's outcome even with this
+      // text; without one, quota wording is usage-limit (round 3, R2-D3b) and login wording
+      // stays the agent's (no-claim) outcome.
+      expect(interpretResult(result(`${text}\nNOT DONE`), "", 0).claim).toBe("not-done");
+      expect(faultOf(() => interpretResult(result(text), "", 0))).toBe(
+        cls === "usage-limit" ? "usage-limit" : "none",
+      );
     }
   });
 
   // Verifier round 2, D4: the text fallback never applies to a clean, completed run. Each
   // probe from the verdict, plus fixture-shaped text (fc-v1 holds qty 401, 403 and 429).
-  it("a clean completed run with no claim is the agent's outcome, whatever its text (round 2, D4)", () => {
+  it("a clean completed run with no claim is the agent's outcome unless it names the usage quota (round 2, D4; round 3, R2-D3b)", () => {
     const probes = [
       "I updated the billing totals in column C.",
       "Fixed the quota column. Done.",
-      "Done — the weekly limit column is fixed.",
-      "The pay period resets on Mon 3 March.",
       "The cell was locked (forbidden). I stopped.",
       "I set the credential column to blank.",
       "I looked at EMP-0055: its qty is 429. I could not save the file.",
       "Row EMP-0127 has qty 401; I left it unchanged.",
       "EMP-0090 qty 403 is now 430.",
-      "Set the API key column header and the OAuth flag; usage limit noted in B4.",
-      "Claude AI usage limit reached|1700000000",
       "Invalid API key · Please run /login",
     ];
     for (const text of probes) {
       expect([text, faultOf(() => interpretResult(result(text), "", 0))]).toEqual([text, "none"]);
       expect([text, interpretResult(result(text), "", 0).claim]).toEqual([text, "no-claim"]);
     }
+    // Usage-quota wording with no claim line fails closed to usage-limit (stop, nothing
+    // counted), even when it might be the agent's prose: the coordinator's narrow fix.
+    const quotaish = [
+      "Done — the weekly limit column is fixed.",
+      "The pay period resets on Mon 3 March.",
+      "Set the API key column header and the OAuth flag; usage limit noted in B4.",
+      "Claude AI usage limit reached|1700000000",
+    ];
+    for (const text of quotaish) {
+      expect([text, faultOf(() => interpretResult(result(text), "", 0))]).toEqual([
+        text,
+        "usage-limit",
+      ]);
+      // With a claim line it is never reclassified.
+      for (const [line, claim] of [
+        ["DONE", "done"],
+        ["NOT DONE", "not-done"],
+      ] as const)
+        expect([text, interpretResult(result(`${text}\n${line}`), "", 0).claim]).toEqual([
+          text,
+          claim,
+        ]);
+    }
     // The fallback still fires when the same run did NOT complete normally.
-    expect(faultOf(() => interpretResult(result(probes[6] as string), "", 1))).toBe("rate-limit");
-    expect(faultOf(() => interpretResult(result(probes[7] as string), "", 1))).toBe("auth");
+    expect(faultOf(() => interpretResult(result(probes[4] as string), "", 1))).toBe("rate-limit");
+    expect(faultOf(() => interpretResult(result(probes[5] as string), "", 1))).toBe("auth");
   });
 
   // Verifier round 2, V-B and V-C: auth outranks rate-limit in the structured class, and
@@ -361,8 +384,18 @@ describe("headless Claude Code transport (fake spawn)", () => {
           "usage-limit",
         ]);
       }
-      // Still never applied to a clean, completed run (round 2, D4 of the earlier PR).
-      expect(faultOf(() => interpretResult(result(t), "", 0))).toBe("none");
+      // Plain (non-JSON) stdout, exit 1 and exit 0 (round 3, R2-D3a).
+      for (const code of [1, 0])
+        expect([t, code, faultOf(() => interpretResult(t, "", code))]).toEqual([
+          t,
+          code,
+          "usage-limit",
+        ]);
+      // A clean result with no claim line: usage-limit (round 3, R2-D3b); with a claim line
+      // it stays the agent's outcome.
+      expect([t, faultOf(() => interpretResult(result(t), "", 0))]).toEqual([t, "usage-limit"]);
+      expect(interpretResult(result(`${t}\nDONE`), "", 0).claim).toBe("done");
+      expect(interpretResult(result(`${t}\nNOT DONE`), "", 0).claim).toBe("not-done");
     }
     // A structured transient limit with no quota wording stays transient.
     for (const s of [{ error: "rate_limit" }, { error: "overloaded" }, { api_error_status: 529 }]) {
@@ -371,6 +404,27 @@ describe("headless Claude Code transport (fake spawn)", () => {
         JSON.parse(result("API Error: Too many requests", { is_error: true })),
       ]);
       expect([s, faultOf(() => interpretResult(v, "", 1))]).toEqual([s, "rate-limit"]);
+    }
+  });
+
+  it("round 3: the verdict's exact inputs (R2-D3a plain stdout, R2-D3b clean result) are usage-limit", () => {
+    const exact =
+      '{"type":"result","subtype":"success","is_error":false,"result":"Claude AI usage limit reached|1700000000"}';
+    expect(faultOf(() => interpretResult(exact, "", 0))).toBe("usage-limit");
+    for (const code of [1, 0]) {
+      expect(faultOf(() => interpretResult("Claude AI usage limit reached|1700000000", "", code))).toBe(
+        "usage-limit",
+      );
+      expect(faultOf(() => interpretResult("5-hour limit reached ∙ resets 3pm", "", code))).toBe(
+        "usage-limit",
+      );
+      // Plain stdout with no quota wording is still a transport error (re-run in place).
+      expect(faultOf(() => interpretResult("not json", "", code))).toBe("transport-error");
+    }
+    // Task data with 429 / 401 / 403 and no usage wording stays the agent's outcome.
+    for (const text of ["qty 429 on EMP-0055", "EMP-0127 401, EMP-0090 403", "429\n401\n403"]) {
+      expect(faultOf(() => interpretResult(result(text), "", 0))).toBe("none");
+      expect(interpretResult(result(text), "", 0).claim).toBe("no-claim");
     }
   });
 

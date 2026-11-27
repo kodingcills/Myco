@@ -25,7 +25,8 @@
  *  - reads the final `--output-format json` result and classifies it (`interpretResult`).
  *    Only a clean result (no error flag, subtype `success`, exit 0, no structured error) is
  *    the agent's outcome: the claim from the last line of the final message (`DONE` /
- *    `NOT DONE`, anything else is no claim) and the token usage. Everything else is a harness
+ *    `NOT DONE`, anything else is no claim) and the token usage; a clean result with no claim
+ *    whose text names the usage quota is `usage-limit` instead. Everything else is a harness
  *    fault, classified from structured fields first (the assistant message's `error` class,
  *    `api_error_status`, the result `subtype`, `is_error`, exit status) and from a tested
  *    text vocabulary only as a fallback; an error the classifier cannot name is
@@ -99,7 +100,8 @@ export function classOfStatus(status: number): PilotHarnessClass {
 /**
  * Text fallback, only for a run that did NOT complete normally (no result event, an error
  * result, a non-zero exit) and carries no structured class; never for a clean result, whose
- * text is the agent's (fc-v1 fixtures hold qty values 401, 403 and 429).
+ * text is the agent's (fc-v1 fixtures hold qty values 401, 403 and 429). The one exception is
+ * `USAGE_LIMIT_TEXT` alone, on a clean result with no claim line (`interpretResult`).
  *
  * Two kinds of limit (lead ruling, PR #598 round 2, D3):
  *  - `USAGE_LIMIT_TEXT`, the subscription's own quota ("usage limit reached", "5-hour limit
@@ -228,9 +230,11 @@ export function apiKeySourceProblem(messages: readonly Record<string, unknown>[]
  * Classify the process outcome; throws `HarnessFault` for every harness-side or uncertain
  * outcome. Returns the agent's report only for a clean result: `type: "result"`, subtype
  * `success`, `is_error` false, exit status 0, and no structured error on any message. A clean
- * result is always the agent's outcome (a missing `DONE`/`NOT DONE` line is "no claim"); the
- * text fallback runs only on runs that did not complete normally (no result event, an error
- * result, a non-zero or null exit, a structured error) and on their stderr.
+ * result is the agent's outcome (a missing `DONE`/`NOT DONE` line is "no claim"), with one
+ * fail-closed exception: no claim line AND usage-quota wording is `usage-limit` (round 3,
+ * R2-D3b). The full text fallback runs only on runs that did not complete normally (no result
+ * event: stdout and stderr; an error result: its text, `errors[]` and stderr; a non-zero or
+ * null exit; a structured error).
  */
 export function interpretResult(stdout: string, stderr: string, code: number | null): AgentReport {
   const { result, messages } = parseOutput(stdout);
@@ -244,7 +248,12 @@ export function interpretResult(stdout: string, stderr: string, code: number | n
   if (apiKey !== null) throw new ApiKeyPathFault(apiKey, usage);
   const structured = structuredClass(messages);
   if (result === null) {
-    const cls = structured === null ? classOfText(stderr) : refineLimit(structured, stderr);
+    // No result event: nothing here is an agent outcome, so plain (non-JSON) stdout is
+    // classified with stderr (PR #598 round 3, R2-D3a: quota wording on stdout must stop the
+    // run, not be re-run as a transport error that spends attempts).
+    const noResultText = `${stdout}\n${stderr}`;
+    const cls =
+      structured === null ? classOfText(noResultText) : refineLimit(structured, noResultText);
     if (cls !== null)
       fault(cls, `claude exited ${String(code)} with a ${cls} signal and no result`);
     fault(
@@ -264,11 +273,22 @@ export function interpretResult(stdout: string, stderr: string, code: number | n
       `claude returned an error result (subtype ${String(r.subtype)}, exit ${String(code)}${cls === null ? ", unclassified" : ""})`,
     );
   }
-  // A run that completed normally is the agent's outcome, whatever its text says. The text
-  // vocabulary above is broad (bare 401/403/429, "billing", "quota", "credential", "<word>
-  // limit") and matches ordinary task content, so it is NEVER applied here: a missing claim is
-  // "no claim", decided and never re-run (verifier round 2, D4).
-  return { claim: parseClaim(text), usage };
+  // A run that completed normally is the agent's outcome. The auth / billing / transient
+  // vocabulary is broad (bare 401/403/429, "billing", "quota", "credential") and matches
+  // ordinary task content, so it is NEVER applied here (verifier round 2, D4).
+  const claim = parseClaim(text);
+  // One narrow, fail-closed exception (PR #598 round 3, R2-D3b, within the lead's D3 rule
+  // "nothing counted"): a clean result with NO `DONE` / `NOT DONE` line whose text names the
+  // subscription's usage quota is the CLI reporting the quota, not an agent outcome. It stops
+  // the run as `usage-limit` and nothing is counted. The usage vocabulary has no bare numbers,
+  // so fixture qty values (401 / 403 / 429) cannot trigger it; a result WITH a claim line is
+  // never reclassified.
+  if (claim === "no-claim" && USAGE_LIMIT_TEXT.test(text))
+    fault(
+      "usage-limit",
+      "claude returned a clean result with no claim whose text names the usage limit",
+    );
+  return { claim, usage };
 }
 
 /**
