@@ -336,13 +336,17 @@ the gate's own oracle, and replay and verify read the same sealed bytes later.
   operator only, through a new operator-only callback `onCheckpoint` on the sealed reader's
   options, beside `onIntegrity` (`src/gate/sealed.ts`), which already carries integrity
   violations to the operator and never to the agent. `onCheckpoint` never feeds a result,
-  a reason or the decision log.
+  a reason or the decision log. **Stated limit: identical bytes, not identical timing.** An
+  in-flight or budget-spent refusal can answer sooner than a copy failure, which waits for the
+  failed copy, so the agent may tell the cases apart by how long the call took. Whether C1
+  must equalise that timing is [§8](#8-open-questions-for-the-lead) question 5 (d).
 - **A state file that does not exist yet.** On an opted-in trial, a state file that does not
   exist yet is not a copy failure: the transport reports it missing, and the call is answered
   as the gate answers a missing file today, `uncertain` `STATE_MISSING` with the gate's
   missing-state corrections (`src/gate/gate.ts`). No checkpoint is sealed and the budget is not
   spent. Because the budget and in-flight checks come first, a call past the budget or during
-  a checkpoint gets the fixed `STATE_UNREADABLE` answer whether or not the file exists.
+  a checkpoint gets the fixed `STATE_UNREADABLE` answer whether or not the file exists. So
+  does every call on `linux-plain` (see Isolation below).
 - **A torn copy fails closed.** A copy taken while the app writes may be partial. The oracle
   then reads what was copied and answers `uncertain` or `refuted`; it is never repaired or
   retried silently.
@@ -355,7 +359,8 @@ the gate's own oracle, and replay and verify read the same sealed bytes later.
 - **Isolation.** Checkpoints are evidence only on an isolated transport (`vm`,
   [§2.6](#26-mock-runs-watermarked-never-evidence)); on `mock` they are plumbing, and on
   `linux-plain` (where the agent could rewrite the copy) `captureCheckpoint()` is refused and
-  every mid-run call stays `uncertain`. The checkpoint directory is inside the vault root, so
+  every mid-run call stays `uncertain`. That refusal comes before the missing-file check, so on
+  `linux-plain` an absent state file is `STATE_UNREADABLE` too, never `STATE_MISSING`. The checkpoint directory is inside the vault root, so
   the vault's reachability rule keeps every agent root away from it.
 - **Where it is built, and when.** Checkpoints change `src/gate/sealed.ts`,
   `src/gate/gated-trial.ts` and `src/integrity/vault.ts`. `src/gate/*` is held for the R1
@@ -1746,8 +1751,9 @@ means. Test file names are the ones the build PRs must create or extend.
   never called. On: S1 and S2 calls (each pre-evidence shape of
   [§1.2](#12-attribution-a-decision-belongs-to-the-trial-its-gate-is-bound-to), including
   one naming another run) take no checkpoint; the fifth S3 call with `max: 4`, a call
-  during an in-flight checkpoint, and every call on a `linux-plain` transport are
-  `uncertain` `STATE_UNREADABLE` with no checkpoint taken; for the same request and a fixed
+  during an in-flight checkpoint, and every call on a `linux-plain` transport (an absent
+  state file included, because the `linux-plain` refusal comes before the missing-file check)
+  are `uncertain` `STATE_UNREADABLE` with no checkpoint taken; for the same request and a fixed
   clock, the budget-spent, in-flight and copy-failed cases give byte-identical agent-facing
   results (codes, reasons and refs) while `onCheckpoint` tells the operator which case each
   was; on an opted-in trial a state file that does not exist yet gives `uncertain`
@@ -1925,5 +1931,7 @@ and B6 cites its number. Until that issue exists and is resolved, B6 does not st
    probe the oracle more often mid-run); (b) checkpoint mode is off by default and a trial
    recorded `on` is refused as R1 and A/B evidence, so the R1 pilot and Stage 0/1 never run
    with it; (c) C1 starts only after the trial run, because it changes `src/gate/*` and the
-   vault, which the R1 pilot holds. The alternative to (b), a pre-registered checkpoint-on arm,
-   is not proposed here.
+   vault, which the R1 pilot holds; (d) the three refusals of §1.4 are byte-identical but not
+   timing-identical, and C1 records each case's answer time to the operator through
+   `onCheckpoint` without padding it, so the lead can rule on equalising it from measured
+   times. The alternative to (b), a pre-registered checkpoint-on arm, is not proposed here.

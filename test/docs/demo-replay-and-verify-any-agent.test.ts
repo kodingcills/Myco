@@ -13,6 +13,7 @@
  *  - follow-ups use the GitHub Issues fallback, never a "TO FILE" note;
  *  - the pending-PR list, the pre-registered proofs and the binding lines stay as written.
  */
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -683,6 +684,140 @@ describe("demo replay + verify-any-agent spec: checkpointed capture, #596 nits, 
     expect(read("docs/product/demo-storyboard.md")).toContain("ms-slip-then-repair-retry");
   });
 });
+
+describe("demo replay + verify-any-agent spec: every v5 checkpoint claim is pinned (#634 round 3)", () => {
+  // Round 3 (verdict D3 on #634): X03-X27 each rewrote one claim and passed the guard. Each
+  // `it` below names the mutants it kills. The last test freezes every v5 passage whole.
+  let cp = "";
+  let va16 = "";
+  let q5 = "";
+  beforeEach(() => {
+    cp = RAW.includes("\n### 1.4 Checkpointed mid-run capture")
+      ? flat(section("### 1.4 Checkpointed mid-run capture"))
+      : "";
+    va16 = flat(criterionText("VA-16"));
+    const open = flat(section("## 8. Open questions for the lead"));
+    q5 = open.slice(open.indexOf("5. **Checkpointed capture"));
+  });
+
+  it("no new request field, result field or reason code, in §1 rule 1 and VA-16 (X20, X24, X27)", () => {
+    const rule1 = flat(section("## 1. Ground rules shared by both features"));
+    expect(rule1).toContain(
+      "Neither feature adds a gate request field, a reason code or a result field.",
+    );
+    expect(rule1).toContain(
+      "Checkpointed capture ([§1.4](#14-checkpointed-mid-run-capture)) changes which sealed bytes a mid-run call of an opted-in trial reads; it adds no request field, result field or reason code either.",
+    );
+    expect(va16).toContain(
+      "`REASON_CODES`, `GATE_REQUEST_SCHEMA`, `ORACLE_INPUT_FIELDS` and the result's fields are byte-unchanged (the existing pins in `test/gate/`).",
+    );
+    expect(va16).toContain(
+      "a checkpoint decision becoming the trial's verdict, a new reason code or request or result field, an agent-facing result",
+    );
+  });
+
+  it("the three refusals take no checkpoint (X21)", () => {
+    expect(cp).toContain(
+      "A call past the budget, a call that arrives while another checkpoint is being taken, and a call whose copy fails are answered `uncertain` `STATE_UNREADABLE`, with no checkpoint taken.",
+    );
+  });
+
+  it("a checkpoint decision is never the verdict, an arm row, graded or evidence (X05, X06, X16, X18)", () => {
+    expect(cp).toContain(
+      "The trial's verdict is still the harness's own check on the final capture after the agent stops. A checkpoint decision is never the trial's verdict, never an arm row, never graded and never R1 evidence. A trial verified at checkpoint 2 and refuted at the final capture (the agent broke it afterwards) is refuted.",
+    );
+    expect(cp).toContain(
+      "A checkpoint-on arm becomes evidence only through its own pre-registration, never by this page.",
+    );
+    expect(va16).toContain(
+      "A trial verified at checkpoint 2 and refuted at its final capture has outcome verdict `refuted`.",
+    );
+  });
+
+  it("isolation, the stop and the operator-only callback (X07, X14, X22)", () => {
+    expect(cp).toContain(
+      "Checkpoints are evidence only on an isolated transport (`vm`, [§2.6](#26-mock-runs-watermarked-never-evidence)); on `mock` they are plumbing, and on `linux-plain` (where the agent could rewrite the copy) `captureCheckpoint()` is refused",
+    );
+    expect(cp).toContain(
+      "beside `onIntegrity` (`src/gate/sealed.ts`), which already carries integrity violations to the operator and never to the agent.",
+    );
+    expect(cp).toContain(
+      "On an opted-in trial, a state file that does not exist yet is not a copy failure: the transport reports it missing, and the call is answered as the gate answers a missing file today",
+    );
+    expect(cp).toContain(
+      "A checkpoint is refused after `markAgentStopped`; the final capture stays the only capture after the stop.",
+    );
+  });
+
+  it("VA-16's probe covers S1/S2, the in-flight call, linux-plain and the stop (X03, X09, X13, N6)", () => {
+    expect(va16).toContain(
+      "On: S1 and S2 calls (each pre-evidence shape of [§1.2](#12-attribution-a-decision-belongs-to-the-trial-its-gate-is-bound-to), including one naming another run) take no checkpoint; the fifth S3 call with `max: 4`, a call during an in-flight checkpoint, and every call on a `linux-plain` transport (an absent state file included, because the `linux-plain` refusal comes before the missing-file check) are `uncertain` `STATE_UNREADABLE` with no checkpoint taken;",
+    );
+    expect(va16).toContain("`vault.checkpoint` after `markAgentStopped` throws;");
+  });
+
+  it("N6: on linux-plain the refusal comes before the missing-file check", () => {
+    expect(cp).toContain(
+      "That refusal comes before the missing-file check, so on `linux-plain` an absent state file is `STATE_UNREADABLE` too, never `STATE_MISSING`.",
+    );
+    expect(cp).toContain(
+      "a call past the budget or during a checkpoint gets the fixed `STATE_UNREADABLE` answer whether or not the file exists. So does every call on `linux-plain` (see Isolation below).",
+    );
+  });
+
+  it("N7: the timing gap is a stated limit and an open question, not a hidden one", () => {
+    expect(cp).toContain(
+      "**Stated limit: identical bytes, not identical timing.** An in-flight or budget-spent refusal can answer sooner than a copy failure, which waits for the failed copy, so the agent may tell the cases apart by how long the call took. Whether C1 must equalise that timing is [§8](#8-open-questions-for-the-lead) question 5 (d).",
+    );
+    expect(q5).toContain(
+      "(d) the three refusals of §1.4 are byte-identical but not timing-identical, and C1 records each case's answer time to the operator through `onCheckpoint` without padding it, so the lead can rule on equalising it from measured times.",
+    );
+  });
+
+  it("§8 question 5 states (a), (b) and (c) exactly, all lead ruling pending (X12, X19, X25, X26)", () => {
+    expect(q5).toContain(
+      "Proposals, all lead ruling pending: (a) the per-trial budget `max` is 4 (the demo's retry story needs 2; more lets an agent probe the oracle more often mid-run); (b) checkpoint mode is off by default and a trial recorded `on` is refused as R1 and A/B evidence, so the R1 pilot and Stage 0/1 never run with it; (c) C1 starts only after the trial run, because it changes `src/gate/*` and the vault, which the R1 pilot holds;",
+    );
+  });
+
+  it("every v5 checkpoint passage is frozen: a change needs a new version and a re-pin", () => {
+    const sha = (s: string) => createHash("sha256").update(s.trim()).digest("hex");
+    const step4 = flat(
+      RAW.slice(
+        RAW.indexOf("4. **Compare, never adopt.**"),
+        RAW.indexOf("5. **What the agent told"),
+      ),
+    );
+    const p6 = rows(section("### 3.6 Pre-registered proofs")).find((r) => r[0] === "P6");
+    const build = (id: string) => (buildRows.find((r) => r[0] === id) ?? []).join(" | ");
+    const passages: Record<string, string> = {
+      "§1.4": cp,
+      "§2.3": flat(section("### 2.3 What real runs show today")),
+      "§3.2 step 4": step4,
+      P6: flat((p6 ?? []).join(" | ")),
+      "RS-18": flat(criterionText("RS-18")),
+      "VA-15": flat(criterionText("VA-15")),
+      "VA-16": va16,
+      "C1, V5, B7": ["C1", "V5", "B7"].map(build).join("\n"),
+      "§8 q5": q5,
+    };
+    const hashes = Object.fromEntries(Object.entries(passages).map(([k, v]) => [k, sha(v)]));
+    expect(hashes).toEqual(FROZEN_V5);
+  });
+});
+
+/** SHA-256 of each flattened v5 passage. Re-pin only with a new version of the spec. */
+const FROZEN_V5: Record<string, string> = {
+  "§1.4": "f91aa1535f33b51a3350ef9f2dfd2fd1c07a648b106962dcbea609ef76ed1ed5",
+  "§2.3": "a3b96b21cc6abed172f8dfaa4968494d0a707cd8878df592b0d505cfbe4eceb7",
+  "§3.2 step 4": "2a01746a44f4239268d6e57a1f12b39ef61851b2e9d5238fde3f8ced7f31dfee",
+  P6: "a5b8e603f7d7579c41979c3a9a7947bdd67a490d5f70b6071ab64236ed24b5af",
+  "RS-18": "952e6b70002b6899b63a768277404e92946f5499e624f9e85ea63b8553addc73",
+  "VA-15": "707d93c059f25725b57270968b6c18e17af0441a5c611bf49dd8034a9f7528ce",
+  "VA-16": "e15fb12ec741a6fb5f5eee83c5daf7d79ffcd823f78dbda9fbcb734db5d1fd89",
+  "C1, V5, B7": "96b72260de515963cccf1a9211f62a3a5e7612d28e1132b68553a8b601384b21",
+  "§8 q5": "94053f853dc2e1fdf8616172fbe7a3c27d8651336123163d00bed6f167d470e1",
+};
 
 describe("demo replay + verify-any-agent spec: binding lines", () => {
   it.each([
