@@ -10,14 +10,16 @@
  * Mutants this file kills: the hashed form restored to 64 hex; any `h-` prefix accepted as
  * already hashed.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { HashLedger } from "../../src/export-guard/provenance.ts";
+import { SealKey } from "../../src/export-guard/seal.ts";
 import {
   bundleHashLedger,
   exportProofBundle,
   type ProofBundle,
   type ProofRunInput,
+  sealProofBundle,
   serializeProofBundle,
   verifyProofBundle,
 } from "../../src/proof/bundle.ts";
@@ -134,7 +136,10 @@ describe("D-H: idempotence matches exactly h-<60hex>", () => {
     const harness = rechain(
       JSON.parse(serializeProofBundle(agent).split(reference(EXACT)).join(EXACT)) as ProofBundle,
     );
-    const ledger = bundleHashLedger(serializeProofBundle(harness));
+    // The harness wrote it, so it seals it (#599): a key built at run time, never committed.
+    const key = new SealKey(randomBytes(32));
+    const text = serializeProofBundle(harness);
+    const ledger = bundleHashLedger(text, { key, seal: sealProofBundle(text, key) });
     const b = exportProofBundle(everywhere(EXACT), NO_CTX, undefined, ledger);
     for (const [field, value] of hashedFields(b)) expect(value, field).toBe(EXACT);
     expect(b.run.runId).toBe(EXACT);

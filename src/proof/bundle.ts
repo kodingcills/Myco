@@ -45,6 +45,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { m2AttemptEventSchema } from "../../schemas/m2-evidence.ts";
 import { type JsonSchema, validateSchema } from "../../schemas/validate.ts";
 import { HashLedger, NO_LEDGER } from "../export-guard/provenance.ts";
+import { type SealKey, sealArtifact, sealHolds } from "../export-guard/seal.ts";
 import { GATE_API_VERSION, REASON_CODES } from "../gate/api.ts";
 import { findLeaks, findLeaksDeep, type RedactionContext } from "./backstop.ts";
 import {
@@ -56,13 +57,13 @@ import {
   HASHED_SOURCE,
   HEX64,
   HEX64_SOURCE,
-  ID_SCOPE,
   isHashed,
   KNOWN_ARMS,
   MEDIA_TYPE_SOURCE,
   MEDIA_TYPES,
   POLICY_CODE_SOURCE,
   POLICY_REASON_CODES,
+  proofScope,
   sameArm,
   sameId,
   type TextRef,
@@ -487,7 +488,13 @@ function need(ok: boolean, field: string): void {
   if (!ok) throw new ProofExportError("PROOF_INPUT", `${field} is not a value of its type`);
 }
 
-function stepBody(step: ProofStep, a: Allowlist): { kind: RecordKind; body: RecordBody } {
+function stepBody(
+  step: ProofStep,
+  a: Allowlist,
+  index: number,
+): { kind: RecordKind; body: RecordBody } {
+  // Step `index` becomes record `index` (`chain`): each closer gets its field's exact bundle path.
+  const p = (field: string) => `$.records[${index}].body.${field}`;
   const s = step as unknown as Record<string, unknown>;
   switch (step.kind) {
     case "action":
@@ -500,10 +507,10 @@ function stepBody(step: ProofStep, a: Allowlist): { kind: RecordKind; body: Reco
         kind: "action",
         body: {
           actor: s.actor as ActionBody["actor"],
-          tool: a.tool(s.tool as string),
+          tool: a.tool(s.tool as string, p("tool")),
           summary: textRef(s.summary as string),
-          ...(s.keys === undefined ? {} : { keys: a.keys(s.keys as string) }),
-          ...(s.app === undefined ? {} : { app: a.app(s.app as string) }),
+          ...(s.keys === undefined ? {} : { keys: a.keys(s.keys as string, p("keys")) }),
+          ...(s.app === undefined ? {} : { app: a.app(s.app as string, p("app")) }),
         },
       };
     case "evidence": {
@@ -517,9 +524,9 @@ function stepBody(step: ProofStep, a: Allowlist): { kind: RecordKind; body: Reco
       return {
         kind: "evidence",
         body: {
-          evidenceId: a.id(step.evidenceId),
-          kind: a.id(step.evidenceKind),
-          mediaType: a.mediaType(step.mediaType),
+          evidenceId: a.id(step.evidenceId, p("evidenceId")),
+          kind: a.id(step.evidenceKind, p("kind")),
+          mediaType: a.mediaType(step.mediaType, p("mediaType")),
           ...(step.path === undefined ? {} : { path: textRef(step.path) }),
           sha256: sha256Hex(bytes),
           bytes: bytes.byteLength,
@@ -547,18 +554,18 @@ function stepBody(step: ProofStep, a: Allowlist): { kind: RecordKind; body: Reco
         kind: "verdict",
         body: {
           gateApi: GATE_API_VERSION,
-          taskId: a.id(s.taskId as string),
-          runId: a.id(s.runId as string),
+          taskId: a.id(s.taskId as string, p("taskId")),
+          runId: a.id(s.runId as string, p("runId")),
           verdict: s.verdict as VerdictBody["verdict"],
           accepted: s.accepted as boolean,
           reasonCodes: [...(s.reasonCodes as string[])],
-          evidence: (s.evidence as string[]).map(a.id),
+          evidence: (s.evidence as string[]).map((e, j) => a.id(e, p(`evidence[${j}]`))),
           ...(o === undefined
             ? {}
             : {
                 oracle: {
-                  family: a.id(o.family as string),
-                  version: a.id(o.version as string),
+                  family: a.id(o.family as string, p("oracle.family")),
+                  version: a.id(o.version as string, p("oracle.version")),
                   specSha256: o.specSha256 as string,
                 },
               }),
@@ -583,8 +590,8 @@ function stepBody(step: ProofStep, a: Allowlist): { kind: RecordKind; body: Reco
       return {
         kind: "handoff",
         body: {
-          from: a.id(s.from as string),
-          to: a.id(s.to as string),
+          from: a.id(s.from as string, p("from")),
+          to: a.id(s.to as string, p("to")),
           summary: textRef(s.summary as string),
           ...(s.checkpoint === undefined ? {} : { checkpoint: s.checkpoint as number }),
         },
@@ -597,10 +604,10 @@ function stepBody(step: ProofStep, a: Allowlist): { kind: RecordKind; body: Reco
       return {
         kind: "policy",
         body: {
-          policyId: a.id(s.policyId as string),
-          subject: a.subject(s.subject as string),
+          policyId: a.id(s.policyId as string, p("policyId")),
+          subject: a.subject(s.subject as string, p("subject")),
           decision: s.decision as PolicyBody["decision"],
-          reasonCode: a.policyCode(s.reasonCode as string),
+          reasonCode: a.policyCode(s.reasonCode as string, p("reasonCode")),
         },
       };
     default:
@@ -694,16 +701,18 @@ function assembleWithGuard(
   guard: IdentityGuard,
   hashLedger: HashLedger,
 ): ProofBundle {
-  const a = allowlist(guard, hashLedger);
   const raw = input as unknown as Record<string, unknown>;
   need(isStr(raw.runId), "run.runId");
+  // Every hashed value is scoped to this run (#599 O-a): on a re-export the input's run id is
+  // the bundle's `run.runId` as written, which is what `bundleHashLedger` scopes by.
+  const a = allowlist(guard, hashLedger, input.runId);
   need(isStr(raw.taskId), "run.taskId");
   need(raw.arm === undefined || isStr(raw.arm), "run.arm");
   need(typeof raw.simulated === "boolean", "run.simulated");
   need(Array.isArray(raw.steps), "run.steps");
-  const items = input.steps.map((s) => {
+  const items = input.steps.map((s, i) => {
     need(s !== null && typeof s === "object", "run.steps");
-    return stepBody(s, a);
+    return stepBody(s, a, i);
   });
   let ledger: ProofBundle["ledger"] = null;
   if (input.ledger !== undefined) {
@@ -754,9 +763,9 @@ function assembleWithGuard(
     episode = projected.projection.ref;
   }
   const run: ProofBundle["run"] = {
-    runId: a.id(input.runId),
-    taskId: a.id(input.taskId),
-    ...(input.arm === undefined ? {} : { arm: a.arm(input.arm) }),
+    runId: a.id(input.runId, "$.run.runId"),
+    taskId: a.id(input.taskId, "$.run.taskId"),
+    ...(input.arm === undefined ? {} : { arm: a.arm(input.arm, "$.run.arm") }),
     simulated: input.simulated,
     episode,
   };
@@ -882,15 +891,52 @@ function indexEvidenceDir(dir: string): Map<string, EvidenceIndexEntry> {
   return index;
 }
 
+/** The seal domain of a proof bundle (#599): a seal made for another surface never holds here. */
+export const PROOF_SEAL_DOMAIN = "myco.proof.seal/1";
+
 /**
- * The hash ledger of a bundle this harness wrote (#579 O3), for re-exporting its run: the bundle
- * must verify first (`verifyProofBundle`, same options), then every `h-<60hex>` it carries in a
- * hashed field is recorded under that field's scope (`ID_SCOPE` for every id; the field name for
- * a vocabulary field). A bundle that does not verify throws (codes only). The bundle is TRUSTED
- * as harness output: one written before #579 may hold an agent's verbatim `h-<60hex>`; re-export
- * it from its source run instead.
+ * The harness's keyed provenance seal over a bundle it just wrote (#599 follow-up 2;
+ * `src/export-guard/seal.ts`): `HMAC-SHA256(key, domain \0 sha256(text))`. The text must verify
+ * (`verifyProofBundle`, same options), so the harness never seals a bundle it would refuse. Store
+ * the seal next to the bundle; `bundleHashLedger` requires it. The key is loaded at the point of
+ * use (`loadSealKey(path)`); neither the key nor any value from the bundle is in a refusal.
  */
-export function bundleHashLedger(text: string, options: VerifyOptions = {}): HashLedger {
+export function sealProofBundle(text: string, key: SealKey, options: VerifyOptions = {}): string {
+  const result = verifyProofBundle(text, options);
+  if (!result.ok)
+    throw new ProofExportError(
+      result.errors[0]?.code ?? "PROOF_INVALID",
+      "seal refused: the bundle does not verify",
+    );
+  return sealArtifact(key, PROOF_SEAL_DOMAIN, text);
+}
+
+/** The harness key and the seal it wrote next to the bundle (`sealProofBundle`). */
+export interface BundleSeal {
+  readonly key: SealKey;
+  readonly seal: string;
+}
+
+/**
+ * The hash ledger of a bundle this harness wrote (#579 O3), for re-exporting its run.
+ *
+ * THE IMPORTER TRUST BOUNDARY (#599 follow-up 2): the bundle's seal must hold under the harness
+ * key first (`PROOF_SEAL`): a hand-edited bundle, even one whose chain was recomputed so that it
+ * verifies, is refused before any of its values is trusted. Then it must verify
+ * (`verifyProofBundle`, same options). Then every `h-<60hex>` it carries in a hashed field is
+ * recorded at `proofScope(run.runId, path)`: the run id and the field's exact bundle JSON path,
+ * array indexes included (#599 O-a, #602 N-a). A refusal carries codes only.
+ *
+ * A sealed bundle is TRUSTED as harness output. A bundle written before #579 may hold an agent's
+ * verbatim `h-<60hex>` and was never sealed; re-export it from its source run instead.
+ */
+export function bundleHashLedger(
+  text: string,
+  seal: BundleSeal,
+  options: VerifyOptions = {},
+): HashLedger {
+  if (!sealHolds(seal.key, PROOF_SEAL_DOMAIN, text, seal.seal))
+    throw new ProofExportError("PROOF_SEAL", "hash ledger refused: the seal does not hold");
   const result = verifyProofBundle(text, options);
   if (!result.ok)
     throw new ProofExportError(
@@ -899,47 +945,50 @@ export function bundleHashLedger(text: string, options: VerifyOptions = {}): Has
     );
   const bundle = JSON.parse(text) as ProofBundle;
   const ledger = new HashLedger();
-  const add = (scope: string, v: unknown) => {
-    if (typeof v === "string" && isHashed(v)) ledger.record(scope, v);
+  const runId = bundle.run.runId;
+  const add = (path: string, v: unknown) => {
+    if (typeof v === "string" && isHashed(v)) ledger.record(proofScope(runId, path), v);
   };
-  add(ID_SCOPE, bundle.run.runId);
-  add(ID_SCOPE, bundle.run.taskId);
-  add(ID_SCOPE, bundle.run.arm);
-  for (const r of bundle.records) {
+  add("$.run.runId", bundle.run.runId);
+  add("$.run.taskId", bundle.run.taskId);
+  add("$.run.arm", bundle.run.arm);
+  bundle.records.forEach((r, i) => {
     const b = r.body as unknown as Record<string, unknown>;
+    const at = (field: string, v: unknown) => add(`$.records[${i}].body.${field}`, v);
     switch (r.kind) {
       case "action":
-        add("action.tool", b.tool);
-        add("action.keys", b.keys);
-        add("action.app", b.app);
+        at("tool", b.tool);
+        at("keys", b.keys);
+        at("app", b.app);
         break;
       case "evidence":
-        add(ID_SCOPE, b.evidenceId);
-        add(ID_SCOPE, b.kind);
-        add("evidence.mediaType", b.mediaType);
+        at("evidenceId", b.evidenceId);
+        at("kind", b.kind);
+        at("mediaType", b.mediaType);
         break;
       case "verdict": {
-        add(ID_SCOPE, b.taskId);
-        add(ID_SCOPE, b.runId);
-        for (const e of (b.evidence as unknown[] | undefined) ?? []) add(ID_SCOPE, e);
+        at("taskId", b.taskId);
+        at("runId", b.runId);
+        for (const [j, e] of ((b.evidence as unknown[] | undefined) ?? []).entries())
+          at(`evidence[${j}]`, e);
         const o = b.oracle as Record<string, unknown> | undefined;
-        add(ID_SCOPE, o?.family);
-        add(ID_SCOPE, o?.version);
+        at("oracle.family", o?.family);
+        at("oracle.version", o?.version);
         break;
       }
       case "handoff":
-        add(ID_SCOPE, b.from);
-        add(ID_SCOPE, b.to);
+        at("from", b.from);
+        at("to", b.to);
         break;
       case "policy":
-        add(ID_SCOPE, b.policyId);
-        add("policy.subject", b.subject);
-        add("policy.reasonCode", b.reasonCode);
+        at("policyId", b.policyId);
+        at("subject", b.subject);
+        at("reasonCode", b.reasonCode);
         break;
       default:
         break;
     }
-  }
+  });
   return ledger;
 }
 
