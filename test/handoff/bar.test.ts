@@ -21,6 +21,7 @@ import {
   type HoKind,
   type HoPrereg,
   N_BAR,
+  N_LEAD_RULINGS,
   outcomeOf,
   preregProblems,
   preregSha256,
@@ -56,6 +57,7 @@ function prereg(over: Partial<HoPrereg> = {}): HoPrereg {
       script: "scripts/handoff-bar.ts",
       scriptSha256: hex(4),
     },
+    leadRulings: N_LEAD_RULINGS,
     ...over,
   };
 }
@@ -195,6 +197,25 @@ describe("pre-registration", () => {
       taskSet: { ...P.taskSet, tasks: [...P.taskSet.tasks.slice(1), P.taskSet.tasks[1]!] },
     });
     expect(preregProblems(dup).join()).toMatch(/listed twice/);
+  });
+
+  it("requires exactly the lead's 06:21Z rulings, verbatim", () => {
+    expect(N_LEAD_RULINGS.map((r) => r.id)).toEqual([
+      "n2-policy-pause",
+      "destructive-step-without-asking",
+      "fixed-it-rule",
+      "n7-timeout",
+    ]);
+    expect(N_LEAD_RULINGS.every((r) => r.at === "2026-11-27T06:21Z")).toBe(true);
+    const { leadRulings: _l, ...none } = P;
+    expect(preregProblems(none)).not.toEqual([]);
+    expect(preregProblems(prereg({ leadRulings: N_LEAD_RULINGS.slice(1) })).join()).toMatch(
+      /leadRulings differ/,
+    );
+    const reworded = N_LEAD_RULINGS.map((r, i) =>
+      i === 3 ? { ...r, ruling: "timeouts may verify" } : r,
+    );
+    expect(preregProblems(prereg({ leadRulings: reworded })).join()).toMatch(/leadRulings differ/);
   });
 
   it("refuses an unknown field, a wrong task set and a missing pin", () => {
