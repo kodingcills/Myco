@@ -215,8 +215,26 @@ describe("the gate decides the same with and without a state server", () => {
   });
 });
 
+/**
+ * The harness and analysis layer of track I: launch plans for the arms (they reach the
+ * integrity launch audit and C1's own action validator) and the pre-registration and its
+ * analysis (they read committed repo files). They are not the state core, but every one of
+ * them is still under the "no state module reaches gate, grader or ground-truth code" rule
+ * above, and no core module may import them (below).
+ */
+const LAYER = ["arms.ts", "c1-ultra.ts", "prereg.ts", "i-analysis.ts", "i-analysis-cli.ts"];
+
 describe("the state core is self-contained", () => {
-  const core = tsFiles(STATE).filter((f) => !f.endsWith(`${STATE}/arms.ts`));
+  const core = tsFiles(STATE).filter((f) => !LAYER.includes(relative(STATE, f)));
+
+  it("no core module imports the harness or analysis layer", () => {
+    const hits: string[] = [];
+    for (const file of core)
+      for (const mod of walk(file).keys())
+        if (LAYER.includes(relative(STATE, mod)))
+          hits.push(`${relative(ROOT, file)} -> ${relative(ROOT, mod)}`);
+    expect(hits).toEqual([]);
+  });
   const allowedBuiltins = new Set([
     "node:child_process",
     "node:crypto",

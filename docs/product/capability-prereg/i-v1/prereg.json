@@ -1,0 +1,108 @@
+{
+  "schema": "myco.capability.prereg/1",
+  "track": "I",
+  "version": 1,
+  "spec": {
+    "path": "docs/product/capability-spec.md",
+    "section": "I. Structured state access",
+    "sectionSha256": "0659c3318110a3ad90b5f8ab55e5ee61d8186feae15d0b5ad20298b62b02c98d"
+  },
+  "leadRulingPending": [
+    "bar: the spec's track I section is a proposal until the lead ratifies it (spec status line)",
+    "modelId: proposed as the R1 pilot's PILOT_MODEL; not ruled for capability tracks",
+    "seeds.assignment and seeds.bootstrap: proposed values",
+    "gate: absent in both arms (spec §1.3 default; a gate-present variant is a §6 open question)",
+    "n: 90 satisfiable tasks, k 1 (raising n is a §6 open question for K and M only)"
+  ],
+  "harness": "Claude Code headless on the Claude Ultra plan (src/pilot harness); $0 Anthropic API, no Messages-API calls",
+  "arms": {
+    "primary": {
+      "capability": "C1+I",
+      "baseline": "C1"
+    },
+    "secondary": {
+      "capability": "hcu+shell+I",
+      "baseline": "hcu+shell",
+      "partOfBar": false
+    }
+  },
+  "taskSet": {
+    "version": "fc-v1",
+    "manifest": "benchmark/false-completion/fc-v1/manifest.json",
+    "manifestSha256": "bf3e5d1174814a79e459b0dfefe9dbe7c1ea775497553e667362151bf740c0ba",
+    "tasksFile": "benchmark/false-completion/fc-v1/tasks.jsonl",
+    "tasks": 100,
+    "satisfiable": 90,
+    "invalidTarget": 10,
+    "k": 1
+  },
+  "seeds": {
+    "assignment": "i-v1-assignment-2026-11-27",
+    "bootstrap": "i-v1-bootstrap-2026-11-27",
+    "taskBuild": "fc-v1-{a,b,c,d}-{01..10}"
+  },
+  "assignment": {
+    "scheme": "assignmentSchedule (src/state/prereg.ts): fc-v1's 100 tasks shuffled by seeds.assignment, paired into two-task ABBA blocks, the A arm of each block a seeded coin"
+  },
+  "stepBudget": 30,
+  "retryBudget": 0,
+  "wallClockBudgetS": null,
+  "scoredAttemptsPerTrial": 1,
+  "modelId": "claude-sonnet-5-5",
+  "gate": "absent-in-both-arms",
+  "primaryMetric": "verified rate on the 90 satisfiable fc-v1 tasks, graded by the independent grader (src/benchmark/grade/), never the gate",
+  "verified": "gate-less rows: the agent claimed done AND the grader graded the captured document pass; ungradable is never verified",
+  "bar": [
+    {
+      "id": 1,
+      "metric": "verified",
+      "test": "exact-mcnemar-one-sided",
+      "alpha": 0.05,
+      "minDiscordant": 5,
+      "requires": []
+    },
+    {
+      "id": 2,
+      "metric": "steps-per-verified-task (total steps over ALL satisfiable trials / verified tasks)",
+      "test": "paired-bootstrap-ratio-upper",
+      "alpha": 0.05,
+      "resamples": 10000,
+      "threshold": 1,
+      "requires": [1]
+    }
+  ],
+  "guardrails": [
+    {
+      "id": "invalid-target-false-done",
+      "rule": "false DONEs on the 10 invalid-target tasks are no higher in C1+I than in C1"
+    },
+    {
+      "id": "tool-output-scan",
+      "rule": "no recorded tool output contains a fixture value the task did not name, a host path or a digest; any hit voids the run"
+    }
+  ],
+  "notShown": [
+    "p > 0.05",
+    "fewer than 5 discordant tasks: underpowered at n, with the discordant count",
+    "a guardrail breached",
+    "a parity check failed (planner, step budget, a missing or duplicate trial)",
+    "the pack's pre-registration hash does not match a committed pre-registration",
+    "any simulated row"
+  ],
+  "secondaryReported": [
+    "wall time per verified task",
+    "cost per verified task (token-derived estimate; null if any trial is null)",
+    "false done",
+    "per-fault-class verified rate",
+    "hcu+shell+I vs hcu+shell"
+  ],
+  "analysis": {
+    "command": "npx tsx scripts/capability-i-analysis.ts <pack.json>",
+    "files": {
+      "scripts/capability-i-analysis.ts": "47a73895e0c15a69b20410f68d30188c2e282aa34e2d0fb419d25a7ffe3452fa",
+      "src/state/i-analysis.ts": "94bfc09a3975380d3d84239705d3fabe15461db2229772a5bc2423d7af1d3088",
+      "src/state/i-analysis-cli.ts": "0f72913d6609ebd92a7792ce65e415932759d71074f52b0464b7e92ef8505929",
+      "src/state/prereg.ts": "b56bb79222b0a28508ffe6b35f47f2ec106ea976795e9170d9f24f511bfebba8"
+    }
+  }
+}
