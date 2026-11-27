@@ -1,0 +1,44 @@
+name: Attribution guard
+
+# Issue #685: fail a pull request whose commit messages, title or body carry a
+# Co-authored-by line naming Claude or Anthropic, a "Generated with/by Claude Code"
+# line, a Claude session trailer or a Claude Code session link (incident #696).
+# `pull_request` only (never pull_request_target), read-only token, no secrets.
+# The job name `attribution guard` is stable so it can be marked required.
+# edited: a title or body change re-runs the check.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  attribution-guard:
+    name: attribution guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Full history at the PR head (not the merge ref), so base..head is local.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      # Title and body reach the script only as environment values from the payload,
+      # never as text inside the run script.
+      - name: Check commits, title and body
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: node .github/scripts/attribution-guard.ts

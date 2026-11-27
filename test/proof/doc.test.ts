@@ -23,6 +23,18 @@ describe("docs/architecture/replayable-proof.md matches the code", () => {
     expect([...documented].sort()).toEqual([...emitted].sort());
   });
 
+  it("the export-pilot code table lists exactly the codes from-pilot.ts emits (#674)", () => {
+    const table = DOC.slice(
+      DOC.indexOf("| Export code | Refused when |"),
+      DOC.indexOf("Every bundle built from a pilot directory"),
+    );
+    const documented = new Set(table.match(/PROOF_[A-Z_]+/g));
+    const src = readFileSync(join(ROOT, "src", "proof", "from-pilot.ts"), "utf8");
+    const emitted = new Set([...src.matchAll(/fail\(\s*"(PROOF_[A-Z_]+)"/g)].map((m) => m[1]));
+    expect(emitted.size).toBeGreaterThan(0);
+    expect([...documented].sort()).toEqual([...emitted].sort());
+  });
+
   it("the quoted claim is the bundle's fixed claim, word for word", () => {
     const quote = DOC.split("\n")
       .filter((l) => l.startsWith("> "))

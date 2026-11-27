@@ -43,15 +43,21 @@ import {
 } from "../../src/pilot/live-launch.ts";
 import { HarnessFault, runPilot } from "../../src/pilot/runner.ts";
 import {
+  agentTokenFile,
+  DEFAULT_DEPLOY_TIMEOUT_MS,
   DEFAULT_GUEST_ROOT,
+  DEPLOY_OK_LINE,
+  DEPLOY_SCRIPT,
   guestTrialPaths,
   HOST_CAPTURE_FILE,
   liveVmDriver,
   parseBootClass,
   realVmBackend,
+  runDeploy,
   taskFixtureBytes,
   VM_FAULT,
   type VmBackend,
+  VmTrialStep,
 } from "../../src/pilot/vm-capture.ts";
 import {
   CLEAN_RESULT_FAULT_PHRASES,
@@ -107,6 +113,8 @@ function fakeVm(
   o: {
     bootClass?: "cold" | "fast" | null;
     failReset?: boolean;
+    /** Fail the n-th deploy (1-based) only, or every deploy with `true`. */
+    failDeploy?: boolean | number;
     failOpen?: boolean;
     failCaptureRead?: boolean;
     corruptSeed?: boolean;
@@ -115,11 +123,18 @@ function fakeVm(
   const guest = new Map<string, Buffer>();
   const events: Event[] = [];
   let reads = 0;
+  let deploys = 0;
   const backend: VmBackend = {
     async reset() {
       events.push("reset");
       if (o.failReset) throw new Error("utm said no");
       return { bootClass: o.bootClass === undefined ? "cold" : o.bootClass };
+    },
+    async deploy() {
+      deploys++;
+      events.push("deploy");
+      if (o.failDeploy === true || o.failDeploy === deploys)
+        throw new Error("deploy-to-vm.sh exited 1");
     },
     async open() {
       events.push("open");
@@ -347,10 +362,12 @@ describe("R1 launch with every precondition and fakes reaches the live driver", 
         Object.keys(call.options.env ?? {}).every((k) => CHILD_ENV_ALLOWLIST.includes(k)),
       ).toBe(true);
     }
-    // The VM step, in order, per trial: reset, open, seed (write + read back), [agent], capture, close.
+    // The VM step, in order, per trial: reset, deploy (#691), open, seed (write + read back),
+    // [agent], capture, close.
     const k1 = guestDoc("r1p-fc-v1-001-a1");
-    expect(vm.events.slice(0, 6)).toEqual([
+    expect(vm.events.slice(0, 7)).toEqual([
       "reset",
+      "deploy",
       "open",
       `write ${k1}`,
       `read ${k1}`,
@@ -488,6 +505,7 @@ describe("VM step failures are code-only harness faults", () => {
 
   for (const [name, o, cls, msg] of [
     ["reset fails", { failReset: true }, "spawn-failed", VM_FAULT.reset],
+    ["agent deploy fails (#691)", { failDeploy: true }, "transport-error", VM_FAULT.deploy],
     ["channel does not open", { failOpen: true }, "transport-error", VM_FAULT.open],
     ["seed does not read back", { corruptSeed: true }, "transport-error", VM_FAULT.seedReadBack],
     ["capture read fails", { failCaptureRead: true }, "transport-error", VM_FAULT.read],
@@ -501,6 +519,8 @@ describe("VM step failures are code-only harness faults", () => {
       // A failure before the agent never starts claude; the channel is always closed.
       if (name !== "capture read fails") expect(claude.calls).toHaveLength(0);
       if (vm.events.includes("open") && !o.failOpen) expect(vm.events.at(-1)).toBe("close");
+      // A failed deploy stops the step there: the channel is never opened (#691).
+      if ("failDeploy" in o) expect(vm.events).toEqual(["reset", "deploy"]);
     });
 
   it("reports the reset's boot class to the runner (#546 / #563); none when unmeasured", async () => {
@@ -885,7 +905,8 @@ describe("A/B launch", () => {
     expect(o.launchRealTrials).toBe(true);
     expect(o.liveLaunchSha256).toBe(sha);
     expect(o.plannerModelId).toBe("claude-sonnet-5-5");
-    expect(vm.events[0]).toBe("reset");
+    // The A/B shares the live driver, so its trials deploy after the reset too (#691).
+    expect(vm.events.slice(0, 3)).toEqual(["reset", "deploy", "open"]);
     expect(claude.calls).toHaveLength(1);
     const status = JSON.parse(readFileSync(join(out, "stage0", LIVE_STATUS_FILE), "utf8"));
     expect(status).toMatchObject({ runner: "corrections-ab", state: "finished", exitCode: 0 });
@@ -1681,6 +1702,9 @@ describe("#606 S1+S2: stderr-only quota wording on a claimless clean result, and
         ] as const)
           expect([t, shape, await launchWith(output)]).toEqual([t, shape, decidedAs(claim)]);
     },
+    // Dozens of full fake launches per case: well under 1 s here, but past vitest's default
+    // 5 s on a loaded macOS runner (check (macos-latest) on #692). Assertions unchanged.
+    60_000,
   );
 
   it.each(NON_CLAIM_LINES)(
@@ -1696,6 +1720,7 @@ describe("#606 S1+S2: stderr-only quota wording on a claimless clean result, and
         ] as const)
           expect([t, shape, await launchWith(output)]).toEqual([t, shape, expectedFor(cls)]);
     },
+    60_000, // the same batch of full fake launches per case as above
   );
 
   it("the A/B launch's live driver shares the classifier: stderr-only and NBSP quota wording is usage-limit there too", async () => {
@@ -1843,6 +1868,264 @@ describe("round 2, D4: same class, different message is not a repeat", () => {
     const r2 = await launchR1Live(r1Opts(twoTrials(), tmp()), deps(fakeVm(), same));
     expect(r2.exitCode).toBe(EXIT.repeatFailure);
     expect(same.calls).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// #691 (TIF-274, critical path): the trial snapshot holds no in-guest agent, so the live driver
+// deploys it after every reset and before the channel opens.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Every reset is followed at once by a deploy, every deploy follows a reset, and every open
+ * follows a deploy: a skipped deploy, a deploy before the reset, or an open before the deploy
+ * all fail this.
+ */
+function expectDeployAfterEveryReset(events: readonly string[]) {
+  const resets = events.filter((e) => e === "reset").length;
+  expect(resets).toBeGreaterThan(0);
+  expect(events.filter((e) => e === "deploy")).toHaveLength(resets);
+  events.forEach((e, i) => {
+    if (e === "reset") expect(events[i + 1]).toBe("deploy");
+    if (e === "deploy") expect(events[i - 1]).toBe("reset");
+    if (e === "open") expect(events[i - 1]).toBe("deploy");
+  });
+}
+
+const deployAttempts = (out: string, taskId: string) =>
+  (loadLedger(join(out, PROGRESS_FILE)).byTask.get(taskId) ?? []).map((a) => ({
+    key: a.start.trialKey,
+    supersedes: a.start.supersedes,
+    outcome: a.end?.outcome,
+    harnessClass: a.end?.harnessClass,
+    faultMessage: a.end?.faultMessage,
+  }));
+
+describe("#691: the live driver deploys the in-guest agent after each reset, before open()", () => {
+  const ok = () => fakeClaude(() => ({ stdout: resultJson("x\nDONE") }));
+
+  it("first attempts: reset, deploy, open, in that order, for every trial", async () => {
+    const vm = fakeVm();
+    const out = tmp();
+    const r = await launchR1Live(r1Opts(twoTrials(), out), deps(vm, ok()));
+    expect(r.exitCode).toBe(EXIT.complete);
+    expectDeployAfterEveryReset(vm.events);
+    expect(vm.events.filter((e) => e === "reset")).toHaveLength(2);
+    expect(vm.events.filter((e) => e === "open")).toHaveLength(2);
+  });
+
+  it("a failed deploy is a transport-error harness fault: open() is not reached, claude not started, the trial re-runs in place", async () => {
+    const vm = fakeVm({ failDeploy: 1 });
+    const claude = ok();
+    const out = tmp();
+    const cfg = { ...config(), trials: ["fc-v1-001"] };
+    const r = await launchR1Live(r1Opts(cfg, out), deps(vm, claude));
+    expect(r.exitCode).toBe(EXIT.complete);
+    expect(r.result).toMatchObject({ status: "complete", ran: 1, faulted: 1, stopCode: null });
+    // Attempt 1: reset, deploy (fails), nothing else. Attempt 2: a fresh reset, deploy, open, ...
+    expect(vm.events.slice(0, 5)).toEqual(["reset", "deploy", "reset", "deploy", "open"]);
+    expectDeployAfterEveryReset(vm.events);
+    expect(deployAttempts(out, "fc-v1-001")).toEqual([
+      {
+        key: "r1p-fc-v1-001-a1",
+        supersedes: null,
+        outcome: "harness-fault",
+        harnessClass: "transport-error",
+        faultMessage: VM_FAULT.deploy,
+      },
+      {
+        key: "r1p-fc-v1-001-a2",
+        supersedes: "r1p-fc-v1-001-a1",
+        outcome: "decided",
+        harnessClass: null,
+        faultMessage: undefined,
+      },
+    ]);
+    // Only the re-run started the agent; the faulted attempt never reached claude.
+    expect(claude.calls).toHaveLength(1);
+    expect(claude.calls[0]?.options.cwd?.toString()).toMatch(/r1p-fc-v1-001-a2$/);
+  });
+
+  it("a deploy that always fails never opens the channel or starts claude; the repeat rule stops the run", async () => {
+    const vm = fakeVm({ failDeploy: true });
+    const claude = ok();
+    const out = tmp();
+    const r = await launchR1Live(r1Opts(twoTrials(), out), deps(vm, claude));
+    expect(r.exitCode).toBe(EXIT.repeatFailure);
+    expect(r.result?.stopCode).toBe("repeat-failure");
+    expect(vm.events).toEqual(["reset", "deploy", "reset", "deploy"]);
+    expect(claude.calls).toEqual([]);
+    expect(ledgerEnds(out).map((e) => [e.outcome, e.harnessClass, e.faultMessage])).toEqual([
+      ["harness-fault", "transport-error", VM_FAULT.deploy],
+      ["harness-fault", "transport-error", VM_FAULT.deploy],
+    ]);
+  });
+
+  it("--resume: the resumed attempt deploys after its reset and before open(), in place", async () => {
+    const out = tmp();
+    const cfg = twoTrials();
+    const stopped = await launchR1Live(r1Opts(cfg, out), deps(fakeVm({ failDeploy: true }), ok()));
+    expect(stopped.exitCode).toBe(EXIT.repeatFailure);
+
+    const vm2 = fakeVm();
+    const claude2 = ok();
+    const r = await launchR1Live(r1Opts(cfg, out), deps(vm2, claude2));
+    expect(r.exitCode).toBe(EXIT.complete);
+    expect(vm2.events.slice(0, 3)).toEqual(["reset", "deploy", "open"]);
+    expectDeployAfterEveryReset(vm2.events);
+    // fc-v1-001 re-runs in place as attempt 3, superseding the two deploy faults.
+    expect(deployAttempts(out, "fc-v1-001").map((a) => [a.key, a.supersedes, a.outcome])).toEqual([
+      ["r1p-fc-v1-001-a1", null, "harness-fault"],
+      ["r1p-fc-v1-001-a2", "r1p-fc-v1-001-a1", "harness-fault"],
+      ["r1p-fc-v1-001-a3", "r1p-fc-v1-001-a2", "decided"],
+    ]);
+    expect(claude2.calls[0]?.options.cwd?.toString()).toMatch(/r1p-fc-v1-001-a3$/);
+  });
+
+  it("the trial deadline passing during the deploy is a timeout fault; open() is not reached", async () => {
+    const vm = fakeVm();
+    const ac = new AbortController();
+    const backend: VmBackend = {
+      reset: () => vm.backend.reset(),
+      async deploy() {
+        await vm.backend.deploy();
+        ac.abort();
+      },
+      open: () => vm.backend.open(),
+    };
+    const trialDir = tmp();
+    const step = new VmTrialStep(
+      { backend, repoRoot: ROOT },
+      { task: task1(), runId: "k", trialKey: "r1p-fc-v1-001-a1", trialDir, signal: ac.signal },
+    );
+    const fault = await step.prepare().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(fault).toBeInstanceOf(HarnessFault);
+    expect((fault as HarnessFault).harnessClass).toBe("timeout");
+    expect((fault as HarnessFault).message).toBe(VM_FAULT.deployTimeout);
+    expect(vm.events).toEqual(["reset", "deploy"]);
+  });
+});
+
+describe("#691: runDeploy runs the M1 sweep's verified deploy, bounded", () => {
+  /** A fake `bash deploy-to-vm.sh`: prints `stdout`, exits `code` (never, when `hang`). */
+  function fakeDeploySpawn(o: {
+    stdout?: string;
+    code?: number;
+    hang?: boolean;
+    throws?: boolean;
+  }) {
+    const calls: SpawnCall[] = [];
+    const kills: (NodeJS.Signals | number | undefined)[] = [];
+    const spawn: SpawnFn = (command, args, options) => {
+      calls.push({ command, args, options });
+      if (o.throws) throw new Error("spawn bash ENOENT");
+      const child = new EventEmitter() as ChildProcess & EventEmitter;
+      const out = new PassThrough();
+      const err = new PassThrough();
+      Object.assign(child, {
+        stdout: out,
+        stderr: err,
+        kill: (s?: NodeJS.Signals | number) => {
+          kills.push(s);
+          return true;
+        },
+      });
+      if (!o.hang)
+        setImmediate(() => {
+          out.write(o.stdout ?? "");
+          err.write("==> copying agent tree to guest\n");
+          out.end();
+          err.end();
+          setImmediate(() => child.emit("close", o.code ?? 0));
+        });
+      return child;
+    };
+    return { spawn, calls, kills };
+  }
+  const echoed: Buffer[] = [];
+  const run = (f: ReturnType<typeof fakeDeploySpawn>, timeoutMs?: number) =>
+    runDeploy({
+      repoRoot: ROOT,
+      spawn: f.spawn,
+      tokenOut: "/h/private/agent-token",
+      env: { PATH: "/bin", MYCO_TOKEN_OUT: "/somewhere/else" },
+      echo: (d) => echoed.push(d),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
+
+  it("runs bash agent/bootstrap/deploy-to-vm.sh with MYCO_TOKEN_OUT set to the trial's token file path", async () => {
+    const f = fakeDeploySpawn({
+      stdout: `==> ping verified:\n\n${DEPLOY_OK_LINE}\n  token : ...\n`,
+    });
+    await expect(run(f)).resolves.toBeUndefined();
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]?.command).toBe("bash");
+    expect(f.calls[0]?.args).toEqual([join(ROOT, ...DEPLOY_SCRIPT)]);
+    expect(DEPLOY_SCRIPT.join("/")).toBe("agent/bootstrap/deploy-to-vm.sh");
+    expect(existsSync(join(ROOT, ...DEPLOY_SCRIPT))).toBe(true);
+    // A path only, and the trial's path wins over an operator export (one file for both ends).
+    expect(f.calls[0]?.options.env?.MYCO_TOKEN_OUT).toBe("/h/private/agent-token");
+    expect(f.calls[0]?.options.env?.PATH).toBe("/bin");
+    expect(Buffer.concat(echoed).toString()).toContain(DEPLOY_OK_LINE);
+  });
+
+  for (const [name, o, why] of [
+    ["a non-zero exit", { stdout: "deploy-to-vm: copy failed\n", code: 1 }, /exited 1/],
+    [
+      "exit 0 without the success line",
+      { stdout: "==> registering\n", code: 0 },
+      /without DEPLOY OK/,
+    ],
+    [
+      "the success line only as part of another line",
+      { stdout: "NOT DEPLOY OK\n" },
+      /without DEPLOY OK/,
+    ],
+    ["a spawn failure", { throws: true }, /ENOENT/],
+  ] as const)
+    it(`rejects on ${name}`, async () => {
+      await expect(run(fakeDeploySpawn(o))).rejects.toThrow(why);
+    });
+
+  it("a deploy past its bound is killed and rejects (no hang)", async () => {
+    const f = fakeDeploySpawn({ hang: true });
+    await expect(run(f, 20)).rejects.toThrow(/exceeded its bound/);
+    expect(f.kills).toEqual(["SIGTERM"]);
+  });
+
+  it("the default bound is the M1 sweep's 400 s", () => {
+    expect(DEFAULT_DEPLOY_TIMEOUT_MS).toBe(400_000);
+    expect(readFileSync(join(ROOT, "scripts", "m1-sweep.sh"), "utf8")).toMatch(
+      /alarm 400; exec @ARGV" agent\/bootstrap\/deploy-to-vm\.sh/,
+    );
+  });
+});
+
+describe("#691: open() reads the token file the deploy just wrote", () => {
+  it("one path for both: --token-file, else MYCO_TOKEN_OUT, else ~/.myco-token; never MYCO_AGENT_TOKEN", () => {
+    expect(agentTokenFile("/op/tok", { MYCO_TOKEN_OUT: "/env/tok" }, "/h")).toBe("/op/tok");
+    expect(agentTokenFile(undefined, { MYCO_TOKEN_OUT: "/env/tok" }, "/h")).toBe("/env/tok");
+    expect(agentTokenFile(undefined, { MYCO_TOKEN_OUT: "" }, "/h")).toBe("/h/.myco-token");
+    expect(agentTokenFile(undefined, { MYCO_AGENT_TOKEN: "stale-value" }, "/h")).toBe(
+      "/h/.myco-token",
+    );
+  });
+
+  it("the real backend passes that one path to both the deploy and open()", () => {
+    // realVmBackend refuses under vitest, so its source is checked: one `tokenOut`, from
+    // agentTokenFile, is the deploy's MYCO_TOKEN_OUT and open()'s --token-file.
+    const src = readFileSync(join(ROOT, "src", "pilot", "vm-capture.ts"), "utf8");
+    const body = src.slice(src.indexOf("export function realVmBackend"));
+    expect(body).toMatch(
+      /const tokenOut = agentTokenFile\(opts\.tokenFile, process\.env, homedir\(\)\);/,
+    );
+    expect(body).toMatch(/return runDeploy\(\{[^}]*\btokenOut,/);
+    expect(body).toMatch(
+      /resolveRunLiveToken\(\["--token-file", tokenOut\], process\.env, homedir\(\)\)/,
+    );
   });
 });
 
