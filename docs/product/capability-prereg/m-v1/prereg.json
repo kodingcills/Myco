@@ -6,29 +6,61 @@
   "spec": "docs/product/capability-spec.md §2 M, under §1 (shared rules), §3 (pre-registration), §4 (constraints) and §5 (sequencing)",
   "ratification": {
     "status": "proposed",
-    "note": "Frozen as proposed. Not ratified: every item under pending awaits a lead ruling. The analysis refuses a real (non-simulated) pack until status is ratified, and ratifying changes this file and so the pre-registration hash, before any measurement run.",
+    "note": "Not ratified: the n ruling cannot be applied to rep-v1 as accepted (see pending and vmHoursEstimate). The analysis refuses a real (non-simulated) pack until status is ratified, and ratifying changes this file and so the pre-registration hash, before any measurement run.",
     "pending": [
       {
         "id": "n",
-        "proposed": "Keep n = 40 test units (20 repeat + 20 similar), as the spec states. capability-spec §6 asks whether to raise n for M: at n = 40 the power for a 10-15 point net gain is 0.26-0.49 (§1.5), so a not-shown result is not evidence of no effect."
-      },
-      {
-        "id": "learn-families",
-        "proposed": "rep-v1 is calc-record-edit only. The spec's learn split names calc-record-edit and calc-multi-step, but calc-multi-step has no published, graded task set yet (TIF-270); adding it is a new task-set version (rep-v2) and a new pre-registration version."
-      },
-      {
-        "id": "base-surface-both-shown",
-        "proposed": "If both I and J are shown, the base surface is the one with the higher grader-verified rate in its own measured run; a tie goes to I (measured first). If J has not run when M is measured, J is not a candidate."
-      },
-      {
-        "id": "model-id",
-        "proposed": "claude-sonnet-5-5, the trial run's planner model (PILOT_MODEL), on Claude Ultra."
-      },
-      {
-        "id": "advice-delivery",
-        "proposed": "Skills reach the agent as harness-side retrieval (the myco_skills_retrieve code path, callRetrieve) rendered into advice text before the first turn; the cold arm runs the same surface with an empty store, which renders no advice. The agent-callable skill tool waits for a reviewed change that lets a launch classify myco-skills."
+        "proposed": "Blocked, back to the coordinator. The lead ruled n = 90 (06:21Z) and accepted rep-v1 (calc-record-edit, no-fault fc-v1 tasks). rep-v1's rules cap n at 60: fc-v1 has 60 no-fault satisfiable tasks on 20 fixture seeds (3 each), and similar tasks may share no fixture seed with a learn task, so at most 30 learn + 30 similar. n = 90 needs 45 learn + 45 similar distinct tasks: (A) all 90 satisfiable fc-v1 tasks, adding the kill-app, delayed-save and focus-change classes; or (C) about 30 newly generated calc-record-edit tasks with new fixture seeds, a new task set (rep-v2). Other options: (B) n = 60, the most rep-v1 allows; (D) n = 40 pre-registered as EXPLORATORY. Until the coordinator chooses, the task set stays at n = 40 (20 repeat + 20 similar)."
       }
     ]
+  },
+  "leadRulings": [
+    {
+      "id": "n",
+      "time": "2026-11-27T06:21Z",
+      "ruling": "n = 90, under the same VM-hours rule as J and K. Put the estimate in the pre-registration before freezing. If it would delay the trial run or the demo, fall back to n = 40, pre-registered as EXPLORATORY, before any data.",
+      "applied": "Not yet: rep-v1 as accepted caps n at 60 (see ratification.pending). The VM-hours estimate is recorded under vmHoursEstimate.",
+      "source": "coordinator relay on PR #646, comment 7211429206"
+    },
+    {
+      "id": "learn-families",
+      "time": "2026-11-27T06:21Z",
+      "ruling": "rep-v1 (calc-record-edit only) is accepted.",
+      "applied": "taskSet rep-v1, unchanged.",
+      "source": "coordinator relay on PR #646, comment 7211429206"
+    },
+    {
+      "id": "base-surface-both-shown",
+      "time": "2026-11-27T06:21Z",
+      "ruling": "Whichever of I or J has the higher grader-verified rate; a tie goes to I.",
+      "applied": "baseSurface rule as proposed (src/skills/m-prereg.ts resolveBaseSurface), unchanged.",
+      "source": "coordinator relay on PR #646, comment 7211429206"
+    },
+    {
+      "id": "model-id",
+      "time": "2026-11-27T06:21Z",
+      "ruling": "claude-sonnet-5-5, the same as the pilot.",
+      "applied": "modelId claude-sonnet-5-5, unchanged.",
+      "source": "coordinator relay on PR #646, comment 7211429206"
+    },
+    {
+      "id": "advice-delivery",
+      "time": "2026-11-27T06:21Z",
+      "ruling": "Harness-side retrieval, with the cold arm on an empty store.",
+      "applied": "arms.definition as proposed: skills-on reads the frozen store through callRetrieve rendered as advice text; cold runs against an empty store (head = GENESIS).",
+      "source": "coordinator relay on PR #646, comment 7211429206"
+    }
+  ],
+  "vmHoursEstimate": {
+    "perTrialSeconds": 375,
+    "perTrialSource": "the repo's measured per-trial cost on the Windows VM, 140 s cold reset + about 100 s redeploy + about 135 s trial (docs/baseline/screenshot-agent.md), as track J's pre-registration uses",
+    "trials": "learn tasks + 2 arms x test units; each test unit is run once per arm (k = 1)",
+    "options": [
+      { "option": "A or C: n = 90", "learn": 45, "testUnits": 90, "trials": 225, "vmHours": 23.4 },
+      { "option": "B: n = 60", "learn": 30, "testUnits": 60, "trials": 150, "vmHours": 15.6 },
+      { "option": "D: n = 40", "learn": 20, "testUnits": 40, "trials": 100, "vmHours": 10.4 }
+    ],
+    "note": "If an Ultra trial takes twice M1's time, double each figure. M's VM time comes only when the critical path does not need the VM (capability-spec §4, m2-plan §7.0), and M is measured only after I (and J, if it ran)."
   },
   "hypothesis": "H1: on the rep-v1 test units, skills-on (the frozen learn-phase store) has a higher grader-verified rate than cold (the same surface with an empty store). H0: no increase. One-sided.",
   "baseSurface": {
