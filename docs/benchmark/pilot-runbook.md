@@ -72,7 +72,8 @@ resume re-runs the trial. So a limit spell on the shared subscription can never 
 and recovering from one needs no config change (and so no new run directory).
 
 `error-result` (an error result the classifier cannot name, including a limit message worded in
-a way the vocabulary does not know) **does** spend `maxAttemptsPerTrial`, with no backoff. That
+a way the vocabulary does not know; an unmapped structured error whose text names a quota,
+billing, auth or transient fault is classified by that text instead, #607 round 3) **does** spend `maxAttemptsPerTrial`, with no backoff. That
 is bounded (3 attempts, `interTrialDelayS` apart) and safe for the data, but it can exhaust a
 trial. Recovering an `exhausted` trial: there is no in-place reset; start a **new run
 directory** (`--out` to a fresh path) once the cause is understood, and keep the old directory
@@ -101,11 +102,22 @@ start hitting limits, raise `--delay-s`. Override per invocation with `--concurr
   the CLI emits no init message, so it never fires; the active guards are the environment
   preflight (no API-path name) and the agent's environment allowlist.
 - **The subscription's usage limit (lead ruling, round 2):** wording such as "usage limit
-  reached", "5-hour limit reached", "Weekly limit reached", "Opus limit reached" or "resets at
-  3pm" (`USAGE_LIMIT_TEXT`; also when it comes with the structured `rate_limit` class or HTTP
-  429) is class `usage-limit`. The run stops at once with exit **7** (`stopCode`
-  `usage-limit`): no retry, no back-off, no attempt spent. The CLI prints `USAGE LIMIT: ...
-  This must go to the lead`; take it to the lead and do not resume until the lead decides.
+  reached", "5-hour limit reached", "Weekly limit reached", "Opus limit reached", "resets at
+  3pm" or "You've hit your limit" (`USAGE_LIMIT_TEXT`; also when it comes with the structured
+  `rate_limit` class or HTTP 429) is class `usage-limit`. The run stops at once with exit
+  **7** (`stopCode` `usage-limit`): no retry, no back-off, no attempt spent. The CLI prints
+  `USAGE LIMIT: ... This must go to the lead`; take it to the lead and do not resume until
+  the lead decides. The usage vocabulary has no bare numbers. "You've hit your limit" (any
+  apostrophe, or "you have", "hit" or "reached", optional "usage") was added in #607 round 2.
+- **Folding before any text match (#606 S2, #607 round 2):** every vocabulary (auth, billing,
+  usage limit, transient limit) is matched on folded text (`vocabularyForms`), on every path:
+  stderr, plain stdout, error results, structured limits and the clean-result exception
+  below. Hyphen variants U+2010-U+2015 become "-"; Unicode format characters (zero-width
+  space U+200B-U+200D, word joiner U+2060, U+FEFF, U+180E) are tried both removed and as a
+  space; then every whitespace run (no-break space U+00A0, U+2000-U+200A, U+202F, U+3000,
+  tabs, newlines, repeated spaces) becomes one space. So "Credit balance is too low" with
+  no-break spaces stops as `billing`, as it does with ASCII spaces. The broad auth, billing and
+  transient vocabulary is still never applied to a clean result.
 - **Two identical failures:** on a live run, two harness faults in a row with the same class
   and message (no decided trial between) stop the run with exit **6** (`stopCode`
   `repeat-failure`), before a third attempt. Rate limits are excluded (they back off). The
@@ -125,9 +137,23 @@ start hitting limits, raise `--delay-s`. Override per invocation with `--concurr
   structured error), never to a clean result: fc-v1's fixtures hold values such as qty 401,
   403 and 429, so a clean result with no `DONE`/`NOT DONE` line is the agent's "no claim",
   decided and never re-run. One narrow, fail-closed exception (PR #598 round 3): a clean
-  result with no claim line whose text matches the usage-limit vocabulary (no bare numbers)
-  is `usage-limit` (exit 7, nothing counted); a clean result with a claim line is never
-  reclassified. Under the
+  result with no claim line whose text **or stderr** matches the usage-limit vocabulary (no
+  bare numbers; stderr since #606 S1, lead ruling 03:58Z) is `usage-limit` (exit 7, nothing
+  counted); a clean result with a claim line is never reclassified, whatever stderr says.
+  Since #607 round 3 (L1, lead rule 04:52Z) the same exception covers a narrow, numberless
+  set of exact CLI billing and auth phrases, folded like the rest: "credit balance is too
+  low" and "out of extra usage" (`billing`), "please run /login", "not logged in", "invalid
+  api key" and "oauth token has expired" (`auth`). A claimless clean result matching one
+  stops with exit 5 and its class, nothing counted and no attempt spent; the broad words
+  ("billing", "quota", "credential", "forbidden", bare 401/403/429) are still never applied to
+  a clean result. **Unmapped structured errors (#607 round 3, B2):** when the only structured
+  class is one the classifier does not map (an `error` string such as `invalid_request`,
+  `server_error` or `unknown`, or an `api_error_status` other than 401/402/403/429/529, e.g.
+  400 or 500), the text vocabulary still decides: quota, billing, auth or transient wording
+  stops or backs off as its class and does not spend the attempt. With no such wording it
+  stays `error-result`. A mapped structured class (auth, billing, rate limit) still wins over
+  the text. `AUTH_TEXT` also matches "log-in again" (hyphenated) since round 3 (F-E).
+  Under the
   topped-up-run ruling (lead, 2026-11-26 12:22Z) the faulted attempt stays in the ledger with
   its arm row (cause `harness`) and its cost estimate, and the re-run's `start` line names it
   in `supersedes`. Its cost counts toward R7.
