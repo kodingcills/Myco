@@ -104,6 +104,10 @@ const packs = dirs.map((dir) => {
   if (packSchema(dir) === AB_PACK_SCHEMA) {
     const input = readAbPack(dir, ROOT);
     const result = checkAbPack(input);
+    // Only the pack's own arms (#573). A Stage-1 pack's `stage0/` ledgers are not passed: no
+    // figure is computed from them; checkCorrectionsAb reads them only to exclude their trial
+    // keys and seeds from Stage 1 and refuses any row there not marked Stage 0. Stage 0 claims
+    // nothing, and the pack-level SIMULATED and EXPERIMENT markers are still checked on `dir`.
     const provenance = packProvenanceErrors(dir, [...input.on.arm, ...input.off.arm], {
       abPack: true,
     }).map((e) => `provenance: ${e}`);
