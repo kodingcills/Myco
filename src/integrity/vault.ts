@@ -37,13 +37,19 @@ import {
   lstatSync,
   mkdirSync,
   readdirSync,
-  readFileSync,
   realpathSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readRegularNoBlock } from "./nonblocking-read.ts";
 
 export const VAULT_FORMAT_VERSION = 1;
+
+/**
+ * The most the vault reads from any one host file (a sealed or captured file, a manifest,
+ * an oracle source). A larger file is refused, never read (#541 R3-1).
+ */
+export const VAULT_READ_LIMIT_BYTES = 256 * 1024 * 1024;
 
 export type IntegrityViolationCode =
   | "vault-reachable"
@@ -169,6 +175,7 @@ export class VaultError extends Error {
       | "exists"
       | "reachable"
       | "permissions"
+      | "not-regular"
       | "not-sealed"
       | "not-stopped"
       | "already-captured",
@@ -328,7 +335,13 @@ export class VerdictVault {
     for (const path of input.oracle.sourceFiles) {
       if (!isAbsolute(path))
         throw new VaultError("bad-name", `oracle source ${path} is not absolute`);
-      sources[path] = sha256(readFileSync(path));
+      // Never blocks (a FIFO planted at the path) and never follows a symlink (#541 R3-1).
+      const read = readRegularNoBlock(path, { maxBytes: VAULT_READ_LIMIT_BYTES });
+      if (!read.ok) {
+        if (read.code === "missing") throw read.error;
+        throw new VaultError("not-regular", `oracle source ${path} refused (${read.code})`);
+      }
+      sources[path] = sha256(read.bytes);
     }
     mkdirSync(dir, { mode: 0o700 });
     chmodSync(dir, 0o700);
@@ -473,19 +486,22 @@ export class VerdictVault {
     }
 
     // 3. Oracle sources unchanged since seal.
+    //    Read without blocking and type-checked: on an unprivileged backend the agent can
+    //    replace a source with a FIFO or a symlink to /dev/zero (#541 R3-1).
     for (const [path, want] of Object.entries(seal.body.oracle.sources)) {
-      let bytes: Buffer;
-      try {
-        bytes = readFileSync(path);
-      } catch {
+      const read = readRegularNoBlock(path, { maxBytes: VAULT_READ_LIMIT_BYTES });
+      if (!read.ok) {
         violations.push({
           code: "oracle-source-missing",
           path,
-          detail: "oracle source unreadable",
+          detail:
+            read.code === "missing"
+              ? "oracle source unreadable"
+              : `oracle source is not a regular file (${read.code})`,
         });
         continue;
       }
-      if (sha256(bytes) !== want)
+      if (sha256(read.bytes) !== want)
         violations.push({
           code: "oracle-source-hash",
           path,
@@ -584,7 +600,22 @@ export class VerdictVault {
             detail: "manifest is not a regular file",
           },
         };
-      text = readFileSync(path, "utf8");
+      // The lstat above does not stop a swap before the read: open without blocking and
+      // require the same regular file on the fd (#541 R3-1).
+      const read = readRegularNoBlock(path, { maxBytes: VAULT_READ_LIMIT_BYTES, expect: st });
+      if (!read.ok) {
+        if (read.code !== "missing")
+          return {
+            ok: false,
+            violation: {
+              code: "seal-malformed",
+              path: rel,
+              detail: "manifest is not a regular file",
+            },
+          };
+        throw read.error;
+      }
+      text = read.bytes.toString("utf8");
     } catch {
       return {
         ok: false,
@@ -638,7 +669,22 @@ export class VerdictVault {
         path: rel,
         detail: `mode ${(st.mode & 0o777).toString(8)}`,
       });
-    const bytes = readFileSync(path);
+    // The lstat above does not stop a swap before the read: open without blocking and
+    // require the same regular single-link file on the fd (#541 R3-1).
+    const read = readRegularNoBlock(path, { maxBytes: VAULT_READ_LIMIT_BYTES, expect: st });
+    if (!read.ok || read.stat.nlink !== 1) {
+      out.push(
+        read.ok || read.code !== "missing"
+          ? {
+              code: `${kind}-file-not-regular`,
+              path: rel,
+              detail: read.ok ? "not a regular single-link file" : `refused (${read.code})`,
+            }
+          : { code: `${kind}-file-missing`, path: rel, detail: "missing" },
+      );
+      return undefined;
+    }
+    const bytes = read.bytes;
     if (sha256(bytes) !== want) {
       out.push({
         code: `${kind}-file-hash`,
