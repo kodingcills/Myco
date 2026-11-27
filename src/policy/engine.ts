@@ -89,7 +89,9 @@ function within(path: string, root: string): boolean {
 }
 
 function cleanPath(p: unknown): p is string {
-  return typeof p === "string" && p.length > 0 && p.length <= 4096 && isAbsolute(p) && resolve(p) === p;
+  return (
+    typeof p === "string" && p.length > 0 && p.length <= 4096 && isAbsolute(p) && resolve(p) === p
+  );
 }
 
 function cleanList(v: unknown, check: (x: unknown) => boolean): boolean {

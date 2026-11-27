@@ -45,7 +45,8 @@ describe("violation checker independence (track O)", () => {
       for (const [mod, specs] of walk(f)) {
         if (!mod.startsWith(`${CHECKER}/`)) bad.push(`${relative(ROOT, mod)} reached`);
         for (const s of specs)
-          if (!s.startsWith(".") && !ALLOWED_BUILTINS.has(s)) bad.push(`${relative(ROOT, mod)}: ${s}`);
+          if (!s.startsWith(".") && !ALLOWED_BUILTINS.has(s))
+            bad.push(`${relative(ROOT, mod)}: ${s}`);
       }
     expect(bad).toEqual([]);
   });
@@ -61,7 +62,9 @@ describe("violation checker independence (track O)", () => {
   it("the checker names no policy-engine module or vocabulary", () => {
     for (const f of tsFiles(CHECKER)) {
       const code = readFileSync(f, "utf8").replace(/^\s*(\/\/|\*|\/\*\*).*$/gm, "");
-      expect(code, relative(ROOT, f)).not.toMatch(/policy\/|POLICY_|PolicyGuard|createPolicyEngine/);
+      expect(code, relative(ROOT, f)).not.toMatch(
+        /policy\/|POLICY_|PolicyGuard|createPolicyEngine/,
+      );
     }
   });
 });

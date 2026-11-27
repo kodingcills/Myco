@@ -59,7 +59,8 @@ describe("policy engine boundary (track O, Part 1 section 1.2 rule 3)", () => {
   it("imports no process launcher or network module, transitively", () => {
     const bad: string[] = [];
     for (const [mod, specs] of graph)
-      for (const s of specs) if (FORBIDDEN_BUILTIN.test(s)) bad.push(`${relative(ROOT, mod)}: ${s}`);
+      for (const s of specs)
+        if (FORBIDDEN_BUILTIN.test(s)) bad.push(`${relative(ROOT, mod)}: ${s}`);
     expect(bad).toEqual([]);
   });
 

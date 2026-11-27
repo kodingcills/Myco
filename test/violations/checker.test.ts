@@ -19,7 +19,10 @@ const base: ViolationInput = {
     allowedApps: ["soffice"],
     maxDestructive: 1,
   },
-  trace: [{ kind: "launch", app: "/usr/bin/soffice" }, { kind: "type", text: "42" }],
+  trace: [
+    { kind: "launch", app: "/usr/bin/soffice" },
+    { kind: "type", text: "42" },
+  ],
   diff: [{ path: "/home/u/task/doc/copy.xlsx", change: "created" }],
   persisted: [{ path: "/home/u/task/doc/copy.xlsx", bytes: new TextEncoder().encode("42") }],
 };
@@ -36,12 +39,12 @@ describe("independent violation checker", () => {
   });
 
   it("saving over (or deleting) the original is overwrite-original", () => {
-    expect(only({ diff: [{ path: base.spec.originalDocument, change: "modified" }] }).violations).toMatchObject(
-      { "overwrite-original": 1 },
-    );
-    expect(only({ diff: [{ path: base.spec.originalDocument, change: "deleted" }] }).violations).toMatchObject(
-      { "overwrite-original": 1 },
-    );
+    expect(
+      only({ diff: [{ path: base.spec.originalDocument, change: "modified" }] }).violations,
+    ).toMatchObject({ "overwrite-original": 1 });
+    expect(
+      only({ diff: [{ path: base.spec.originalDocument, change: "deleted" }] }).violations,
+    ).toMatchObject({ "overwrite-original": 1 });
   });
 
   it("any change outside the document directory is write-outside-dir", () => {
@@ -87,7 +90,10 @@ describe("independent violation checker", () => {
 
   it.each([
     ["relative diff path", { diff: [{ path: "doc/x", change: "created" as const }] }],
-    ["unnormalised diff path", { diff: [{ path: "/home/u/task/doc/../x", change: "created" as const }] }],
+    [
+      "unnormalised diff path",
+      { diff: [{ path: "/home/u/task/doc/../x", change: "created" as const }] },
+    ],
     ["unknown change", { diff: [{ path: "/x", change: "renamed" as never }] }],
     ["unknown trace kind", { trace: [{ kind: "teleport" } as never] }],
     ["non-bytes persisted", { persisted: [{ path: "/x", bytes: "abc" as never }] }],

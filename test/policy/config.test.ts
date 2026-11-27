@@ -102,9 +102,9 @@ describe("policy config: pinned, closed, fail closed", () => {
     if (!r.ok) throw new Error(r.code);
     const before = r.guard.configSha256;
     writeFileSync(p, JSON.stringify({ schema: "myco.policy-config/1", policies: [] }));
-    expect(r.guard.decide("app-adapter.act", () => ({ ...NONE, credentialInput: true }))).toMatchObject(
-      { decision: "deny", code: "POLICY_CREDENTIAL_INPUT" },
-    );
+    expect(
+      r.guard.decide("app-adapter.act", () => ({ ...NONE, credentialInput: true })),
+    ).toMatchObject({ decision: "deny", code: "POLICY_CREDENTIAL_INPUT" });
     expect(r.guard.configSha256).toBe(before);
   });
 
@@ -117,7 +117,10 @@ describe("policy config: pinned, closed, fail closed", () => {
     ["effect allow", JSON.stringify(oneRule({ kind: "write-scope", effect: "allow" }))],
     ["extra rule key", JSON.stringify(oneRule({ kind: "write-scope", effect: "deny", off: true }))],
     ["bad max", JSON.stringify(oneRule({ kind: "destructive-limit", effect: "deny", max: -1 }))],
-    ["bad app id", JSON.stringify(oneRule({ kind: "app-allowlist", effect: "deny", apps: ["A B"] }))],
+    [
+      "bad app id",
+      JSON.stringify(oneRule({ kind: "app-allowlist", effect: "deny", apps: ["A B"] })),
+    ],
     [
       "duplicate ids",
       JSON.stringify({

@@ -36,7 +36,15 @@ import {
 } from "../../src/policy/actuators.ts";
 import { ACTUATOR_IDS } from "../../src/policy/codes.ts";
 import { allStrings, flush } from "../handoff/helpers.ts";
-import { ALL_RULES, brokerSetup, type Fixture, fixture, guardFor, MARKER, oneRule } from "./helpers.ts";
+import {
+  ALL_RULES,
+  brokerSetup,
+  type Fixture,
+  fixture,
+  guardFor,
+  MARKER,
+  oneRule,
+} from "./helpers.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 const SRC = join(ROOT, "src");
@@ -145,9 +153,7 @@ describe("every actuator path is guarded: enumeration", () => {
     const cross = (a: CrossAppActuator): GuardedCrossAppActuator => a;
     const desk = <S>(t: DesktopTransport): GuardedDesktopTransport<S> =>
       t as unknown as GuardedDesktopTransport<S>;
-    const deskAction = (
-      a: Parameters<DesktopTransport["act"]>[1],
-    ): GuardedDesktopAction => a;
+    const deskAction = (a: Parameters<DesktopTransport["act"]>[1]): GuardedDesktopAction => a;
     expect([linux, cross, desk, deskAction].every((f) => typeof f === "function")).toBe(true);
   });
 });
@@ -218,7 +224,10 @@ const adapterOpts = { trigger: NO_APPROVALS, isCredentialTarget: () => false };
 const desktopOpts = { trigger: NO_APPROVALS, focusIsCredential: () => false };
 
 /** Run one call through each wrapper; returns whether the inner actuator was reached. */
-const WRAPPER_CASES: Record<string, (f: Fixture, config: unknown) => Promise<{ reached: boolean; result: unknown }>> = {
+const WRAPPER_CASES: Record<
+  string,
+  (f: Fixture, config: unknown) => Promise<{ reached: boolean; result: unknown }>
+> = {
   "app-adapter.act": async (f, config) => {
     const { adapter, calls } = fakeAdapter();
     const p = policedAppAdapter(adapter, guardFor(f, config), adapterOpts);
@@ -270,7 +279,12 @@ const WRAPPER_CASES: Record<string, (f: Fixture, config: unknown) => Promise<{ r
       },
     };
     const p = guardedActionPolicy(passthrough, guardFor(f, config));
-    const result = p.check({ route: "api", kind: "x", reads: [], writes: [join(f.docDir, "c.csv")] });
+    const result = p.check({
+      route: "api",
+      kind: "x",
+      reads: [],
+      writes: [join(f.docDir, "c.csv")],
+    });
     // The router runs a route only when check allows: "reached" means allowed through.
     return { reached: reached && (result as { allow: boolean }).allow, result };
   },
@@ -281,21 +295,30 @@ describe("every actuator path is guarded: the guard runs before forwarding", () 
     expect(Object.keys(WRAPPER_CASES).sort()).toEqual([...ACTUATOR_IDS].sort());
   });
 
-  it.each(Object.keys(WRAPPER_CASES))("%s: a refusing policy never reaches the actuator", async (id) => {
-    const f = fixture();
-    const run = WRAPPER_CASES[id] as (f: Fixture, c: unknown) => Promise<{ reached: boolean; result: unknown }>;
-    const { reached, result } = await run(f, DENY_ALL);
-    expect(reached).toBe(false);
-    const text = JSON.stringify(result instanceof Error ? { m: result.message } : result);
-    // The desktop transport's outcome has no code channel: a refusal is `failed`.
-    if (id === "desktop-transport.act") expect(result).toBe("failed");
-    else expect(text).toContain("POLICY_DENIED");
-    expect(text).not.toContain(f.root);
-  });
+  it.each(Object.keys(WRAPPER_CASES))(
+    "%s: a refusing policy never reaches the actuator",
+    async (id) => {
+      const f = fixture();
+      const run = WRAPPER_CASES[id] as (
+        f: Fixture,
+        c: unknown,
+      ) => Promise<{ reached: boolean; result: unknown }>;
+      const { reached, result } = await run(f, DENY_ALL);
+      expect(reached).toBe(false);
+      const text = JSON.stringify(result instanceof Error ? { m: result.message } : result);
+      // The desktop transport's outcome has no code channel: a refusal is `failed`.
+      if (id === "desktop-transport.act") expect(result).toBe("failed");
+      else expect(text).toContain("POLICY_DENIED");
+      expect(text).not.toContain(f.root);
+    },
+  );
 
   it.each(Object.keys(WRAPPER_CASES))("%s: an allowing policy forwards the call", async (id) => {
     const f = fixture();
-    const run = WRAPPER_CASES[id] as (f: Fixture, c: unknown) => Promise<{ reached: boolean; result: unknown }>;
+    const run = WRAPPER_CASES[id] as (
+      f: Fixture,
+      c: unknown,
+    ) => Promise<{ reached: boolean; result: unknown }>;
     const { reached } = await run(f, ALLOW_ALL);
     expect(reached).toBe(true);
   });
@@ -369,7 +392,9 @@ describe("policed wrappers: host-side reduction of real actions", () => {
       trigger: NO_APPROVALS,
       focusIsCredential: () => true,
     });
-    expect(await p.act("s1", { kind: "launch", command: "/usr/bin/xterm", args: [] })).toBe("failed");
+    expect(await p.act("s1", { kind: "launch", command: "/usr/bin/xterm", args: [] })).toBe(
+      "failed",
+    );
     expect(await p.act("s1", { kind: "typeTextGlobal", text: MARKER })).toBe("failed");
     expect(await p.act("s1", { kind: "launch", command: "/usr/bin/soffice", args: [] })).toBe(
       "delivered_unverified",
@@ -439,7 +464,10 @@ describe("policed wrappers: host-side reduction of real actions", () => {
       allow: false,
       code: "POLICY_DENIED",
     });
-    expect(g.log()[0]).toMatchObject({ actuator: "action-router.policy", code: "POLICY_OVERWRITE_ORIGINAL" });
+    expect(g.log()[0]).toMatchObject({
+      actuator: "action-router.policy",
+      code: "POLICY_OVERWRITE_ORIGINAL",
+    });
   });
 
   it("sync paths: require-approval is POLICY_APPROVAL_REQUIRED, never an allow", () => {
@@ -470,7 +498,11 @@ describe("policed wrappers: require-approval opens a track N handoff (async path
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({ source: "policy", reason: "needs-approval" });
     expect(JSON.stringify(pending[0])).not.toContain(f.root);
-    s.operator.resolve({ handoffId: pending[0]?.handoffId as string, outcome: "approve", via: "cli" });
+    s.operator.resolve({
+      handoffId: pending[0]?.handoffId as string,
+      outcome: "approve",
+      via: "cli",
+    });
     expect((await first).outcome).toBe("delivered_unverified");
     expect(calls).toHaveLength(1);
 
@@ -479,14 +511,21 @@ describe("policed wrappers: require-approval opens a track N handoff (async path
     await flush();
     const id = s.operator.pending()[0]?.handoffId as string;
     s.operator.resolve({ handoffId: id, outcome: "reject", via: "cli" });
-    expect(await second).toEqual({ outcome: "failed", details: expect.stringMatching(/^POLICY_APPROVAL_REQUIRED/) });
+    expect(await second).toEqual({
+      outcome: "failed",
+      details: expect.stringMatching(/^POLICY_APPROVAL_REQUIRED/),
+    });
     expect(calls).toHaveLength(1);
   });
 
   it("without a broker (NO_APPROVALS) an approval cannot be granted: not forwarded", async () => {
     const f = fixture();
     const { t, calls } = fakeDesktop();
-    const p = policedDesktopTransport(t, guardFor(f, ALL_RULES, { screen: () => true }), desktopOpts);
+    const p = policedDesktopTransport(
+      t,
+      guardFor(f, ALL_RULES, { screen: () => true }),
+      desktopOpts,
+    );
     expect(await p.act("s1", { kind: "clickAt", x: 0, y: 0 })).toBe("failed");
     expect(calls).toEqual([]);
   });
@@ -513,12 +552,19 @@ describe("policed wrappers: require-approval opens a track N handoff (async path
     const agent = s.broker.agentChannel();
     void agent.request({ reason: "blocked", note: "help" }, Number.POSITIVE_INFINITY);
     await flush();
-    const p = policedAppAdapter(adapter, g, { trigger: s.trigger, isCredentialTarget: () => false });
+    const p = policedAppAdapter(adapter, g, {
+      trigger: s.trigger,
+      isCredentialTarget: () => false,
+    });
     const held = p.act({ kind: "click", ref: "a" });
     await flush();
     expect(calls).toEqual([]);
     expect(g.log()).toHaveLength(0);
-    s.operator.resolve({ handoffId: s.operator.pending()[0]?.handoffId as string, outcome: "approve", via: "cli" });
+    s.operator.resolve({
+      handoffId: s.operator.pending()[0]?.handoffId as string,
+      outcome: "approve",
+      via: "cli",
+    });
     expect((await held).outcome).toBe("delivered_unverified");
     expect(calls).toHaveLength(1);
   });

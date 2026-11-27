@@ -177,7 +177,6 @@ export function loadPolicyConfig(path: string, options: LoadOptions): LoadedPoli
     if (within(real, realRoot)) return { ok: false, code: "POLICY_CONFIG_NOT_HOST" };
   }
   const sha256 = createHash("sha256").update(bytes).digest("hex");
-  const config =
-    bytes.length > MAX_CONFIG_BYTES ? null : parsePolicyConfig(bytes.toString("utf8"));
+  const config = bytes.length > MAX_CONFIG_BYTES ? null : parsePolicyConfig(bytes.toString("utf8"));
   return { ok: true, sha256, config };
 }

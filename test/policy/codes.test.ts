@@ -4,12 +4,6 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  closedPolicyCode,
-  POLICY_CODE_SOURCE,
-  POLICY_REASON_CODES,
-} from "../../src/proof/closed.ts";
-import { hashedId } from "../../src/proof/hashed.ts";
-import {
   ACTUATOR_IDS,
   POLICY_AGENT_CODES,
   POLICY_DECISION_CODES,
@@ -20,6 +14,12 @@ import {
   POLICY_START_REFUSALS,
   RULE_CODE,
 } from "../../src/policy/codes.ts";
+import {
+  closedPolicyCode,
+  POLICY_CODE_SOURCE,
+  POLICY_REASON_CODES,
+} from "../../src/proof/closed.ts";
+import { hashedId } from "../../src/proof/hashed.ts";
 
 describe("track O closed vocabularies", () => {
   it("pins every list", () => {

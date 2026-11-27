@@ -28,7 +28,10 @@ const NONE: EngineInput = {
 function engine(config: unknown = ALL_RULES) {
   const f = fixture();
   const parsed = parsePolicyConfig(JSON.stringify(config));
-  const e = createPolicyEngine(SHA, parsed, { originalDocument: f.original, documentDir: f.docDir });
+  const e = createPolicyEngine(SHA, parsed, {
+    originalDocument: f.original,
+    documentDir: f.docDir,
+  });
   return { f, e };
 }
 
@@ -149,7 +152,10 @@ describe("policy engine: fail closed", () => {
 
   it("an invalid config denies every action", () => {
     const f = fixture();
-    const e = createPolicyEngine(SHA, null, { originalDocument: f.original, documentDir: f.docDir });
+    const e = createPolicyEngine(SHA, null, {
+      originalDocument: f.original,
+      documentDir: f.docDir,
+    });
     expect(e.evaluate(NONE)).toMatchObject({ decision: "deny", code: "POLICY_CONFIG_INVALID" });
   });
 
@@ -165,7 +171,10 @@ describe("policy engine: fail closed", () => {
       }),
     ).toThrow("POLICY_SCOPE_INVALID");
     expect(() =>
-      createPolicyEngine("not-a-hash", null, { originalDocument: f.original, documentDir: f.docDir }),
+      createPolicyEngine("not-a-hash", null, {
+        originalDocument: f.original,
+        documentDir: f.docDir,
+      }),
     ).toThrow("POLICY_SCOPE_INVALID");
   });
 
