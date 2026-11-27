@@ -57,10 +57,10 @@ describe("track C: an honest check passes R5 over host cases and yields an advis
         runId: BINDING.runId,
         family: "calc-record-edit",
         check: CHECK_MANIFEST.name,
-        selftest: { pass: true, claims: HONEST_CLAIMS, cases: 3 },
+        selftest: { pass: true, claims: HONEST_CLAIMS, cases: 5 },
       });
       expect(check.provenance.selftest.caughtClaimed).toBe(check.provenance.selftest.runsClaimed);
-      expect(check.provenance.selftest.runsClaimed).toBeGreaterThanOrEqual(12);
+      expect(check.provenance.selftest.runsClaimed).toBeGreaterThanOrEqual(20);
 
       const ok = runAgentCheck(check, BINDING, csvDoc(exactCsv), SPEC);
       expect(ok).toEqual({

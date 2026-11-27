@@ -41,12 +41,14 @@ import { calcCasesFor } from "../oracle-selftest/subjects.ts";
 import {
   CORRUPTION_CLASSES,
   type CorruptionClass,
+  type Draw,
   EXPECTED_STATUS,
   type SavedDocument,
   type SelfTestCase,
 } from "../oracle-selftest/types.ts";
 import {
   type PluginRegistration,
+  type RegisterOptions,
   registerPlugin,
   runPluginOracle,
 } from "../plugins/host/registry.ts";
@@ -74,16 +76,30 @@ export interface AgentCheckTask {
   readonly fileName: string;
 }
 
-/** Fresh, host-side random cases per registration (beside the bound task's own case). */
+/**
+ * Cases of the bound task itself per registration, each with its corruptions drawn afresh
+ * (D1, round 2 of #590): a check that recognises its own task's self-test documents would
+ * otherwise only need to be honest on one fixed set of them.
+ */
+const OWN_CASES = 3;
+/** Fresh, host-side random cases per registration (beside the bound task's own cases). */
 const RANDOM_CASES = 2;
 
 /** A seed or name nobody, the check's author included, can predict or recognise. */
 const unpredictable = (): string => randomBytes(9).toString("hex");
 
 /**
- * The calc-record-edit self-test: the bound task's own intent and file name, plus fresh cases
- * with random seeds, random parameter picks and random file names. Every corruption carries
- * its case's intent and name, so only a document's content tells it from the clean copy.
+ * The host's random source for every corruption the self-test draws (values, cells, rows,
+ * truncation points and byte-flip offsets). It lives in the host process; the sandboxed check
+ * cannot observe or seed it.
+ */
+const hostDraw: Draw = (n) => randomInt(n);
+
+/**
+ * The calc-record-edit self-test: the bound task's own intent and file name (several cases,
+ * each with corruptions drawn afresh from `hostDraw`), plus fresh cases with random seeds,
+ * random parameter picks and random file names. Every corruption carries its case's intent
+ * and name, so a check sees the bound task's real intent and name on every one of them.
  */
 function calcSelfTestCases(task: AgentCheckTask): SelfTestCase<unknown>[] {
   // A case whose clean copy equals one of its corruptions (an intent that changes nothing)
@@ -91,7 +107,10 @@ function calcSelfTestCases(task: AgentCheckTask): SelfTestCase<unknown>[] {
   const same = (a: SavedDocument, b: SavedDocument) =>
     a.bytes !== null && b.bytes !== null && Buffer.from(a.bytes).equals(Buffer.from(b.bytes));
   const sound = (c: SelfTestCase<unknown>) => !c.corruptions.some((x) => same(x.doc, c.correct));
-  const own = calcCasesFor([task.intent], task.fileName);
+  const own = Array.from(
+    { length: OWN_CASES },
+    () => calcCasesFor([task.intent], task.fileName, hostDraw)[0] as SelfTestCase<unknown>,
+  );
   if (!own.every(sound)) throw new Error("the intent changes nothing");
   const ext = task.fileName.slice(task.fileName.lastIndexOf("."));
   const randomCase = (): SelfTestCase<unknown> => {
@@ -101,7 +120,7 @@ function calcSelfTestCases(task: AgentCheckTask): SelfTestCase<unknown>[] {
       try {
         const params = generateParameterSets([unpredictable()]);
         const pick = params[randomInt(params.length)] as CalcRecordEditParams;
-        const [c] = calcCasesFor([pick], `${unpredictable()}${ext}`);
+        const [c] = calcCasesFor([pick], `${unpredictable()}${ext}`, hostDraw);
         if (c !== undefined && sound(c)) return c;
       } catch {
         // draw again
@@ -109,7 +128,10 @@ function calcSelfTestCases(task: AgentCheckTask): SelfTestCase<unknown>[] {
     }
     throw new Error("no usable random self-test case");
   };
-  return [...own, ...Array.from({ length: RANDOM_CASES }, randomCase)];
+  return [...own, ...Array.from({ length: RANDOM_CASES }, randomCase)].map((c, k) => ({
+    ...c,
+    id: `case-${k + 1}`,
+  }));
 }
 
 /**
@@ -131,6 +153,18 @@ export function agentCheckSelfTestCases(
   task: AgentCheckTask,
 ): SelfTestCase<unknown>[] {
   return FAMILY_CASES[family](task);
+}
+
+/**
+ * What a proposal registers the check with: the host-owned cases (fresh on every call) and
+ * the host's random source for track T's read corruptions (random truncation and byte-flip
+ * offsets, not fixed ones). Host side only; exported so the tests can show both are drawn.
+ */
+export function agentCheckRegisterOptions(
+  family: AgentCheckFamily,
+  task: AgentCheckTask,
+): RegisterOptions {
+  return { hostCases: agentCheckSelfTestCases(family, task), draw: hostDraw };
 }
 
 /** Classes whose corruption provably fails the postcondition (`refuted`). */
@@ -306,15 +340,15 @@ export function proposeAgentCheck(
     return refuse("AGENT_CHECK_TASK_INVALID", [
       "task is { intent, fileName } of a .csv state file",
     ]);
-  let cases: SelfTestCase<unknown>[];
+  let opts: RegisterOptions;
   try {
-    cases = agentCheckSelfTestCases(binding.family, bound);
+    opts = agentCheckRegisterOptions(binding.family, bound);
   } catch {
     return refuse("AGENT_CHECK_TASK_INVALID", [
       "the intent names no record and column, or changes nothing",
     ]);
   }
-  const reg = registerPlugin(checkDir, { hostCases: cases });
+  const reg = registerPlugin(checkDir, opts);
   if (!reg.ok) return refuse(`AGENT_CHECK_${reg.code}`, reg.reasons, reg.selftest);
   const { manifest, provenance } = reg.registration;
   if (manifest.kinds.length !== 1 || manifest.kinds[0] !== "oracle")

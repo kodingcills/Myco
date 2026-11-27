@@ -25,6 +25,7 @@ import { join, relative, sep } from "node:path";
 import { type OracleReport, runSelfTest, type SelfTestRow } from "../../oracle-selftest/run.ts";
 import type {
   CorruptionClass,
+  Draw,
   OracleUnderTest,
   OracleVerdict,
   SavedDocument,
@@ -227,20 +228,36 @@ function fromWire(doc: WireDocument): SavedDocument {
   };
 }
 
+/** Up to three distinct offsets in `[0, n)` drawn by `draw`. */
+function drawnOffsets(draw: Draw, n: number): number[] {
+  const at = new Set<number>();
+  while (at.size < Math.min(3, n)) at.add(draw(n));
+  return [...at];
+}
+
 /**
  * Read corruptions the host derives from a correct document, independent of the plugin:
- * three truncations, three single-byte flips, and a missing file.
+ * three truncations, three single-byte flips, and a missing file. With `draw` (a host-side
+ * random source; track C passes one) the truncation and flip offsets are random, so a check
+ * cannot compute the corrupted documents in advance; without it they are fixed.
  */
 export function hostCorruptions(
   correct: SavedDocument,
+  draw?: Draw,
 ): { cls: CorruptionClass; doc: SavedDocument }[] {
   const bytes = correct.bytes;
   if (bytes === null || bytes.length === 0) return [];
   const n = bytes.length;
   const out: { cls: CorruptionClass; doc: SavedDocument }[] = [];
-  for (const at of new Set([n - 1, Math.floor(n / 2), Math.floor(n / 4)]))
+  const cuts =
+    draw === undefined ? [n - 1, Math.floor(n / 2), Math.floor(n / 4)] : drawnOffsets(draw, n);
+  const flips =
+    draw === undefined
+      ? [Math.floor(n / 3), Math.floor((2 * n) / 3), n - 1]
+      : drawnOffsets(draw, n);
+  for (const at of new Set(cuts))
     out.push({ cls: "truncated", doc: { fileName: correct.fileName, bytes: bytes.slice(0, at) } });
-  for (const at of new Set([Math.floor(n / 3), Math.floor((2 * n) / 3), n - 1])) {
+  for (const at of new Set(flips)) {
     const flipped = bytes.slice();
     flipped[at] = (flipped[at] as number) ^ 0x01;
     out.push({ cls: "corrupt-byte", doc: { fileName: correct.fileName, bytes: flipped } });
@@ -285,6 +302,11 @@ export interface RegisterOptions {
    * `selftestCases` hook is not called. Host read corruptions are added to every case either way.
    */
   readonly hostCases?: readonly SelfTestCase<unknown>[];
+  /**
+   * A host-side random source for the host read corruptions' offsets (track C passes
+   * `node:crypto` `randomInt`). Absent: the fixed offsets.
+   */
+  readonly draw?: Draw;
 }
 
 export function registerPlugin(pluginDir: string, opts: RegisterOptions = {}): RegistrationResult {
@@ -315,7 +337,7 @@ export function registerPlugin(pluginDir: string, opts: RegisterOptions = {}): R
           id: c.id,
           intent: c.intent,
           correct: c.correct,
-          corruptions: [...c.corruptions, ...hostCorruptions(c.correct)],
+          corruptions: [...c.corruptions, ...hostCorruptions(c.correct, opts.draw)],
         };
       });
       const faults: string[] = [];

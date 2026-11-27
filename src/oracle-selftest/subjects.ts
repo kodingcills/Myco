@@ -48,7 +48,15 @@ import {
   writeZip,
 } from "../tasks/writer-docgen.ts";
 import { verifyWriterFile } from "../verify/writer-oracle.ts";
-import type { CorruptionClass, OracleUnderTest, SavedDocument, SelfTestCase } from "./types.ts";
+import type {
+  CorruptionClass,
+  Draw,
+  OracleUnderTest,
+  SavedDocument,
+  SelfTestCase,
+} from "./types.ts";
+
+export type { Draw } from "./types.ts";
 
 /** Write `doc` to a fresh temp dir, run `read` on its path, and clean up. */
 function withFile<T>(doc: SavedDocument, read: (path: string) => T): T {
@@ -248,22 +256,120 @@ export function calcCases(count = 10): SelfTestCase<CalcRecordEditParams>[] {
   return calcCasesFor(generateParameterSets(seeds).slice(0, count), "doc.csv");
 }
 
+const VALUE_CHARS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-_/$";
+const DIGITS = "0123456789";
+
+function randomString(draw: Draw, alphabet: string, min: number, max: number): string {
+  const len = min + draw(max - min + 1);
+  let s = "";
+  for (let k = 0; k < len; k++) s += alphabet[draw(alphabet.length)];
+  return s;
+}
+
+/** Two cell values no reasonable reader takes for the same value (case, spaces, numbers). */
+function sameCell(a: string, b: string): boolean {
+  const x = a.trim().toLowerCase();
+  const y = b.trim().toLowerCase();
+  if (x === y) return true;
+  const nx = Number(x.replace(/^\$/, ""));
+  const ny = Number(y.replace(/^\$/, ""));
+  return x !== "" && y !== "" && Number.isFinite(nx) && Number.isFinite(ny) && nx === ny;
+}
+
+/**
+ * A random cell value unlike every value in `avoid`: an edit of `base` (a character added,
+ * dropped or replaced, or a number moved by a random amount), random digits, a random word,
+ * or another cell of the same sheet. Wide on purpose: a check that lies only on values the
+ * self-test cannot draw has little room left (track C, D1 round 2 of #590).
+ */
+function randomValue(draw: Draw, base: string, cells: readonly string[], avoid: string[]): string {
+  for (;;) {
+    let v: string;
+    const kind = draw(6);
+    if (kind === 0) {
+      const at = draw(base.length + 1);
+      v = base.slice(0, at) + VALUE_CHARS[draw(VALUE_CHARS.length)] + base.slice(at);
+    } else if (kind === 1) {
+      const at = draw(base.length);
+      v = base.slice(0, at) + base.slice(at + 1);
+    } else if (kind === 2) {
+      const at = draw(base.length);
+      v = base.slice(0, at) + VALUE_CHARS[draw(VALUE_CHARS.length)] + base.slice(at + 1);
+    } else if (kind === 3) {
+      const n = Number(base.replace(/^\$/, ""));
+      const delta = (1 + draw(10_000)) * (draw(2) === 0 ? 1 : -1);
+      v = Number.isFinite(n) ? String(n + delta) : randomString(draw, DIGITS, 1, 9);
+    } else if (kind === 4) {
+      v = draw(2) === 0 ? randomString(draw, DIGITS, 1, 9) : randomString(draw, VALUE_CHARS, 1, 16);
+    } else {
+      v = cells[draw(cells.length)] as string;
+    }
+    // One CSV cell, no edge spaces (a reader may trim them), unlike every value to avoid.
+    if (/^\S(?:[^,"\r\n]{0,62}\S)?$/.test(v) && !avoid.some((a) => sameCell(a, v))) return v;
+  }
+}
+
+/**
+ * The value-class corruptions of one calc case drawn from host-side randomness: a random wrong
+ * value, the value written to a random other cell, and 1-3 random other cells changed to
+ * random values. With fixed corruptions, the check's author (who knows the task's intent)
+ * could compute every self-test document in advance and lie on anything else.
+ */
+function drawnValueCorruptions(
+  draw: Draw,
+  p: CalcRecordEditParams,
+  fixture: { readonly csv: string; readonly header: string[]; readonly rows: string[][] },
+  correct: string,
+): { wrongValue: string; wrongTarget: string; collateral: string } {
+  const columns = fixture.header.slice(1);
+  const target = fixture.rows.find((r) => r[0] === p.rowKey) as string[];
+  const original = target[fixture.header.indexOf(p.column)] as string;
+  const cells = fixture.rows.flatMap((r) => r.slice(1));
+  /** A random data cell other than the target whose value differs from `unlike`. */
+  const otherCell = (unlike: (cur: string) => boolean) => {
+    for (;;) {
+      const row = fixture.rows[draw(fixture.rows.length)] as string[];
+      const column = columns[draw(columns.length)] as string;
+      const cur = row[fixture.header.indexOf(column)] as string;
+      if ((row[0] !== p.rowKey || column !== p.column) && !unlike(cur))
+        return { rowKey: row[0] as string, column, cur };
+    }
+  };
+  const wrong = randomValue(draw, p.newValue, cells, [p.newValue, original]);
+  const moved = otherCell((cur) => sameCell(cur, p.newValue));
+  const edits = new Map<string, { rowKey: string; column: string; value: string }>();
+  for (let k = 1 + draw(3); k > 0; k--) {
+    const c = otherCell(() => false);
+    edits.set(`${c.rowKey}/${c.column}`, {
+      rowKey: c.rowKey,
+      column: c.column,
+      value: randomValue(draw, c.cur, cells, [c.cur]),
+    });
+  }
+  return {
+    wrongValue: editCsv(fixture.csv, [{ rowKey: p.rowKey, column: p.column, value: wrong }]),
+    wrongTarget: editCsv(fixture.csv, [
+      { rowKey: moved.rowKey, column: moved.column, value: p.newValue },
+    ]),
+    collateral: editCsv(correct, [...edits.values()]),
+  };
+}
+
 /**
  * The calc-record-edit R5 cases for the given intents, every document (clean and corrupted)
- * named `fileName`. `calcCases` is this over the fixed public seeds; agent-written checks
- * (track C) call it with the bound task's own intent and fresh random seeds, so nothing but
- * a document's content tells a self-test case from a real run. Throws when an intent does
- * not locate a record and column in its fixture.
+ * named `fileName`. `calcCases` is this over the fixed public seeds, with fixed corruptions
+ * (`draw` absent). Agent-written checks (track C) pass `draw`, a host-side random source: then
+ * the wrong value, the wrong target, the collateral cells and values and the truncation point
+ * are drawn afresh for every case, so a check's author cannot compute the self-test documents
+ * from the task's intent. Throws when an intent does not locate a record and column.
  */
 export function calcCasesFor(
   params: readonly CalcRecordEditParams[],
   fileName: string,
+  draw?: Draw,
 ): SelfTestCase<CalcRecordEditParams>[] {
   return params.map((p, i) => {
     const fixture = generateFixture(p.fixtureSeed);
-    const names = DATA_COLUMNS.map((c) => c.name);
-    const neighbour = names[(names.indexOf(p.column) + 1) % names.length] as string;
-    const otherKey = fixture.rows.find((r) => r[0] !== p.rowKey)?.[0] as string;
     const correct = editCsv(fixture.csv, [
       { rowKey: p.rowKey, column: p.column, value: p.newValue },
     ]);
@@ -272,31 +378,38 @@ export function calcCasesFor(
       bytes: text === null ? null : utf8(text),
     });
     const bytes = utf8(correct);
+    let wrongValue: string;
+    let wrongTarget: string;
+    let collateral: string;
+    let cut: Uint8Array;
+    if (draw === undefined) {
+      const names = DATA_COLUMNS.map((c) => c.name);
+      const neighbour = names[(names.indexOf(p.column) + 1) % names.length] as string;
+      const otherKey = fixture.rows.find((r) => r[0] !== p.rowKey)?.[0] as string;
+      wrongValue = editCsv(fixture.csv, [
+        { rowKey: p.rowKey, column: p.column, value: `${p.newValue}9` },
+      ]);
+      wrongTarget = editCsv(fixture.csv, [
+        { rowKey: p.rowKey, column: neighbour, value: p.newValue },
+      ]);
+      collateral = editCsv(correct, [
+        { rowKey: otherKey, column: "name", value: "Collateral Edit" },
+      ]);
+      cut = truncated(bytes, 0.5);
+    } else {
+      ({ wrongValue, wrongTarget, collateral } = drawnValueCorruptions(draw, p, fixture, correct));
+      cut = bytes.slice(0, 1 + draw(bytes.length - 1));
+    }
     return {
       id: `calc-${String(i + 1).padStart(2, "0")}`,
       intent: p,
       correct: doc(correct),
       corruptions: [
         { cls: "edit-missing", doc: doc(fixture.csv) },
-        {
-          cls: "wrong-value",
-          doc: doc(
-            editCsv(fixture.csv, [{ rowKey: p.rowKey, column: p.column, value: `${p.newValue}9` }]),
-          ),
-        },
-        {
-          cls: "wrong-target",
-          doc: doc(
-            editCsv(fixture.csv, [{ rowKey: p.rowKey, column: neighbour, value: p.newValue }]),
-          ),
-        },
-        {
-          cls: "collateral",
-          doc: doc(
-            editCsv(correct, [{ rowKey: otherKey, column: "name", value: "Collateral Edit" }]),
-          ),
-        },
-        { cls: "truncated", doc: { fileName, bytes: truncated(bytes, 0.5) } },
+        { cls: "wrong-value", doc: doc(wrongValue) },
+        { cls: "wrong-target", doc: doc(wrongTarget) },
+        { cls: "collateral", doc: doc(collateral) },
+        { cls: "truncated", doc: { fileName, bytes: cut } },
         { cls: "missing-file", doc: doc(null) },
       ],
     };

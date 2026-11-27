@@ -78,12 +78,14 @@ describe("D1: a check that recognises the self-test is refused", () => {
     const seeds = (cs: typeof a) =>
       cs.map((c) => (c.intent as { fixtureSeed: string }).fixtureSeed);
     const names = (cs: typeof a) => cs.map((c) => c.correct.fileName);
-    // The bound task first, exactly as a real run carries it; then the random cases.
-    expect(a[0]?.intent).toEqual(SPEC);
-    expect(a[0]?.correct.fileName).toBe(TASK.fileName);
-    expect(a.length).toBeGreaterThanOrEqual(3);
-    const randomA = a.slice(1);
-    const randomB = b.slice(1);
+    // The bound task first (three cases), exactly as a real run carries it; then the random cases.
+    for (const c of a.slice(0, 3)) {
+      expect(c.intent).toEqual(SPEC);
+      expect(c.correct.fileName).toBe(TASK.fileName);
+    }
+    expect(a.length).toBe(5);
+    const randomA = a.slice(3);
+    const randomB = b.slice(3);
     for (const s of [...seeds(randomA), ...seeds(randomB)]) expect(s).toMatch(/^[0-9a-f]{18}$/);
     for (const n of [...names(randomA), ...names(randomB)])
       expect(n).toMatch(/^[0-9a-f]{18}\.csv$/);
@@ -200,13 +202,13 @@ describe("D3: the host read corruptions are part of the host-owned cases", () =>
       );
       expect(r.ok ? "accepted" : r.code).toBe("AGENT_CHECK_SELFTEST_FAILED");
       if (r.ok) return;
-      expect(r.reasons.join(" ")).toMatch(/corrupt-byte: \d+ of 9 corruptions verified/);
+      expect(r.reasons.join(" ")).toMatch(/corrupt-byte: \d+ of 15 corruptions verified/);
       const per = r.selftest?.perClass;
       // Per case: 3 host flips; 1 family truncation + 3 host truncations; 1 family missing
-      // file + 1 host missing file. Three cases.
-      expect(per?.["corrupt-byte"].runs).toBe(9);
-      expect(per?.truncated.runs).toBe(12);
-      expect(per?.["missing-file"].runs).toBe(6);
+      // file + 1 host missing file. Five cases (three of the bound task, two random).
+      expect(per?.["corrupt-byte"].runs).toBe(15);
+      expect(per?.truncated.runs).toBe(20);
+      expect(per?.["missing-file"].runs).toBe(10);
     },
     T,
   );
