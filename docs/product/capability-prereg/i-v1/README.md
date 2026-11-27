@@ -28,13 +28,25 @@ change makes `i-v2` (capability spec §3).
   module it imports are frozen by SHA-256 in `analysis.files`. The analysis refuses to run
   if any of them changed.
 
+## Lead ruling pending: nothing is shown
+
+While `leadRulingPending` is non-empty (or is not a list of strings), the analysis reports
+status `LEAD_RULING_PENDING`, shows no bar component, and the CLI exits 3, whatever the
+pack says. A proposed bar is never reported as met. When the lead rules, the ruling and its
+timestamp are recorded here, the entry leaves `leadRulingPending`, and the hashes are
+re-pinned before the first run. No ruling has been posted yet.
+
 ## What the analysis refuses
 
 The analysis reports "not shown", with the reason, for any of these: a pack whose
 pre-registration hash is not this one; a hash that the pack's recorded commit does not
-hold; any simulated row or non-model planner; a planner other than the pre-registered
-model; a step count over the budget; a missing or duplicated (task, arm) trial (no
-exclusions); a tool-output scan breach; or more false DONEs on invalid-target tasks in
-`C1+I` than in `C1`.
+hold; any row that is not exactly `simulated: false` (a missing field or the string
+`"false"` is refused too), or a non-model planner; a planner other than the pre-registered
+model; a malformed row; a step count over the budget; a missing or duplicated (task, arm)
+trial (no exclusions); a tool-output scan breach; task facts that do not split 90/10; or
+more false DONEs on invalid-target tasks in `C1+I` than in `C1`.
+
+CLI exit codes: 0 shown, 1 not shown, 2 could not run (including any flag: there is no
+`--require-r1` or `--evidence` mode), 3 `LEAD_RULING_PENDING`.
 
 Tests: `test/state/i-prereg.test.ts`, `test/state/i-analysis.test.ts`.

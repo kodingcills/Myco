@@ -167,6 +167,17 @@ describe("the audit refuses", () => {
       expect(a.violations.map((v) => v.detail).join("; ")).toMatch(want);
     });
 
+  it("an extra MCP server (the state server on C1), named by the server-set check itself", () => {
+    const a = audit(
+      mutate(plan("C1"), (m) => {
+        m.mcpServers["myco-state"] = structuredClone(plan("C1+I").mcpServers["myco-state"]);
+      }),
+      "C1",
+    );
+    expect(a.ok).toBe(false);
+    expect(a.violations.map((v) => v.detail)).toContain("MCP servers are not exactly the C1 arm's");
+  });
+
   it("a model other than the pre-registered one", () => {
     const a = audit(plan("C1"), "C1", { modelId: "claude-other-1" });
     expect(a.ok).toBe(false);

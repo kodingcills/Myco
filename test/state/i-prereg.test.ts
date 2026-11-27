@@ -3,7 +3,8 @@
  * hash-pinned, consistent with the spec's track I section and the frozen fc-v1 task set, and
  * freezes the analysis code by SHA-256. Also the seeded ABBA assignment (§1.3).
  */
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { STEP_BUDGET } from "../../src/baseline/c1-trial.ts";
@@ -122,6 +123,40 @@ describe("preregProblems names every broken freeze", () => {
       const problems = preregProblems(edit(change as any), ROOT);
       expect(problems.join("; ")).toMatch(want);
     });
+
+  it("leadRulingPending that is not a list of strings", () => {
+    for (const bad of [undefined, "none", [1]])
+      expect(
+        preregProblems(
+          edit((p) => (p.leadRulingPending = bad)),
+          ROOT,
+        ).join("; "),
+      ).toMatch(/leadRulingPending must be a list of strings/);
+  });
+
+  it("a tasks.jsonl that does not hash to the manifest's entry", () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-prereg-tasks-"));
+    try {
+      const real = readFileSync(join(ROOT, raw().taskSet.tasksFile), "utf8");
+      const fake = join(dir, "tasks.jsonl");
+      writeFileSync(fake, `${real}\n`);
+      const problems = preregProblems(
+        edit((p) => (p.taskSet.tasksFile = relative(ROOT, fake))),
+        ROOT,
+      );
+      expect(problems.join("; ")).toMatch(/tasks\.jsonl does not hash to the manifest's entry/);
+      // The same bytes under the same name pass: the check is on content, not the path.
+      writeFileSync(fake, real);
+      expect(
+        preregProblems(
+          edit((p) => (p.taskSet.tasksFile = relative(ROOT, fake))),
+          ROOT,
+        ),
+      ).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it("the untouched file has none", () => {
     expect(preregProblems(raw(), ROOT)).toEqual([]);

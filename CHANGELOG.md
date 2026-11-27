@@ -14,7 +14,9 @@ versioned releases yet; entries are grouped by milestone. License: [Apache-2.0](
   analysis (`scripts/capability-i-analysis.ts`) it freezes by SHA-256. The analysis applies
   the spec's fixed sequence (exact one-sided McNemar on grader-verified, then the
   steps-per-verified bootstrap ratio). It reports "not shown" on any refusal: a hash
-  mismatch, a simulated row, a parity failure, a missing trial or a guardrail breach. First
+  mismatch, a row that is not exactly `simulated: false`, a parity failure, a missing trial
+  or a guardrail breach. While any lead ruling is pending it reports `LEAD_RULING_PENDING`
+  (CLI exit 3) and never "shown". First
   piece of the C1 port onto the Ultra (Claude Code) harness: audited, gate-less launch plans
   for `C1` and `C1+I` (`src/state/c1-ultra.ts`). `C1+I` is exactly `C1` plus the four state
   tools. No trial was run.

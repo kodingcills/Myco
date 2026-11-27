@@ -18,9 +18,14 @@
  * - **Guardrails:** false DONEs on the 10 invalid-target tasks no higher in `C1+I`; any
  *   tool-output scan breach voids the run.
  * - **Refusals** (the whole result is "not shown"): a pack hash that is not the committed
- *   pre-registration's, a simulated row or non-model planner (§3 item 5), a planner other
- *   than the pre-registered model, a step count over the budget, or a task/arm cell that is
- *   missing or duplicated (no exclusions: every trial stays in the denominator).
+ *   pre-registration's, a row that is not exactly `simulated: false` (absent, `"false"` or
+ *   `true` are all refused: fail closed) or has a non-model planner (§3 item 5), a planner
+ *   other than the pre-registered model, a malformed row, a step count over the budget, or a
+ *   task/arm cell that is missing or duplicated (no exclusions: every trial stays in the
+ *   denominator).
+ * - **Lead ruling pending:** while the pre-registration's `leadRulingPending` is non-empty
+ *   (or not a list of strings), the status is `LEAD_RULING_PENDING` and no bar component is
+ *   ever shown, whatever the pack says. A proposed bar is never reported as met.
  *
  * Pure: no file system, no gate, no grader. The CLI (`scripts/capability-i-analysis.ts`)
  * loads the files and the committed pre-registration.
@@ -181,10 +186,23 @@ export type ComponentResult =
       readonly reason: string | null;
     };
 
+export const LEAD_RULING_PENDING = "LEAD_RULING_PENDING" as const;
+export type IStatus = "shown" | "not-shown" | typeof LEAD_RULING_PENDING;
+
 export interface IAnalysis {
   readonly schema: "myco.capability.i-analysis/1";
   readonly preregSha256: string;
-  /** True only when every bar component is shown and no guardrail or refusal applies. */
+  /**
+   * `LEAD_RULING_PENDING` whenever the pre-registration has a pending lead ruling (it wins
+   * over everything else); otherwise `shown` exactly when `barShown`.
+   */
+  readonly status: IStatus;
+  /** The pre-registration's pending lead rulings, copied so the output names them. */
+  readonly leadRulingPending: readonly string[];
+  /**
+   * True only when every bar component is shown, no guardrail or refusal applies, and no
+   * lead ruling is pending.
+   */
   readonly barShown: boolean;
   /** Refusals and guardrail breaches: any entry makes the whole bar "not shown". */
   readonly refusals: readonly string[];
@@ -219,9 +237,35 @@ export interface IAnalysisContext {
   readonly preregHashAtCommit: (commit: string) => string | null;
 }
 
+const CLAIMS: readonly unknown[] = ["done", "not-done", "no-claim"];
+const GRADES: readonly unknown[] = ["pass", "fail", "ungradable", null];
+
+/** The first field of a pack row that does not have its declared type, or null. */
+export function rowShapeProblem(r: unknown): string | null {
+  if (r === null || typeof r !== "object" || Array.isArray(r)) return "row is not an object";
+  const o = r as Record<string, unknown>;
+  if (typeof o.taskId !== "string") return "taskId is not a string";
+  if (typeof o.arm !== "string") return "arm is not a string";
+  if (typeof o.plannerModelId !== "string") return "plannerModelId is not a string";
+  if (!CLAIMS.includes(o.claim)) return "claim is not done, not-done or no-claim";
+  if (!GRADES.includes(o.grade)) return "grade is not pass, fail, ungradable or null";
+  if (o.steps !== null && typeof o.steps !== "number") return "steps is not a number or null";
+  if (typeof o.toolOutputBreach !== "boolean") return "toolOutputBreach is not a boolean";
+  return null;
+}
+
+/** The pending lead rulings; a field that is not a list of strings counts as pending. */
+export function pendingLeadRulings(prereg: Pick<IPrereg, "leadRulingPending">): string[] {
+  const l: unknown = prereg.leadRulingPending;
+  if (!Array.isArray(l) || !l.every((x) => typeof x === "string"))
+    return ["leadRulingPending is not a list of strings"];
+  return [...l];
+}
+
 export function analyzeIPack(pack: IPack, ctx: IAnalysisContext): IAnalysis {
   const refusals: string[] = [];
   const p = ctx.prereg;
+  const pending = pendingLeadRulings(p);
   if (pack.schema !== I_PACK_SCHEMA) refusals.push(`pack schema is not ${I_PACK_SCHEMA}`);
   if (pack.preregSha256 !== ctx.preregSha256)
     refusals.push("pack pre-registration hash does not match the committed pre-registration");
@@ -233,8 +277,15 @@ export function analyzeIPack(pack: IPack, ctx: IAnalysisContext): IAnalysis {
 
   const facts = new Map(ctx.tasks.map((t) => [t.taskId, t]));
   const cells = new Map<string, ITrialRow>();
-  for (const r of pack.rows) {
-    if (r.simulated || !r.plannerModelId.startsWith("claude-"))
+  const rows: readonly ITrialRow[] = Array.isArray(pack.rows) ? pack.rows : [];
+  if (!Array.isArray(pack.rows)) refusals.push("pack rows is not a list");
+  for (const [i, r] of rows.entries()) {
+    const shape = rowShapeProblem(r);
+    if (shape !== null) {
+      refusals.push(`row ${i}: malformed (${shape})`);
+      continue;
+    }
+    if (r.simulated !== false || !r.plannerModelId.startsWith("claude-"))
       refusals.push(`${r.taskId}/${r.arm}: simulated row, never evidence`);
     else if (r.plannerModelId !== p.modelId)
       refusals.push(`${r.taskId}/${r.arm}: planner is not the pre-registered model`);
@@ -285,11 +336,13 @@ export function analyzeIPack(pack: IPack, ctx: IAnalysisContext): IAnalysis {
   const b1Reason =
     refusals.length > 0
       ? "refused (see refusals)"
-      : discordant < (b1.minDiscordant ?? 5)
-        ? `underpowered at n: ${discordant} discordant tasks`
-        : pValue > b1.alpha
-          ? `p = ${pValue.toFixed(4)} > ${b1.alpha}`
-          : null;
+      : pending.length > 0
+        ? LEAD_RULING_PENDING
+        : discordant < (b1.minDiscordant ?? 5)
+          ? `underpowered at n: ${discordant} discordant tasks`
+          : pValue > b1.alpha
+            ? `p = ${pValue.toFixed(4)} > ${b1.alpha}`
+            : null;
   const c1: ComponentResult = {
     id: 1,
     shown: b1Reason === null,
@@ -337,10 +390,13 @@ export function analyzeIPack(pack: IPack, ctx: IAnalysisContext): IAnalysis {
     }
   }
 
+  const barShown = pending.length === 0 && refusals.length === 0 && c1.shown && c2.shown;
   return {
     schema: "myco.capability.i-analysis/1",
     preregSha256: ctx.preregSha256,
-    barShown: refusals.length === 0 && c1.shown && c2.shown,
+    status: pending.length > 0 ? LEAD_RULING_PENDING : barShown ? "shown" : "not-shown",
+    leadRulingPending: pending,
+    barShown,
     refusals,
     components: [c1, c2],
     satisfiable: { cap: summarize(capSat), base: summarize(baseSat) },

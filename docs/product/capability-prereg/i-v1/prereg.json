@@ -100,9 +100,9 @@
     "command": "npx tsx scripts/capability-i-analysis.ts <pack.json>",
     "files": {
       "scripts/capability-i-analysis.ts": "47a73895e0c15a69b20410f68d30188c2e282aa34e2d0fb419d25a7ffe3452fa",
-      "src/state/i-analysis.ts": "94bfc09a3975380d3d84239705d3fabe15461db2229772a5bc2423d7af1d3088",
-      "src/state/i-analysis-cli.ts": "0f72913d6609ebd92a7792ce65e415932759d71074f52b0464b7e92ef8505929",
-      "src/state/prereg.ts": "b56bb79222b0a28508ffe6b35f47f2ec106ea976795e9170d9f24f511bfebba8"
+      "src/state/i-analysis.ts": "44f25d46b9038fecb6b2fa8c3694df0a35235e1ba3399846e02d17708e855c7d",
+      "src/state/i-analysis-cli.ts": "7cf673ef7125b00afbd250474377e4eadc0e4537c0364c3649013d343c823308",
+      "src/state/prereg.ts": "d401a27e8c212ec84119453b150dd35f4a65473d920280549762ed91d95699ac"
     }
   }
 }

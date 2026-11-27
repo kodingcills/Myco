@@ -147,6 +147,11 @@ export function preregProblems(p: IPrereg, repoRoot: string): string[] {
   };
   if (p.schema !== I_PREREG_SCHEMA) out.push(`schema is not ${I_PREREG_SCHEMA}`);
   if (p.track !== "I" || p.version !== 1) out.push("track must be I, version 1");
+  if (
+    !Array.isArray(p.leadRulingPending) ||
+    !p.leadRulingPending.every((x: unknown) => typeof x === "string")
+  )
+    out.push("leadRulingPending must be a list of strings (empty only once the lead ruled)");
   const spec = read(p.spec?.path ?? "");
   if (spec) {
     try {
