@@ -1,0 +1,5 @@
+vm-session: holding /tmp/myco-win11.vm.lock as 58647 vm-session.sh
+v3-wrapper: 21:10:46Z attempt 3: tree 85d65837 (44f5a98a + build boot-class patch); snapshots before: trial-base-v2, cua-c1-base, m1-agent-live, clean-base-live, clean-base
+v3-wrapper: 22:54:28Z attempt 3: rc=0 
+v3-wrapper: 22:54:28Z snapshots after: trial-base-v3, trial-base-v2, cua-c1-base, m1-agent-live, clean-base-live, clean-base
+v3-wrapper: 22:54:28Z done: trial-base-v3 built on attempt 3
