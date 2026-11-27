@@ -30,7 +30,7 @@ import { stripAccents } from "./fold.ts";
 export const IDENTITY_WORD_MIN_CHARS = 3;
 
 /** Full Unicode case folding by round trip (see the module comment). */
-function caseFold(text: string): string {
+export function caseFold(text: string): string {
   let cur = text.normalize("NFKC");
   for (let i = 0; i < 4; i++) {
     const next = cur.toUpperCase().toLowerCase().normalize("NFKC");
