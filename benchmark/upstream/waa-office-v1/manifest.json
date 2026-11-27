@@ -9,7 +9,7 @@
     "licenseFile": "LICENSE",
     "licenseSha256": "9906940f61b1f0b533fa7d99baf55178b2808fbe113ea51dfbfad8572ccd5f2b"
   },
-  "selectionRule": "Every task id listed in evaluation_examples_windows/test_all.json under libreoffice_calc, libreoffice_writer, notepad and file_explorer (WAA's office apps are LibreOffice on Windows; it has no Microsoft Office tasks). No task is dropped for difficulty, feasibility, evaluator type or placement.",
+  "selectionRule": "Every task id listed in evaluation_examples_windows/test_all.json under libreoffice_calc, libreoffice_writer, notepad and file_explorer (WAA's office apps are LibreOffice on Windows; it has no Microsoft Office tasks), run in WAA's own Windows 11 image, in-VM server and evaluators. No task is dropped for difficulty, feasibility or evaluator type. Phase 2: deferred, not dropped.",
   "metricsDir": "src/win-arena-container/client/desktop_env/evaluators/metrics",
   "metricsPackage": "desktop_env.evaluators.metrics",
   "counts": {
@@ -20,10 +20,11 @@
       "notepad": 2,
       "file_explorer": 19
     },
-    "perPlacement": {
-      "windows-vm": 64
-    }
+    "infeasible": 1,
+    "excluded": 0
   },
+  "environment": "waa-windows-arena",
+  "exclusions": {},
   "evaluatorFiles": {
     "src/win-arena-container/client/desktop_env/evaluators/metrics/chrome.py": "9372fbb4cc62f992beba875fcecd3afb3b34e757d34a6650c002661da9f1121b",
     "src/win-arena-container/client/desktop_env/evaluators/metrics/docs.py": "65052a7bd6970224bf6fefe52441e09851ed3b8a56c9ce85d8436125123a07f7",
@@ -34,5 +35,5 @@
     "src/win-arena-container/client/desktop_env/evaluators/metrics/vlc.py": "bb7082fd2b7a0ca196d03b0222b730406712de4732ed3bb6d520e3f96c275859",
     "src/win-arena-container/client/desktop_env/evaluators/metrics/vscode.py": "73e5ed8c975758598624bd05fa69d4db73c67d0197734386b2feeced8ccb2b75"
   },
-  "tasksSha256": "25342f23813af0d182dfb2e27dff91c41cc4a818cab7747deb3ae4eb305b191b"
+  "tasksSha256": "c764beb65af0ea6961b90a1441c57be8cfdbde0f2f0fc937c677a31d6e51df5e"
 }

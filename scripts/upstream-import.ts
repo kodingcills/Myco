@@ -6,7 +6,7 @@
  * Each checkout must be a git clone of the pinned repo at the pinned commit
  * (src/benchmark/upstream/pins.ts); the script refuses any other HEAD. It writes
  * benchmark/upstream/<version>/{manifest.json,tasks.jsonl} and
- * docs/benchmark/upstream/placement.md. Nothing is downloaded: per-task assets are recorded
+ * docs/benchmark/upstream/requirements.md. Nothing is downloaded: per-task assets are recorded
  * by URL only (license unclear). With --check it writes nothing and exits 1 on any drift.
  */
 import { execFileSync } from "node:child_process";
@@ -21,7 +21,7 @@ import {
   WAA_OFFICE_V1,
 } from "../src/benchmark/upstream/import.ts";
 import { OSWORLD_PIN, WAA_PIN } from "../src/benchmark/upstream/pins.ts";
-import { renderPlacementReport } from "../src/benchmark/upstream/placement-report.ts";
+import { renderRequirementsReport } from "../src/benchmark/upstream/requirements-report.ts";
 
 const args = process.argv.slice(2);
 const opt = (name: string) => {
@@ -69,7 +69,7 @@ for (const [flag, spec, pin] of [
   outputs.set(`${dir}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`);
   manifests.push({ manifest, tasks });
 }
-outputs.set("docs/benchmark/upstream/placement.md", renderPlacementReport(manifests));
+outputs.set("docs/benchmark/upstream/requirements.md", renderRequirementsReport(manifests));
 
 const problems: string[] = [];
 for (const [path, content] of outputs) {
@@ -87,6 +87,6 @@ if (problems.length > 0) {
 }
 for (const { manifest } of manifests)
   process.stdout.write(
-    `${manifest.taskSetVersion}: ${manifest.counts.total} tasks ${JSON.stringify(manifest.counts.perPlacement)}\n`,
+    `${manifest.taskSetVersion}: ${manifest.counts.total} tasks ${JSON.stringify(manifest.counts.perDomain)}\n`,
   );
 process.stdout.write(check ? "all outputs match\n" : `wrote ${outputs.size} files\n`);

@@ -1,26 +1,29 @@
 /**
- * Grade a public-benchmark task with the benchmark's OWN evaluator (#675, #682 item 3).
+ * MOCK plumbing proof only: run a public-benchmark metric function from the pinned upstream
+ * checkout, unmodified, on SCRIPTED end-state files (#682 item 3). NEVER R1 evidence.
  *
- * Ground truth for `osworld-office-v1` and `waa-office-v1` is the upstream metric code at the
- * pinned commit, run unmodified by `run_upstream_metric.py`. This module only:
+ * Under the lead's 13:55Z harness ruling, R1 ground truth is OSWorld's own evaluation path,
+ * `DesktopEnv.evaluate()` with its own getters and postconfig, executed by its in-VM
+ * controller inside OSWorld's runner; Myco only reads the score that path wrote
+ * (`./r1-grade.ts`). This module stands in for the upstream getters with local files, which
+ * is exactly what R1 grading must never do, so it is restricted by type to `MOCK` end states
+ * and stamps `upstream-metric-mock/1`, a grader version `./prereg.ts` refuses as evidence.
+ * It stays because it proves, without a VM, that the pinned metric code runs unmodified and
+ * that Myco reads its scores and the FAIL-action rule the way upstream does.
+ *
+ * What it does:
  *  - checks the task file and every evaluator file against the manifest's SHA-256 (a moved
  *    byte is `ungradable`, never a pass);
  *  - reads the evaluator config (functions, options, conj, getters) from the upstream task
  *    file itself, so nothing about the check is restated here;
- *  - stands in for the upstream getters with the captured end state (a local file per
- *    `vm_file` result; the task's own rules per `rule` expectation);
+ *  - stands in for the upstream getters with scripted files (MOCK only, see above);
  *  - applies upstream's FAIL-action rule (DesktopEnv.evaluate: an `infeasible` task passes
  *    only on a final FAIL action; any other task fails on one);
- *  - maps the upstream score to a verdict: `pass` iff the score is exactly 1.0
- *    (`UPSTREAM_PASS_SCORE`; the threshold is a pending lead ruling in the draft
- *    pre-registration, docs/benchmark/upstream/r1-public-prereg.md).
+ *  - maps the upstream score to a verdict: `pass` iff the score is exactly 1.0.
  *
- * Independence: it never receives an agent claim or a gate verdict (`UpstreamGradeInput` has
- * no field for them), imports nothing from src/gate, src/verify, src/tasks or the gating
- * oracle, and the gate never imports it (test/benchmark/independence.test.ts).
- *
- * Labels: every verdict carries the end state's label. `MOCK` end states prove plumbing only
- * and are never results (lead ruling, REAL-NUMBERS RULES).
+ * Independence: it never receives an agent claim or a gate verdict, imports nothing from
+ * src/gate, src/gate-hooks, src/verify, src/tasks or the gating oracle, and the gate never
+ * imports it (test/benchmark/independence.test.ts).
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -28,7 +31,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { sha256Hex, type UpstreamManifest, type UpstreamTask } from "./import.ts";
 
-export const UPSTREAM_GRADER_VERSION = "upstream-evaluator-grader/1";
+export const UPSTREAM_METRIC_MOCK_VERSION = "upstream-metric-mock/1";
 export const UPSTREAM_PASS_SCORE = 1.0;
 
 const DRIVER = resolve(import.meta.dirname, "run_upstream_metric.py");
@@ -41,8 +44,8 @@ const RULE_GETTERS = new Set(["rule", "rules"]);
 export type EndStateValue = string | readonly (string | null)[] | null;
 
 export interface UpstreamEndState {
-  /** `MOCK`: scripted end state, plumbing only. `LIVE`: captured from a real run. */
-  readonly label: "MOCK" | "LIVE";
+  /** Always `MOCK`: a scripted end state, plumbing only. This path is never R1 evidence. */
+  readonly label: "MOCK";
   /** One per upstream result getter, in order: captured file path(s), null if not captured. */
   readonly results: readonly EndStateValue[];
   /** One per upstream expected getter, in order: file path(s) for file getters, null for rules. */
@@ -63,10 +66,10 @@ export interface UpstreamGradeInput {
 }
 
 export interface UpstreamVerdict {
-  readonly graderVersion: typeof UPSTREAM_GRADER_VERSION;
+  readonly graderVersion: typeof UPSTREAM_METRIC_MOCK_VERSION;
   readonly taskSetVersion: string;
   readonly taskId: string;
-  readonly label: "MOCK" | "LIVE";
+  readonly label: "MOCK";
   readonly status: "pass" | "fail" | "ungradable";
   /** The upstream evaluator's own score, or null when it did not run. */
   readonly upstreamScore: number | null;
@@ -86,7 +89,7 @@ export function gradeUpstreamTask(input: UpstreamGradeInput): UpstreamVerdict {
     upstreamScore: number | null,
     codes: string[],
   ): UpstreamVerdict => ({
-    graderVersion: UPSTREAM_GRADER_VERSION,
+    graderVersion: UPSTREAM_METRIC_MOCK_VERSION,
     taskSetVersion: task.taskSetVersion,
     taskId: task.taskId,
     label: endState.label,

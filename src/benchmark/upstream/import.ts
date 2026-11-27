@@ -14,8 +14,10 @@
  * `license: "unclear"` and nothing downloads it.
  *
  * Selection rule (stated before any results, no difficulty filter): every task the upstream
- * manifest file (`test_all.json`) lists in the chosen domains; for OSWorld's `multi_apps`,
- * every listed task whose `related_apps` names a LibreOffice app. Nothing else is dropped.
+ * manifest file (`test_all.json`) lists in the chosen domains, minus the spec's exclusion list
+ * (empty today; each entry needs a reason code decided before any run). There is no Myco
+ * placement filter: under the lead's 13:55Z ruling every task runs in its benchmark's own
+ * environment, so the apps a task needs and its getters only feed the requirements report.
  *
  * Pure: reads through a `UpstreamReader`, so tests run it on a synthetic tree. It imports
  * nothing from the gate, the grader or the task generators.
@@ -52,13 +54,24 @@ export interface SubsetSpec {
   readonly metricsDir: string;
   /** Python package the metric modules import each other through. */
   readonly metricsPackage: string;
-  /** Domains imported whole. */
+  /** Domains imported whole, in this order. */
   readonly domains: readonly string[];
-  /** Domains imported only for tasks that name a LibreOffice app. */
-  readonly officeFilteredDomains: readonly string[];
+  /**
+   * Listed task ids left out, each with a reason code. Decided before any run, from the task
+   * files alone; never for difficulty or outcome. Empty for both subsets today.
+   */
+  readonly exclusions: Readonly<Record<string, string>>;
+  /** The environment the benchmark's own harness runs every task in. */
+  readonly environment: HarnessEnvironment;
   /** The selection rule, in words, copied into the manifest. */
   readonly selectionRule: string;
 }
+
+/**
+ * Where a task runs under the lead's 13:55Z ruling: the benchmark's OWN environment, action
+ * server and evaluator. There is no Myco placement any more (no namespace desktop, no HCU).
+ */
+export type HarnessEnvironment = "osworld-desktopenv" | "waa-windows-arena";
 
 export const OSWORLD_OFFICE_V1: SubsetSpec = {
   taskSetVersion: "osworld-office-v1",
@@ -67,11 +80,13 @@ export const OSWORLD_OFFICE_V1: SubsetSpec = {
   metricsDir: "desktop_env/evaluators/metrics",
   metricsPackage: "desktop_env.evaluators.metrics",
   domains: ["libreoffice_calc", "libreoffice_writer", "libreoffice_impress"],
-  officeFilteredDomains: ["multi_apps"],
+  exclusions: {},
+  environment: "osworld-desktopenv",
   selectionRule:
-    "Every task id listed in evaluation_examples/test_all.json under libreoffice_calc, libreoffice_writer and libreoffice_impress, plus every multi_apps task listed there whose related_apps names a LibreOffice app (calc, writer or impress). No task is dropped for difficulty, feasibility, evaluator type or placement.",
+    "Every task id listed in evaluation_examples/test_all.json at the pinned commit under libreoffice_calc, libreoffice_writer and libreoffice_impress, run in OSWorld's own DesktopEnv (its provider and in-VM controller). No task is dropped for difficulty, feasibility, evaluator type, the apps it needs or the getters its evaluator uses; the exclusion list is empty and any entry must be decided before any run, with a reason code, never for difficulty or outcome.",
 };
 
+/** Phase 2 (deferred, not dropped): imported for the record, not pre-registered. */
 export const WAA_OFFICE_V1: SubsetSpec = {
   taskSetVersion: "waa-office-v1",
   benchmark: "waa",
@@ -79,22 +94,25 @@ export const WAA_OFFICE_V1: SubsetSpec = {
   metricsDir: "src/win-arena-container/client/desktop_env/evaluators/metrics",
   metricsPackage: "desktop_env.evaluators.metrics",
   domains: ["libreoffice_calc", "libreoffice_writer", "notepad", "file_explorer"],
-  officeFilteredDomains: [],
+  exclusions: {},
+  environment: "waa-windows-arena",
   selectionRule:
-    "Every task id listed in evaluation_examples_windows/test_all.json under libreoffice_calc, libreoffice_writer, notepad and file_explorer (WAA's office apps are LibreOffice on Windows; it has no Microsoft Office tasks). No task is dropped for difficulty, feasibility, evaluator type or placement.",
+    "Every task id listed in evaluation_examples_windows/test_all.json under libreoffice_calc, libreoffice_writer, notepad and file_explorer (WAA's office apps are LibreOffice on Windows; it has no Microsoft Office tasks), run in WAA's own Windows 11 image, in-VM server and evaluators. No task is dropped for difficulty, feasibility or evaluator type. Phase 2: deferred, not dropped.",
 };
 
-export type PlacementTarget =
-  | "linux-namespace-desktop"
-  | "linux-needs-other-app"
-  | "linux-needs-guest-probe"
-  | "windows-vm";
-
-export interface Placement {
-  readonly target: PlacementTarget;
-  /** Codes, sorted; `docs/benchmark/upstream/placement.md` explains each. */
-  readonly reasons: readonly string[];
-  /** What the run harness must provide on top of the desktop, sorted codes. */
+/**
+ * What a task needs from its benchmark's own harness, as codes. Informational: none of these
+ * selects or drops a task. `docs/benchmark/upstream/requirements.md` explains each code.
+ */
+export interface TaskRequirements {
+  readonly environment: HarnessEnvironment;
+  /** Upstream getter types the evaluator calls (result and expected), sorted, unique. */
+  readonly getters: readonly string[];
+  /** Upstream config (setup) step types, sorted, unique. */
+  readonly setup: readonly string[];
+  /** Upstream postconfig step types, run by the upstream evaluate path, sorted, unique. */
+  readonly postconfig: readonly string[];
+  /** Sorted codes. */
   readonly needs: readonly string[];
 }
 
@@ -131,7 +149,7 @@ export interface UpstreamTask {
     readonly expectedTypes: readonly string[];
   };
   readonly assets: readonly UpstreamAsset[];
-  readonly placement: Placement;
+  readonly requirements: TaskRequirements;
 }
 
 export interface UpstreamManifest {
@@ -145,8 +163,14 @@ export interface UpstreamManifest {
   readonly counts: {
     readonly total: number;
     readonly perDomain: Readonly<Record<string, number>>;
-    readonly perPlacement: Readonly<Record<string, number>>;
+    /** Tasks whose evaluator is upstream's `infeasible` (graded on the agent's FAIL action). */
+    readonly infeasible: number;
+    /** Listed ids left out by `exclusions` (always 0 today). */
+    readonly excluded: number;
   };
+  readonly environment: HarnessEnvironment;
+  /** Listed ids left out, with reason codes (see SubsetSpec.exclusions). */
+  readonly exclusions: Readonly<Record<string, string>>;
   /** Every evaluator file any task needs, path -> SHA-256 at the pin. */
   readonly evaluatorFiles: Readonly<Record<string, string>>;
   /** SHA-256 of the rendered `tasks.jsonl`. */
@@ -160,27 +184,8 @@ export const sha256Hex = (bytes: Uint8Array | string) =>
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
-const LIBREOFFICE = /libreoffice|\bcalc\b|writer|impress/;
-const normalizeApp = (a: string) =>
-  a
-    .toLowerCase()
-    .replace(/[_\s]+/g, " ")
-    .trim();
-const isOfficeApp = (a: string) => LIBREOFFICE.test(normalizeApp(a));
-
-/** Apps the Linux namespace desktop provides (src/desktops REGISTERED_APPS: LibreOffice only). */
-const LINUX_DESKTOP_APPS =
-  /^(libreoffice( (calc|writer|impress))?|calc|writer|impress|os|terminal)$/;
-
-/** Getters that read a captured file or a constant: gradable on the host from captured bytes. */
-const FILE_GETTERS = new Set([
-  "vm_file",
-  "cloud_file",
-  "local_file",
-  "rule",
-  "rules",
-  "rule_relativeTime",
-]);
+/** Getters that read a constant from the task file (no guest, no download). */
+const CONSTANT_GETTERS = new Set(["rule", "rules", "rule_relativeTime"]);
 
 function asList<T>(v: T | readonly T[] | undefined | null): T[] {
   if (v === undefined || v === null) return [];
@@ -246,39 +251,43 @@ function metricClosure(
   return seen;
 }
 
-function place(spec: SubsetSpec, task: Record<string, unknown>, apps: string[]): Placement {
+const uniqSorted = (xs: Iterable<string>) => [...new Set(xs)].sort();
+
+function stepTypes(v: unknown): string[] {
+  return asList(v as unknown[]).map((s) => {
+    const type = s && typeof s === "object" ? (s as Record<string, unknown>).type : undefined;
+    return typeof type === "string" ? type : "(none)";
+  });
+}
+
+/**
+ * What the task needs from its benchmark's own harness. Informational only: it never selects
+ * or drops a task (the ruling: OSWorld's image has the apps, its controller serves the getters
+ * and its evaluate path runs the postconfig).
+ */
+function requirementsOf(spec: SubsetSpec, task: Record<string, unknown>): TaskRequirements {
   const ev = (task.evaluator ?? {}) as Record<string, unknown>;
-  const getters = [...getterTypes(ev.result), ...getterTypes(ev.expected)];
-  const reasons = new Set<string>();
+  const getters = uniqSorted(
+    [...getterTypes(ev.result), ...getterTypes(ev.expected)].filter((g) => g !== "(none)"),
+  );
+  const setup = uniqSorted(stepTypes(task.config));
+  const postconfig = uniqSorted(stepTypes(ev.postconfig));
   const needs = new Set<string>();
-  const funcs = asList(ev.func as string | string[]);
-  if (asList(task.config as unknown[]).some((s) => (s as { type?: string })?.type === "download"))
-    needs.add("SEED_ASSETS_LICENSE_UNCLEAR");
-  if (asList(ev.postconfig as unknown[]).length > 0) needs.add("POSTCONFIG_EXECUTOR");
+  if (setup.includes("download")) needs.add("SEED_ASSETS_LICENSE_UNCLEAR");
+  if (getters.includes("cloud_file")) needs.add("GOLD_ASSETS_LICENSE_UNCLEAR");
+  if (postconfig.length > 0) needs.add("POSTCONFIG_RUN_BY_UPSTREAM_EVALUATE");
+  if (getters.some((g) => !CONSTANT_GETTERS.has(g) && g !== "cloud_file"))
+    needs.add("GETTERS_SERVED_BY_UPSTREAM_CONTROLLER");
   if (task.proxy === true) needs.add("NETWORK_PROXY");
-  if (funcs.includes("infeasible")) reasons.add("INFEASIBLE_TASK_GRADED_ON_AGENT_FAIL_ACTION");
-
-  if (spec.benchmark === "waa") {
-    reasons.add("WAA_WINDOWS_IMAGE");
-    if (JSON.stringify(task).includes("C:\\\\")) reasons.add("WINDOWS_PATHS");
-    const domain = String(task.snapshot ?? "");
-    if (domain === "notepad" || domain === "file_explorer") reasons.add("WINDOWS_ONLY_APP");
-    return { target: "windows-vm", reasons: [...reasons].sort(), needs: [...needs].sort() };
-  }
-
-  const otherApps = apps.map(normalizeApp).filter((a) => !LINUX_DESKTOP_APPS.test(a));
-  const probes = getters.filter((g) => !FILE_GETTERS.has(g) && g !== "(none)");
-  let target: PlacementTarget = "linux-namespace-desktop";
-  if (otherApps.length > 0) {
-    target = "linux-needs-other-app";
-    for (const a of otherApps) reasons.add(`APP_NOT_ON_DESKTOP:${a.replace(/\s+/g, "_")}`);
-  } else if (probes.length > 0) {
-    target = "linux-needs-guest-probe";
-    for (const g of probes) reasons.add(`GUEST_PROBE_GETTER:${g}`);
-  } else {
-    reasons.add("LIBREOFFICE_ONLY_FILE_GRADED");
-  }
-  return { target, reasons: [...reasons].sort(), needs: [...needs].sort() };
+  if (asList(ev.func as string | string[]).includes("infeasible"))
+    needs.add("INFEASIBLE_TASK_GRADED_ON_AGENT_FAIL_ACTION");
+  return {
+    environment: spec.environment,
+    getters,
+    setup,
+    postconfig,
+    needs: [...needs].sort(),
+  };
 }
 
 function readJson(reader: UpstreamReader, rel: string): unknown {
@@ -300,12 +309,11 @@ export function importSubset(
   const metricIndex = indexMetrics(reader, spec.metricsDir);
   const tasks: UpstreamTask[] = [];
   const evaluatorFiles = new Map<string, string>();
-  const seenIds = new Set<string>();
-
-  for (const domain of [...spec.domains, ...spec.officeFilteredDomains]) {
+  let excluded = 0;
+  const listedIds = new Set<string>();
+  for (const domain of spec.domains) {
     const ids = listed[domain];
     if (!Array.isArray(ids)) throw new ImportError(`DOMAIN_NOT_LISTED ${domain}`);
-    const filtered = spec.officeFilteredDomains.includes(domain);
     for (const id of ids) {
       if (typeof id !== "string" || !/^[A-Za-z0-9-]+$/.test(id))
         throw new ImportError(`BAD_TASK_ID ${domain}`);
@@ -322,9 +330,12 @@ export function importSubset(
       const apps = asList(task.related_apps as string[]).filter(
         (a): a is string => typeof a === "string",
       );
-      if (filtered && !apps.some(isOfficeApp)) continue;
-      if (seenIds.has(id)) throw new ImportError(`DUPLICATE_TASK_ID ${id}`);
-      seenIds.add(id);
+      if (listedIds.has(id)) throw new ImportError(`DUPLICATE_TASK_ID ${id}`);
+      listedIds.add(id);
+      if (Object.hasOwn(spec.exclusions, id)) {
+        excluded += 1;
+        continue;
+      }
 
       const ev = (task.evaluator ?? {}) as Record<string, unknown>;
       const funcs = asList(ev.func as string | string[]);
@@ -365,17 +376,19 @@ export function importSubset(
           expectedTypes: getterTypes(ev.expected),
         },
         assets: assetsOf(task),
-        placement: place(spec, task, apps),
+        requirements: requirementsOf(spec, task),
       });
     }
   }
 
+  for (const id of Object.keys(spec.exclusions))
+    if (!listedIds.has(id)) throw new ImportError(`EXCLUSION_NOT_LISTED ${id}`);
   const tasksJsonl = `${tasks.map((t) => JSON.stringify(t)).join("\n")}\n`;
   const perDomain: Record<string, number> = {};
-  const perPlacement: Record<string, number> = {};
+  let infeasible = 0;
   for (const t of tasks) {
     perDomain[t.domain] = (perDomain[t.domain] ?? 0) + 1;
-    perPlacement[t.placement.target] = (perPlacement[t.placement.target] ?? 0) + 1;
+    if (t.evaluator.funcs.includes("infeasible")) infeasible += 1;
   }
   const manifest: UpstreamManifest = {
     schema: UPSTREAM_MANIFEST_SCHEMA,
@@ -384,7 +397,9 @@ export function importSubset(
     selectionRule: spec.selectionRule,
     metricsDir: spec.metricsDir,
     metricsPackage: spec.metricsPackage,
-    counts: { total: tasks.length, perDomain, perPlacement },
+    counts: { total: tasks.length, perDomain, infeasible, excluded },
+    environment: spec.environment,
+    exclusions: spec.exclusions,
     evaluatorFiles: Object.fromEntries([...evaluatorFiles].sort(([a], [b]) => (a < b ? -1 : 1))),
     tasksSha256: sha256Hex(tasksJsonl),
   };
