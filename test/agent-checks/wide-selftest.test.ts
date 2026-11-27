@@ -27,19 +27,17 @@ import {
   calcCasesFor,
 } from "../../src/oracle-selftest/subjects.ts";
 import type { SavedDocument, SelfTestCase } from "../../src/oracle-selftest/types.ts";
-import { cleanupPlugins, SPEC, TASK } from "./helpers.ts";
+import { cleanupPlugins, SEED, SPEC, TASK } from "./helpers.ts";
 import {
   ATTACKS,
   type Attack,
   COL,
   exactRows,
   fixture,
-  ORIGINAL,
   refusedNow,
   render,
   SINGLE,
   T,
-  targetRow,
 } from "./wide-attacks.ts";
 
 afterAll(cleanupPlugins);
@@ -63,7 +61,7 @@ describe("#610 item 1: checks that recognise only single-error documents are ref
 const text = (d: SavedDocument) => Buffer.from(d.bytes as Uint8Array).toString("utf8");
 
 /** The single errors a bound-task document carries (naive comma split: no quoted cells). */
-function errorsOf(csv: string): Set<CalcError> {
+function errorsOf(csv: string, spec: typeof SPEC = SPEC): Set<CalcError> {
   const rows = csv
     .trimEnd()
     .split("\n")
@@ -71,8 +69,10 @@ function errorsOf(csv: string): Set<CalcError> {
   const fx = new Map(fixture.rows.map((r) => [r[0], r]));
   const keys = new Set(rows.slice(1).map((r) => r[0]));
   const out = new Set<CalcError>();
-  const tv = targetRow(rows)?.[COL];
-  if (tv !== SPEC.newValue && tv !== ORIGINAL) out.add("wrong-value");
+  const col = fixture.header.indexOf(spec.column);
+  const original = fx.get(spec.rowKey)?.[col];
+  const tv = rows.find((r, i) => i > 0 && r[0] === spec.rowKey)?.[col];
+  if (tv !== spec.newValue && tv !== original) out.add("wrong-value");
   for (const r of rows.slice(1)) {
     const f = fx.get(r[0] as string);
     if (f === undefined) {
@@ -80,8 +80,8 @@ function errorsOf(csv: string): Set<CalcError> {
       continue;
     }
     for (let j = 1; j < f.length; j++) {
-      if (r[0] === SPEC.rowKey && j === COL) continue;
-      if (r[j] !== f[j]) out.add(r[j] === SPEC.newValue ? "wrong-target" : "cell");
+      if (r[0] === spec.rowKey && j === col) continue;
+      if (r[j] !== f[j]) out.add(r[j] === spec.newValue ? "wrong-target" : "cell");
     }
   }
   if (fixture.rows.some((r) => !keys.has(r[0]))) out.add("row-delete");
@@ -125,6 +125,26 @@ describe("#610 item 1: every proposal's self-test carries the wider drawn corrup
         const doc = c?.corruptions[SINGLE.length + k]?.doc as SavedDocument;
         const got = [...errorsOf(text(doc))].sort();
         // Only on a mismatch, so 10,000 passing checks stay cheap.
+        if (got.join("+") !== [...pair].sort().join("+"))
+          expect(got, pair.join("+")).toEqual([...pair].sort());
+      });
+    }
+  }, 60_000);
+
+  it("no third error even when the new value is common in the sheet (1000 draws)", () => {
+    // The sheet's most common name as the new value of another row's name: a changed cell
+    // drawn from the sheet's own cells hits it about once in 125 cases, which would add a
+    // wrong target to the pair.
+    const counts = new Map<string, number>();
+    for (const r of fixture.rows) counts.set(r[1] as string, (counts.get(r[1] as string) ?? 0) + 1);
+    const [common] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0] as [string, number];
+    const row = fixture.rows.find((r) => r[1] !== common) as string[];
+    const spec = { fixtureSeed: SEED, rowKey: row[0] as string, column: "name", newValue: common };
+    for (let n = 0; n < 1000; n++) {
+      const [c] = calcCasesFor([spec], TASK.fileName, randomInt, true);
+      CALC_ERROR_PAIRS.forEach((pair, k) => {
+        const doc = c?.corruptions[SINGLE.length + k]?.doc as SavedDocument;
+        const got = [...errorsOf(text(doc), spec)].sort();
         if (got.join("+") !== [...pair].sort().join("+"))
           expect(got, pair.join("+")).toEqual([...pair].sort());
       });

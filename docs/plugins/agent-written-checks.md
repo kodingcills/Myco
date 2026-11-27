@@ -136,7 +136,8 @@ Its only output is a frozen `myco.agent-check-signal/1`:
   widened the draw (§2: every pair of errors, inserted and deleted rows, four out-of-grammar
   value shapes); it narrowed the gap and did not close it. Exactly what is still never drawn:
   - three or more distinct errors in one document, or two of the same kind beyond what one
-    error draws (two inserted rows, two deleted rows, a wrong target in two cells);
+    error draws (two inserted rows, two deleted rows, a wrong target in two cells, or a changed
+    cell that takes the new value beside another error);
   - an out-of-grammar value combined with any other error, or written anywhere but the
     target (an inserted row's cells and changed cells hold in-grammar values);
   - value shapes outside the six in-grammar kinds and the four odd shapes: an empty cell,
