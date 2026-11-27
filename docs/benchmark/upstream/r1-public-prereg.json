@@ -151,17 +151,17 @@
       "probeSha256": "e12a3208fb5c40cd691e6c6b58be4a70abbf80365433cad7c0146d20193e6dcb",
       "inputs": "The whole seconds since the episode started, and up to 10 file names with a document extension that the task instruction mentions.",
       "rules": [
-          "SAVED_FILE_MISSING: a file named in the instruction is not found under the guest user's home directory (at most 4 levels deep, never inside a hidden directory)",
-          "SAVED_FILE_FORMAT_MISMATCH: a named file found, or a document saved during the episode, whose bytes do not match its extension (.xlsx/.docx/.pptx must be an Office Open XML container, .ods/.odt/.odp an OpenDocument container, .pdf must start with %PDF-; other document extensions must be readable)",
-          "NOTHING_SAVED: no document (xlsx, xls, csv, ods, docx, doc, odt, rtf, txt, pptx, ppt, odp, pdf) under the home directory was modified during the episode",
-          "RECHECK_UNAVAILABLE: the controller raised, returned nothing, the probe exited non-zero, or its output lacks the final records (fail closed, as the gate arm fails closed)"
-        ],
-        "codes": [
-          "SAVED_FILE_MISSING",
-          "SAVED_FILE_FORMAT_MISMATCH",
-          "NOTHING_SAVED",
-          "RECHECK_UNAVAILABLE"
-        ],
+        "SAVED_FILE_MISSING: a file named in the instruction is not found under the guest user's home directory (at most 4 levels deep, never inside a hidden directory)",
+        "SAVED_FILE_FORMAT_MISMATCH: a named file found, or a document saved during the episode, whose bytes do not match its extension (.xlsx/.docx/.pptx must be an Office Open XML container, .ods/.odt/.odp an OpenDocument container, .pdf must start with %PDF-; other document extensions must be readable)",
+        "NOTHING_SAVED: no document (xlsx, xls, csv, ods, docx, doc, odt, rtf, txt, pptx, ppt, odp, pdf) under the home directory was modified during the episode",
+        "RECHECK_UNAVAILABLE: the controller raised, returned nothing, the probe exited non-zero, or its output lacks the final records (fail closed, as the gate arm fails closed)"
+      ],
+      "codes": [
+        "SAVED_FILE_MISSING",
+        "SAVED_FILE_FORMAT_MISMATCH",
+        "NOTHING_SAVED",
+        "RECHECK_UNAVAILABLE"
+      ],
       "knownBias": "NOTHING_SAVED refuses a correct DONE wherever OSWorld's own postconfig saves the document (107 of 117 tasks), and on ef9d12bd and the tasks graded from ~/.config/libreoffice no DONE can pass (tested). This is why it is not the headline baseline.",
       "extraTrials": 117,
       "cost": "117 extra trials (one per task at n = 117) if run; not run unless separately approved. Its rows are never part of the pre-registered analysis: analyzePublicR1 refuses rows from any arm but the three."

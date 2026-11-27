@@ -361,7 +361,10 @@ describe.runIf(hasPython)("OSWorld DONE gate hook (MOCK, fakes only)", () => {
       it("the dump hands back the real saved content: cells by reference with formulas, text, slides, or that nothing was saved", () => {
         const d = (k: string) => dumpOf(dumps[k] as Run);
         const head = (path: string) =>
-          new RegExp(`^=== ${path.replace(/[.]/g, "\\.")} \\(\\d+ bytes, saved \\d+ s after the episode started\\) ===$`, "m");
+          new RegExp(
+            `^=== ${path.replace(/[.]/g, "\\.")} \\(\\d+ bytes, saved \\d+ s after the episode started\\) ===$`,
+            "m",
+          );
         expect(d("xlsx")).toMatch(head("~/Desktop/report.xlsx"));
         expect(d("xlsx")).toContain("[sheet Sheet1]\nA1=Total\nB2=42\nB3=42 (formula =SUM(B2))");
         expect(d("xlsx")).toMatch(head("~/Desktop/notes.csv"));
@@ -382,7 +385,8 @@ describe.runIf(hasPython)("OSWorld DONE gate hook (MOCK, fakes only)", () => {
         expect(d("pdf")).toContain("(binary .pdf file, content not dumped)");
         expect(d("unreadable")).toContain("(could not read: BadZipFile)");
         expect(d("big")).toMatch(/\n\[truncated\]$/);
-        for (const [k, r] of Object.entries(dumps)) expect(dumpOf(r).length, k).toBeLessThanOrEqual(c.dumpLimit + 200);
+        for (const [k, r] of Object.entries(dumps))
+          expect(dumpOf(r).length, k).toBeLessThanOrEqual(c.dumpLimit + 200);
       });
 
       it("nothing saved is never a refusal: a config-graded task (ef9d12bd, graded from the accessibility tree; or from ~/.config/libreoffice) passes a correct DONE; the rules ablation never does", () => {
@@ -433,7 +437,8 @@ describe.runIf(hasPython)("OSWorld DONE gate hook (MOCK, fakes only)", () => {
         for (const [name, r] of primaryRuns()) {
           const dones = r.decisions.length;
           expect(r.probe.scripts.length, name).toBe(dones > 0 ? 1 : 0);
-          for (const t of r.probe.timeouts) expect(t + c.controllerMargin, name).toBe(c.checkTimeout);
+          for (const t of r.probe.timeouts)
+            expect(t + c.controllerMargin, name).toBe(c.checkTimeout);
         }
         expect(c.gateClientTimeout).toBe(c.checkTimeout);
         // Upstream's retries, as the pre-registered budget text states them.
@@ -579,7 +584,8 @@ describe.runIf(hasPython)("OSWorld DONE gate hook (MOCK, fakes only)", () => {
         expect(m.probe.callTurns).toEqual([1, 2, 3, 4]);
         for (const [name, r] of rulesRuns()) {
           expect(r.probe.scripts.length, name).toBe(r.decisions.length);
-          for (const t of r.probe.timeouts) expect(t + c.controllerMargin, name).toBe(c.checkTimeout);
+          for (const t of r.probe.timeouts)
+            expect(t + c.controllerMargin, name).toBe(c.checkTimeout);
           expect(r.tripwires, name).toEqual(CLEAN);
         }
         for (const mode of ["raises", "none", "exit1", "noEnd"])
@@ -649,7 +655,11 @@ describe.runIf(hasPython)("OSWorld DONE gate hook (MOCK, fakes only)", () => {
     const calls = s.serverSaw.filter((m) => m.method === "tools/call");
     expect(calls).toHaveLength(1);
     expect(calls[0]?.params?.name).toBe(GATE_TOOL);
-    expect(calls[0]?.params?.arguments).toEqual({ taskId: "task-9", runId: "run-9", claim: "done" });
+    expect(calls[0]?.params?.arguments).toEqual({
+      taskId: "task-9",
+      runId: "run-9",
+      claim: "done",
+    });
     expect(s.reply.verdict).toBe("verified");
     expect(s.unreachable).toBe("GATE_UNAVAILABLE");
   });

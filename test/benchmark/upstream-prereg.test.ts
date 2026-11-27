@@ -229,10 +229,14 @@ describe("draft public-R1 pre-registration: the rulings' fields", () => {
       expect(a.label).toBe("ABLATION, never the headline baseline (lead ruling 18:11Z)");
       expect(a.headline).toBe(false);
       expect(a.extraTrials).toBe(117);
-      expect(a.cost).toMatch(/^117 extra trials \(one per task at n = 117\) if run; not run unless separately approved/);
+      expect(a.cost).toMatch(
+        /^117 extra trials \(one per task at n = 117\) if run; not run unless separately approved/,
+      );
       expect(R1_ARMS as readonly string[]).not.toContain(a.id);
     }
-    expect(ab[0]?.probeSha256).toBe("e12a3208fb5c40cd691e6c6b58be4a70abbf80365433cad7c0146d20193e6dcb");
+    expect(ab[0]?.probeSha256).toBe(
+      "e12a3208fb5c40cd691e6c6b58be4a70abbf80365433cad7c0146d20193e6dcb",
+    );
     expect(ab[0]?.knownBias).toMatch(/NOTHING_SAVED refuses a correct DONE/);
     expect(ab[1]?.implemented).toMatch(/^No\./);
   });
@@ -274,7 +278,9 @@ describe("draft public-R1 pre-registration: the rulings' fields", () => {
       "7222035806",
     ]);
     // 18:11Z was relayed in the round-3 brief, not posted as its own comment.
-    expect(rulings[5]?.ref).toMatch(/^https:\/\/github\.com\/kodingcills\/Myco\/pull\/741 \(lead ruling relayed in the round-3 builder brief/);
+    expect(rulings[5]?.ref).toMatch(
+      /^https:\/\/github\.com\/kodingcills\/Myco\/pull\/741 \(lead ruling relayed in the round-3 builder brief/,
+    );
     for (const t of ["13:55Z", "14:05Z", "14:37Z", "15:21Z", "15:26Z", "18:11Z"])
       expect(PREREG.ruling as string).toContain(t);
   });
@@ -418,6 +424,7 @@ describe("draft public-R1 pre-registration: the rulings' fields", () => {
       ["ABLATIONS_NOT_LABELLED", (p) => (at(p, "ablations", 1).label = "secondary baseline")],
       ["ABLATIONS_NOT_LABELLED", (p) => delete at(p, "ablations", 0).extraTrials],
       ["ABLATIONS_NOT_LABELLED", (p) => (at(p, "ablations", 1).extraTrials = 0)],
+      ["ABLATIONS_NOT_LABELLED", (p) => (at(p, "ablations", 0).extraTrials = "117")],
       ["ABLATIONS_NOT_LABELLED", (p) => (at(p, "ablations", 0).id = "self-check")],
       ...["oracle", "task configuration", "gold", "fixtures", "evaluator code", "result.txt"].map(
         (k) =>
@@ -624,9 +631,10 @@ describe("the public-R1 analysis refuses 'shown' while anything is pending", () 
     }
     // 18:11Z: rows from a labelled ablation arm never enter the pre-registered analysis.
     for (const arm of ["self-check-rules", "self-check-prompt-suffix"])
-      expect(analyze(ruled(), [...rows, row([...SUBSET][0] as string, { arm })]).reasons, arm).toEqual([
-        "ROW_ARM_NOT_REGISTERED",
-      ]);
+      expect(
+        analyze(ruled(), [...rows, row([...SUBSET][0] as string, { arm })]).reasons,
+        arm,
+      ).toEqual(["ROW_ARM_NOT_REGISTERED"]);
     expect(R1_ARMS).toEqual(["no-gate", "gate-before-done", "self-check"]);
     expect(analyze(ruled(), [...rows, row("not-in-subset", { arm: "no-gate" })]).reasons).toEqual([
       "ROW_OUTSIDE_SUBSET",

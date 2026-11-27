@@ -417,6 +417,8 @@ describe("the gate and its OSWorld DONE hook are independent of the upstream eva
   const GUEST_FORBIDDEN =
     /result|gold|cache|evaluation_examples|desktop_env|cloud|expected|oracle|fixture|score|task_config|\bexample|evaluat|urllib|requests|socket|curl|wget|https?:|environ|\.\.|dirname|pardir/i;
   const GUEST_SCRIPTS = ["SELF_CHECK_DUMP", "SELF_CHECK_PROBE"] as const;
+  /** The guest scripts' root, `"${HOME:?}"` (built so it is not read as a template). */
+  const HOME_ROOT = ['"$', "{HOME:?}", '"'].join("");
   const selfCheckProblems = (file: string) => {
     const raw = readFileSync(file, "utf8");
     const rel = relative(ROOT, file);
@@ -437,7 +439,7 @@ describe("the gate and its OSWorld DONE hook are independent of the upstream eva
       const g = text.match(GUEST_FORBIDDEN);
       if (g) out.push(`${rel} ${name} names ${g[0]}`);
       if (/(^|[\s"'=(<])\//m.test(text)) out.push(`${rel} ${name} has an absolute path`);
-      if (!text.includes('"${HOME:?}"')) out.push(`${rel} ${name} does not start from $HOME`);
+      if (!text.includes(HOME_ROOT)) out.push(`${rel} ${name} does not start from $HOME`);
     }
     return out;
   };
@@ -470,13 +472,15 @@ describe("the gate and its OSWorld DONE hook are independent of the upstream eva
       expect(
         plant(call, `            cfg = self.controller.__closure__[0].cell_contents\n${call}`),
       ).toEqual(expect.arrayContaining([expect.stringContaining("names __closure__")]));
-      expect(
-        plant(call, `            prov = self.controller._address.__self__\n${call}`),
-      ).toEqual(expect.arrayContaining([expect.stringContaining("calls controller._address")]));
+      expect(plant(call, `            prov = self.controller._address.__self__\n${call}`)).toEqual(
+        expect.arrayContaining([expect.stringContaining("calls controller._address")]),
+      );
       expect(plant("import json\n", "import json\nimport gc\n")).toEqual([
         expect.stringContaining("names gc"),
       ]);
-      expect(plant('print("END")', 'print(open(home + "/../ground/result.txt").read())\nprint("END")')).toEqual([
+      expect(
+        plant('print("END")', 'print(open(home + "/../ground/result.txt").read())\nprint("END")'),
+      ).toEqual([
         expect.stringMatching(/SELF_CHECK_DUMP names (result|\.\.)/),
         expect.stringContaining("SELF_CHECK_DUMP has an absolute path"),
       ]);
