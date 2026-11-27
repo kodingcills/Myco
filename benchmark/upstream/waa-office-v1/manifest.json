@@ -10,6 +10,8 @@
     "licenseSha256": "9906940f61b1f0b533fa7d99baf55178b2808fbe113ea51dfbfad8572ccd5f2b"
   },
   "selectionRule": "Every task id listed in evaluation_examples_windows/test_all.json under libreoffice_calc, libreoffice_writer, notepad and file_explorer (WAA's office apps are LibreOffice on Windows; it has no Microsoft Office tasks). No task is dropped for difficulty, feasibility, evaluator type or placement.",
+  "metricsDir": "src/win-arena-container/client/desktop_env/evaluators/metrics",
+  "metricsPackage": "desktop_env.evaluators.metrics",
   "counts": {
     "total": 64,
     "perDomain": {

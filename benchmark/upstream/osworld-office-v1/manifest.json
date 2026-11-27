@@ -10,6 +10,8 @@
     "licenseSha256": "a8d1d88a0f9cce3cdbff73b03a80dc5e5d69e3ba2443946c268815a550c9e0ec"
   },
   "selectionRule": "Every task id listed in evaluation_examples/test_all.json under libreoffice_calc, libreoffice_writer and libreoffice_impress, plus every multi_apps task listed there whose related_apps names a LibreOffice app (calc, writer or impress). No task is dropped for difficulty, feasibility, evaluator type or placement.",
+  "metricsDir": "desktop_env/evaluators/metrics",
+  "metricsPackage": "desktop_env.evaluators.metrics",
   "counts": {
     "total": 173,
     "perDomain": {
