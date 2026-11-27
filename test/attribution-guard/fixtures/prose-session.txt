@@ -1,0 +1,3 @@
+Record the Claude session timing
+
+The Claude session ended early; see the session log at docs/ci.md.

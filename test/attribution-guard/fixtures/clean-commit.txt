@@ -1,0 +1,5 @@
+Add the heartbeat check
+
+The launcher now writes a heartbeat before the first poll.
+
+Refs #685
