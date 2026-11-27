@@ -37,6 +37,8 @@ const newDir = (tag: string) => {
   tmp.push(d);
   return d;
 };
+/** A planted absolute home path, joined at run time so this file never holds one (TIF-241). */
+const homePath = (root: string, ...rest: string[]) => ["", root, "zelphine", ...rest].join("/");
 afterAll(() => {
   for (const d of tmp) rmSync(d, { recursive: true, force: true });
 });
@@ -113,7 +115,10 @@ let entries: TarEntry[];
 beforeAll(() => {
   repo = fixtureRepo();
   // A dirty working tree must not reach the bundle: it is built from the commit.
-  writeFileSync(join(repo, "docs/benchmark/public/README.md"), "working-tree edit /Users/x/y\n");
+  writeFileSync(
+    join(repo, "docs/benchmark/public/README.md"),
+    `working-tree edit ${homePath("Users", "y")}\n`,
+  );
   outA = join(newDir("out"), "a");
   built = buildRelease({ repoDir: repo, ref: "HEAD", outDir: outA });
   tree = join(outA, RELEASE_ROOT);
@@ -218,7 +223,10 @@ describe("leak scan", () => {
   it("refuses a committed host path, naming file, line and kind but not the text", () => {
     const dir = fixtureRepo((d) => {
       const p = join(d, "docs/benchmark/public/task-set-card.md");
-      writeFileSync(p, `${readFileSync(p, "utf8")}\nsaved under /Users/zelphine/runs/x\n`);
+      writeFileSync(
+        p,
+        `${readFileSync(p, "utf8")}\nsaved under ${homePath("Users", "runs", "x")}\n`,
+      );
     });
     const msg = refusal(() =>
       buildRelease({ repoDir: dir, ref: "HEAD", outDir: join(newDir("o"), "x") }),
@@ -285,7 +293,7 @@ describe("datasets (#612 N2)", () => {
     mkdirSync(join(d, "episodes"), { recursive: true });
     writeFileSync(join(d, "manifest.json"), `{"schema":"x","episodes":1}\n`);
     writeFileSync(join(d, "episodes", "e1.json"), `{"id":"h-${"a".repeat(60)}"}\n`);
-    writeFileSync(join(dirname(d), "run.log"), "wrote /Users/zelphine/myco/run-542\n");
+    writeFileSync(join(dirname(d), "run.log"), `wrote ${homePath("Users", "myco", "run-542")}\n`);
     return d;
   };
 
@@ -334,7 +342,7 @@ describe("datasets (#612 N2)", () => {
 
   it("refuses a dataset holding a host path or a configured identity", () => {
     const d = dataset("leak");
-    writeFileSync(join(d, "episodes", "e2.json"), `{"cwd":"/home/zelphine/x"}\n`);
+    writeFileSync(join(d, "episodes", "e2.json"), `{"cwd":"${homePath("home", "x")}"}\n`);
     writeFileSync(join(d, "episodes", "e3.json"), `{"by":"Quintessa.Vbramble"}\n`);
     const ids = join(newDir("id"), "ids.txt");
     writeFileSync(ids, "Quintessa Vbramble\n");
