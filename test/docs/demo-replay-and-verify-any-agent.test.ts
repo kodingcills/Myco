@@ -646,6 +646,24 @@ describe("demo replay + verify-any-agent spec: checkpointed capture, #596 nits, 
     );
   });
 
+  it("the sealed checkpoint's names, the S1/S2 consequence, mock as plumbing, RS-18 and VA-15 stay as written", () => {
+    expect(cp).toContain("a checkpoint manifest `myco.checkpoint/1`");
+    expect(cp).toContain(
+      "It is opened only through `openCheckpointForTrial(vault, binding, k)`, receipt-bound",
+    );
+    expect(cp).toContain("so naming another trial never captures anything");
+    expect(cp).toContain("on `mock` they are plumbing");
+    expect(DOC).toContain(
+      "#### RS-18. A checkpointed run replays read-only, each mid-run decision on its frame and flagged as a checkpoint",
+    );
+    expect(DOC).toContain(
+      "#### VA-15. Verify recomputes each checkpoint decision on the sealed bytes it read",
+    );
+    expect(flat(criterionText("VA-15"))).toContain(
+      "a checkpoint line compared against bytes other than its own checkpoint's, or a checkpoint matched by clock or by the log's `checkedAt`.",
+    );
+  });
+
   it("N4: P6 reuses slip-then-repair's edits, not its harness restore", () => {
     const p6 = rows(section("### 3.6 Pre-registered proofs")).find((r) => r[0] === "P6");
     const p6Row = p6 ? flat(p6.join(" | ")) : "";
