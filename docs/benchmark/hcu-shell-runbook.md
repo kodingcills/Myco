@@ -35,6 +35,26 @@ then reset to the rebuilt base, so the snapshot stays the same across the pair. 
 snapshot name changes, `TRIAL_SNAPSHOT` in `runner.ts` and the reset default change with it
 in a reviewed PR.
 
+**Baking HCU into a trial base (TIF-734).** `scripts/build-trial-base.sh` does it when
+`MYCO_TRIAL_BASE_HCU_DIR` names a directory holding a pinned HCU build and its `SHA256SUMS`.
+Upstream publishes no Windows release (v1.0.1 ships only a Linux amd64 tarball), so the build
+comes from source at a pinned tag: `computer-use/native/windows` for win-arm64 (self-contained
+.NET provider) and `cmd/computer-use` with `GOOS=windows GOARCH=arm64`. The build checks every
+hash in the guest, installs into `C:\myco\bin`, and registers the `MycoHCU` logon task, which
+runs `computer-use.exe serve` in the interactive session. On the cold boot in place, with egress
+denied, it proves `computer-use.exe` runs in a session other than 0 and that
+`computer-use.exe mcp --attach <socket>` lists `AX` and `GUI` and returns one screenshot. HCU's
+first call on a fresh boot can time out, so that probe makes up to 3 sessions, 10 s apart, and
+records every attempt. The command that reaches HCU from SSH (session 0) is therefore:
+
+```
+C:\myco\bin\computer-use.exe mcp --attach C:\Users\myco\AppData\Local\Temp\hcu--1\desktop-default.sock
+```
+
+Without `--attach`, `computer-use.exe mcp` runs in process in session 0 and cannot see the
+desktop. Pass the `--attach` form as `--hcu-command`. A build that stopped at 5b can be finished
+on the same running guest with `MYCO_TRIAL_BASE_RESUME_FROM=5b` (see the script's header).
+
 ## 2. Run it
 
 ```bash

@@ -30,7 +30,17 @@
 #   5b. on the cold boot in place, egress denied: computer-use.exe runs in a session other
 #       than 0 and its daemon answers (guest-hcu.ps1 verify), and over SSH
 #       `computer-use.exe mcp --attach <socket>` initialises, lists the GUI tool and returns
-#       one screenshot image. Any failure stops the build before the snapshot.
+#       one screenshot image (up to HCU_PROBE_ATTEMPTS sessions, 10 s apart, every attempt
+#       recorded: HCU's first call on a fresh boot can time out). Any failure stops the build
+#       before the snapshot.
+#
+# Resume (TIF-734, lead ruling 2026-11-27 15:44Z): MYCO_TRIAL_BASE_RESUME_FROM=5b finishes a build
+# that stopped at 5b, on the SAME running guest, with the SAME <evidence-dir>. It refuses unless
+# the earlier run's evidence is there (deny, the cold boot in place, verify, probes, 14b), the VM
+# is running, egress is denied, and the guest is the same instance: the computer-use.exe pid that
+# 14b recorded is still alive in an interactive session and Windows booted before that record.
+# It then re-proves egress (verify + probes) and HCU (5b) and takes the snapshot (6), exactly as
+# a fresh build ends. It never restores, never opens egress and never re-runs maintenance.
 #
 # Fails closed: any step that fails stops the build before the snapshot. The
 # VM is then left with egress DENIED (an EXIT trap re-denies it) and clean-base
@@ -47,6 +57,9 @@ CFG=${VM_SSH_CONFIG:-$HOME/VMs/myco-win11/ssh_config}
 GUEST_PS='C:\Users\myco\trial-base-maintenance.ps1'
 HCU_DIR=${MYCO_TRIAL_BASE_HCU_DIR:-}
 GUEST_HCU_PS='C:\myco\bin\myco-hcu.ps1'
+RESUME_FROM=${MYCO_TRIAL_BASE_RESUME_FROM:-}
+# Fixed, not overridable: HCU's first call on a fresh boot can time out (TIF-734 build 1).
+HCU_PROBE_ATTEMPTS=3
 # Overridable so the host test can stub them; the defaults are the in-repo scripts.
 EGRESS=${MYCO_EGRESS_SCRIPT:-$REPO/scripts/guest-egress.sh}
 RESET=${MYCO_RESET_SCRIPT:-$REPO/scripts/reset-trial-vm.sh}
@@ -65,6 +78,11 @@ has_snapshot() { snapshots | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -qx "$1
 status() { "$VM/vm.sh" status 2>/dev/null | tr -d '\r'; }
 
 has_snapshot "$FROM" || die "source snapshot '$FROM' not found"
+case "$RESUME_FROM" in
+  "" | 5b) ;;
+  *) die "MYCO_TRIAL_BASE_RESUME_FROM accepts only 5b" ;;
+esac
+[ "$RESUME_FROM" = 5b ] && [ -z "$HCU_DIR" ] && die "a resume from 5b needs MYCO_TRIAL_BASE_HCU_DIR (it re-proves HCU)"
 if [ -n "$HCU_DIR" ]; then
   for f in computer-use.exe computer-use-windows-provider.exe LICENSE THIRD_PARTY_NOTICES.md SHA256SUMS; do
     [ -f "$HCU_DIR/$f" ] || die "MYCO_TRIAL_BASE_HCU_DIR is missing $f"
@@ -100,6 +118,13 @@ clean_shutdown() { # never force: a forced stop would snapshot an unclean disk
   return 1
 }
 
+hcu_guest() { # hcu_guest <stage and args> <logfile>
+  "$VSSH" "powershell -NoProfile -ExecutionPolicy Bypass -File $GUEST_HCU_PS -Stage $1" 2>&1 \
+    | tr -d '\r' | grep -v -e 'post-quantum' -e 'openssh.com/pq.html' > "$2"
+  return "${PIPESTATUS[0]}"
+}
+
+if [ -z "$RESUME_FROM" ]; then
 # 1. Maintenance window: egress open, clean-base booted.
 log "step 1: open egress for the maintenance window; restore and boot $FROM"
 EGRESS_OPENED=1
@@ -131,11 +156,6 @@ guest state "$OUT/09-state-after.json" || die "state (after) failed"
 guest check "$OUT/10-defender-check.log" || die "Defender check failed: real-time off or exclusions present (see 10-defender-check.log)"
 
 # 3b. HCU (TIF-734), only when MYCO_TRIAL_BASE_HCU_DIR is set.
-hcu_guest() { # hcu_guest <stage> <logfile>
-  "$VSSH" "powershell -NoProfile -ExecutionPolicy Bypass -File $GUEST_HCU_PS -Stage $1" 2>&1 \
-    | tr -d '\r' | grep -v -e 'post-quantum' -e 'openssh.com/pq.html' > "$2"
-  return "${PIPESTATUS[0]}"
-}
 if [ -n "$HCU_DIR" ]; then
   log "step 3b: install HCU from $(basename "$HCU_DIR") (sha256-checked in the guest)"
   cp "$HCU_DIR/SHA256SUMS" "$OUT/10b-hcu-sha256sums.txt"
@@ -179,6 +199,37 @@ if [ "$BIP_CPU" -lt "$COLD_MIN_GUEST_CPU" ]; then
   [ "$BIP_CPU" -ge "$COLD_MIN_GUEST_CPU" ] || die "boot in place was fast again (guest CPU ${BIP_CPU}s); not snapshotting a guest that skipped its boot work"
 fi
 echo "step 5 boot in place: class=cold guest_cpu_first_ssh_s=$BIP_CPU" >> "$OUT/boot-classes.log"
+else
+# Resume from 5b: the same running guest, egress still denied, or nothing at all.
+log "resume from 5b: prove this is the build's own running guest, with egress still denied"
+for f in 11-egress-deny.log 13-egress-verify.log 14-probe-denied.json 14b-hcu-verify.log boot-classes.log; do
+  [ -f "$OUT/$f" ] || die "resume: $f is missing from $OUT (not the evidence of a build that stopped at 5b)"
+done
+grep -q '^step 5 boot in place: class=cold ' "$OUT/boot-classes.log" \
+  || die "resume: boot-classes.log records no cold boot in place"
+MARK_PID=$(sed -nE 's/^verify: computer-use\.exe pid ([0-9]+) session [1-9][0-9]*$/\1/p' "$OUT/14b-hcu-verify.log" | tail -n 1)
+[ -n "$MARK_PID" ] || die "resume: 14b-hcu-verify.log holds no instance marker (computer-use.exe pid in an interactive session)"
+MARK_UTC=$(stat -f %m "$OUT/14b-hcu-verify.log" 2>/dev/null || stat -c %Y "$OUT/14b-hcu-verify.log")
+[ "$(status)" = started ] || die "resume: the VM is not running (a stopped or restarted guest is not the build's instance)"
+bash "$EGRESS" status > "$OUT/r1-egress-status.log" 2>&1
+grep -q '^utm isolate-from-host: true$' "$OUT/r1-egress-status.log" || die "resume: egress is not denied (see r1-egress-status.log)"
+scp -q -F "$CFG" -o ConnectTimeout=10 "$REPO/scripts/trial-base/guest-hcu.ps1" "myco-win11:C:/myco/bin/myco-hcu.ps1" \
+  || die "resume: could not copy guest-hcu.ps1"
+hcu_guest "identity -ExpectPid $MARK_PID" "$OUT/r2-identity.log" || die "resume: identity check failed to run (see r2-identity.log)"
+ID_LINE=$(grep -E '^identity: ' "$OUT/r2-identity.log" | tail -n 1)
+ID_ALIVE=$(sed -nE 's/.* alive=([01]) .*/\1/p' <<< "$ID_LINE")
+ID_BOOT=$(sed -nE 's/.* boot_utc=([0-9]+)$/\1/p' <<< "$ID_LINE")
+[ "$ID_ALIVE" = 1 ] || die "resume: computer-use.exe pid $MARK_PID is not alive in an interactive session: not the same guest instance (see r2-identity.log)"
+[ -n "$ID_BOOT" ] && [ "$ID_BOOT" -lt "$MARK_UTC" ] \
+  || die "resume: the guest booted after the 5b record (boot_utc ${ID_BOOT:-unreadable} >= $MARK_UTC): not the same instance"
+mkdir -p "$OUT/before-resume"
+for f in 13-egress-verify.log 14-probe-denied.json 14b-hcu-verify.log 14c-hcu-mcp-probe.json 14c-hcu-mcp.raw; do
+  [ -e "$OUT/$f" ] && mv "$OUT/$f" "$OUT/before-resume/"
+done
+echo "resume from 5b: same instance (computer-use.exe pid $MARK_PID alive, boot_utc $ID_BOOT < 5b record $MARK_UTC)" >> "$OUT/boot-classes.log"
+fi
+
+# Egress proof, right before HCU and the snapshot, on a fresh build and on a resume alike.
 bash "$EGRESS" verify > "$OUT/13-egress-verify.log" 2>&1 || die "egress verify failed after deny"
 bash "$EGRESS" probe > "$OUT/14-probe-denied.json" 2>/dev/null || die "probe failed to run"
 python3 - "$OUT/14-probe-denied.json" <<'PY' || die "a probe target was reachable with egress denied (see 14-probe-denied.json)"
@@ -193,14 +244,19 @@ if [ -n "$HCU_DIR" ]; then
   hcu_guest verify "$OUT/14b-hcu-verify.log" || die "HCU verify failed (see 14b-hcu-verify.log)"
   HCU_SOCKET=$(sed -n 's/^socket=//p' "$OUT/14b-hcu-verify.log" | tail -n 1)
   [ -n "$HCU_SOCKET" ] || die "HCU verify printed no socket (see 14b-hcu-verify.log)"
-  { printf '%s\n' \
-      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"build-trial-base","version":"1"}}}' \
-      '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-      '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-      '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"GUI","arguments":{"actions":[{"type":"screenshot"}]}}}'
-    sleep "${MYCO_HCU_PROBE_WAIT_S:-25}"; } \
-    | ssh -F "$CFG" -o LogLevel=ERROR -o ConnectTimeout=10 myco-win11 "C:\myco\bin\computer-use.exe mcp --attach $HCU_SOCKET" 2>/dev/null | tr -d '\r' > "$OUT/14c-hcu-mcp.raw"
-  python3 - "$OUT/14c-hcu-mcp.raw" "$OUT/14c-hcu-mcp-probe.json" <<'PY' || die "HCU MCP probe failed (see 14c-hcu-mcp-probe.json)"
+  hcu_session() { # hcu_session <raw>: one MCP session over --attach: initialise, tools/list, one screenshot
+    { printf '%s\n' \
+        '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"build-trial-base","version":"1"}}}' \
+        '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+        '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+        '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"GUI","arguments":{"actions":[{"type":"screenshot"}]}}}'
+      sleep "${MYCO_HCU_PROBE_WAIT_S:-25}"; } \
+      | ssh -F "$CFG" -o LogLevel=ERROR -o ConnectTimeout=10 myco-win11 "C:\\myco\\bin\\computer-use.exe mcp --attach $HCU_SOCKET" 2>/dev/null | tr -d '\r' > "$1"
+  }
+  HCU_OK=0
+  for n in $(seq 1 "$HCU_PROBE_ATTEMPTS"); do
+    hcu_session "$OUT/14c-hcu-mcp.raw"
+    if python3 - "$OUT/14c-hcu-mcp.raw" "$OUT/14c-hcu-mcp-probe-attempt-$n.json" <<'PY'
 import json, sys
 raw, out = sys.argv[1], sys.argv[2]
 by_id = {}
@@ -226,10 +282,20 @@ summary = {
     "screenshot_text": [c.get("text", "")[:300] for c in shot.get("content", []) if c.get("type") == "text"],
 }
 json.dump(summary, open(out, "w"), indent=2)
-ok = bool(init.get("serverInfo")) and "GUI" in tools and shot.get("isError") is not True and len(images) == 1
+ok = bool(init.get("serverInfo")) and "GUI" in tools and "AX" in tools and shot.get("isError") is not True and len(images) == 1
 sys.exit(0 if ok else 1)
 PY
+    then
+      cp "$OUT/14c-hcu-mcp-probe-attempt-$n.json" "$OUT/14c-hcu-mcp-probe.json"
+      echo "step 5b: HCU MCP probe attempt $n of $HCU_PROBE_ATTEMPTS: ok" >> "$OUT/boot-classes.log"
+      HCU_OK=1
+      break
+    fi
+    echo "step 5b: HCU MCP probe attempt $n of $HCU_PROBE_ATTEMPTS: failed (see 14c-hcu-mcp-probe-attempt-$n.json)" >> "$OUT/boot-classes.log"
+    [ "$n" -lt "$HCU_PROBE_ATTEMPTS" ] && sleep "${MYCO_HCU_RETRY_S:-10}"
+  done
   rm -f "$OUT/14c-hcu-mcp.raw"
+  [ "$HCU_OK" = 1 ] || die "HCU MCP probe failed on all $HCU_PROBE_ATTEMPTS attempts (see 14c-hcu-mcp-probe-attempt-*.json)"
 fi
 
 # 6. Snapshot, stopped, egress denied.

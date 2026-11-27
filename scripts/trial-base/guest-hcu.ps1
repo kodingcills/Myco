@@ -9,11 +9,16 @@
 #            see the desktop, so the harness reaches HCU through that daemon:
 #            `C:\myco\bin\computer-use.exe mcp --attach <socket>`.
 #   verify   wait for computer-use.exe in a session other than 0, then ask the daemon for its
-#            status from this (session 0) shell. Prints the socket path on success.
+#            status from this (session 0) shell. Prints the socket path on success, and the
+#            instance markers `pid=` (that computer-use.exe) and `boot_utc=` (Windows' last boot,
+#            Unix seconds) that a resume checks.
+#   identity read-only: report whether -ExpectPid is still computer-use.exe in an interactive
+#            session, and Windows' last boot time; for `MYCO_TRIAL_BASE_RESUME_FROM=5b`.
 #
 # Exit 0 ok, 1 failed. Prints no secret: there is none here.
-param([Parameter(Mandatory)][ValidateSet('install', 'verify')][string]$Stage,
-      [string]$Staging = 'C:\myco\hcu-staging')
+param([Parameter(Mandatory)][ValidateSet('install', 'verify', 'identity')][string]$Stage,
+      [string]$Staging = 'C:\myco\hcu-staging',
+      [int]$ExpectPid = 0)
 $ErrorActionPreference = 'Stop'
 $bin = 'C:\myco\bin'
 $exe = Join-Path $bin 'computer-use.exe'
@@ -55,6 +60,15 @@ if ($Stage -eq 'install') {
   exit 0
 }
 
+function BootUtc { [DateTimeOffset]::new((Get-CimInstance Win32_OperatingSystem).LastBootUpTime).ToUnixTimeSeconds() }
+
+if ($Stage -eq 'identity') {
+  $p = Get-Process -Id $ExpectPid -ErrorAction SilentlyContinue
+  $alive = [int]($null -ne $p -and $p.ProcessName -eq 'computer-use' -and $p.SessionId -ne 0)
+  "identity: pid=$ExpectPid alive=$alive session=$(if ($p) { $p.SessionId } else { 'none' }) boot_utc=$(BootUtc)"
+  exit 0
+}
+
 # verify
 $deadline = (Get-Date).AddSeconds(180)
 $proc = $null
@@ -74,4 +88,6 @@ if ($status -notmatch '"socket"') { "verify: FAIL daemon status: $status"; exit 
 $socket = ($status | ConvertFrom-Json).socket
 "verify: daemon answers from session 0; socket $socket"
 "socket=$socket"
+"pid=$($proc.Id)"
+"boot_utc=$(BootUtc)"
 exit 0
