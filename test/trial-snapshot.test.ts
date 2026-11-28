@@ -35,8 +35,9 @@ function ts(script: string, env: Record<string, string> = {}, setup?: (out: stri
 }
 
 describe("ts_resolve", () => {
-  it("defaults to trial-base-v3 and honours MYCO_TRIAL_SNAPSHOT", () => {
-    expect(ts("ts_resolve").stdout).toBe("trial-base-v3");
+  it("defaults to trial-base-v4 and honours MYCO_TRIAL_SNAPSHOT", () => {
+    expect(ts("ts_resolve").stdout).toBe("trial-base-v4");
+    expect(ts("ts_resolve", { MYCO_TRIAL_SNAPSHOT: "trial-base-v3" }).stdout).toBe("trial-base-v3");
     expect(ts("ts_resolve", { MYCO_TRIAL_SNAPSHOT: "trial-base-v2" }).stdout).toBe("trial-base-v2");
     expect(ts("ts_resolve", { MYCO_TRIAL_SNAPSHOT: "clean-base" }).stdout).toBe("clean-base");
   });
@@ -55,6 +56,9 @@ describe("ts_resolve", () => {
     ).toBe(11);
     expect(
       ts("ts_resolve", { MYCO_COMPARISON_RUN: "1", MYCO_TRIAL_SNAPSHOT: "trial-base-v3" }).status,
+    ).toBe(11);
+    expect(
+      ts("ts_resolve", { MYCO_COMPARISON_RUN: "1", MYCO_TRIAL_SNAPSHOT: "trial-base-v4" }).status,
     ).toBe(11);
     const ok = ts("ts_resolve", { MYCO_COMPARISON_RUN: "1", MYCO_TRIAL_SNAPSHOT: "clean-base" });
     expect(ok.status).toBe(0);
@@ -136,8 +140,8 @@ describe("ts_resolve: strict MYCO_COMPARISON_RUN", () => {
   );
 
   it("empty and 0 mean no comparison (the default applies)", () => {
-    expect(ts("ts_resolve", { MYCO_COMPARISON_RUN: "" }).stdout).toBe("trial-base-v3");
-    expect(ts("ts_resolve", { MYCO_COMPARISON_RUN: "0" }).stdout).toBe("trial-base-v3");
+    expect(ts("ts_resolve", { MYCO_COMPARISON_RUN: "" }).stdout).toBe("trial-base-v4");
+    expect(ts("ts_resolve", { MYCO_COMPARISON_RUN: "0" }).stdout).toBe("trial-base-v4");
   });
 });
 
@@ -146,7 +150,7 @@ describe("ts_resolve: allowlist", () => {
   it.each([
     "Clean-Base",
     "cua-c1-base",
-    "trial-base-v4",
+    "trial-base-v5",
     "m1-agent-live",
     "$(touch pwned)",
     "../clean-base",
@@ -237,7 +241,7 @@ describe("the drivers use it", () => {
       expect(comparison.status).toBe(11);
       const fresh = ts(body);
       expect(fresh.stdout).toBe("REACHED");
-      expect(readFileSync(join(fresh.out, "snapshot"), "utf8")).toBe("trial-base-v3\n");
+      expect(readFileSync(join(fresh.out, "snapshot"), "utf8")).toBe("trial-base-v4\n");
     });
   }
 

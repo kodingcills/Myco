@@ -2,17 +2,18 @@
 # trial-snapshot.sh: which snapshot a trial driver resets to, pinned per $OUT
 # (TIF-98). Source it from scripts/m1-sweep.sh and scripts/m1-corrupt-suite.sh.
 #
-# Why: the default trial snapshot moved from clean-base to trial-base-v2, then
-# to trial-base-v3 (rebuilt from cold boots, 2026-11-26). A
+# Why: the default trial snapshot moved from clean-base to trial-base-v2,
+# trial-base-v3 (rebuilt from cold boots, 2026-11-26), and then trial-base-v4
+# (cold-boot rebuild with pinned HCU v1.0.1, 2026-11-27). A
 # sweep resumed after a load pause, or after the switch, must not silently mix
-# the two, and every row must say which snapshot its trial ran on.
+# them, and every row must say which snapshot its trial ran on.
 #
 #   ts_resolve
 #       Print the snapshot this run uses: $MYCO_TRIAL_SNAPSHOT, else
-#       trial-base-v3. Refuses (rc 11), with the reason on stderr:
+#       trial-base-v4. Refuses (rc 11), with the reason on stderr:
 #         - MYCO_COMPARISON_RUN set to anything but empty, 0 or 1 (a typo such
 #           as `true` must not silently mean "not a comparison");
-#         - a snapshot that is not a Myco trial base (trial-base-v3,
+#         - a snapshot that is not a Myco trial base (trial-base-v4, trial-base-v3,
 #           trial-base-v2 or clean-base), so a typo fails here, at pin time, not on every trial.
 #           That also refuses *-live (the live path wedges UTM under rapid
 #           cycling, runbook §3.3) and cua-c1-base (the baseline arms' base);
@@ -20,7 +21,7 @@
 #           set MYCO_TRIAL_SNAPSHOT=clean-base. The baseline arms (C1/C2:
 #           cua-c1-base) are clean-base derivatives, and both arms of a
 #           comparison must start from the same base (m1-state acceptance #7;
-#           docs/baseline/screenshot-agent.md §2). There is no trial-base-v2/v3
+#           docs/baseline/screenshot-agent.md §2). There is no trial-base-v2/v3/v4
 #           derivative for the baseline arms yet.
 #   ts_pin <out_dir> <trials.jsonl> <snapshot>
 #       First run: write <snapshot> to <out_dir>/snapshot. Resume: refuse
@@ -41,7 +42,7 @@
 # Every message goes to stderr; callers append it to their progress log.
 
 ts_resolve() {
-  local snap=${MYCO_TRIAL_SNAPSHOT:-trial-base-v3}
+  local snap=${MYCO_TRIAL_SNAPSHOT:-trial-base-v4}
   case "${MYCO_COMPARISON_RUN:-}" in
     ''|0|1) ;;
     *)
@@ -49,9 +50,9 @@ ts_resolve() {
       return 11 ;;
   esac
   case "$snap" in
-    trial-base-v3|trial-base-v2|clean-base) ;;
+    trial-base-v4|trial-base-v3|trial-base-v2|clean-base) ;;
     *)
-      echo "REFUSED_SNAPSHOT: MYCO_TRIAL_SNAPSHOT='$snap' is not a Myco trial base (trial-base-v3, trial-base-v2 or clean-base); live snapshots and the baseline arms' cua-c1-base are never a sweep's base (runbook §3.3, §3.5)" >&2
+      echo "REFUSED_SNAPSHOT: MYCO_TRIAL_SNAPSHOT='$snap' is not a Myco trial base (trial-base-v4, trial-base-v3, trial-base-v2 or clean-base); live snapshots and the baseline arms' cua-c1-base are never a sweep's base (runbook §3.3, §3.5)" >&2
       return 11 ;;
   esac
   if [ "${MYCO_COMPARISON_RUN:-}" = 1 ] && [ "${MYCO_TRIAL_SNAPSHOT:-}" != clean-base ]; then

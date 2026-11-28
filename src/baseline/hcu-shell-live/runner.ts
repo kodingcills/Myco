@@ -137,8 +137,8 @@ export const LEDGER_FILE = "ledger.jsonl";
 export const PROGRESS_FILE = "progress.json";
 export const TASK_BUNDLE = "benchmark/false-completion/fc-v1";
 export const DEMO_TRIALS = 30;
-/** The snapshot every trial resets to (`scripts/reset-trial-vm.sh` default, TIF-98). */
-export const TRIAL_SNAPSHOT = "trial-base-v3";
+/** The snapshot every trial resets to (`scripts/reset-trial-vm.sh` default, TIF-98 / TIF-734). */
+export const TRIAL_SNAPSHOT = "trial-base-v4";
 /** The planner id on simulated rows: never a Claude model id, so `--evidence` refuses it. */
 export const SIMULATED_PLANNER = "simulated:hcu-shell-dry-run";
 

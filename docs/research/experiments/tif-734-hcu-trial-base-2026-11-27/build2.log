@@ -1,0 +1,10 @@
+build-trial-base: 20:31:32Z step 1: open egress for the maintenance window; restore and boot clean-base
+build-trial-base: 20:36:39Z step 2: state before; signatures; ngen; idle tasks; full scan
+build-trial-base: 22:16:37Z step 3: disable maintenance trigger and Windows Update; check Defender
+build-trial-base: 22:17:08Z step 3b: install HCU from hcu-build (sha256-checked in the guest)
+build-trial-base: 22:17:28Z step 4: remove the maintenance script; clean shutdown
+build-trial-base: 22:18:01Z step 5: deny egress; boot in place; verify + probe
+build-trial-base: 22:18:24Z step 5: boot in place was fast (guest CPU 4s < 100s); clean shutdown and one more start
+build-trial-base: 22:21:33Z step 5b: HCU in the interactive session; MCP over --attach: initialise, GUI tool, one screenshot
+build-trial-base: 22:22:49Z step 6: clean shutdown; snapshot trial-base-v4
+build-trial-base: 22:23:09Z done: trial-base-v4 created from clean-base; egress denied; clean-base untouched

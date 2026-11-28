@@ -120,7 +120,7 @@ describe("refusal functions", () => {
   it("the committed repo has no GO yet, so a real run is refused", () => {
     expect(liveRefusals(base).map((r) => r.split(":")[0])).toEqual(["lead-go-missing"]);
   });
-  it("the cold-boot guard is present on main (#546, trial-base-v3 default)", () => {
+  it("the cold-boot guard is present on main (#546, trial-base-v4 default)", () => {
     expect(coldBootGuardProblems(ROOT)).toEqual([]);
   });
   it("a reset script without #546's guard is refused", () => {

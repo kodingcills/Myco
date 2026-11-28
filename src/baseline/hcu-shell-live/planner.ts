@@ -125,7 +125,7 @@ export const PLANNER_DIFFERENCES: readonly string[] = [
   "seed check: the guest-made .xlsx is read back, required non-empty and hashed (seededSha256), not compared to host bytes, because the host never holds the .xlsx; the gate arm compares its read-back with the bytes it wrote",
   "repeat-failure signature: the harness's failure code, where the gate arm uses class plus message; both persist it in the ledger and restore it on --resume",
   "load gate: an attempt waits (30 s polls, pause after 1800 s) while host 1-minute load >= 10; the gate arm records the start load and the M2 evidence rule refuses rows at >= 10 (same threshold)",
-  "the reset is given trial-base-v3 explicitly and killed after 20 min; the gate arm relies on the script's default and its trial deadline",
+  "the reset is given trial-base-v4 explicitly and killed after 20 min; the gate arm relies on the script's default and its trial deadline",
   "own ledger, progress and host-capture schemas (myco.hcu-shell.*); live-status.json has the gate arm's shape with runner hcu-shell",
 ];
 

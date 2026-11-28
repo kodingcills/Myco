@@ -1,0 +1,5 @@
+verify: computer-use.exe pid 5348 session 1
+verify: daemon answers from session 0; socket C:\Users\myco\AppData\Local\Temp\hcu--1\desktop-default.sock
+socket=C:\Users\myco\AppData\Local\Temp\hcu--1\desktop-default.sock
+pid=5348
+boot_utc=1795817941

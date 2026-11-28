@@ -21,19 +21,19 @@ Everything below is checked by the CLI or by the probe. Nothing is assumed.
 
 | # | What | How it is checked |
 |---|---|---|
-| 1 | **The trial VM host.** The Mac with `myco-win11` and the files `~/VMs/myco-win11/ssh_config`, `scripts/vssh` and `scripts/vm.sh`, as for every live run (`docs/eval-runbook.md` §3). `trial-base-v3` must be built and recorded (#564). | `launch` refuses unless `scripts/reset-trial-vm.sh` has #546's cold-boot guard and defaults to `trial-base-v3`. Every trial then parses the reset's `boot class=` line. |
+| 1 | **The trial VM host.** The Mac with `myco-win11` and the files `~/VMs/myco-win11/ssh_config`, `scripts/vssh` and `scripts/vm.sh`, as for every live run (`docs/eval-runbook.md` §3). `trial-base-v4` must be built and recorded (`docs/research/experiments/tif-734-hcu-trial-base-2026-11-27/`). | `launch` refuses unless `scripts/reset-trial-vm.sh` has #546's cold-boot guard and defaults to `trial-base-v4`. Every trial then parses the reset's `boot class=` line. |
 | 2 | **`claude` on `PATH`, logged in to the operator's Claude subscription.** Log in with `/login` using the subscription account, not an API key or Console account. The environment must hold **no** `ANTHROPIC_*` or provider variables, not even empty ones. The full list is `API_CREDENTIAL_NAMES` in `src/pilot/claude-cli.ts`. | The preflight checks variable names only and never reads a value. On every call the planner checks the CLI's own `system/init` event: `apiKeySource` must be `none`, and `model` must be the plan's model. |
 | 3 | **HCU in the guest, inside the trial base.** Install Microsoft Hybrid Computer Use (`computer-use`, github.com/microsoft/Hybrid-Computer-Use, MIT, v1.0.1 or later, Windows build with its .NET 8 provider) in the snapshot both arms reset to. By default it is reached as `ssh myco-win11 'C:\myco\bin\computer-use.exe mcp'`. It must serve the **interactive** desktop (session 1). An SSH session runs in session 0, so a plain `computer-use mcp` over SSH cannot see the desktop. Use a relay into session 1, as C1 did for `cua-driver` (`C:\myco\bin\run-interactive.ps1` and a named pipe), and pass that command with `--hcu-command '<cmd>'`. Passing it changes the plan hash, so the lead's GO names the exact command. | On every trial, prepare probes HCU: MCP initialise, the `GUI` tool must be present, and one screenshot. If the probe fails, the attempt fails with the harness code `hcu-unreachable` before the agent or the planner runs. No row is written and nothing is counted. The trial re-runs in place, and a second `hcu-unreachable` in a row aborts the run (exit 6). |
 | 4 | **Guest basics already in the trial base.** Windows PowerShell 5.1, LibreOffice at `C:\Program Files\LibreOffice`, and `myco-agent` with `run-interactive.ps1`, as for the C1 and myco-gate runs. | Prepare fails with a code (`agent-unreachable`, `fixture-convert-failed`, `seed-readback-failed`, `calc-uno-timeout`). Two identical failures in a row abort the run. |
 | 5 | **The lead's GO.** A committed, unchanged `docs/benchmark/hcu-shell-go.json`: `{"schema":"myco.hcu-shell.lead-go/1","arm":"hcu+shell","planSha256":"<the printed hash>","ruling":"<who and when>"}`. The repo does not contain it until the lead gives it. | `launch` refuses with `lead-go-missing`, `lead-go-invalid`, `lead-go-plan-mismatch` or `lead-go-uncommitted`. |
 | 6 | **The VM lock.** Run under `scripts/vm-session.sh -- node --import tsx ...` (TIF-210), so nothing else drives the VM during the run. Start the runner with `node --import tsx`, **not** `npx tsx`: a Node launcher replaces FD 9, so the lock never reaches the runner or the reset. | `launch` refuses with `vm-lock-not-held` otherwise. The reset is spawned with FD 9 passed through, so it accepts the session's lock. |
 
-As far as this repo records, `trial-base-v3` does **not** contain HCU yet
-(`docs/research/m2-hcu-shell-arm.md`, "Same app state reset"). Item 3 therefore needs the trial
-base rebuilt with HCU installed. That rebuild is VM time and a lead decision. Both arms should
-then reset to the rebuilt base, so the snapshot stays the same across the pair. If the
-snapshot name changes, `TRIAL_SNAPSHOT` in `runner.ts` and the reset default change with it
-in a reviewed PR.
+`trial-base-v4` contains pinned HCU (`v1.0.1`, commit `00eaeebe`, built from source for
+`win-arm64`), installed in `C:\myco\bin` with the `MycoHCU` logon task running
+`computer-use.exe serve --idle-timeout 8760h` in the interactive session and verified on a cold
+boot with egress denied (`docs/research/experiments/tif-734-hcu-trial-base-2026-11-27/`).
+`TRIAL_SNAPSHOT` in `runner.ts` and `scripts/reset-trial-vm.sh` both default to `trial-base-v4`,
+so both arms reset to the same snapshot. `trial-base-v4` has no reset bench or live trial run yet.
 
 **Baking HCU into a trial base (TIF-734).** `scripts/build-trial-base.sh` does it when
 `MYCO_TRIAL_BASE_HCU_DIR` names a directory holding a pinned HCU build and its `SHA256SUMS`.
@@ -198,7 +198,7 @@ approves them by naming the plan hash.
 **The same in both arms:**
 
 - the model (`claude-sonnet-5-5`, `PILOT_MODEL`), the tasks, fixtures and instruction text, the
-  snapshot (`trial-base-v3`) and cold reset, #546's boot-class halt, the VM lock and the grader;
+  snapshot (`trial-base-v4`) and cold reset, #546's boot-class halt, the VM lock and the grader;
 - the environment allowlist for `claude` and the settings-isolation flags: `--setting-sources ""`,
   `--strict-mcp-config` with no MCP server, `--tools ""` and `--permission-mode dontAsk`;
 - the subscription only: the env-name preflight, plus a halt on any `apiKeySource` other than
@@ -264,7 +264,7 @@ approves them by naming the plan hash.
 - **The load gate.** This arm waits before an attempt while the host load is 10 or more. The
   gate arm records the start load, and the M2 evidence rule refuses rows at 10 or more. The
   threshold is the same.
-- **The reset call.** This arm passes `trial-base-v3` explicitly and kills a reset after 20 min.
+- **The reset call.** This arm passes `trial-base-v4` explicitly and kills a reset after 20 min.
   The gate arm uses the script's default and its trial deadline.
 - **Formats.** The ledger, progress and host-capture schemas are this arm's own
   (`myco.hcu-shell.*`). `live-status.json` has the gate arm's shape with `runner: "hcu-shell"`.

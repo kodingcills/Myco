@@ -528,9 +528,11 @@ arms must share all of the following. Anything that differs is a documented devi
 
 **Snapshot rule for comparison runs (TIF-98, 2026-11-26).** Since 2026-11-26 the Myco trial
 drivers reset to a trial base by default: `trial-base-v2`, then `trial-base-v3` (the same build
-rerun from cold boots). Each is `clean-base` with its pending maintenance done; `trial-base-v2`'s
-resets measured about 64 s faster (runbook §3.5). The baseline arms have no trial-base
-derivative: `cua-c1-base` derives from `clean-base`. So, until one exists:
+rerun from cold boots), then `trial-base-v4` (cold-boot rebuild with pinned HCU v1.0.1,
+2026-11-27; no reset bench or live trial run yet). Each is `clean-base` with its pending
+maintenance done; `trial-base-v2`'s resets measured about 64 s faster (runbook §3.5). The
+baseline arms have no trial-base derivative: `cua-c1-base` derives from `clean-base`. So, until
+one exists:
 
 - **Any Myco-vs-baseline comparison pins the Myco arm to `clean-base`.** Launch its driver with
   `MYCO_COMPARISON_RUN=1 MYCO_TRIAL_SNAPSHOT=clean-base`. `scripts/m1-sweep.sh` and
@@ -538,15 +540,15 @@ derivative: `cua-c1-base` derives from `clean-base`. So, until one exists:
   is explicitly `clean-base` (`scripts/trial-snapshot.sh`). They also refuse any
   `MYCO_COMPARISON_RUN` other than empty, `0` or `1`, so a typo never means "not a comparison".
 - **The join refuses mixed bases, fail-closed.** `scripts/row7-compare.py` refuses to pair a Myco
-  row whose `snapshot` is not in the baseline's base family. A Myco row on `trial-base-v2` or
-  `trial-base-v3` cannot be paired with C1's `cua-c1-base`. A row with no `snapshot` key predates the field and
+  row whose `snapshot` is not in the baseline's base family. A Myco row on `trial-base-v2`,
+  `trial-base-v3` or `trial-base-v4` cannot be paired with C1's `cua-c1-base`. A row with no `snapshot` key predates the field and
   counts as `clean-base`. Any new comparator that pairs Myco rows with a baseline arm must apply
   the same check, so a comparison launched without the flag still cannot be reported.
 - Each `OUT` pins its snapshot in `OUT/snapshot` on the first run, and a resume on a different
   snapshot is refused (exit 11). Every Myco row carries `snapshot`, parsed from the reset's
   `ready on '<snap>'` line: the name the reset reports it restored, not an observed identity of
   the guest. A mixed or mismatched comparison is visible in the rows themselves.
-- **Non-comparison Myco runs** (for example R1 false-done) use the trial-base default (`trial-base-v3`).
+- **Non-comparison Myco runs** (for example R1 false-done) use the trial-base default (`trial-base-v4`).
 - Rebasing C1/C2 onto a trial-base derivative is queued work (VM time). Once it exists, a
   comparison can run both arms on that trial base instead.
 
@@ -756,7 +758,7 @@ entries (to be kept current in the report):
 | Baseline uses a host-side driver; Myco uses its runtime | by design | scoring judge is shared and blind |
 | Baseline may need a PyAutoGUI runner in the guest | baseline only | runs through the reviewed `launch` op; no UIA/UNO |
 | **Step budget is asymmetric**: baseline 30 model actions, Myco a fixed 5-step program with no budget concept in the runner | by construction | generous direction, stated in §3.2;  `steps` never compared side by side (§4.2 reports it per arm) |
-| **Trial base (TIF-98, 2026-11-26)**: the Myco drivers' default moved to `trial-base-v2`, then `trial-base-v3`; the baseline arms stay on `cua-c1-base`, a `clean-base` derivative | not in a comparison run: the Myco arm is pinned to `clean-base` | enforced by the drivers (`MYCO_COMPARISON_RUN=1` requires `MYCO_TRIAL_SNAPSHOT=clean-base`, exit 11; a malformed flag is refused) and at the join (`row7-compare.py` refuses a Myco row outside the baseline's base family); `OUT/snapshot` pin and a per-row `snapshot` field; rebasing C1/C2 onto a `trial-base-v2` derivative is queued (§2) |
+| **Trial base (TIF-98, 2026-11-26; TIF-734, 2026-11-27)**: the Myco drivers' default moved to `trial-base-v2`, then `trial-base-v3`, then `trial-base-v4`; the baseline arms stay on `cua-c1-base`, a `clean-base` derivative | not in a comparison run: the Myco arm is pinned to `clean-base` | enforced by the drivers (`MYCO_COMPARISON_RUN=1` requires `MYCO_TRIAL_SNAPSHOT=clean-base`, exit 11; a malformed flag is refused) and at the join (`row7-compare.py` refuses a Myco row outside the baseline's base family); `OUT/snapshot` pin and a per-row `snapshot` field; rebasing C1/C2 onto a `trial-base-v2` derivative is queued (§2) |
 | **Reset hygiene may differ in practice**: the baseline gets a scripted cold restore of its `clean-base` derivative (`cua-c1-base`); the Myco rows inherit whatever the sweep did, including degraded resets under load | both intend identical, neither guaranteed | `resetMs` + AC/battery state recorded per row; a row whose `resetMs` exceeds 2× the 152 s measured maximum (log 39) is flagged and the comparison table reports how many were flagged |
 | Screenshot capture is GDI window-capture, not full-desktop | both capture, baseline-only consumer | same op, same rect policy |
 | VM reset cost differs by time of day (cold restore 134–152 s measured, log 39) | both | reset timing is a metric, not a deviation |

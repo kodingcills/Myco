@@ -1,0 +1,10 @@
+== start (step 2, guest up after the cold reset), host 2026-11-27T20:36:43Z
+2026-11-27T15:36:43.2153723-05:00
+2026-11-27T20:36:43.4453463Z
+The following error occurred: The service has not been started. (0x80070426)
+== host after 2026-11-27T20:36:59Z
+== before the snapshot (step 5b), host 2026-11-27T22:21:34Z
+2026-11-27T17:21:37.3922152-05:00
+2026-11-27T22:21:37.4127493Z
+The following error occurred: The service has not been started. (0x80070426)
+== host after 2026-11-27T22:21:37Z
