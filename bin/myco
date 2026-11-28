@@ -10,6 +10,9 @@ if [ "$1" = "test" ]; then
 elif [ "$1" = "watch" ]; then
   shift
   exec npx tsx "$ROOT/scripts/myco-watch.ts" "$@"
+elif [ "$1" = "verify" ]; then
+  shift
+  exec npx tsx "$ROOT/scripts/myco-verify.ts" "$@"
 elif [ "$1" = "init" ]; then
   shift
   if [ ! -x "$ROOT/node_modules/.bin/tsx" ]; then
@@ -23,12 +26,14 @@ elif [ "$1" = "--help" ] || [ "$1" = "-h" ] || [ -z "$1" ]; then
   echo "Usage: myco test <task-package.yaml>"
   echo "       myco init [--dry-run] [--global [--yes]] [--help]"
   echo "       myco watch --run <runId> ... | --demo todo-items|calc-multi-step"
+  echo "       myco verify <runId> --task <taskId> --mock-evidence <dir> [--decision-log <file>]"
   echo ""
   echo "Commands:"
   echo "  test <file>   Execute a verified GUI task package and output evidence"
   echo "  init          One-command setup: check the Linux desktop path, start the gate once,"
   echo "                write the myco-gate MCP config for Claude Code and Codex (project dir)"
   echo "  watch         Read-only local view of a run: desktop frames + gate decisions (docs/gate/watch.md)"
+  echo "  verify        Re-verify a recorded run with the gate's own code, read-only (docs/gate/verify-run.md)"
   echo ""
   echo "Exit codes (test):"
   echo "  0: Verified (state changes confirmed)"
