@@ -1,0 +1,7 @@
+install: computer-use.exe sha256 ok 368345290f6979fbd6dc0e5aaaa3c41064c976f722768de7b99a2c52f6943800
+install: computer-use-windows-provider.exe sha256 ok 09ea7922467bdaba95baad8d56126cb7400321a6caeda8100757ba65720f780f
+install: LICENSE sha256 ok 00c4af1890432e7972d4e760d99d870edcfd4734f8697166257a780326a5867d
+install: THIRD_PARTY_NOTICES.md sha256 ok fcd2a79c088e591b2ab014faf8fedb45e0cf3ca5b17e594305634ba3f7091d31
+install: computer-use version 1.0.1
+install: MycoHCU task registered (at logon of myco, interactive session): C:\myco\bin\computer-use.exe serve --idle-timeout 8760h
+install: staging removed

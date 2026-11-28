@@ -1,0 +1,2 @@
+wait-guest-ready: first ssh answer after 129s (guest CPU 274s)
+wait-guest-ready: ssh up after 138s, stable for 3 consecutive probes 5s apart start to start (guest CPU 274s)

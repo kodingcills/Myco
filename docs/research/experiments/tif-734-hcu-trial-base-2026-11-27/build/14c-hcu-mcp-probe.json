@@ -1,0 +1,16 @@
+{
+  "server": {
+    "name": "computer-use",
+    "version": "1.0.1"
+  },
+  "tools": [
+    "AX",
+    "GUI"
+  ],
+  "screenshot_is_error": true,
+  "screenshot_images": [],
+  "screenshot_text": [
+    "{\"ok\":false,\"code\":\"runtime_error\",\"message\":\"Windows runtime timed out after 838.8614ms\",\"hint\":\"{\\\"actions\\\":[{\\\"type\\\":\\\"screenshot\\\"}]}\",\"input_emitted\":false}",
+    "No desktop mutation is inferred from this failure."
+  ]
+}

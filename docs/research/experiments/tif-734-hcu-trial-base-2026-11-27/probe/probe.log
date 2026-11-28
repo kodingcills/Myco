@@ -1,0 +1,37 @@
+vm-session: holding /tmp/myco-win11.vm.lock as 27148 vm-session.sh
+== reset
+reset-trial-vm: boot class=cold first_ssh_s=144 guest_cpu_first_ssh_s=294 attempts=1
+reset-trial-vm: timing stop=0 restore=3 start=3 ready=155 egress=1 clock=3 total=165
+reset-trial-vm: ready on 'trial-base-v3'
+== copy
+copied
+At line:1 char:156
++ ... r-use-windows-provider.exe' | ForEach-Object { .Hash.ToLower() + '  ' ...
++                                                                  ~
+An expression was expected after '('.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : ExpectedExpression
+ 
+== version / doctor (session 0)
+1.0.1
+== run-interactive present: True
+== start serve in session 1
+started task myco-hcu-probe
+.ProcessName : The term '.ProcessName' is not recognized as the name of a cmdlet, function, 
+script file, or operable program. Check the spelling of the name, or if a path was included, 
+verify that the path is correct and try again.
+At line:1 char:76
++ ... -ErrorAction SilentlyContinue | ForEach-Object { .ProcessName + ' ses ...
++                                                      ~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (.ProcessName:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+== daemon status from SSH (default socket)
+{"connections":2,"contract_version":"1.1","desktop":"DISPLAY=;WAYLAND_DISPLAY=;XDG_RUNTIME_DIR=","pid":5084,"sessions":[],"socket":"C:\\Users\\myco\\AppData\\Local\\Temp\\hcu--1\\desktop-default.sock","version":"1.0.1"}
+== MCP over --attach
+socket: C:\\Users\\myco\\AppData\\Local\\Temp\\hcu--1\\desktop-default.sock
+initialize ok: server {'name': 'computer-use', 'version': '1.0.1'}
+tools: ['AX', 'GUI']
+GUI screenshot: isError= False content= [('text', None, '{"ok":true,"input_emitted":false,"screen":{"coordinate_space":"screen_image_px","height":480,"screenshot_returned":true,"width":640}}'), ('image', 'image/png', 43948)]
+== stop VM
+vm: stopped
