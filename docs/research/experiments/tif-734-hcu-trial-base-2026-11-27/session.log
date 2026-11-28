@@ -1,0 +1,4 @@
+vm-session: holding /tmp/myco-win11.vm.lock as 45524 vm-session.sh
+v4-wrapper: 13:49:28Z tree 461525c7; snapshots before: trial-base-v3, trial-base-v2, cua-c1-base, m1-agent-live, clean-base-live, clean-base
+v4-wrapper: 15:35:29Z rc=1 build-trial-base: HCU MCP probe failed (see 14c-hcu-mcp-probe.json)
+v4-wrapper: 15:35:29Z STOP: build failed; no retry (report)
