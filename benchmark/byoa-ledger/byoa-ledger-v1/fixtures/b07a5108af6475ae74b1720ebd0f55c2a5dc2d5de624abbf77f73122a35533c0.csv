@@ -1,0 +1,7 @@
+id,date,payee,amount,category
+1452,2026-09-03,North Bakery,1870.83,bills
+1659,2026-03-11,Lake Gym,1266.93,food
+6921,2026-04-26,Acme Rent,324.99,gifts
+7217,2026-12-14,Wave Internet,1444.53,home
+7697,2026-05-25,Bright Dental,1277.81,food
+#rows,5

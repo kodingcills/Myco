@@ -1,0 +1,16 @@
+id,date,payee,amount,category
+392,2026-09-08,River Cafe,1102.61,travel
+999,2026-09-22,North Bakery,1715.27,travel
+1051,2026-09-21,Bright Dental,115.11,gifts
+1324,2026-11-06,Pine Insurance,1391.49,leisure
+2572,2026-12-15,River Cafe,662.67,office
+3155,2026-02-26,Oak Hardware,1766.89,leisure
+3596,2026-09-26,Pine Insurance,631.89,leisure
+4870,2026-05-06,Book Nook,970.81,bills
+5322,2026-03-07,Bright Dental,1961.17,travel
+5455,2026-06-03,Book Nook,956.82,leisure
+5750,2026-06-19,Book Nook,16.18,leisure
+7889,2026-06-08,Spark Telecom,827.61,bills
+8056,2026-08-25,Acme Rent,699.87,gifts
+9984,2026-02-02,City Utility,205.07,gifts
+#rows,14

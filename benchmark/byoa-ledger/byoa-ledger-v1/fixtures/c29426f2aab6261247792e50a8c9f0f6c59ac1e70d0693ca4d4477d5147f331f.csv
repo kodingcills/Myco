@@ -1,0 +1,19 @@
+id,date,payee,amount,category
+315,2026-04-01,Hill Pharmacy,197.56,office
+479,2026-11-23,Elm Florist,1583.70,home
+3392,2026-08-25,Pine Insurance,1947.07,home
+3412,2026-07-07,Pine Insurance,835.01,food
+3818,2026-04-19,Wave Internet,1801.53,bills
+5074,2026-04-26,Metro Transit,1187.04,office
+5143,2026-02-09,Bright Dental,839.02,health
+5373,2026-08-22,Book Nook,1181.67,travel
+5676,2026-03-12,Acme Rent,1444.80,home
+5717,2026-01-01,Metro Transit,441.49,office
+5902,2026-02-27,North Bakery,122.43,office
+7624,2026-10-24,Oak Hardware,1843.72,office
+7840,2026-04-20,Star Cinema,801.08,office
+8095,2026-12-23,Lake Gym,176.33,food
+8732,2026-03-22,Bright Dental,1387.06,bills
+9045,2026-06-24,Corner Grocer,956.68,office
+9552,2026-05-10,Elm Florist,846.22,food
+#rows,17

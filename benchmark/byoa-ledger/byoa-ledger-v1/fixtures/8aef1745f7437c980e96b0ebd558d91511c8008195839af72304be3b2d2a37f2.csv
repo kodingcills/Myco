@@ -1,0 +1,13 @@
+id,date,payee,amount,category
+1609,2026-05-20,Bright Dental,1755.61,leisure
+2191,2026-09-10,Bright Dental,848.89,gifts
+2201,2026-03-26,River Cafe,673.89,gifts
+2544,2026-01-21,Hill Pharmacy,1848.00,home
+2560,2026-02-26,Oak Hardware,463.52,food
+2603,2026-02-27,Wave Internet,251.08,gifts
+3764,2026-03-24,Star Cinema,882.04,travel
+5803,2026-01-24,Wave Internet,1162.09,gifts
+6742,2026-05-16,River Cafe,1080.59,bills
+8631,2026-09-12,North Bakery,816.04,office
+9666,2026-04-05,Elm Florist,1490.13,gifts
+#rows,11
