@@ -2,7 +2,7 @@
  * TIF-268 - the LIVE trial environment for the `hcu+shell` arm on the Windows trial VM
  * (`myco-win11`), the same VM, lock and reset path as the myco-gate arm:
  *
- *  1. **Reset**: `scripts/reset-trial-vm.sh trial-base-v3` (cold, disk-only), run under the VM
+ *  1. **Reset**: `scripts/reset-trial-vm.sh trial-base-v4` (cold, disk-only), run under the VM
  *     lock the CLI holds. Its stderr line `reset-trial-vm: boot class=<cold|fast>` (#546) is
  *     parsed and returned; the runner halts on anything but `cold`.
  *  2. **Guest agent**: `myco-agent` started in the interactive session (as the C1 sweep does),

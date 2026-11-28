@@ -93,6 +93,7 @@ describe("reset-trial-vm.sh snapshot allowlist", () => {
     "cua-c1-base",
     "trial-base-v2",
     "trial-base-v3",
+    "trial-base-v4",
   ])("restores the allowed snapshot %s", (name) => {
     const r = run(name);
     expect(r.stderr).not.toContain("refusing to restore");
@@ -101,15 +102,24 @@ describe("reset-trial-vm.sh snapshot allowlist", () => {
     expect(r.stdout).toContain(`ready on '${name}'`);
   });
 
-  // TIF-98: the default trial snapshot is trial-base-v3 (rebuilt from cold boots);
-  // trial-base-v2 and clean-base stay selectable. Guards against the default silently
-  // changing again.
-  it("defaults to trial-base-v3 when no snapshot is given", () => {
+  // TIF-98 / TIF-734: the default trial snapshot is trial-base-v4 (cold-boot rebuild with HCU);
+  // trial-base-v3, trial-base-v2 and clean-base stay selectable. Guards against the default
+  // silently changing again.
+  it("defaults to trial-base-v4 when no snapshot is given", () => {
     const r = run();
     expect(r.status).toBe(0);
-    expect(r.calls).toContain("vm.sh restore trial-base-v3");
+    expect(r.calls).toContain("vm.sh restore trial-base-v4");
+    expect(r.calls).not.toContain("vm.sh restore trial-base-v3");
     expect(r.calls).not.toContain("vm.sh restore trial-base-v2");
     expect(r.calls).not.toContain("vm.sh restore clean-base");
+    expect(r.stdout).toContain("ready on 'trial-base-v4'");
+  });
+
+  it("MYCO_TRIAL_SNAPSHOT=trial-base-v3 rolls the default back to trial-base-v3", () => {
+    const r = run(undefined, { env: { MYCO_TRIAL_SNAPSHOT: "trial-base-v3" } });
+    expect(r.status).toBe(0);
+    expect(r.calls).toContain("vm.sh restore trial-base-v3");
+    expect(r.calls).not.toContain("vm.sh restore trial-base-v4");
     expect(r.stdout).toContain("ready on 'trial-base-v3'");
   });
 
@@ -117,7 +127,7 @@ describe("reset-trial-vm.sh snapshot allowlist", () => {
     const r = run(undefined, { env: { MYCO_TRIAL_SNAPSHOT: "trial-base-v2" } });
     expect(r.status).toBe(0);
     expect(r.calls).toContain("vm.sh restore trial-base-v2");
-    expect(r.calls).not.toContain("vm.sh restore trial-base-v3");
+    expect(r.calls).not.toContain("vm.sh restore trial-base-v4");
     expect(r.stdout).toContain("ready on 'trial-base-v2'");
   });
 
@@ -153,7 +163,7 @@ describe("reset-trial-vm.sh snapshot allowlist", () => {
     expect(explicit.calls).toContain("vm.sh restore clean-base-live");
   });
 
-  it.each(["trial-base-v4", "clean-base;true", "../clean-base"])(
+  it.each(["trial-base-v5", "clean-base;true", "../clean-base"])(
     "MYCO_TRIAL_SNAPSHOT=%j is held to the same allowlist, without touching the VM",
     (name) => {
       const r = run(undefined, { env: { MYCO_TRIAL_SNAPSHOT: name } });
@@ -175,7 +185,7 @@ describe("reset-trial-vm.sh snapshot allowlist", () => {
     "clean-base-evil",
     "clean-base2",
     "trial-base",
-    "trial-base-v4",
+    "trial-base-v5",
     "Trial-Base-V2",
     "m1-agent",
     "../clean-base",
@@ -284,7 +294,7 @@ describe("trial drivers use the default trial snapshot", () => {
   const read = (p: string) => readFileSync(join(__dirname, "..", p), "utf8");
 
   // Round 2: the drivers resolve the snapshot themselves (scripts/trial-snapshot.sh, the
-  // same rule: MYCO_TRIAL_SNAPSHOT, else trial-base-v3), pin it in OUT and pass it
+  // same rule: MYCO_TRIAL_SNAPSHOT, else trial-base-v4), pin it in OUT and pass it
   // explicitly. test/trial-snapshot.test.ts covers that path.
   it.each(["scripts/m1-sweep.sh", "scripts/m1-corrupt-suite.sh"])(
     "%s resets through ts_reset with the resolved snapshot",
@@ -295,14 +305,14 @@ describe("trial drivers use the default trial snapshot", () => {
 
   it("trial-snapshot.sh resolves the same default as reset-trial-vm.sh", () => {
     expect(read("scripts/trial-snapshot.sh")).toContain(
-      "local snap=$" + "{MYCO_TRIAL_SNAPSHOT:-trial-base-v3}",
+      "local snap=$" + "{MYCO_TRIAL_SNAPSHOT:-trial-base-v4}",
     );
   });
 
-  it("scripts/reset-bench.sh benches trial-base-v3 unless MYCO_BENCH_SNAPSHOT says otherwise", () => {
+  it("scripts/reset-bench.sh benches trial-base-v4 unless MYCO_BENCH_SNAPSHOT says otherwise", () => {
     // Split so the shell ${...} is not read as a JS template placeholder.
     expect(read("scripts/reset-bench.sh")).toContain(
-      "SNAPSHOT=$" + "{MYCO_BENCH_SNAPSHOT:-trial-base-v3}",
+      "SNAPSHOT=$" + "{MYCO_BENCH_SNAPSHOT:-trial-base-v4}",
     );
   });
 });
@@ -318,7 +328,7 @@ describe("reset-trial-vm.sh MYCO_TRIAL_SNAPSHOT as the default", () => {
     },
   );
 
-  it.each(["trial-base-v3", "trial-base-v2", "clean-base"])(
+  it.each(["trial-base-v4", "trial-base-v3", "trial-base-v2", "clean-base"])(
     "accepts MYCO_TRIAL_SNAPSHOT=%s as the default",
     (name) => {
       const r = run(undefined, { env: { MYCO_TRIAL_SNAPSHOT: name } });

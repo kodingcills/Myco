@@ -1,0 +1,2 @@
+build-trial-base: 20:29:21Z resume from 5b: prove this is the build's own running guest, with egress still denied
+build-trial-base: resume: the guest booted after the 5b record (boot_utc 1795793893 >= 1795793694): not the same instance

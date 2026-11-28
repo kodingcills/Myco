@@ -178,12 +178,12 @@ describe("parseBootClass", () => {
 });
 
 describe("liveEnvironment.prepare", () => {
-  it("resets to trial-base-v3, reports the boot class and wires HCU, shell and capture", async () => {
+  it("resets to trial-base-v4, reports the boot class and wires HCU, shell and capture", async () => {
     const { d, log, writes, reads } = deps();
     const t = await liveEnvironment(".", d, "hcu.exe mcp").prepare(TASK, "hcu-shell-x");
-    expect(log.slice(0, 2)).toEqual(["reset trial-base-v3", "agent"]);
+    expect(log.slice(0, 2)).toEqual(["reset trial-base-v4", "agent"]);
     expect(t.bootClass).toBe("cold");
-    expect(t.prepared.snapshot).toBe("trial-base-v3");
+    expect(t.prepared.snapshot).toBe("trial-base-v4");
     expect(t.prepared.fixtureSha256).toBe(TASK.fixtureSha256);
     expect(t.prepared.driver.pipeReachable).toBe(true);
     // Defence in depth: the verifier's conversion dir and the harness dir are denied by name,
@@ -227,7 +227,7 @@ describe("liveEnvironment.prepare", () => {
     await expect(liveEnvironment(".", d).prepare(TASK, "k")).rejects.toMatchObject({
       code: "reset-failed",
     });
-    expect(log).toEqual(["reset trial-base-v3"]);
+    expect(log).toEqual(["reset trial-base-v4"]);
   });
   it("refuses a task whose published fixture does not match its hash, before any reset", async () => {
     const { d, log } = deps();

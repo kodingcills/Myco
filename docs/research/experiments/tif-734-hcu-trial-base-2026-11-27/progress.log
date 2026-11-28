@@ -1,3 +1,10 @@
 v4-wrapper: 13:49:28Z tree 461525c7; snapshots before: trial-base-v3, trial-base-v2, cua-c1-base, m1-agent-live, clean-base-live, clean-base
 v4-wrapper: 15:35:29Z rc=1 build-trial-base: HCU MCP probe failed (see 14c-hcu-mcp-probe.json)
 v4-wrapper: 15:35:29Z STOP: build failed; no retry (report)
+resume-wrapper: 20:29:21Z tree b70cd4ffd11994888fd13b9032046a4d8ad961f1; snapshots before: trial-base-v3, trial-base-v2, cua-c1-base, m1-agent-live, clean-base-live, clean-base
+resume-wrapper: 20:29:31Z rc=1 build-trial-base: resume: the guest booted after the 5b record (boot_utc 1795793893 >= 1795793694): not the same instance
+resume-wrapper: 20:29:31Z STOP: resume failed; no retry (report; fallback needs the lead's go)
+rebuild-wrapper: 20:31:32Z full rebuild (option 1), tree b70cd4ffd11994888fd13b9032046a4d8ad961f1; snapshots before: trial-base-v3, trial-base-v2, cua-c1-base, m1-agent-live, clean-base-live, clean-base
+rebuild-wrapper: 22:23:09Z rc=0 
+rebuild-wrapper: 22:23:09Z snapshots after: trial-base-v4, trial-base-v3, trial-base-v2, cua-c1-base, m1-agent-live, clean-base-live, clean-base
+rebuild-wrapper: 22:23:09Z done: trial-base-v4 built (full rebuild)

@@ -606,7 +606,7 @@ describe("VM step failures are code-only harness faults", () => {
       ),
     ).toBe("cold");
     expect(parseBootClass("reset-trial-vm: boot class=fast first_ssh_s=1 x")).toBe("fast");
-    expect(parseBootClass("reset-trial-vm: ready on 'trial-base-v3'")).toBeNull();
+    expect(parseBootClass("reset-trial-vm: ready on 'trial-base-v4'")).toBeNull();
     expect(parseBootClass("xreset-trial-vm: boot class=cold first")).toBeNull();
     expect(parseBootClass("reset-trial-vm: boot class=warm first")).toBeNull();
   });

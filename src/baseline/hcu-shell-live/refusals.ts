@@ -11,7 +11,7 @@
  *  - `api-key-path-configured`: no API-path credential variable set (names only, values never
  *    read; the subscription preflight shared with the myco-gate arm);
  *  - `cold-boot-guard-missing`: `scripts/reset-trial-vm.sh` carries #546's guard (it prints
- *    `boot class=`) and defaults to `trial-base-v3`; each trial's boot class is then checked
+ *    `boot class=`) and defaults to `trial-base-v4`; each trial's boot class is then checked
  *    by the runner, which halts on anything but `cold`;
  *  - `vm-lock-not-held`: started under `scripts/vm-session.sh`, so the VM lock (TIF-210) is held
  *    for the whole run, and the reset path accepts it.
@@ -76,8 +76,8 @@ export function coldBootGuardProblems(repoRoot: string): string[] {
   if (!script.includes('echo "reset-trial-vm: boot class=$BOOT_CLASS'))
     out.push("cold-boot-guard-missing: reset-trial-vm.sh does not report #546's boot class");
   // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal bash parameter expansion in reset-trial-vm.sh.
-  if (!script.includes("SNAPSHOT=${1:-${MYCO_TRIAL_SNAPSHOT:-trial-base-v3}}"))
-    out.push("cold-boot-guard-missing: reset-trial-vm.sh does not default to trial-base-v3");
+  if (!script.includes("SNAPSHOT=${1:-${MYCO_TRIAL_SNAPSHOT:-trial-base-v4}}"))
+    out.push("cold-boot-guard-missing: reset-trial-vm.sh does not default to trial-base-v4");
   return out;
 }
 

@@ -5,7 +5,7 @@
 # usage: reset-bench.sh <reset|cycle> <count> <out.jsonl> [label]
 #
 #   reset  N runs of scripts/reset-trial-vm.sh onto MYCO_BENCH_SNAPSHOT (default
-#          trial-base-v3, the trial default), each followed by a readiness
+#          trial-base-v4, the trial default), each followed by a readiness
 #          re-check of the guest over ssh.
 #   cycle  N runs of reset -> agent/bootstrap/deploy-to-vm.sh -> session_info.
 #          Needs MYCO_TOKEN_OUT (a private token path, runbook §4).
@@ -36,7 +36,7 @@ LOCK=${MYCO_VM_LOCK_PATH:-/tmp/myco-win11.vm.lock}
 LOAD_LIMIT=${MYCO_LOAD_LIMIT:-10}
 VSSH=${MYCO_VSSH:-$HOME/VMs/myco-win11/scripts/vssh}
 LOGS="$OUT.logs"
-SNAPSHOT=${MYCO_BENCH_SNAPSHOT:-trial-base-v3}
+SNAPSHOT=${MYCO_BENCH_SNAPSHOT:-trial-base-v4}
 mkdir -p "$LOGS"
 
 case "$MODE" in reset|cycle) ;; *) echo "reset-bench: unknown mode '$MODE'" >&2; exit 2 ;; esac

@@ -14,10 +14,10 @@ Per attempt, in order (`liveVmDriver`, `src/pilot/vm-capture.ts`; every failure 
 fault with a fixed, code-only message, never an agent outcome):
 
 1. The runner seals the trial (`runGatedTrial`, #484) and audits the launch plan, as before.
-2. **Cold reset.** `scripts/reset-trial-vm.sh` (default snapshot `trial-base-v3`) runs with the
+2. **Cold reset.** `scripts/reset-trial-vm.sh` (default snapshot `trial-base-v4`) runs with the
    session's lock descriptor. Its `boot class=` line (#546) becomes the attempt's
    `resetBootClass`. A failed reset is `spawn-failed`.
-3. **Deploy (#691).** `trial-base-v3` holds no in-guest agent, so every reset wipes it. After
+3. **Deploy (#691).** `trial-base-v4` holds HCU, not the in-guest `myco-agent`, so every reset wipes the agent. After
    each reset, on every attempt (first attempts, re-runs in place and after `--resume`), the
    driver runs the M1 sweep's verified deploy, `agent/bootstrap/deploy-to-vm.sh`. That deploy
    copies the agent tree and checks it, installs the agent and its scheduled task, checks
@@ -321,8 +321,8 @@ guest channel or `claude` process is touched. The other items are the operator's
 6. **The VM side (wired by TIF-274, the operator provides the rest).** Wired: the per-trial
    cold reset, the in-guest agent deploy after every reset (#691), the seed and the host-side
    capture over the SSH tunnel (above), and the boot class per trial. You still provide:
-   - a working trial VM: `trial-base-v3` restorable with `scripts/reset-trial-vm.sh` (run it
-     once by hand under `scripts/vm-session.sh` and see `boot class=cold`), and guest egress
+   - a working trial VM: `trial-base-v4` restorable with `scripts/reset-trial-vm.sh` (run it
+     once by hand under `scripts/vm-session.sh` and see `boot class=cold`; `trial-base-v4` has no reset bench or live trial run yet), and guest egress
      closed (the reset checks it, and the deploy refuses without it);
    - what the per-trial deploy (`agent/bootstrap/deploy-to-vm.sh`, eval-runbook §4) needs on
      the host: the VM's ssh config, `nc`, `openssl`, the guest wheels (cached, or
@@ -535,7 +535,7 @@ What the operator must still provide before a real A/B launch:
   the A/B format check and the pilot row mapping are CSV-only while fc-v1 persists xlsx, and #518's vocabulary cannot
   name the pilot's harness classes (now also `billing`). `launch` lists them. They are fixed in
   their own changes, never by an ack or a flag.
-- **The VM side.** The same as the pilot's preflight item 6: a restorable `trial-base-v3`, and
+- **The VM side.** The same as the pilot's preflight item 6: a restorable `trial-base-v4`, and
   what the per-trial agent deploy needs on the host. The A/B shares the live driver, so each of
   its trials also deploys the in-guest agent after its reset, before the channel opens (#691).
 

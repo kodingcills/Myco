@@ -1,0 +1,20 @@
+{
+  "server": {
+    "name": "computer-use",
+    "version": "1.0.1"
+  },
+  "tools": [
+    "AX",
+    "GUI"
+  ],
+  "screenshot_is_error": false,
+  "screenshot_images": [
+    {
+      "mimeType": "image/png",
+      "base64Length": 21400
+    }
+  ],
+  "screenshot_text": [
+    "{\"ok\":true,\"input_emitted\":false,\"screen\":{\"coordinate_space\":\"screen_image_px\",\"height\":480,\"screenshot_returned\":true,\"width\":640}}"
+  ]
+}
