@@ -303,7 +303,7 @@ describe("baseline", () => {
       const source = {
         resolve(t: typeof task) {
           const h = hidden.find((entry) => entry.fixture.fixtureId === t.fixtureId)!;
-          return { fixture: h.fixture, committedFault: h.fault };
+          return { fixture: h.fixture, committedFault: h.fault, taskFixtureId: h.taskFixtureId };
         },
       };
       const rows = runArm(credulous, tasks, {

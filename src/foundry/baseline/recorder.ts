@@ -43,6 +43,13 @@ export interface RecordedTrialEvidence {
   readonly armId: string;
   readonly taskId: string;
   readonly promptHash: string;
+  /**
+   * The fixture the row was actually run against, and its hash. The attestation gate
+   * compares these to the fixture it resolved from the hidden commitment, so evidence
+   * gathered on one fixture cannot vouch for a row scored against another (TIF-125).
+   */
+  readonly fixtureId?: string;
+  readonly fixtureHash?: string;
   readonly status: "finished" | "quota-exhausted";
   readonly planner?: {
     readonly model: string;
@@ -184,6 +191,9 @@ export class ArmRecorder {
     armId: string;
     taskId: string;
     promptHash: string;
+    /** The fixture the row ran against. Required: the gate refuses evidence that omits it. */
+    fixtureId: string;
+    fixtureHash: string;
     status?: "finished" | "quota-exhausted";
     planner?: RecordedTrialEvidence["planner"];
   }): RecordedTrialEvidence {
@@ -192,6 +202,8 @@ export class ArmRecorder {
       armId: meta.armId,
       taskId: meta.taskId,
       promptHash: meta.promptHash,
+      fixtureId: meta.fixtureId,
+      fixtureHash: meta.fixtureHash,
       status: meta.status ?? (this.#limitHit ? "quota-exhausted" : "finished"),
       ...(meta.planner ? { planner: meta.planner } : {}),
       recordedCalls: calls,

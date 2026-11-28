@@ -9,14 +9,13 @@ import { todoTransport } from "../../src/foundry/baseline/todo-transport.ts";
 import {
   type AttestInput,
   attest,
+  bundleDigest,
+  isAttestation,
   offlineObserverForContractTest,
   registerLiveObserver,
   type SaveObservation,
 } from "../../src/foundry/grader/attest.ts";
-import {
-  ATTESTATION_BINDING_LANDED,
-  scoreDiscoveryTrial,
-} from "../../src/foundry/grader/discovery.ts";
+import { scoreDiscoveryTrial } from "../../src/foundry/grader/discovery.ts";
 import {
   type commitment,
   fixtureHash,
@@ -74,6 +73,8 @@ async function finishedRun(): Promise<FinishedRun> {
       armId: "screenshot-only",
       taskId: TASK.taskId,
       promptHash: PROMPT_HASH,
+      fixtureId: TASK.fixtureId,
+      fixtureHash: fixtureHash(HIDDEN_FIXTURE),
       budget: 40,
       persistencePaths: ["store.json"],
     },
@@ -83,9 +84,17 @@ async function finishedRun(): Promise<FinishedRun> {
 
 function baseInput(run: FinishedRun) {
   const { observer, marker } = offlineObserverForContractTest();
+  const bound = run.evidence as { armId: string; taskId: string; promptHash: string };
   return {
     [marker]: marker,
-    evidence: run.evidence,
+    // TIF-125 R6 1d: the row must name the fixture it ran against. The honest value is the
+    // TASK fixture's id — the same id the hidden fixture carries — and the hidden fixture's
+    // own hash. Omitting these used to skip the binding entirely.
+    evidence: {
+      ...run.evidence,
+      fixtureId: TASK.fixtureId,
+      fixtureHash: fixtureHash(HIDDEN_FIXTURE),
+    },
     trace: [...run.trace, saveEvent(run.files)],
     finalFiles: run.files,
     observations: observer.observe(["store.json"], run.files),
@@ -97,6 +106,13 @@ function baseInput(run: FinishedRun) {
     ...{ [marker]: marker },
     hiddenFixtures: HIDDEN,
     claimedFixtureHash: fixtureHash(HIDDEN_FIXTURE),
+    // TIF-125: the attestation names the row it is for, bound to the scored bytes.
+    bundle: {
+      armId: bound.armId,
+      taskId: bound.taskId,
+      promptHash: bound.promptHash,
+      bundleDigest: bundleDigest(run.files),
+    },
     screenObserved: true,
   };
 }
@@ -268,17 +284,9 @@ describe("TIF-95: a caller cannot name its own provenance", () => {
   });
 });
 
-describe("TIF-125 fail-closed: no row is eligible until the binding lands", () => {
-  it("an eligible attestation does not make a row decision-eligible", async () => {
-    // Finding 1a exists in the tree BEFORE TIF-125: the scorer trusts the gate's claim about
-    // evidence the caller handed it, and holds no proof the evidence was for THIS row. Until
-    // the binding lands and the scorer re-derives the digest, the flip stays off.
-    expect(ATTESTATION_BINDING_LANDED).toBe(false);
-    const run = await finishedRun();
-    const attestation = attest(baseInput(run));
-    expect(attestation.eligible, "the gate should still say eligible").toBe(true);
-
-    const scored = scoreDiscoveryTrial(
+describe("TIF-125 R6: the scorer re-derives the binding, and malformed input is refused", () => {
+  const scored = (run: FinishedRun, attestation: ReturnType<typeof attest> | undefined) =>
+    scoreDiscoveryTrial(
       { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
       {
         fixture: taskFixture(TASK),
@@ -291,9 +299,769 @@ describe("TIF-125 fail-closed: no row is eligible until the binding lands", () =
       { t: 0 },
       attestation,
     );
-    if (scored.status !== "scored") throw new Error("unreachable");
-    expect(scored.decisionEligible).toBe(false);
-    expect(scored.attestationBlockers.join(" ")).toContain("TIF-125");
+
+  it("R6 1a positive control: an honest row passes the binding, withheld only by the flag", async () => {
+    // The flag stays false until an independent PASS, so eligibility cannot be asserted
+    // here. What CAN be asserted is that the binding admits the honest row: the blocker is
+    // the flag, not the binding. Together with the negative test below — which asserts the
+    // binding blocker — this pins both directions. A binding that did nothing would make
+    // the negative test fail; a binding that refused everything would make this one fail.
+    const run = await finishedRun();
+    const result = scored(run, attest(baseInput(run)));
+    if (result.status !== "scored") throw new Error("unreachable");
+    const blockers = result.attestationBlockers.join(" ");
+    expect(blockers).toContain("eligibility withheld");
+    expect(blockers).not.toContain("does not cover this row");
+    expect(result.decisionEligible).toBe(false);
+  });
+
+  it("R6 1a: attest(bundle A) cannot make bundle B decision-eligible", async () => {
+    // The scorer holds the row, so it recomputes the digest rather than trusting `eligible`.
+    const run = await finishedRun();
+    const forA = attest(baseInput(run));
+    expect(forA.eligible).toBe(true);
+
+    const otherBundle = { "store.json": new TextEncoder().encode('{"items":[{"text":"else"}]}\n') };
+    const result = scored({ ...run, files: otherBundle } as FinishedRun, forA);
+    if (result.status !== "scored") throw new Error("unreachable");
+    expect(result.decisionEligible).toBe(false);
+    expect(result.attestationBlockers.join(" ")).toContain("does not cover this row");
+  });
+
+  it("R6 1a: a relabelled attestation is refused on arm, task and prompt", async () => {
+    // The gate refuses a mismatched bundle, so the scorer's own arm/task/prompt checks are
+    // only reachable by relabelling a VALID attestation. That is the attack: a caller who
+    // holds an honest attestation for one row spreads it and rewrites the binding.
+    const run = await finishedRun();
+    const real = attest(baseInput(run));
+    expect(real.eligible).toBe(true);
+    for (const field of ["armId", "taskId", "promptHash"] as const) {
+      const relabelled = {
+        ...real,
+        binding: { ...real.binding!, [field]: "relabelled" },
+      };
+      const result = scored(run, relabelled as typeof real);
+      if (result.status !== "scored") throw new Error("unreachable");
+      expect(result.decisionEligible, `relabelled ${field} was admitted`).toBe(false);
+      expect(result.attestationBlockers.join(" ")).toContain("does not cover this row");
+    }
+  });
+
+  it("R6 round 2 finding 3: the binding cannot be mutated or trapped after attest", async () => {
+    const run = await finishedRun();
+    const otherBundle = { "store.json": new TextEncoder().encode('{"items":[{"text":"else"}]}\n') };
+    const otherRun = { ...run, files: otherBundle } as FinishedRun;
+
+    // (i) Mutate the caller's own bundle object after attest() said eligible.
+    const input = baseInput(run);
+    const mutable = input.bundle!;
+    const attested = attest(input);
+    expect(attested.eligible).toBe(true);
+    mutable.bundleDigest = bundleDigest(otherBundle);
+    const afterMutation = scored(otherRun, attested);
+    if (afterMutation.status !== "scored") throw new Error("unreachable");
+    // Assert the BLOCKER, not just the flag: with the flag off, `decisionEligible` is false
+    // either way, so only the blocker identity proves the binding caught it.
+    expect(afterMutation.attestationBlockers.join(" ")).toContain("does not cover this row");
+
+    // (ii) A getter that answers honestly for the gate and dishonestly for the scorer.
+    let reads = 0;
+    const trapped = {
+      ...baseInput(run).bundle!,
+      get bundleDigest() {
+        reads += 1;
+        return reads === 1 ? bundleDigest(run.files) : bundleDigest(otherBundle);
+      },
+    };
+    const trappedAttestation = attest({ ...baseInput(run), bundle: trapped });
+    const afterGetter = scored(otherRun, trappedAttestation);
+    if (afterGetter.status !== "scored") throw new Error("unreachable");
+    expect(afterGetter.attestationBlockers.join(" ")).toContain("does not cover this row");
+
+    // (iii) A hostile binding must not throw out of the scorer and abort the batch.
+    const hostile = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("trap");
+        },
+      },
+    );
+    const forged = { ...attested, binding: hostile } as typeof attested;
+    expect(() => scored(run, forged)).not.toThrow();
+  });
+
+  it("R6 1d: an absent fixture identity is refused, not skipped", async () => {
+    const run = await finishedRun();
+    const input = baseInput(run);
+    for (const field of ["fixtureId", "fixtureHash"] as const) {
+      const result = attest({ ...input, evidence: { ...input.evidence, [field]: undefined } });
+      expect(result.eligible, `${field} absent was admitted`).toBe(false);
+      expect(result.blockers.join(" ")).toContain("does not name the fixture");
+    }
+  });
+
+  it("R6 1d: the honest task fixture is accepted and a foreign one refused", async () => {
+    const run = await finishedRun();
+    const input = baseInput(run);
+    // The honest value is the task fixture's id — the same id on the hidden fixture.
+    expect(attest(input).eligible).toBe(true);
+    const foreign = attest({
+      ...input,
+      evidence: { ...input.evidence, fixtureId: "ef-todo-other-v1" },
+    });
+    expect(foreign.eligible).toBe(false);
+    expect(foreign.blockers.join(" ")).toContain("is fixture");
+  });
+
+  it("R6 4: the fixture-hash binding and the unaudited-call clause are each load-bearing", async () => {
+    const input = baseInput(await finishedRun());
+    // A wrong hash is refused by the hash clause alone: the fixture identity is otherwise
+    // intact, so nothing else in the gate can be what rejects it.
+    const wrongHash = attest({ ...input, claimedFixtureHash: "0".repeat(64) });
+    expect(wrongHash.eligible).toBe(false);
+    expect(wrongHash.blockers.join(" ")).toContain("fixture hash differs");
+
+    // One recorded call with no audit is refused by the count clause alone.
+    const unaudited = attest({
+      ...input,
+      evidence: { ...input.evidence, toolCallAudits: input.evidence.toolCallAudits.slice(1) },
+    });
+    expect(unaudited.eligible).toBe(false);
+    expect(unaudited.blockers.join(" ")).toContain("not every call has an audit");
+  });
+
+  it("R6 round 2 finding 4 (A14): a claimed hash that names no fixture is refused", async () => {
+    // Without the `resolved === undefined` clause, a made-up hash claimed consistently with
+    // zero observations came out eligible with no blockers. The fixture-hash check alone
+    // does not catch it, because the caller writes both sides of that comparison.
+    const input = baseInput(await finishedRun());
+    const madeUp = "a".repeat(64);
+    const result = attest({
+      ...input,
+      claimedFixtureHash: madeUp,
+      evidence: { ...input.evidence, fixtureHash: madeUp },
+      observations: [],
+    });
+    expect(result.eligible, "a made-up hash was admitted").toBe(false);
+    expect(result.blockers.join(" ")).toContain("no hidden fixture hashes to");
+  });
+
+  it("R6 round 2 finding 3: the scorer does not throw on a hostile accessor or bad files", async () => {
+    const run = await finishedRun();
+    const real = attest(baseInput(run));
+
+    // (i) A throwing `binding` ACCESSOR, not just a hostile binding value.
+    const throwingAccessor = Object.defineProperty({ ...real }, "binding", {
+      get() {
+        throw new Error("trap");
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    expect(() => scored(run, throwingAccessor as typeof real)).not.toThrow();
+
+    // (ii) A Proxy that throws on the FIRST read — the brand read inside isAttestation.
+    const brandThrows = new Proxy(real, {
+      get() {
+        throw new Error("trap");
+      },
+    });
+    expect(() => scored(run, brandThrows as typeof real)).not.toThrow();
+
+    // (iii) Malformed files: `scoreTrial` handles these without throwing, so the scorer must
+    // too. A throw here aborts the whole comparison batch.
+    for (const files of [{ "store.json": undefined }, null]) {
+      expect(() =>
+        scoreDiscoveryTrial(
+          { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
+          {
+            fixture: taskFixture(TASK),
+            actual: { kind: "myco-todo", files },
+            screen: run.screen,
+            trace: run.trace,
+            selfReport: run.selfReport,
+            faultVersion: 0,
+          } as never,
+          { t: 0 },
+          real,
+        ),
+      ).not.toThrow();
+    }
+  });
+
+  it("v2 round 1 finding 1: an observation is read once, so a getter cannot toggle", async () => {
+    // The attack: `sha256` answers with the FINAL bytes on the first read (so the final-bytes
+    // check passes) and with DIFFERENT bytes on the second (so the copy reports a hash it
+    // never verified). The trace's last save holds those different bytes, so the trace check
+    // passes against the copy. Reading once makes the two disagree and the row is refused.
+    const run = await finishedRun();
+    const input = baseInput(run);
+    const real = input.observations[0]!;
+    const finalBytes = run.files["store.json"]!;
+    const otherBytes = new TextEncoder().encode('{"items":[{"text":"different"}]}\n');
+    const finalHash = createHash("sha256").update(finalBytes).digest("hex");
+    const otherHash = createHash("sha256").update(otherBytes).digest("hex");
+    let reads = 0;
+    const shifty = {
+      ...real,
+      get sha256() {
+        reads += 1;
+        return reads === 1 ? finalHash : otherHash;
+      },
+    };
+    const trace = [...run.trace.slice(0, -1), saveEvent({ "store.json": otherBytes })];
+    const result = attest({
+      ...input,
+      trace,
+      observations: [shifty, ...input.observations.slice(1)],
+    });
+    expect(result.eligible, "a toggling sha256 getter was admitted").toBe(false);
+    // Whatever it reports must be the hash it actually checked.
+    for (const observation of result.accepted) expect(observation.sha256).toBe(finalHash);
+  });
+
+  it("v3: the scorer reads actual.files once", async () => {
+    // `scoreTrial` read `actual.files` twice and the binding digest a third time, so a
+    // getter could show honest bytes to the scorer and the attested bytes to the digest.
+    // Counting reads is the direct property (round 1, finding 1).
+    const run = await finishedRun();
+    const input = {
+      fixture: taskFixture(TASK),
+      actual: { kind: "myco-todo", files: run.files },
+      screen: run.screen,
+      trace: run.trace,
+      selfReport: run.selfReport,
+      faultVersion: 0,
+    } as never;
+    // Count reads of the `actual` OBJECT, not just `.files`: the `{...input}` spread read it
+    // a second time before the explicit override, which is how the two diverged.
+    let actualReads = 0;
+    let fileReads = 0;
+    const counted = {
+      ...(input as Record<string, unknown>),
+      get actual() {
+        actualReads += 1;
+        return {
+          kind: "myco-todo",
+          get files() {
+            fileReads += 1;
+            return run.files;
+          },
+        };
+      },
+    };
+    scoreDiscoveryTrial(
+      { ...run.evidence, planner: { model: "claude-sonnet-5-5", settings: { t: 0 } } } as never,
+      counted as never,
+      { t: 0 },
+      attest(baseInput(run)),
+    );
+    expect(actualReads, "actual was read more than once").toBe(1);
+    expect(fileReads, "actual.files was read more than once").toBe(1);
+  });
+
+  it("v3: every caller field is read exactly once", async () => {
+    // The property that makes the toggling-getter attacks impossible: one read per field, at
+    // entry. Counting reads is the direct test; a getter that answers differently per read
+    // can only matter if there is more than one read.
+    const run = await finishedRun();
+    const input = baseInput(run);
+    const counts = { evidence: 0, claimedFixtureHash: 0, observerId: 0, trace: 0 };
+    const counted = {
+      ...input,
+      get evidence() {
+        counts.evidence += 1;
+        return input.evidence;
+      },
+      get claimedFixtureHash() {
+        counts.claimedFixtureHash += 1;
+        return input.claimedFixtureHash;
+      },
+      get observerId() {
+        counts.observerId += 1;
+        return input.observerId;
+      },
+      get trace() {
+        counts.trace += 1;
+        return input.trace;
+      },
+    };
+    attest(counted as never);
+    expect(counts, "a caller field was read more than once").toEqual({
+      evidence: 1,
+      claimedFixtureHash: 1,
+      observerId: 1,
+      trace: 1,
+    });
+  });
+
+  it("v3: the commitment taskFixtureId check is load-bearing", async () => {
+    // An honest `fixtureId` paired with another task's committed hash. The registry check
+    // passes (the fixtureId is honest), so only the commitment's `taskFixtureId` comparison
+    // can refuse it. Removing that clause admits this row.
+    const run = await finishedRun();
+    const input = baseInput(run);
+    const foreign = HIDDEN.find((h) => h.taskFixtureId !== TASK.fixtureId)!;
+    const result = attest({
+      ...input,
+      claimedFixtureHash: fixtureHash(foreign),
+      evidence: { ...input.evidence, fixtureHash: fixtureHash(foreign) },
+    });
+    expect(result.eligible, "a foreign committed hash was admitted").toBe(false);
+    expect(result.blockers.join(" ")).toContain("the commitment resolves the fixture for");
+  });
+
+  it("v3: a toggling evidence.taskId cannot make a foreign fixture eligible", async () => {
+    // `taskId` was read three times: twice for the fixture checks, once for the binding. A
+    // getter could answer with the honest task for the checks and a foreign task for the
+    // binding (round 3, finding 3a).
+    const run = await finishedRun();
+    const input = baseInput(run);
+    const foreign = HIDDEN.find((h) => h.taskFixtureId !== TASK.fixtureId)!;
+    let reads = 0;
+    const shifty = {
+      ...input.evidence,
+      get taskId() {
+        reads += 1;
+        return reads <= 2 ? TASK.taskId : foreign.taskFixtureId;
+      },
+    };
+    // The bundle claims the foreign task, so the binding check agrees with the third read
+    // while the fixture checks agreed with the first two.
+    const result = attest({
+      ...input,
+      evidence: shifty as never,
+      bundle: { ...input.bundle!, taskId: foreign.taskFixtureId },
+    });
+    expect(result.eligible, "a toggling taskId was admitted").toBe(false);
+  });
+
+  it("v3: a toggling claimedFixtureHash cannot skip the commitment check", async () => {
+    // `claimedFixtureHash` was read at the resolve and again at the fixture-hash check. A
+    // getter could return the committed hash first and a forged one second (finding 3b).
+    const run = await finishedRun();
+    const input = baseInput(run);
+    const forged = "ab".repeat(32);
+    let reads = 0;
+    const shifty = {
+      ...input,
+      get claimedFixtureHash() {
+        reads += 1;
+        return reads === 1 ? input.claimedFixtureHash : forged;
+      },
+      evidence: { ...input.evidence, fixtureHash: forged },
+    };
+    const result = attest(shifty as never);
+    expect(result.eligible, "a toggling claimedFixtureHash was admitted").toBe(false);
+  });
+
+  it("v3: a toggling observerId cannot report an id it did not check", async () => {
+    const run = await finishedRun();
+    const input = baseInput(run);
+    let reads = 0;
+    const shifty = {
+      ...input,
+      get observerId() {
+        reads += 1;
+        return reads <= 2 ? input.observerId : "vm-guest-live";
+      },
+    };
+    const result = attest(shifty as never);
+    expect(result.observerId, "the reported id differs from the checked one").toBe(
+      input.observerId,
+    );
+  });
+
+  it("v2 round 1 finding 1: a non-primitive observation field is refused", async () => {
+    const input = baseInput(await finishedRun());
+    const real = input.observations[0]!;
+    for (const field of ["path", "sha256", "bytes", "observedAt", "afterLastSave"] as const) {
+      const result = attest({
+        ...input,
+        observations: [
+          { ...real, [field]: { when: "now" } },
+          ...input.observations.slice(1),
+        ] as never,
+      });
+      expect(result.eligible, `a non-primitive ${field} was admitted`).toBe(false);
+    }
+    // `afterLastSave` is the one the gate only tests for truthiness, so a truthy non-boolean
+    // slips through without its own type check (round 2, finding 2).
+    for (const bad of ["false", 1, {}, []]) {
+      const result = attest({
+        ...input,
+        observations: [{ ...real, afterLastSave: bad }, ...input.observations.slice(1)] as never,
+      });
+      expect(result.eligible, `afterLastSave ${JSON.stringify(bad)} was admitted`).toBe(false);
+    }
+  });
+
+  it("R6 round 3 finding 2: the attestation is deeply frozen", async () => {
+    const run = await finishedRun();
+    const att = attest(baseInput(run));
+    expect(Object.isFrozen(att.blockers), "blockers array is frozen").toBe(true);
+    expect(Object.isFrozen(att.accepted), "accepted array is frozen").toBe(true);
+    expect(Object.isFrozen(att.unexpectedFiles), "unexpectedFiles array is frozen").toBe(true);
+    // The observations are copies, not the caller's objects.
+    if (att.accepted.length > 0) {
+      expect(Object.isFrozen(att.accepted[0]), "an accepted observation is frozen").toBe(true);
+      expect(() => {
+        (att.accepted[0] as { sha256: string }).sha256 = "x";
+      }).toThrow();
+    }
+    // Clearing blockers must not be possible: "empty iff eligible" depends on it.
+    const refused = attest({} as never);
+    expect(() => {
+      (refused.blockers as string[]).length = 0;
+    }).toThrow();
+    expect(refused.blockers.length).toBeGreaterThan(0);
+    // The catch-handler return is frozen the same way, including its empty arrays.
+    expect(Object.isFrozen(refused.accepted), "catch accepted is frozen").toBe(true);
+    expect(Object.isFrozen(refused.unexpectedFiles), "catch unexpectedFiles is frozen").toBe(true);
+    expect(() => {
+      (refused.accepted as unknown[]).push({});
+    }).toThrow();
+    expect(() => {
+      (refused.unexpectedFiles as string[]).push("x");
+    }).toThrow();
+  });
+
+  it("R6 round 2 finding 4: the returned attestation is frozen", async () => {
+    const run = await finishedRun();
+    const att = attest(baseInput(run));
+    expect(Object.isFrozen(att)).toBe(true);
+    // Reassigning `binding` or `eligible` after the fact must not take effect.
+    expect(() => {
+      (att as { eligible: boolean }).eligible = true;
+    }).toThrow();
+    expect(att.eligible).toBe(true);
+    const refused = attest({} as never);
+    expect(Object.isFrozen(refused)).toBe(true);
+    expect(refused.eligible).toBe(false);
+  });
+
+  it("v3: freezeBinding's freeze is load-bearing", async () => {
+    // A binding whose fields are getters: frozen into primitives at entry, the returned
+    // `binding` is plain data. Without freezeBinding the caller's object is returned.
+    // (`isAttestation`'s try is pinned separately, where its effect is observable: the outer
+    // catch in scoreDiscoveryTrial masks it otherwise.)
+    const run = await finishedRun();
+    const input = baseInput(run);
+    let reads = 0;
+    const shifty = {
+      ...input.bundle!,
+      get armId() {
+        reads += 1;
+        return input.bundle!.armId;
+      },
+    };
+    const att = attest({ ...input, bundle: shifty });
+    expect(Object.isFrozen(att.binding), "the returned binding is not frozen").toBe(true);
+    expect(reads, "the binding was not read exactly once").toBe(1);
+  });
+
+  it("v3: finalFiles and screen are each read once", async () => {
+    // Counting reads is the direct property (round 1, findings 3 and 4).
+    const run = await finishedRun();
+    const input = baseInput(run);
+    const counts = { finalFiles: 0, screen: 0 };
+    const counted = {
+      ...input,
+      get finalFiles() {
+        counts.finalFiles += 1;
+        return input.finalFiles;
+      },
+      get screen() {
+        counts.screen += 1;
+        return input.screen;
+      },
+    };
+    attest(counted as never);
+    expect(counts, "a field was read more than once").toEqual({ finalFiles: 1, screen: 1 });
+
+    // Each ENTRY is read once too. Counting only the top-level getter missed the snapshot's
+    // removal (round 2, finding 3).
+    let entryReads = 0;
+    const countedEntries = {
+      ...input,
+      finalFiles: {
+        get "store.json"() {
+          entryReads += 1;
+          return input.finalFiles["store.json"];
+        },
+      },
+    };
+    attest(countedEntries as never);
+    expect(entryReads, "a finalFiles entry was read more than once").toBe(1);
+
+    // `screen.visibleText` is read once too, so the value reported as `screenConstrained` is
+    // the value checked (round 1, finding 4).
+    let textReads = 0;
+    const shiftyScreen = {
+      ...run.screen,
+      get visibleText() {
+        textReads += 1;
+        return run.screen.visibleText;
+      },
+    };
+    const screenResult = attest({ ...input, screen: shiftyScreen as never });
+    expect(textReads, "screen.visibleText was read more than once").toBe(1);
+    expect(screenResult.screenConstrained).toBe(false);
+  });
+
+  it("v3: bundleDigest is injective over paths containing newlines", () => {
+    // Joining `path:hash` with "\n" collided, so two distinct maps shared a digest and the
+    // binding did not bind "this bundle" (round 3, finding 1).
+    const h = (v: string) => createHash("sha256").update(v).digest("hex");
+    const enc = (v: string) => new TextEncoder().encode(v);
+    const twoFiles = { "store.json": enc("s"), p: enc("p"), q: enc("q") };
+    const smudged = { "store.json": enc("s"), [`p:${h("p")}\nq`]: enc("q") };
+    expect(bundleDigest(twoFiles as never)).not.toBe(bundleDigest(smudged as never));
+    // Order still does not matter.
+    const reordered = { q: enc("q"), p: enc("p"), "store.json": enc("s") };
+    expect(bundleDigest(reordered as never)).toBe(bundleDigest(twoFiles as never));
+  });
+
+  it("v3: isAttestation's guard is load-bearing", () => {
+    // Called directly, so the outer catch in scoreDiscoveryTrial cannot mask it. A Proxy
+    // whose `get` trap throws must yield `false`, not a throw.
+    const hostile = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("trap");
+        },
+      },
+    );
+    expect(() => isAttestation(hostile), "isAttestation threw").not.toThrow();
+    expect(isAttestation(hostile), "a hostile Proxy passed the brand check").toBe(false);
+    expect(isAttestation({}), "a plain object passed the brand check").toBe(false);
+  });
+
+  it("v3: the catch-path return is frozen too", () => {
+    // `attest({})` never throws, so it tests the SUCCESS path. This input throws inside the
+    // body, so the catch handler's own return is what gets checked (round 1, finding 5).
+    const throwing = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("trap");
+        },
+        has: () => {
+          throw new Error("trap");
+        },
+      },
+    );
+    const caught = attest(throwing as never);
+    expect(Object.isFrozen(caught), "catch return is frozen").toBe(true);
+    expect(Object.isFrozen(caught.blockers), "catch blockers is frozen").toBe(true);
+    expect(Object.isFrozen(caught.accepted), "catch accepted is frozen").toBe(true);
+    expect(Object.isFrozen(caught.unexpectedFiles), "catch unexpectedFiles is frozen").toBe(true);
+    expect(() => (caught.blockers as string[]).push("x")).toThrow();
+    expect(() => (caught.accepted as unknown[]).push({})).toThrow();
+    expect(() => (caught.unexpectedFiles as string[]).push("x")).toThrow();
+    expect(caught.eligible).toBe(false);
+  });
+
+  it("R6 round 2 finding 1: the hidden set is read once, so a Proxy cannot answer twice", async () => {
+    // The set was read at the commitment check and again at the resolve. A Proxy array can
+    // give the real set to the commitment and a forged fixture to the resolve, so the
+    // commitment passes while the resolved fixture is not in it.
+    const input = baseInput(await finishedRun());
+    const forged = structuredClone(HIDDEN[0]!);
+    (forged.fault as { version: number }).version = 999;
+    const forgedHash = fixtureHash(forged);
+    let indexReads = 0;
+    const shifty = new Proxy(HIDDEN, {
+      get(target, key, receiver) {
+        if (key === "0") {
+          indexReads += 1;
+          // First index read is the commitment's map; later reads are the resolve's find.
+          return indexReads === 1 ? target[0] : forged;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const result = attest({
+      ...input,
+      hiddenFixtures: shifty as never,
+      claimedFixtureHash: forgedHash,
+      evidence: { ...input.evidence, fixtureHash: forgedHash },
+    });
+    expect(result.eligible, "a Proxy set admitted a fixture outside the commitment").toBe(false);
+  });
+
+  it("R6 round 2 finding 1: a getter on taskFixtureId cannot answer differently per read", async () => {
+    const input = baseInput(await finishedRun());
+    const foreign = HIDDEN.find((h) => h.taskFixtureId !== TASK.fixtureId)!;
+    let reads = 0;
+    const shifty = structuredClone(foreign);
+    Object.defineProperty(shifty, "taskFixtureId", {
+      get() {
+        reads += 1;
+        // Honest for the first reads, the claimed task's value afterwards.
+        return reads <= 2 ? foreign.taskFixtureId : TASK.fixtureId;
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    const result = attest({
+      ...input,
+      hiddenFixtures: [shifty, ...HIDDEN.slice(1)] as never,
+      claimedFixtureHash: fixtureHash(foreign),
+      evidence: { ...input.evidence, fixtureHash: fixtureHash(foreign) },
+    });
+    expect(result.eligible, "a getter fixture was admitted").toBe(false);
+  });
+
+  it("R6 round 2 finding 1: a row naming an unknown task is refused", async () => {
+    // The registry is the only non-circular oracle here, so a task it does not know cannot
+    // be bound to any fixture.
+    const input = baseInput(await finishedRun());
+    const result = attest({
+      ...input,
+      evidence: { ...input.evidence, taskId: "ef-no-such-task" },
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("names no known task");
+  });
+
+  it("R6 round 2 finding 1: a self-consistent foreign hidden fixture is refused", async () => {
+    // The attack: claim a hidden fixture for a DIFFERENT task, consistently. fixtureId,
+    // fixtureHash and claimedFixtureHash all agree with each other, so every comparison
+    // between caller-supplied values passes. Only the task registry can catch it.
+    const run = await finishedRun();
+    const input = baseInput(run);
+    const foreign = HIDDEN.find((h) => h.taskFixtureId !== TASK.fixtureId)!;
+    const consistent = {
+      ...input,
+      claimedFixtureHash: fixtureHash(foreign),
+      evidence: {
+        ...input.evidence,
+        fixtureId: foreign.taskFixtureId,
+        fixtureHash: fixtureHash(foreign),
+      },
+    };
+    const result = attest(consistent);
+    expect(result.eligible, "a self-consistent foreign fixture was admitted").toBe(false);
+    expect(result.blockers.join(" ")).toContain("is fixture");
+
+    // And the scorer must refuse it too, not just the gate.
+    const scoredResult = scored(run, result);
+    if (scoredResult.status !== "scored") throw new Error("unreachable");
+    expect(scoredResult.decisionEligible).toBe(false);
+  });
+
+  it("R6 3: every malformed screen shape is refused, and the Proxy trap does not throw", async () => {
+    const input = baseInput(await finishedRun());
+    for (const bad of [42, "x", {}, [], null]) {
+      const result = attest({ ...input, screen: bad as never });
+      expect(result.eligible, `screen ${JSON.stringify(bad)} was admitted`).toBe(false);
+    }
+    for (const bad of [42, "x", {}, [], undefined, null]) {
+      const result = attest({ ...input, screenObserved: bad as never });
+      expect(result.eligible, `screenObserved ${JSON.stringify(bad)} was admitted`).toBe(false);
+    }
+    // A Proxy whose traps throw must not escape: the catch handler examines nothing.
+    const hostile = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("trap");
+        },
+        has: () => {
+          throw new Error("trap");
+        },
+      },
+    );
+    expect(() => attest(hostile as never)).not.toThrow();
+    expect(attest(hostile as never).eligible).toBe(false);
+  });
+});
+
+describe("TIF-125: the attestation is bound to the row it scores", () => {
+  /**
+   * Round 5's finding 1. A valid attestation from one bundle marked a different bundle
+   * decision-eligible, and the resolved hidden fixture was never compared to the scored task
+   * fixture. Evidence not tied to the thing it is evidence of is the same defect class as a
+   * fabricated observer: it looks like verification and checks nothing.
+   */
+  it("refuses a bundle whose bytes differ from the attested digest", async () => {
+    const input = baseInput(await finishedRun());
+    const otherBundle = {
+      "store.json": new TextEncoder().encode('{"items":[{"text":"other"}]}\n'),
+    };
+    const result = attest({
+      ...input,
+      finalFiles: otherBundle,
+      observations: [
+        { path: "store.json", sha256: "whatever", bytes: 1, observedAt: "t", afterLastSave: true },
+      ],
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("attested bundle digest does not match");
+  });
+
+  it("refuses an attestation for a different arm, task or prompt", async () => {
+    const input = baseInput(await finishedRun());
+    for (const [field, value] of [
+      ["armId", "hcu+shell"],
+      ["taskId", "some-other-task"],
+      ["promptHash", "0".repeat(64)],
+    ] as const) {
+      const result = attest({ ...input, bundle: { ...input.bundle!, [field]: value } });
+      expect(result.eligible, `${field} mismatch was admitted`).toBe(false);
+      expect(result.blockers.join(" ")).toContain("binding:");
+    }
+  });
+
+  it("refuses an attestation that does not name the row at all", async () => {
+    // Absent binding is a blocker, not a pass: an attestation that does not say what it
+    // attests cannot be evidence for anything.
+    const input = baseInput(await finishedRun());
+    const result = attest({ ...input, bundle: undefined });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("does not name the row it is for");
+  });
+
+  it("refuses when the commitment resolves a fixture other than the scored one", async () => {
+    const run = await finishedRun();
+    const input = baseInput(run);
+    const result = attest({
+      ...input,
+      evidence: { ...run.evidence, fixtureId: "ef-todo-something-else-v1" },
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("the row scores");
+  });
+
+  it("admits the bound run, so the refusals above are about the binding", async () => {
+    const input = baseInput(await finishedRun());
+    expect(attest(input).eligible).toBe(true);
+  });
+
+  it("refuses a string where file bytes belong", async () => {
+    // Accepting a string meant a caller could pass "content" and have it digested as a file.
+    const input = baseInput(await finishedRun());
+    const result = attest({
+      ...input,
+      finalFiles: { "store.json": "not bytes" as never },
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.blockers.join(" ")).toContain("is not a byte array");
+  });
+
+  it("the digest is order-independent, so map construction order cannot refuse an honest run", () => {
+    const a = {
+      "store.json": new TextEncoder().encode("x"),
+      "store.meta.json": new TextEncoder().encode("y"),
+    };
+    const b = {
+      "store.meta.json": new TextEncoder().encode("y"),
+      "store.json": new TextEncoder().encode("x"),
+    };
+    expect(bundleDigest(a)).toBe(bundleDigest(b));
   });
 });
 
@@ -320,8 +1088,8 @@ describe("TIF-95: the gate decides eligibility, never the verdict", () => {
     expect(scored.status).toBe("scored");
     if (scored.status !== "scored") throw new Error("unreachable");
     // Eligibility is about admissibility, not correctness: the verdict is whatever the
-    // state oracle said, and the gate must not have touched it. Eligibility itself is
-    // withheld until TIF-125 (fail-closed), which is asserted separately.
+    // state oracle said, and the gate must not have touched it. The eligibility flip itself
+    // is still withheld (fail-closed) and is asserted in its own test.
     expect(scored.result.verdict).toBe("refuted");
   });
 
@@ -385,8 +1153,7 @@ describe("TIF-95: the gate decides eligibility, never the verdict", () => {
     );
     if (scored.status !== "scored") throw new Error("unreachable");
     expect(scored.decisionEligible).toBe(false);
-    // The gate's own reason is what names the missing observation; the eligibility flip is
-    // withheld separately until TIF-125, and both are reported.
+    // The gate's own reason names the missing observation; the flip is withheld separately.
     expect(refused.blockers.join(" ")).toContain("no observation");
   });
 });
@@ -501,7 +1268,7 @@ describe("EF-005 attestation gate", () => {
     expect(attest(input).observerId).toBe("offline");
   });
 
-  it("refuses an empty required set instead of admitting a run that observed nothing", async () => {
+  it("refuses a hidden set that does not match the commitment", async () => {
     // The P1 the verifier found: a caller-supplied list with no lower bound let
     // `requiredPaths: []` pass with zero observations.
     const input = baseInput(await finishedRun());
@@ -515,12 +1282,34 @@ describe("EF-005 attestation gate", () => {
     expect(result.blockers.join(" ")).toContain("does not match the committed commitment");
   });
 
+  it("v3: a forged hidden set of the SAME COUNT is refused by rootHash alone", async () => {
+    // The existing test above differs in count, so the count check catches it. A set with the
+    // same length but different content is only caught by the rootHash comparison, which is
+    // what makes the commitment a commitment (round 3, finding 3).
+    const input = baseInput(await finishedRun());
+    const forged = structuredClone(HIDDEN);
+    (forged[0]!.fault as { seed: number }).seed = 999_999;
+    const result = attest({
+      ...input,
+      hiddenFixtures: forged,
+      claimedFixtureHash: fixtureHash(forged[0]!),
+      evidence: { ...input.evidence, fixtureHash: fixtureHash(forged[0]!) },
+    });
+    expect(result.eligible, "a forged set of the same count was admitted").toBe(false);
+    expect(result.blockers.join(" ")).toContain("does not match the committed commitment");
+  });
+
   it("reports an app-written file the fixture does not designate, without refusing the run", async () => {
     // Demanding an observation for every file in the final state refuses honest runs that
     // wrote a log. The fixture says what matters; anything else is reported.
     const input = baseInput(await finishedRun());
     const withExtra = { ...input.finalFiles, "app.log": new TextEncoder().encode("started\n") };
-    const result = attest({ ...input, finalFiles: withExtra });
+    // Rebind: the extra file changes the bundle digest, and the binding is meant to notice.
+    const result = attest({
+      ...input,
+      finalFiles: withExtra,
+      bundle: { ...input.bundle!, bundleDigest: bundleDigest(withExtra) },
+    });
     expect(result.eligible).toBe(true);
     expect(result.unexpectedFiles).toEqual(["app.log"]);
   });

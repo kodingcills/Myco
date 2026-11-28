@@ -211,6 +211,19 @@ it("rejects invalid evidence and uncommitted fixtures", () => {
     fs.writeFileSync(join(dir, "bundle.json"), encode(altered));
     expect(() => scoreRunDir(dir, manifest)).toThrow(/Commitment or version mismatch/);
     setup();
+    // R6 round 2 finding 4 (R1): a bundle whose hidden fixture omits taskFixtureId must be
+    // refused. Without this check the field is optional, and the commitment cannot be tied
+    // back to the task the row claims.
+    const noTask = decode(fs.readFileSync(join(dir, "bundle.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    // `shape` only checks that the key is present, so a non-string value is what the
+    // typeof check actually guards.
+    (noTask.hiddenFixture as Record<string, unknown>).taskFixtureId = 42;
+    fs.writeFileSync(join(dir, "bundle.json"), encode(noTask));
+    expect(() => scoreRunDir(dir, manifest)).toThrow(/Invalid bundle/);
+    setup();
     fs.writeFileSync(
       join(dir, "trace.jsonl"),
       JSON.stringify({ type: "action", timestamp: "now" }),
