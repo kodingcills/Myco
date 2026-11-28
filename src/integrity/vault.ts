@@ -36,12 +36,12 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  readdirSync,
   realpathSync,
+  type Stats,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { readRegularNoBlock } from "./nonblocking-read.ts";
+import { readDirNoFollow, readRegularNoBlock } from "./nonblocking-read.ts";
 
 export const VAULT_FORMAT_VERSION = 1;
 
@@ -50,6 +50,17 @@ export const VAULT_FORMAT_VERSION = 1;
  * an oracle source). A larger file is refused, never read (#541 R3-1).
  */
 export const VAULT_READ_LIMIT_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Tighter caps for files that are always small (#578 F2), so a planted sparse file cannot
+ * stall a check for seconds: a manifest (`seal.json`, `stop.json`, `capture.json`) and an
+ * oracle source (source code; the pool's snapshot copies keep the snapshot's own cap).
+ */
+export const MANIFEST_READ_LIMIT_BYTES = 1024 * 1024;
+export const ORACLE_SOURCE_READ_LIMIT_BYTES = 16 * 1024 * 1024;
+
+/** A vault run dir with more entries than this is refused, never listed in full (#578 F1). */
+export const VAULT_LIST_LIMIT_ENTRIES = 10_000;
 
 export type IntegrityViolationCode =
   | "vault-reachable"
@@ -336,7 +347,7 @@ export class VerdictVault {
       if (!isAbsolute(path))
         throw new VaultError("bad-name", `oracle source ${path} is not absolute`);
       // Never blocks (a FIFO planted at the path) and never follows a symlink (#541 R3-1).
-      const read = readRegularNoBlock(path, { maxBytes: VAULT_READ_LIMIT_BYTES });
+      const read = readRegularNoBlock(path, { maxBytes: ORACLE_SOURCE_READ_LIMIT_BYTES });
       if (!read.ok) {
         if (read.code === "missing") throw read.error;
         throw new VaultError("not-regular", `oracle source ${path} refused (${read.code})`);
@@ -489,7 +500,7 @@ export class VerdictVault {
     //    Read without blocking and type-checked: on an unprivileged backend the agent can
     //    replace a source with a FIFO or a symlink to /dev/zero (#541 R3-1).
     for (const [path, want] of Object.entries(seal.body.oracle.sources)) {
-      const read = readRegularNoBlock(path, { maxBytes: VAULT_READ_LIMIT_BYTES });
+      const read = readRegularNoBlock(path, { maxBytes: ORACLE_SOURCE_READ_LIMIT_BYTES });
       if (!read.ok) {
         violations.push({
           code: "oracle-source-missing",
@@ -549,7 +560,7 @@ export class VerdictVault {
     //    an extra "fixture", a planted symlink).
     const expected = new Set<string>([SEAL, STOP, CAPTURE, ...Object.keys(seal.body.files)]);
     if (capture.ok) for (const rel of Object.keys(capture.body.files)) expected.add(rel);
-    for (const rel of listTree(dir))
+    for (const rel of listRunTree(dir, violations))
       if (!expected.has(rel))
         violations.push({ code: "unexpected-file", path: rel, detail: "file not in any manifest" });
 
@@ -602,7 +613,7 @@ export class VerdictVault {
         };
       // The lstat above does not stop a swap before the read: open without blocking and
       // require the same regular file on the fd (#541 R3-1).
-      const read = readRegularNoBlock(path, { maxBytes: VAULT_READ_LIMIT_BYTES, expect: st });
+      const read = readRegularNoBlock(path, { maxBytes: MANIFEST_READ_LIMIT_BYTES, expect: st });
       if (!read.ok) {
         if (read.code !== "missing")
           return {
@@ -697,13 +708,55 @@ export class VerdictVault {
   }
 }
 
-/** Every non-directory entry under `dir`, as `/`-joined relative paths. Symlinks are listed, not followed. */
-function listTree(dir: string, prefix = ""): string[] {
+/**
+ * Every non-directory entry under `dir`, as `/`-joined relative paths. Symlinks are listed,
+ * not followed (#578 F1): each dir is opened `O_DIRECTORY | O_NOFOLLOW` and must be the dir
+ * its `lstat` saw, so a dir swapped for a symlink (to `/usr`, say) is refused, not walked. A
+ * refused dir, a vanished dir or more than `VAULT_LIST_LIMIT_ENTRIES` entries adds an
+ * `unexpected-file` violation (fail closed) instead of throwing out of the check.
+ *
+ * Exported for tests only: `opts.lstat` may lie (stand in, deterministically, for a dir the
+ * agent swaps between the `lstat` and the open), and `opts.limit` lowers the entry cap.
+ */
+export function listRunTree(
+  dir: string,
+  violations: IntegrityViolation[],
+  opts: { readonly lstat?: (path: string) => Stats; readonly limit?: number } = {},
+): string[] {
+  const lstat = opts.lstat ?? lstatSync;
   const out: string[] = [];
-  for (const entry of readdirSync(join(dir, prefix), { withFileTypes: true })) {
-    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) out.push(...listTree(dir, rel));
-    else out.push(rel);
-  }
+  let budget = opts.limit ?? VAULT_LIST_LIMIT_ENTRIES;
+  const walk = (rel: string, expect: Stats | undefined): boolean => {
+    const listed = readDirNoFollow(rel ? join(dir, rel) : dir, {
+      maxEntries: budget,
+      ...(expect ? { expect } : {}),
+    });
+    if (!listed.ok) {
+      violations.push({
+        code: "unexpected-file",
+        path: rel || ".",
+        detail: `directory refused (${listed.code})`,
+      });
+      // A refused dir is recorded and its siblings are still listed; only the entry cap
+      // stops the whole walk (so the listing never depends on readdir order).
+      return listed.code !== "too-many";
+    }
+    budget -= listed.names.length;
+    for (const name of listed.names) {
+      const child = rel ? `${rel}/${name}` : name;
+      let st: Stats;
+      try {
+        st = lstat(join(dir, child));
+      } catch {
+        out.push(child); // vanished mid-walk: listed, so an unaccounted name still fails
+        continue;
+      }
+      if (st.isDirectory()) {
+        if (!walk(child, st)) return false;
+      } else out.push(child);
+    }
+    return true;
+  };
+  walk("", undefined);
   return out;
 }

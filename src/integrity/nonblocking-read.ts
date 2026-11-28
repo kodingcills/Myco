@@ -15,7 +15,17 @@
  * are exactly what `readFileSync` returns.
  */
 
-import { closeSync, constants, fstatSync, openSync, readSync, type Stats } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  opendirSync,
+  openSync,
+  readSync,
+  type Stats,
+} from "node:fs";
 
 /** Why a read was refused. `missing` covers every open error except a refused symlink. */
 export type NoBlockReadRefusal = "missing" | "not-regular" | "swapped" | "too-large";
@@ -43,9 +53,15 @@ export function readRegularNoBlock(path: string, opts: NoBlockReadOptions): NoBl
   try {
     fd = openSync(path, FLAGS);
   } catch (error) {
-    // ELOOP: the last component is a symlink (O_NOFOLLOW). Anything else: unreadable.
+    // ELOOP: the last component is a symlink (O_NOFOLLOW). ENXIO: a unix socket, which
+    // `open` cannot open (#578 N1); like a FIFO it is a special file, not a missing one.
+    // Anything else: unreadable.
     const code = (error as NodeJS.ErrnoException).code;
-    return { ok: false, code: code === "ELOOP" ? "not-regular" : "missing", error };
+    return {
+      ok: false,
+      code: code === "ELOOP" || code === "ENXIO" ? "not-regular" : "missing",
+      error,
+    };
   }
   try {
     const stat = fstatSync(fd);
@@ -61,6 +77,90 @@ export function readRegularNoBlock(path: string, opts: NoBlockReadOptions): NoBl
       off += n;
     }
     return { ok: true, bytes: off === buf.length ? buf : buf.subarray(0, off), stat };
+  } catch (error) {
+    return { ok: false, code: "missing", error };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Why a directory read was refused (#578 F1). */
+export type NoFollowDirRefusal = "missing" | "not-directory" | "swapped" | "too-many";
+
+export type NoFollowDir =
+  | { readonly ok: true; readonly names: readonly string[]; readonly stat: Stats }
+  | { readonly ok: false; readonly code: NoFollowDirRefusal; readonly error?: unknown };
+
+export interface NoFollowDirOptions {
+  /** More entries than this refuses the read (`too-many`); at most this many + 1 are read. */
+  readonly maxEntries: number;
+  /**
+   * The caller's earlier `lstat` of the same path. When given, the opened dir must be that
+   * same dir (device and inode): a dir swapped between the `lstat` and the `open` is refused.
+   */
+  readonly expect?: Stats;
+}
+
+const DIR_FLAGS =
+  constants.O_RDONLY |
+  (constants.O_DIRECTORY ?? 0) |
+  (constants.O_NOFOLLOW ?? 0) |
+  (constants.O_NONBLOCK ?? 0);
+
+/** Linux: list the dir through its open fd, so a later swap of the path cannot redirect it. */
+const FD_DIR = process.platform === "linux" && existsSync("/proc/self/fd") ? "/proc/self/fd" : null;
+
+/**
+ * List a directory without following a symlink at its path, and without being redirected by
+ * a swap (#578 F1). A walk that decides to recurse from an `lstat` (or a `readdir` d_type)
+ * and then re-opens the child by path can be led anywhere: a same-uid agent that swaps a dir
+ * for a symlink to `/usr` between the two steps makes the walk list all of `/usr`.
+ *
+ * - open the path `O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK`: a symlink or a non-dir is refused
+ *   at once (`not-directory`), and nothing that could block is opened;
+ * - `fstat` the fd: a directory, and the same dir as the caller's `lstat` when one is given
+ *   (`swapped`);
+ * - read the entries from that fd (Linux: `/proc/self/fd/<fd>`, which names the opened dir
+ *   itself, never the path); elsewhere read by path and re-`lstat` afterwards, refusing a
+ *   path that no longer names the opened dir (`swapped`);
+ * - stop after `maxEntries + 1` entries (`too-many`), so a huge tree cannot stall the walk.
+ *
+ * `.` and `..` are never returned. Every refusal is immediate and carries a code.
+ */
+export function readDirNoFollow(path: string, opts: NoFollowDirOptions): NoFollowDir {
+  let fd: number;
+  try {
+    fd = openSync(path, DIR_FLAGS);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return {
+      ok: false,
+      code: code === "ELOOP" || code === "ENOTDIR" ? "not-directory" : "missing",
+      error,
+    };
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isDirectory()) return { ok: false, code: "not-directory" };
+    if (opts.expect && (stat.ino !== opts.expect.ino || stat.dev !== opts.expect.dev))
+      return { ok: false, code: "swapped" };
+    const names: string[] = [];
+    const dir = opendirSync(FD_DIR ? `${FD_DIR}/${fd}` : path);
+    try {
+      for (let e = dir.readSync(); e !== null; e = dir.readSync()) {
+        if (e.name === "." || e.name === "..") continue;
+        if (names.length >= opts.maxEntries) return { ok: false, code: "too-many" };
+        names.push(e.name);
+      }
+    } finally {
+      dir.closeSync();
+    }
+    if (!FD_DIR) {
+      const after = lstatSync(path);
+      if (!after.isDirectory() || after.ino !== stat.ino || after.dev !== stat.dev)
+        return { ok: false, code: "swapped" };
+    }
+    return { ok: true, names, stat };
   } catch (error) {
     return { ok: false, code: "missing", error };
   } finally {

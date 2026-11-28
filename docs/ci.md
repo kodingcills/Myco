@@ -42,8 +42,11 @@ nothing is skipped or fails for lack of one.
   `test/parallel` with `MYCO_PARALLEL_REQUIRED=1` (the Xvfb and real-Calc suites fail
   instead of skipping), then a $0 throughput run at N = 1, 2, 4 with scripted agents on
   the unprivileged `linux-plain` backend (`--allow-weak-isolation`; nothing is counted as
-  verified there). Strict namespace isolation is not in this job. See
-  `docs/product/safe-parallelism.md`.
+  verified there). Then the L-infra zero-contamination run (`pnpm myco-l-infra`: fc-v1's
+  90 satisfiable tasks at N = 1, 2, 4, 8, real Calc, a canary per desktop, a positive
+  control), which prints its rows and their SHA-256 to the log and must recompute
+  (`pnpm myco-l-infra-analyze --check`). Strict namespace isolation is not in this job. See
+  `docs/product/safe-parallelism.md` and `docs/product/l-infra/README.md`.
 - **M2 evidence and scorecard.** `scripts/m2-evidence-check.ts --all` checks every
   committed `docs/research/experiments/m2-*` pack (schemas, the shared benchmark ledger,
   a cause on every non-verified row, the guest load gate record), then
