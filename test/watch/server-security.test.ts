@@ -486,6 +486,9 @@ describe("watch: passive (changes no file, holds no gate handle)", () => {
       "page.ts",
       "render-frame.ts",
       "sanitize-frame.ts",
+      // Replay B2 (spec #589 §2.8): the joiner and the run-trust classifier, extended, never relaxed.
+      "timeline.ts",
+      "run-trust.ts",
       "run-dir.ts",
     ];
     const writes =
@@ -503,15 +506,26 @@ describe("watch: passive (changes no file, holds no gate handle)", () => {
       const imports = [...text.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1] as string);
       for (const spec of imports) {
         const ok =
-          ["node:fs", "node:http", "node:net", "node:os", "node:path", "node:zlib"].includes(
-            spec,
-          ) ||
+          [
+            "node:fs",
+            "node:http",
+            "node:net",
+            "node:os",
+            "node:path",
+            "node:zlib",
+            "node:crypto",
+          ].includes(spec) ||
           [
             "./decision-log.ts",
             "./events.ts",
             "./frames.ts",
             "./page.ts",
             "./sanitize-frame.ts",
+            "./timeline.ts",
+            "./run-trust.ts",
+            // Replay B5: the pure clip renderer (scanned in clip-cli.test.ts) and the shared identity guard.
+            "./clip/mock-preview.ts",
+            "../proof/identity.ts",
             "./run-dir.ts",
             "../gate/api.ts",
             "../core/state.ts",

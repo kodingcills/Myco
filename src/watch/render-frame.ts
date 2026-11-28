@@ -28,6 +28,10 @@ function frame(width: number, height: number, title: string, body: string[]): st
     `<rect x="10" y="10" width="${width - 20}" height="26" rx="6" fill="#3d4450"/>`,
     `<text x="22" y="28" fill="#fff" font-weight="bold">${esc(title)}</text>`,
     ...body,
+    // Every rendered frame is a mock frame: it draws its own MOCK watermark (spec #589 §2.6).
+    `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" dominant-baseline="middle" transform="rotate(-30 ${width / 2} ${height / 2})" font-size="72" font-weight="900" fill="#f85149" fill-opacity="0.35">MOCK</text>`,
+    `<rect x="0" y="${height - 18}" width="${width}" height="18" fill="#f85149" fill-opacity="0.85"/>`,
+    `<text x="${width / 2}" y="${height - 5}" text-anchor="middle" font-size="12" font-weight="bold" fill="#fff">MOCK · NOT EVIDENCE</text>`,
     "</svg>",
     "",
   ].join("\n");

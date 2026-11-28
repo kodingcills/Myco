@@ -53,7 +53,17 @@ export interface FrameSource {
   count(runId: string): number;
   /** Frame `index` of the run, or null. */
   read(runId: string, index: number): Frame | null;
+  /** Where every frame of this source comes from (decides the MOCK watermark; absent = mock). */
+  readonly provenance?: Frame["provenance"];
+  /**
+   * The run's timeline manifest (replay B2) at its fixed place beside the frames, every
+   * component re-checked (no symlink), or null. The name is fixed, never a request value.
+   */
+  timelineFile?(runId: string): string | null;
 }
+
+/** The manifest's fixed name beside a run's frames (`captured/frames/` in the sealed layout). */
+export const TIMELINE_FILE = "timeline.jsonl";
 
 export type FrameLayout = "per-run" | "sealed";
 
@@ -166,6 +176,12 @@ export function directoryFrameSource(
     return dir === null ? null : { dir, names: listImages(dir, skip) };
   };
   return {
+    provenance: "file",
+    timelineFile(runId) {
+      const dir = runDir(runId);
+      if (dir === null) return null;
+      return resolveListed(dir, layout === "sealed" ? `frames/${TIMELINE_FILE}` : TIMELINE_FILE);
+    },
     count(runId) {
       return list(runId)?.names.length ?? 0;
     },
@@ -196,6 +212,7 @@ export interface RenderedFrameSource extends FrameSource {
 export function renderedFrameSource(runs: ReadonlySet<string>): RenderedFrameSource {
   const frames = new Map<string, Buffer[]>();
   return {
+    provenance: "rendered",
     push(runId, svg) {
       if (!runs.has(runId)) return;
       const list = frames.get(runId) ?? [];
