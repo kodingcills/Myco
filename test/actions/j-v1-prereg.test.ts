@@ -17,6 +17,7 @@ import {
 } from "../../src/actions/j-v1-analysis.ts";
 import {
   J_V1_ANALYSIS_PATH,
+  J_V1_GUARD_PATH,
   J_V1_PREREG_PATH,
   loadJV1Prereg,
 } from "../../src/actions/j-v1-harness.ts";
@@ -34,7 +35,7 @@ const SPEC = readFileSync("docs/product/capability-spec.md", "utf8");
 const flat = (s: string) => s.replace(/\s+/g, " ");
 
 /** The pre-registration hash, stated in the README and the PR. Changing j-v1 changes this. */
-const J_V1_PREREG_HASH = "140e929c5fc94d8cfa22cef833028344c369d7b04a484f9ed3a9c19986b6cbb8";
+const J_V1_PREREG_HASH = "832354f63c4e78b962872d9d77fc4068aba1e55666751751b52fed0e2f98ec70";
 
 let tmp: string | null = null;
 afterEach(() => {
@@ -80,6 +81,7 @@ describe("j-v1 pre-registration (capability spec §3)", () => {
     tmp = mkdtempSync(join(tmpdir(), "j-v1-"));
     cpSync(join(ROOT, "docs"), join(tmp, "docs"), { recursive: true });
     cpSync(join(ROOT, "src/actions"), join(tmp, "src/actions"), { recursive: true });
+    cpSync(join(ROOT, "src/capability"), join(tmp, "src/capability"), { recursive: true });
     expect(() => loadJV1Prereg(tmp as string)).not.toThrow();
     const script = join(tmp, J_V1_ANALYSIS_PATH);
     writeFileSync(script, `${readFileSync(script, "utf8")}\n// edited\n`);
@@ -90,6 +92,7 @@ describe("j-v1 pre-registration (capability spec §3)", () => {
     tmp = mkdtempSync(join(tmpdir(), "j-v1-"));
     cpSync(join(ROOT, "docs"), join(tmp, "docs"), { recursive: true });
     cpSync(join(ROOT, "src/actions"), join(tmp, "src/actions"), { recursive: true });
+    cpSync(join(ROOT, "src/capability"), join(tmp, "src/capability"), { recursive: true });
     const p = join(tmp, J_V1_PREREG_PATH);
     writeFileSync(
       p,
@@ -98,14 +101,38 @@ describe("j-v1 pre-registration (capability spec §3)", () => {
     expect(() => loadJV1Prereg(tmp as string)).toThrow(/not the frozen script/);
   });
 
-  it("the analysis script is self-contained: it imports node:crypto and nothing else", () => {
+  it("the analysis script imports node:crypto and the pinned shared guard, nothing else", () => {
+    const specsOf = (path: string) =>
+      [...readFileSync(path, "utf8").matchAll(/^\s*(?:import|export)[^;]*?from\s+"([^"]+)"/gm)].map(
+        (m) => m[1],
+      );
     const src = readFileSync(J_V1_ANALYSIS_PATH, "utf8");
-    const specs = [...src.matchAll(/^\s*(?:import|export)[^;]*?from\s+"([^"]+)"/gm)].map(
-      (m) => m[1],
-    );
-    expect(specs).toEqual(["node:crypto"]);
+    expect(specsOf(J_V1_ANALYSIS_PATH)).toEqual(["node:crypto", "../capability/analysis-guard.ts"]);
     expect(src).not.toMatch(/\bimport\s*\(/);
     expect(src).not.toMatch(/\brequire\s*\(/);
+    // The guard imports nothing, so the two pinned hashes cover the whole computation.
+    const guard = readFileSync(J_V1_GUARD_PATH, "utf8");
+    expect(specsOf(J_V1_GUARD_PATH)).toEqual([]);
+    expect(guard).not.toMatch(/\bimport\s*\(/);
+    expect(guard).not.toMatch(/\brequire\s*\(/);
+  });
+
+  it("pins the shared analysis guard (#652) by SHA-256, and the loader checks it", () => {
+    const pin = RAW.analysis.modules.find((m: { path: string }) => m.path === J_V1_GUARD_PATH);
+    expect(pin?.sha256).toBe(sha(readFileSync(J_V1_GUARD_PATH)));
+    tmp = mkdtempSync(join(tmpdir(), "j-v1-"));
+    cpSync(join(ROOT, "docs"), join(tmp, "docs"), { recursive: true });
+    cpSync(join(ROOT, "src/actions"), join(tmp, "src/actions"), { recursive: true });
+    cpSync(join(ROOT, "src/capability"), join(tmp, "src/capability"), { recursive: true });
+    expect(() => loadJV1Prereg(tmp as string)).not.toThrow();
+    const guard = join(tmp, J_V1_GUARD_PATH);
+    writeFileSync(guard, `${readFileSync(guard, "utf8")}\n// edited\n`);
+    expect(() => loadJV1Prereg(tmp as string)).toThrow(/guard does not match its SHA-256/);
+    writeFileSync(
+      join(tmp, J_V1_PREREG_PATH),
+      JSON.stringify({ ...RAW, analysis: { ...RAW.analysis, modules: [] } }),
+    );
+    expect(() => loadJV1Prereg(tmp as string)).toThrow(/does not pin the analysis guard/);
   });
 
   it("the task set is fc-v1's 90 satisfiable tasks, with the manifest's SHA-256", () => {

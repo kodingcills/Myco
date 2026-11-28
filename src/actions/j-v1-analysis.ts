@@ -2,9 +2,14 @@
  * Track J, pre-registration j-v1: the frozen analysis script.
  *
  * This file is named, with its SHA-256, in `docs/product/capability-prereg/j-v1/prereg.json`
- * (capability spec §3 item 1). It imports nothing but `node:crypto`, so that hash pins the
- * whole computation: a change to any line here is a change to the pre-registration, which
- * after the first run means a new version (`j-v2`), never an edit.
+ * (capability spec §3 item 1). It imports `node:crypto` and the shared capability-analysis
+ * guard (`src/capability/analysis-guard.ts`, GitHub #652), which itself imports
+ * nothing and is pinned by its own SHA-256 in the same pre-registration (`analysis.modules`),
+ * so the two hashes pin the whole computation: a change to any line here or there is a change
+ * to the pre-registration, which after the first run means a new version (`j-v2`), never an
+ * edit. The guard runs before any decision: it refuses a pack whose pre-registration hash
+ * does not match, and no verdict is "shown" while a lead ruling is pending or any row's
+ * `simulated` is anything but absent or `false`.
  *
  * What it computes (capability spec §2 J and §1.5), on paired rows over fc-v1's 90
  * satisfiable tasks, k trials per task per arm (k = 2 by the lead's ruling of 2026-11-27
@@ -37,6 +42,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { guardCapabilityAnalysis, guardedVerdict } from "../capability/analysis-guard.ts";
 
 export const J_V1_ANALYSIS = "myco.capability.j-v1.analysis/1" as const;
 export const J_V1_TRIAL_SCHEMA = "myco.capability.j-v1.trial/1" as const;
@@ -480,6 +486,11 @@ export interface JV1Result {
   /** The commit the pack says its pre-registration was frozen in (§3 item 2); null if refused before it was read. */
   readonly preregCommit: string | null;
   readonly verdict: "shown" | "not-shown";
+  /**
+   * For a command line around this script: 1 refused, 3 a lead ruling is pending (computed,
+   * never shown), 0 otherwise (the verdict says shown or not). From the shared guard (#652).
+   */
+  readonly exitCode: number;
   /** True when the numbers were computed; false when the pack was refused outright. */
   readonly computed: boolean;
   /** Codes, each with detail after a colon. Empty only when the verdict is shown. */
@@ -519,6 +530,7 @@ function refused(hash: string, commit: string | null, reasons: string[]): JV1Res
     preregHash: hash,
     preregCommit: commit,
     verdict: "not-shown",
+    exitCode: 1,
     computed: false,
     reasons,
     n: null,
@@ -600,10 +612,15 @@ export function analyzeJV1(input: JV1Input): JV1Result {
     problems.push("PREREG_NOT_CANONICAL");
   }
   if (problems.length > 0) return refused(hash, null, problems);
-  if (input.packPreregHash !== hash)
-    return refused(hash, null, [
-      "PREREG_HASH_MISMATCH: the pack's pre-registration hash is not this pre-registration's",
-    ]);
+  // The shared guard (#652), before any decision. `input.prereg` is the committed file (the
+  // harness loader reads it from the repo), so its hash is the committed hash.
+  const guard = guardCapabilityAnalysis({
+    prereg: input.prereg,
+    preregHash: hash,
+    packs: [{ recordedHash: input.packPreregHash, committedHash: hash }],
+    rows: input.rows,
+  });
+  if (guard.refused) return refused(hash, null, [...guard.reasons]);
   if (typeof input.packPreregCommit !== "string" || !COMMIT_SHA.test(input.packPreregCommit))
     return refused(hash, null, [
       "PACK_FROZEN_COMMIT: the pack does not record the commit its pre-registration was frozen in",
@@ -644,12 +661,8 @@ export function analyzeJV1(input: JV1Input): JV1Result {
     cell.get(`${taskId}\u0000${arm}\u0000${rep}`) as JTrialRow;
 
   // Blocking reasons that leave the numbers computable (useful for plumbing, never a "shown").
-  const reasons: string[] = [];
-  if (prereg.leadRulingPending.length > 0)
-    reasons.push(`LEAD_RULING_PENDING: ${prereg.leadRulingPending.join(", ")}`);
-  const simulated = rows.filter((r) => r.simulated).length;
-  if (simulated > 0)
-    reasons.push(`SIMULATED: ${simulated} row(s); simulated rows are never evidence`);
+  // The guard's LEAD_RULING_PENDING and SIMULATED reasons come first.
+  const reasons: string[] = [...guard.reasons];
   const planners = [...new Set(rows.map((r) => r.plannerModelId))].sort();
   if (planners.length !== 1 || planners[0] !== prereg.modelId)
     reasons.push(`PLANNER_MISMATCH: ${planners.join(", ")}; pre-registered ${prereg.modelId}`);
@@ -747,7 +760,8 @@ export function analyzeJV1(input: JV1Input): JV1Result {
     analysis: J_V1_ANALYSIS,
     preregHash: hash,
     preregCommit: commit,
-    verdict: reasons.length === 0 ? "shown" : "not-shown",
+    verdict: guardedVerdict(guard, reasons.length === 0),
+    exitCode: guard.exitCode,
     computed: true,
     reasons,
     n,
