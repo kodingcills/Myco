@@ -41,6 +41,252 @@
   Coordinator GO.
 - [M1 backlog](../backlog/m1.md)
 
+- **TIF-178 CLOSED** — #347 merged as `1308539f`. The gate suite now covers the leak-REPORTING composition (case 6) and the reset/destroy asymmetry (case 7), which the old `FakeMcp` could not express; 17b's inert `os.environ` seam is fixed (it patched the environment, but `GUEST_DIR`/`VM_LOCK_PATH` bind at import, so the case passed while testing nothing on a host holding the VM lock); and the vitest wrapper no longer accepts a gate's self-report unqualified. Round-2 verdict PASS; its four findings (all comment/message accuracy, including one assertion that tested a prefix rather than the teardown's reason) fixed in `63768e03` and mutation-verified.
+- **Verified coverage, all by mutation:** six mutations of `scripts/df005-runner.py` each caught by a named assertion; case 7 is the SOLE guard for the asymmetry; both binary states green (114s with, 12s without); 153 assertions in the offline gate.
+
+## Log 2026-11-24 (74) — TIF-206 follow-up: the SAI MCP child still gets the key in its env
+- **TIF-206 fixed the Anthropic path and left the SAI path as it was.** `scripts/sai/mcp.ts:73`
+  spawns the MCP child with `env: { PATH: process.env.PATH, SAI_API_KEY: apiKey }` — the key is
+  handed to the child **through the environment**, which is the exact shape TIF-193 leaked through.
+  Anything that can read that child's environment (`ps eww`) sees a live credential, which is what
+  TIF-206 exists to prevent on the other path.
+- **The good news is the reading side is already right.** `scripts/sai/client.ts` loads the key from
+  the one permitted file (`~/.myco/secrets/sai.env`), parses `SAI_API_KEY=` itself, and
+  **"throws without echoing file contents"**. So the value is already file-sourced and the file
+  already exists; only the handoff to the child is wrong.
+- **Follow-up, post-M1, Low:** pass the key FILE PATH to the child and have it read at use, the
+  pattern `src/baseline/secret-file.ts` now establishes for Anthropic. Scope: `scripts/sai/mcp.ts`,
+  its caller in `scripts/sai/run.ts`, and `test/sai/mcp.test.ts`, which currently asserts the
+  env-injection shape at `test/sai/mcp.test.ts:15` and would need to assert the path handoff instead.
+- **Why Low and not blocking:** the SAI arm is post-M1 and the child is `@simular-ai/sai-mcp@0.6.0`,
+  a third-party binary whose own key-reading interface we do not control — so this may not be
+  fixable from our side without upstream support, which is part of why it is a follow-up and not a
+  defect to fix in TIF-206's PR.
+- **Not fixed here.** Filing it is the deliverable; the outer loop assigns the id.
+
+## Log 2026-11-24 (73) — an issue-first CI job is sitting untracked and needs its owner
+- **`scripts/check-tif-id.py` and `.github/workflows/issue-id.yml` are untracked in the
+  m1-foundation worktree and are on no branch.** They exist only inside T3 checkpoint refs
+  (`git log --all -- <path>` finds them solely under
+  `refs/t3/orchestration-v2/checkpoints/...`), so if this worktree is cleaned up they are gone.
+- **They are not strays — they are finished work.** 110 + 43 lines. Every PR must reference a
+  Linear TIF issue; the rule lives in `docs/coordination/CONTRIBUTING-agents.md` and this job is
+  what makes it true rather than conventional. `python3 scripts/check-tif-id.py --self-test`
+  passes **all 14 cases**, covering the injection cases (a title like `$(rm -rf /)` is data, never
+  shell) and the `no-issue: <reason>` opt-out for bot PRs.
+- **I did NOT commit them, and this entry is why.** `CONTRIBUTING-agents.md:355` names this exact
+  file as the artifact that once got swept into an unrelated docs commit by `git add -A`, making
+  an unrelated workflow run and **fail** on that PR's head. Shipping another owner's WIP would
+  repeat the mistake this repo has already recorded twice.
+- **Owner action needed: the author should commit the two files on their own branch and open the
+  PR.** They are complete and self-testing; nothing appears to be missing. If the owner is unknown,
+  this is a candidate TIF — the outer loop assigns ids. The workflow is deliberately not marked
+  required yet (`push: branches: [main]` is there so the outer loop can mark it required once it
+  lands).
+- **Consequence of it not landing:** the issue-first rule stays conventional. Nothing enforces it,
+  which is consistent with the outer loop having proxied issue creation while Linear access was
+  unconfirmed.
+
+## Log 2026-11-24 (72) — the two TIF-200 decisions, answered from r6's own calls
+- **Both decisions the outer loop asked for are already implemented in #400, and I verified its
+  numbers rather than accepting them.** Re-measured from `~/Projects/myco-runs/c1-r6/trials/c1/*.json`
+  (field `.usage[].completion`, 19 scored rows): **570 calls, min 77, median 254, P90 401, P99 535,
+  max 615.** Nothing above 615 at all, nothing above 768, so `1024/max = 1.67` — **40% headroom, not
+  the ~66% #400's comment states**; that comment understates it. The conclusion is unaffected and
+  if anything stronger.
+- **(b) IS 1024 TOO LOW? No, on this evidence — and the lead's save-dialog hypothesis is not
+  supported.** The hypothesis was that the truncation is a *consequence of the long decisions the
+  save-dialog loop produces*. **Zero of 570 calls exceed 615**, so the loop does not generate
+  unusually long replies; the index-20 call is an outlier ~1.7x beyond anything else in the arm, and
+  the shape of a reply that runs past every observed sample without approaching it is a **degenerate
+  repeat**, not a ceiling that is too tight. Raising the bound would make a runaway more expensive,
+  and the cap is not unlimited, so #400 correctly keeps `MAX_OUTPUT = 1024` and bounds the runaway
+  instead of accommodating it.
+
+  (An earlier revision said "with only $1.75 of cap left". **That figure was unanchored** — it did
+  not come from `report.json`, whose value at that stop was `c1ChargedMicros: 2765970`, i.e.
+  $6.234030 of headroom. A verifier caught it after it had been restated to four decimals in the
+  rows-7/8 draft, which is how a hedge becomes a measurement. Corrected here at the source.)
+- **(a) SHOULD ONE PLANNER FAILURE STOP AN ARM? No — and it no longer does.** Verified at
+  `origin/pull/400/head`: the assignment `if (failed) stopReason = "planner-failed"` is gone,
+  replaced by `noteCause(failed ? "planner-failed" : "trial-interrupted")` plus
+  `micros: billed ?? reservation`, so a truncation now needs **two consecutive occurrences** like
+  every other cause and books its **actual cost**. That is the same fix I would have written.
+- **#400's cost validation is strictly fail-closed, and I checked the bound rather than the
+  claim:** `billed` requires `Number.isSafeInteger(offered) && offered >= 0 && offered <= reservation`,
+  else the FULL reservation is kept. Negative (would make `charged()` go backwards and fire the cap
+  *later*), `NaN` (would make `NaN > LIMIT` false and silently kill the cap), `Infinity` and
+  fractional all fall back to the reservation. So the change can only ever bound *tighter* than
+  before, never looser — the direction that matters against a hard cap.
+- **Reservation arithmetic confirmed:** `MAX_CALL_MICROS` 20,240 → 30,480 and the per-trial
+  reservation 607,200 → 914,400 at `MAX_OUTPUT = 1024` with `MAX_INPUT * 2 + MAX_OUTPUT * 10`. The
+  outer loop is right that this makes the guard more conservative.
+- **The flock is FREE, and the "run-live pid 2536 holds it" reading is stale.** 2536 was *my* §6
+  run; it finished 08:49:46Z, `ps -p 2536` is empty and `lsof` shows no holder. The lock *text* still
+  reads `2536 run-live.ts` because the record is the last writer and is not cleared on release —
+  exactly the trap the runbook §2 note describes. **r6's resume is not waiting on me.**
+- **#400 is docs+code and touches no VM state**, so I did not treat it as blocked by row 8; it
+  queues normally behind its verifier.
+
+## Log 2026-11-24 (71) — §6 PASSES 20/20; TIF-195 closed; row 8 unblocked through §6
+- **§6 PASSES: 20/20 verified, exit 0**, 08:34:06Z → 08:49:46Z (15m40s), zero refuted and zero
+  harness errors, columns `name`/`qty`/`joined`/`salary` ×5, per-row 44.7–99.1 s. **F9 is
+  retired** — the runbook's `20/20` now reproduces. Evidence:
+  `docs/research/experiments/m1-row8/{S6-PASS.md,s6-evidence/}` (PR #401, merged `d2917a06`).
+- **The run held the flock as `2536 run-live.ts` for its whole life** and released on exit: TIF-191
+  demonstrably working in production, on the first real §6 after it landed. Nothing could reset
+  the guest out from under it.
+- **Not pooled with attempts A and B.** Those verified every row that reached the verifier
+  (16 of 16, 0 refuted) but never completed — one lost its host process, one was cold-reset — and
+  ran at load 5.8–10.0. Only this run is a 20/20.
+- **Four preconditions each failed once before this run worked, all now in `NEXT-RUN.md` (#399):**
+  a free flock with no driver; a guest cleaned **past §6.1's `myco-*` filter** (r6 left two stray
+  `soffice` and a run dir literally named `20`, the C1 sweep output, which the filter does not
+  match); a **freshly fetched token** (r6 installed its own, so the cached `~/.myco-token` gave
+  `AUTH_FAILED` *after* the guest had been touched); and **`nohup`, not `setsid` — `setsid` does
+  not exist on macOS** and a launcher built on it dies instantly and silently, costing two launches.
+- **TIF-195 closed.** `main` re-verified the seam narrowing at `c80c0cb3` → **PASS** (PR #395,
+  merged `ba9c0c06`). The verifier found the fix stronger than claimed: it is enforced **at runtime**
+  as well as by the type — `acquireVmLockUnlessOwnedByAncestor` builds a fresh `{path, driver}`, so
+  a widened object, an `as` cast, an interface extension and a prototype-inherited key were all
+  dropped while the lock was still acquired. Its ruling on the author's cast disclosure: the cast
+  reproduces but **does not block**, since only editing the module body can reopen it.
+- **TIF-187 runbook fixes landed as #396, and #387 closed as superseded.** #387 was **not**
+  superseded by #388/#391 — main had none of its six fixes (F1, F3-runbook-side, F5, F6, F9, F11).
+  I rebased it onto main and resolved two conflicts by keeping both sides, since they are
+  complementary; closing #387 avoided a force-update for no gain.
+
+## Log 2026-11-24 (70) — I merged TIF-191 past its verifier; TIF-195 corrects it
+- **Process miss, mine.** #390 was Tier 2 (locks). Round 1 PASSed at `c4ab78a`, then I **changed
+  code** — `cf66dbb0`, the two test seams on `lockOwnedByAncestor` — and merged as `865389fc`
+  **with no PASS at the final head.** Rule A says a post-PASS push touching only docs/tests is
+  exempt; this touched source, so it was not exempt. Filed by the lead as **TIF-195**.
+- **Not reverted.** The change is a fail-closed safety addition and reverting it would remove the
+  lock from the very path row 8 depends on. Fixed forward instead: a **fresh Tier-2 verifier at the
+  merged content** (`865389fc`), read-only, no VM, no lock. It must PASS **before the row-8 §6
+  launch relies on the lock.**
+- **The merged content is verify-stable:** `src/integration/vm-lock.ts`, `src/integration/run-live.ts`
+  and `test/run-live-vm-lock.test.ts` are byte-identical at `865389fc` and at `7ab53c60`; #391 and
+  #393 were docs-only. Checked by SHA-256, not by reading the log.
+- **What the seams put at risk, stated plainly:** `lockOwnedByAncestor` now accepts `owner` and
+  `ancestorOf`. `owner` already defaults to the env var `MYCO_VM_LOCK_OWNER`, so an operator can
+  always name an owner; the question the verifier must answer is whether a caller can also inject
+  `ancestorOf` and so certify any owner it likes.
+- **TIF-196 — the viewer verdict-budget flake. Do not retune during M1.** The lead's call is runner
+  noise, and the evidence supports it: `77bed54c` (490.6 ms) and `29801f14` (443.3 ms, a docs-only
+  merge) both failed and both went green on a plain rerun. **Rerun it when it trips.** The
+  structural complaint — it is `skipping` on every PR and only runs post-merge, with a 35% band
+  narrower than its 1.7–2.2x sample spread — is recorded for after M1, not acted on now.
+- **`main` is green** at `7ab53c60`: all 7 jobs, including the budget job, on the first attempt.
+- **VM order unchanged:** r6 holds the guest (trial 18/30 at 08:10Z). §6 fires from
+  `docs/research/experiments/m1-row8/NEXT-RUN.md` the moment it releases, behind the exit-10
+  refusal so it cannot be reset out from under itself.
+
+## Log 2026-11-24 (69) — main went red for 6 merges' worth of attention it did not deserve
+- **`main` after #388 (`77bed54c`) failed CI on `viewer verdict budget (macos-latest)`.** Cause:
+  the 10 000-step verdict median regressed 35%+ over the darwin baseline (490.6 ms vs the 425.8 ms
+  limit; samples 354–791 ms, a 2.2x spread). **Not caused by #388** — that PR and the two before it
+  touched no viewer code.
+- **The regression does not reproduce.** A plain rerun (`attempt=2`) took **all 7 jobs green**,
+  including the same job on the same commit. So the gate is not measuring the change under test.
+- **Second occurrence, 2026-11-24 ~07:44Z, on a docs-only merge.** `29801f14` (the `NEXT-RUN.md`
+  note, two markdown files) failed the same job: median **443.3 ms** against the 425.8 limit,
+  samples `363.9 … 635.9`. **A PR that touches no viewer code cannot regress viewer performance**,
+  which settles it: the numbers are runner noise, not a property of the commit. Committed medians
+  so far — 490.6, 443.3, against a 35% band with sample spreads of 2.2x and 1.7x.
+- **The gate is unsound on its face: the `viewer verdict budget (${{ matrix.os }})` job is
+  `skipping` on every PR**, and only runs on `main` after the merge. A timing gate that never runs
+  on the PR and only runs post-merge can only ever produce red `main` — it cannot block a bad
+  merge, and it does not run where the change is reviewable. **Needs the outer loop's decision:**
+  either give it a sane tolerance (a 2.2x sample spread against a 35% limit cannot pass reliably)
+  or make it non-blocking on a shared runner. Not fixed here — it is not M1 row 8 and it is not
+  mine to retune.
+- **Correction to a stale notification:** a PR event for #388 arrived at 07:0xZ saying "all 5
+  required checks passed"; **#388 was already merged at 06:50:46Z** and this was the post-merge
+  re-run of the pre-merge head. Checked `state` rather than acting on the notice.
+- **#391 conflicted after #388 merged** — both appended to the same two files. Resolved by taking
+  main's `m1-state.md` and re-inserting my (68) entry verbatim from the commit object, and appending
+  the fencing note to `NEXT-RUN.md` on the branch after the merge. Verified the resulting diff is
+  additive only (+35 lines, 2 files, no deletions).
+
+## Log 2026-11-24 (68) — TIF-191 built; VM order reversed to r6-first
+- **VM order (lead, 06:48Z): r6 keeps the guest until it finishes.** Interrupting a live paid run
+  costs more than waiting. Nothing touches the guest or the flock while `c1-baseline` pid 36343
+  holds it. Row-8 §6 → §7 → the row-8 rerun go the moment it releases.
+- **#388 MERGED** as `77bed54c`, Tier 0, 5/5 green: runbook §6.1 (guest clean + cleanup for an
+  aborted attempt), §6.2, and §2's race-free stale-lock clearing. Carries `Part of TIF-191`.
+- **TIF-191 = F12, and the lead's call is acquire-and-fail-closed.** PR #390, head `c4ab78a7`.
+  `run-live` now takes the flock before the token read, the tunnel, `mkdir runs/` or any guest
+  contact, and refuses with exit **10** naming the holder. A sweep's child **inherits** the lock
+  its ancestor owns instead of refusing, so §7 is unaffected: `vm_lock_owned_by_parent`'s rule,
+  reimplemented in TypeScript in `src/integration/vm-lock.ts`. Node has no `flock`, so the
+  descriptor is handed to `python3` as fd 3 and Node keeps its copy open — the same kernel object
+  `vm-lock.sh` uses, so the two sides interlock.
+- **Measured, all five tests and the full suite:** `pnpm typecheck` and `pnpm lint` clean,
+  `pnpm test` **973 passed / 1 skipped**, schema-validate ok. **Mutation-verified three ways** —
+  removing the acquire fails 2, disabling ancestor inheritance fails 1, making contention
+  non-fatal fails 3. A test bug was caught **by the mutation run, not by inspection**: `bash -c`
+  **execs** its last command, so the owning sweep pid vanished and the ancestor check correctly
+  reported no owner.
+- **Tests are hermetic by construction:** every case uses a temp `MYCO_VM_LOCK_PATH` and a sandbox
+  `HOME` with no `.myco-token`. The first draft read the host's real token and started dialling
+  the guest — caught because the assertion expected a token error and got a tunnel error.
+- **#391** (Tier 0) adds `docs/research/experiments/m1-row8/NEXT-RUN.md`: the §6 launch ready but
+  unrun, survivor-detached through `setsid`, with the gate (flock free **and** no driver), and the
+  point that liveness is the **guest run dirs**, never the log.
+- **Attempt A's death is now attributed as the lead's hypothesis:** the omp session teardown at
+  06:33:04Z, when turns were failing. That is why every launch from here is survivor-detached.
+
+## Log 2026-11-24 (67) — row 8 §6: 16/16 verified, 0 refuted, never finished
+- **§6 is neither passed nor refuted.** Two attempts on a reset, verified-clean guest:
+  **every row that reached the verifier verified (16 of 16), and no row was refuted.** Both
+  attempts were cut short by infrastructure, so `20/20` on a quiet host is **still outstanding**
+  and §7 stays blocked behind it. Evidence: `docs/research/experiments/m1-row8/README.md`.
+- **Attempt A (06:19–06:33Z): 15 verified, then the host process vanished mid-trial-16.**
+  15 `result.json` written one per ~48 s; the 16th dir left empty; **no crash report, no stack,
+  no output** — the log held only `agent ping ok`. `run-live` prints its array once at the end
+  of the loop, so **a silent log is the expected shape of a healthy `values` run**; liveness is
+  the guest run dirs, not the log. Cause unproven; the launcher was not survivor-detached, so a
+  session teardown is the leading hypothesis and is untested.
+- **Attempt B (06:37–06:40Z): row 1 verified, then a baseline driver cold-reset the guest at
+  trial 2.** `reset-trial-vm.sh cua-c1-base` started 06:38:14Z from the baseline worktree (pid
+  36434); QEMU restarted 06:38:40Z (44955 → 36509); the tunnel died with the guest and rows 3–20
+  each returned `uncertain` in **0–1 ms**. Exited 1 — a shape that reads like a generator failure
+  and was not one.
+- **F12, the real defect: `run-live` takes no VM flock.** `grep -c vm_lock
+  src/integration/run-live.ts` = 0, while `m1-sweep.sh`, `m1-corrupt-suite.sh`,
+  `reset-trial-vm.sh`, `c1-baseline.sh` and `c1-spike.sh` all acquire. So a §6 attempt holds no
+  ownership evidence, a driver that legitimately acquires the lock cannot detect it, and nothing
+  warns either side. **Not fixed here**: making `run-live` acquire would start refusing to run
+  when another driver is active, which is a behaviour change and an outer-loop decision.
+- **Runbook fixed (Tier 0, PR #388, `4a4c7ac7`):** §6.1 verifies the guest is clean and gives the
+  cleanup for an aborted attempt (one leftover run dir fails every later row — the 20/20
+  `uncertain` result explained); §6.2 requires a proven-free flock and no running driver; §2
+  gains a race-free way to clear a stale lock record, since a dead pid there reads exactly like a
+  live owner. §6's `20/20` is now labelled not-yet-reproduced with the real record.
+- **Stale lock, resolved as a non-issue:** `/tmp/myco-win11.vm.lock` read `44837 reset-trial-vm.sh`
+  with pid 44837 dead while the flock was **free** (`lsof` empty). `vm_lock_acquire` truncates and
+  rewrites only after the kernel grants the lock, so a stale pid never blocks a driver — it only
+  misleads a human.
+- **Row-8 rerun NOT launched.** It needs the guest exclusively for 3–4 h and the r6 resume holds
+  the flock and is spending against the $9 cap; launching would repeat exactly the collision that
+  killed attempt B, and would corrupt a scored arm. It waits for r6 to finish.
+
+## Log 2026-11-24 (66) — TIF-177 shipped; TIF-178 opens its test gaps
+- **TIF-177 Done.** #342 merged as `7317fd75`: the post-create readiness gate fails closed, and `cleanup()` reports a dirty teardown instead of swallowing it. Verified at head `d2480eba` (MERGEABLE CLEAN, 5/5) before merge.
+- **The fix's own test ran nowhere.** `test/df005-postcreate-gate.py` — the only test catching a `cleanup` that returns early and leaks — was executed by **nothing**: `pnpm test` is vitest + schema-validate, and `test/df005-runner.selftest.sh` is referenced from no workflow and no script. That is how the round-1 regression shipped green, and the wiring bug predates the PR. Fixed in #342 by `test/df005-contract-gates.test.ts`, which runs both gates under vitest. **Visible in CI:** `check (macos-latest)` went from ~1m15s to **2m8s**, the gates executing.
+- **TIF-178 opened (PR #347, `edbd9ac7`) for the test gaps that remained.** Deleting the leak-REPORTING code still left every suite green, because the gate test drove `cleanup()` and `wait_ready()` only in isolation, never `execute_scenario`. #347 adds the composition case and the reset/destroy asymmetry (a `FakeMcp` that could not express "reset fails, destroy succeeds"), and fixes 17b, which was **silently testing nothing**: it set `os.environ`, but `GUEST_DIR` and `VM_LOCK_PATH` bind at **import** time (`df005-runner.py:46-47`) — so that assignment did nothing, and on a host holding the VM lock the case passed while the guest check was skipped as "not run". It now patches the module attributes.
+- **Six mutations verified, each caught by a named assertion** — including the round-1 early return, `teardown = None`, and recording any tool's error (which breaks the asymmetry).
+- **Two verifier rounds each found something green CI did not:** round 1 a regression I introduced; round 2 a test I wrote that could never fail. Treat a green suite as unproven until a mutation makes it fail.
+- **Known, unfixed, flagged:** `test/df005-runner-offline.py` mutates `scripts/df005-runner.py` on disk during cases 12/13. Restoration is asserted on exception paths but is **not signal-safe**; my own kill left `if False:` on disk mid-session. A file that edits its own subject is a hazard in a shared CI checkout.
+- **CI cost:** the gate suite adds ~2 minutes to `check` on every run, on a job already cancelled ~37% of the time. Flagged to the outer loop before it surfaces as a new flake.
+
+- **DF-S01's preflight deadlock is RESOLVED (#338, `73b8ef8d`).** `preflight()` ran *before* `acquire_vm_lock()` and `create()`, and hard-failed on `guest-ssh` when no guest was up — but `create()` is what boots the guest (`provision()` → `boot.sh`). **Both orderings deadlocked:** booting first made the runner fail `vm-lock`, because `boot.sh` holds the host flock for the guest's lifetime. Fixed by DEFERRING the guest-dependent checks (`guest-ssh`, `app-deployed`, `app-self-test`, `introspection-file`, `introspection-shadow`) rather than failing them — "unmeasurable now, measured by the run". Verified from a clean host, no guest and a free lock:
+  ```
+  preflight OK: 3/8 measured, 5 deferred to the run   rc=0
+  ```
+  **Deferring is the right call, not a workaround:** a guest that fails to come up still shows as a `gap` per trial, so nothing about what the run verifies is weakened, and the summary cannot claim a count it did not measure.
+
 ## Standing rule — defensive engineering (Tiffany-approved, 2026-11-22 16:00 ET)
 
 Applies to **every owner, builder and verifier**, and is repeated in every owner
@@ -147,6 +393,8 @@ once an owner confirms.
 - **#156 — open**, 15 s -> measured value with headroom. Do not restart the arm
   before it lands.
 - **#162 — open**, defensive rule + abort-early, verifier running.
+
+- **NEW (TIF-178 verifier, 2026-11-24) — a leaked session can still reach `bucket = "success"`.** `cleanup()`'s return value is inspected at exactly one of its twelve call sites, the readiness-timeout path (`scripts/df005-runner.py:598`). The primary success path (`:813`) discards it, and nothing downstream catches the leak: every check grades the **persisted store**, not the session, so an unfreed `destroy` still yields `success/pass`. This is not the swallowing #342 fixed — it is the same *class* one layer up, on the scoring path rather than the teardown path. **Not fixed in #347** (which is test-only): the fix changes scoring semantics, so it needs an outer-loop decision. Options: route the teardown result into the `gap` bucket as `:598` does, or add a session-liveness check to the grading set. **Consequence if left:** a `pass` row can be recorded with the guest still allocated, which is the M1 false-success shape the vision doc's "zero false successes" criterion is about.
 
 ## Next actions
 
@@ -1019,3 +1267,58 @@ Reconstructed actual state after a provider switch and a long gap. Recorded so t
 - **Row 8 corrected (#303):** the runbook and scorecard both claimed the VM toolchain was "not in the repo at all". It landed in **#206** at `docs/env/vm-toolchain/` (18 files). Corrected in three places, keeping the claim still true: never run end to end **from the repo**. Row 8 stays PARTIAL.
 - **Trace links (#303):** all 54 scorecard trace paths were plain code spans, none clickable. Converted to markdown links; 54 links, 0 text/target mismatches, 0 targets missing, 0 plain spans remaining.
 - **Host state:** no qemu, no c1-sweep, flock FREE. Booked spend unchanged at **$2.762570**; arm-003 and arm-003b each scored 0 rows and spent $0.00 cash.
+
+## Log 2026-11-23 (65) — reboot 11:47: inventory, and what was NOT lost
+- **Mac restarted 11:47:19 ET** (`kern.boottime` 1795452439). T3 was unreachable ~11:46-12:02. Load spiked to ~200 post-login and had fallen to **5.96** by 14:07.
+- **/tmp wiped again:** `baseline`, `m1-013`, `m1-014`, `t2-lc-verify`, `v304e-verify` all GONE. The durable evidence dir **`~/Myco-evidence/` survived** — that is why I moved DF-S01 output there rather than /tmp, and it worked.
+- **No orphaned VM state.** qemu 0, UTM `stopped`, runtime `SESSION.lock` absent, `qemu.pid` absent. **flock FREE.** The lock file reads `19182 boot.sh ...` — stale metadata from my own guest run, dead pid; the flock is the authority and it is free.
+- **No survivor processes:** c1-sweep 0, c1-baseline 0, df005 0, t2-lc 0, race.sh 0, arm-003 0.
+- **The `Virtualization.framework` process at 199% is COLIMA, not ours.** Traced by its open files: `~/.colima/_lima/colima/disk` and `_disks/colima/datadisk`, parented to `colima start`. It holds handles on `convert-disk-virtio.sh` from two worktrees, which is it reading them, not a Myco guest. Under the 300% gate, so it does not block a grant.
+- **One live process that is not debris:** a `docker run --cpus=2 -v .../tif-170-race` (pid 53475), Discovery's active work. **Not touched.**
+- **Gate state: CLEARED** (load 6.90, nothing non-VM above 300%).
+- **My worktree synced to origin/main `b2d37f16`**, clean.
+
+## Log 2026-11-24 (66) — TIF-202 and TIF-204 DONE; r6 complete; the mycoVerdict hazard
+- **TIF-202 DONE.** Merged as **#408** (`da4c48f7`, squash) after syncing with main. The sync was verified **patch-equivalent**: `probe-directory.test.ts` stayed `a0a7bd25ffbf` and `watch-prior-spend.test.ts` stayed `98bb6e359c6e` across it, so the tree hash moved only from main's own files. 5/5 checks green, `MERGEABLE/CLEAN`, merged normally — no `--admin`, no `--auto`, no force.
+- **TIF-204 DONE.** Both asks landed through #408: the test asserting the SHARED-lock throw, and the `probe-directory.test.ts` reword naming the ordering. **#413 was CLOSED as superseded** — same two files, byte-identical; the lead ruled merge whichever is green first and close the other. Never merged twice.
+- **Three rounds proved text cannot enforce the property.** Round 2 defeated every textual predicate with an alias and MEASURED the spawn reaching `vm_lock_acquire` on the shared lock; round 3 found the pre-spawn check was unreachable, deletable with the suite green. The guarantee is now runtime (`launcherEnvFor` assigns the lock path after the override spread) and the guard is exercised by a test. Mutation controls (a)-(d) each fail by name; **(e) remains uncovered** — a resolver returning the shared path — and is recorded as such rather than claimed.
+- **TIF-203 (M1-032) is on main**, mirrored in Linear — D2 (other spawn forms) and D4 (the four other `vm-lock.sh`-sourcing scripts) with reproductions.
+- **NEW HAZARD, M1-033: `mycoVerdict` is a PINNED EXPECTATION, not this run's outcome.** `src/baseline/sweep.ts:894` copies it from `src/baseline/sweep-v3.json`. r6's `report.json` pins **29 verified / 1 refuted**; the ledger measures **30 refuted**. A reader of the report concludes the run passed; the ledger says 0/30.
+- **I made that error in my own reports and am correcting it.** I described r6 as "29/30 verified, acceptance met" in two turn reports before checking which field was measured. Per the ledger, r6 scored **0/30 verified, 0 false successes, 30 refuted** (29 `step-budget`, 1 `modified` at trial 23). The 27/30 criterion is **NOT** claimed as met on this sweep.
+- **r6 is complete: 30/30 scored**, $3.3714 local + $4.4807 prior = **$7.8521 of $9.00**, headroom $1.1479, no cap breach. VM released (the lock is now held by `run-live.ts`, not r6).
+- **Still in force:** no paid C1 run on the current key.
+
+## Log 2026-11-24 (67) — r6's graded verdict tally, for row 7
+**To the Coordinator, from the M1 screenshots-baseline thread.** Row-7 facts, from the r6 ledger, not from memory.
+
+**Ledger path:** `~/Projects/myco-runs/c1-r6/accounting.json` (30 entries under `c1`, each with a `row`).
+**Graded field:** `row.verdict` + `row.verdictReason` — set by `judge()` (`src/baseline/index.ts:131`) and written by `c1-trial.ts:163`. **Not** `mycoVerdict`, which `sweep.ts:894` copies from the pinned `src/baseline/sweep-v3.json`.
+
+### The counts, on both axes
+
+| axis | field | tally |
+|---|---|---|
+| **status** | `row.verdict` | **`refuted` = 30, `verified` = 0** |
+| **reason** | `row.verdictReason` | **`step-budget` = 29, `modified` = 1** |
+
+```
+verdict.status : {'refuted': 30}
+verdictReason  : {'step-budget': 29, 'modified': 1}
+falseSuccess   : {'False': 30}
+```
+
+**Reconciling a disagreement that was not one.** The lead's notes say *29 step-budget + 1 modified*; my earlier report said *30 refuted*. **Both are right, on different axes** — the 30 is the count of rows that share the `refuted` **status**, and 29/1 is the split of those 30 by **reason**. There is no discrepancy; `30 = 29 + 1`.
+
+### The one non-step-budget row
+
+- **index 23** — `refuted` / `modified`, cell `E4`, `seed-f`, `EMP-0003`/`salary`, value `$37683.00`.
+- It cost **$0.0128** against a ~$0.11 average: the run died early rather than exhausting its step budget. **The single cheapest row is the only real failure; the other 29 are the agent running to the step budget.**
+
+### What this does and does not say
+
+- **`falseSuccess` is `false` on 30/30.** `falseSuccess()` returns `false` for any non-`verified` status (`src/baseline/index.ts:84`), so the 0-false-successes criterion is unaffected by the verdict-field question.
+- **`independentValuePresent` is `null` on 30/30** — the independent audit only runs when `verdict.status === "verified"` (`c1-trial.ts:150`). **No row reached the audit.**
+- **r6 demonstrates no pass rate.** Its graded outcome is 30 `refuted`. Whether the 27/30 criterion is graded on this field, on v3's committed `trials.jsonl` (29/1, a different sweep), or on something else is the **row-7 Tier-2 decision**.
+- **No pass rate is stated for r6 anywhere** pending that decision. My earlier "29/30 verified, acceptance met" was wrong and is retracted (log 66).
+
+Full reasoning: `docs/research/experiments/c1-arm-003/VERDICT-FIELD-EVIDENCE.md`.

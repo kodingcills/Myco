@@ -65,6 +65,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Resolve `?compare=<raw>` against the page's own URL, refusing anything that leaves the
+ * origin. gui-spec §5 keeps the viewer offline and forbids it acting as a fetch-anything
+ * gadget, so a cross-origin address is a refusal, not a request.
+ */
+export function resolveSameOriginReportUrl(
+  raw: string,
+  base: string,
+): { url: URL } | { error: string } {
+  let url: URL;
+  try {
+    url = new URL(raw, base);
+  } catch {
+    return { error: "That report address is not a URL." };
+  }
+  const origin = new URL(base).origin;
+  if (url.origin !== origin) {
+    return { error: "That report is not on this origin, so it was not loaded." };
+  }
+  return { url };
+}
+
 function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

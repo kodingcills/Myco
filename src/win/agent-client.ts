@@ -94,6 +94,12 @@ export interface SocketTransportOptions {
   timeoutMs?: number;
 }
 
+/** Per-call override of a transport's configured timeout. */
+export interface CallOptions {
+  /** Timeout for this call in ms; omitted, the transport's own timeout applies. */
+  timeoutMs?: number;
+}
+
 /**
  * Speaks the NDJSON protocol over a TCP connection, matching responses by id.
  * One short-lived connection per request keeps the client simple; blocking
@@ -111,12 +117,12 @@ export class SocketTransport implements AgentTransport {
     this.timeoutMs = options.timeoutMs ?? 15_000;
   }
 
-  call(request: Omit<AgentRequest, "id">): Promise<AgentResponse> {
+  call(request: Omit<AgentRequest, "id">, options: CallOptions = {}): Promise<AgentResponse> {
     const id = this.nextId++;
-    return this.exchange({ ...request, id });
+    return this.exchange({ ...request, id }, options.timeoutMs ?? this.timeoutMs);
   }
 
-  private exchange(request: AgentRequest): Promise<AgentResponse> {
+  private exchange(request: AgentRequest, timeoutMs: number): Promise<AgentResponse> {
     return new Promise((resolve, reject) => {
       let buffer = "";
       let socket: Socket | undefined;
@@ -124,10 +130,10 @@ export class SocketTransport implements AgentTransport {
         cleanup();
         reject(
           new AgentUnreachableError(
-            `agent at ${this.host}:${this.port} timed out after ${this.timeoutMs}ms`,
+            `agent at ${this.host}:${this.port} timed out after ${timeoutMs}ms`,
           ),
         );
-      }, this.timeoutMs);
+      }, timeoutMs);
 
       const cleanup = () => {
         clearTimeout(timer);
@@ -196,6 +202,12 @@ export interface SshTunnelOptions {
   sshPath?: string;
   /** Per-call timeout for agent requests through the tunnel (default 15_000ms). */
   timeoutMs?: number;
+  /**
+   * Environment for the ssh child. Omitted (every existing caller): the child
+   * inherits `process.env`, exactly as before. The session-info CLI (TIF-209)
+   * passes a copy scrubbed of the agent token.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** The argv `SshTunnel` spawns, exported for tests and runbooks. */
@@ -251,7 +263,11 @@ export class SshTunnel implements AgentTransport {
     if (this.child && this.child.exitCode === null) return;
     const sshPath = this.options.sshPath ?? "ssh";
     const args = sshTunnelArgs(this.options);
-    this.child = spawn(sshPath, args, { stdio: "ignore", detached: false });
+    this.child = spawn(sshPath, args, {
+      stdio: "ignore",
+      detached: false,
+      ...(this.options.env ? { env: this.options.env } : {}),
+    });
     this.child.on("error", () => {
       // surfaced via health check / transport failures
     });
@@ -292,13 +308,13 @@ export class SshTunnel implements AgentTransport {
     await this.stop();
   }
 
-  call(request: AgentRequest): Promise<AgentResponse> {
+  call(request: AgentRequest, options: CallOptions = {}): Promise<AgentResponse> {
     if (!this.child || this.child.exitCode !== null) {
       return Promise.reject(
         new AgentUnreachableError("ssh tunnel is not running (call start() first)"),
       );
     }
-    return this.inner.call(request);
+    return this.inner.call(request, options);
   }
 }
 
@@ -309,7 +325,12 @@ export class SshTunnel implements AgentTransport {
 export interface AgentClientConfig {
   /** Shared auth token (agent/README.md protocol). */
   token: string;
-  /** Per-request timeout in ms (default 15_000). */
+  /**
+   * Per-request timeout in ms. Honoured by {@link AgentClient.fromEnv} (socket)
+   * and {@link AgentClient.overTunnel} (overrides the tunnel's own timeout).
+   * The plain constructor cannot apply it to an arbitrary transport, so its
+   * config type omits this field (TIF-216: a silently ignored 60 s limit).
+   */
   timeoutMs?: number;
 }
 
@@ -348,7 +369,7 @@ export class AgentClient {
   private nextId = 1;
   private readonly token: string;
 
-  constructor(transport: AgentTransport, config: AgentClientConfig) {
+  constructor(transport: AgentTransport, config: Omit<AgentClientConfig, "timeoutMs">) {
     this.transport = transport;
     this.token = config.token;
   }
@@ -362,9 +383,16 @@ export class AgentClient {
     );
   }
 
-  /** Over an SSH tunnel to the VM's loopback agent. */
+  /**
+   * Over an SSH tunnel to the VM's loopback agent. `config.timeoutMs`, when
+   * set, governs every call (overriding the tunnel's own `timeoutMs`); when
+   * omitted, the tunnel's timeout applies (default 15_000ms).
+   */
   static overTunnel(tunnel: SshTunnel, config: AgentClientConfig): AgentClient {
-    return new AgentClient(tunnel, config);
+    const { timeoutMs } = config;
+    const transport: AgentTransport =
+      timeoutMs === undefined ? tunnel : { call: (request) => tunnel.call(request, { timeoutMs }) };
+    return new AgentClient(transport, config);
   }
 
   private async request(op: AgentOp, params: Record<string, unknown> = {}): Promise<unknown> {
@@ -389,6 +417,26 @@ export class AgentClient {
       agent_version: string;
       session_id: string;
       backend?: string;
+    }>;
+  }
+
+  /**
+   * Read-only desktop proof (`agent/myco_agent/windows_backend.py:288-321`):
+   * Windows session number, window station, desktop, and user. Not to be
+   * confused with `ping`'s `session_id`, a per-start GUID — see
+   * `docs/eval-runbook.md` §5 (F9/F10).
+   */
+  sessionInfo(): Promise<{
+    session_id: number;
+    window_station: string;
+    desktop: string;
+    user: string;
+  }> {
+    return this.request("session_info") as Promise<{
+      session_id: number;
+      window_station: string;
+      desktop: string;
+      user: string;
     }>;
   }
 

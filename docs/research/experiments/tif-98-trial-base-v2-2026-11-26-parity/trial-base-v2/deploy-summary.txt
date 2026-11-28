@@ -1,0 +1,4 @@
+==> verified 14 files on the guest against the source (sha256)
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+DEPLOY OK

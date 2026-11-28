@@ -1,0 +1,690 @@
+{
+  "schema": "myco.capability.r-taskset/1",
+  "taskSetVersion": "fr-v1",
+  "track": "R",
+  "appFamily": "calc-record-edit",
+  "taskSeeds": [
+    "fr-v1-a-01",
+    "fr-v1-a-02",
+    "fr-v1-a-03",
+    "fr-v1-a-04",
+    "fr-v1-a-05",
+    "fr-v1-a-06",
+    "fr-v1-a-07",
+    "fr-v1-a-08",
+    "fr-v1-a-09",
+    "fr-v1-a-10",
+    "fr-v1-b-01",
+    "fr-v1-b-02",
+    "fr-v1-b-03",
+    "fr-v1-b-04",
+    "fr-v1-b-05",
+    "fr-v1-b-06",
+    "fr-v1-b-07",
+    "fr-v1-b-08",
+    "fr-v1-b-09",
+    "fr-v1-b-10"
+  ],
+  "demonstrationFamilies": [
+    {
+      "family": "record-edit:name",
+      "column": "name",
+      "kind": "text",
+      "fixtureSeed": "fr-v1-demo-name",
+      "fixtureSha256": "b601502ddb8c4fd4eed4f99fefec681ea5cb2486cf48186813cfe7b5ebf0440a"
+    },
+    {
+      "family": "record-edit:qty",
+      "column": "qty",
+      "kind": "integer",
+      "fixtureSeed": "fr-v1-demo-qty",
+      "fixtureSha256": "a90c3455f4451e1f1d40f2825e1bf027c1c89c73593f4c5168551cd9bb182d13"
+    },
+    {
+      "family": "record-edit:joined",
+      "column": "joined",
+      "kind": "date",
+      "fixtureSeed": "fr-v1-demo-joined",
+      "fixtureSha256": "8336f43c696f9c1bfd83af8d59e4a5888f48ede3691aa6913c8001a43fcaf8d2"
+    },
+    {
+      "family": "record-edit:salary",
+      "column": "salary",
+      "kind": "currency",
+      "fixtureSeed": "fr-v1-demo-salary",
+      "fixtureSha256": "c46f3e8b4cf2589393993d6b3bdb1069b408e4c85825a6b289301888b3adf2de"
+    }
+  ],
+  "tasks": [
+    {
+      "taskId": "fr-v1-001",
+      "demonstrationFamily": "record-edit:name",
+      "fixtureSeed": "fr-v1-a-01",
+      "fixtureSha256": "6c80f6773c3492fefc2f7f076fe4c071e6993b63df8870819a953262c7351bda",
+      "intent": {
+        "rowKey": "EMP-0019",
+        "column": "name",
+        "newValue": "REVISED-700939"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0019, column name, to \"REVISED-700939\", and save the file.",
+      "instructionSha256": "41db76e517a4fd869bef8f48e2f57cfa07c446bb399f7295b98507ead41e4625",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-002",
+      "demonstrationFamily": "record-edit:qty",
+      "fixtureSeed": "fr-v1-a-02",
+      "fixtureSha256": "59557e0d174feaadfcf6c2a1ffba76e14b4c2dea41acd8fe8cc5e7de80bd6db6",
+      "intent": {
+        "rowKey": "EMP-0004",
+        "column": "qty",
+        "newValue": "613"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0004, column qty, to \"613\", and save the file.",
+      "instructionSha256": "77bb4b18e05b449d45c8925a338ff6deec93db96ef8be93739a9d237888bf98d",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-003",
+      "demonstrationFamily": "record-edit:joined",
+      "fixtureSeed": "fr-v1-a-03",
+      "fixtureSha256": "d48802794fa540277b2409ecea65b703a8ab122eef1cbea37b6fe3cee60538c1",
+      "intent": {
+        "rowKey": "EMP-0067",
+        "column": "joined",
+        "newValue": "2024-12-25"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0067, column joined, to \"2024-12-25\", and save the file.",
+      "instructionSha256": "34ff256e2b7eadb22f25420f3222c37a65ff57b8dfeddbec369076a7c02e3e91",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-004",
+      "demonstrationFamily": "record-edit:salary",
+      "fixtureSeed": "fr-v1-a-04",
+      "fixtureSha256": "c9c514d16a3097e492d8a5bc1ca6092ed74cf19219999204382e48cf7b4e6a62",
+      "intent": {
+        "rowKey": "EMP-0098",
+        "column": "salary",
+        "newValue": "$25607.62"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0098, column salary, to \"$25607.62\", and save the file.",
+      "instructionSha256": "ffe40b4fecd783a1f69f1023696781a2db09863ab2ccc0bada71d4abcfa3fcb1",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-005",
+      "demonstrationFamily": "record-edit:name",
+      "fixtureSeed": "fr-v1-a-05",
+      "fixtureSha256": "7911567b54ed81d5bf4223a0f62ba0c6d0466a05d2929b1717280bde088a5271",
+      "intent": {
+        "rowKey": "EMP-0091",
+        "column": "name",
+        "newValue": "REVISED-100467"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0091, column name, to \"REVISED-100467\", and save the file.",
+      "instructionSha256": "6dc0c20c5af3793cb215af43cb464552ab4db5fa60a062f6268a4fdd412a40d6",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-006",
+      "demonstrationFamily": "record-edit:qty",
+      "fixtureSeed": "fr-v1-a-06",
+      "fixtureSha256": "22773fa15444c5b4b6b95ddac994c89ab3be0160a914c301e08f91a8b1ec60a1",
+      "intent": {
+        "rowKey": "EMP-0068",
+        "column": "qty",
+        "newValue": "6970"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0068, column qty, to \"6970\", and save the file.",
+      "instructionSha256": "270248642a3e5a03bef377342b37e19683c6c707c7a0fbb886f3e04a427c6800",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-007",
+      "demonstrationFamily": "record-edit:joined",
+      "fixtureSeed": "fr-v1-a-07",
+      "fixtureSha256": "7a2ba360548569212c647c8fe9608c262c997e6458255a9f5555d68722ca742e",
+      "intent": {
+        "rowKey": "EMP-0017",
+        "column": "joined",
+        "newValue": "2024-12-15"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0017, column joined, to \"2024-12-15\", and save the file.",
+      "instructionSha256": "2b3a851b213576743bae73f1ad25fb90c9b439cc23c4445457dc91126386e82d",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-008",
+      "demonstrationFamily": "record-edit:salary",
+      "fixtureSeed": "fr-v1-a-08",
+      "fixtureSha256": "06678785dee09558491c2daddf0094d2ed8924eb0b94ec24c0b34a21d1145c31",
+      "intent": {
+        "rowKey": "EMP-0156",
+        "column": "salary",
+        "newValue": "$48413.19"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0156, column salary, to \"$48413.19\", and save the file.",
+      "instructionSha256": "d44c8f9d450c059ee97e15d5ed08c90558eabea96e8d087572059d73fed34d8f",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-009",
+      "demonstrationFamily": "record-edit:name",
+      "fixtureSeed": "fr-v1-a-09",
+      "fixtureSha256": "f6d9e744516ed7ccbcb4974dd3fcf83e4017a460b84f8fd46369f6df947aaf4a",
+      "intent": {
+        "rowKey": "EMP-0156",
+        "column": "name",
+        "newValue": "REVISED-419007"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0156, column name, to \"REVISED-419007\", and save the file.",
+      "instructionSha256": "4688443454c66f7c4225c64b656a70039c30aab8260c3c321b77d3bfae14c8b8",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-010",
+      "demonstrationFamily": "record-edit:qty",
+      "fixtureSeed": "fr-v1-a-10",
+      "fixtureSha256": "2dbacf92c74c05aca90c1e40ef6975af4bff6f72e92c6dfa81f0c747e619e9a6",
+      "intent": {
+        "rowKey": "EMP-0080",
+        "column": "qty",
+        "newValue": "472"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0080, column qty, to \"472\", and save the file.",
+      "instructionSha256": "817247f91c7eec1216836f2041befe721b1accd9c5be058be622dea57e2aca9d",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-011",
+      "demonstrationFamily": "record-edit:joined",
+      "fixtureSeed": "fr-v1-a-01",
+      "fixtureSha256": "6c80f6773c3492fefc2f7f076fe4c071e6993b63df8870819a953262c7351bda",
+      "intent": {
+        "rowKey": "EMP-0004",
+        "column": "joined",
+        "newValue": "2024-06-05"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0004, column joined, to \"2024-06-05\", and save the file.",
+      "instructionSha256": "9189954ac77a82447251221e5c4b93747b816a5046c184ce65c868300b670e2b",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-012",
+      "demonstrationFamily": "record-edit:salary",
+      "fixtureSeed": "fr-v1-a-02",
+      "fixtureSha256": "59557e0d174feaadfcf6c2a1ffba76e14b4c2dea41acd8fe8cc5e7de80bd6db6",
+      "intent": {
+        "rowKey": "EMP-0007",
+        "column": "salary",
+        "newValue": "$34178.36"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0007, column salary, to \"$34178.36\", and save the file.",
+      "instructionSha256": "ae63b66bc2ed5d50afa514410c955fdaf5576bbe1b7e8a9b0b972203b7d044e2",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-013",
+      "demonstrationFamily": "record-edit:name",
+      "fixtureSeed": "fr-v1-a-03",
+      "fixtureSha256": "d48802794fa540277b2409ecea65b703a8ab122eef1cbea37b6fe3cee60538c1",
+      "intent": {
+        "rowKey": "EMP-0098",
+        "column": "name",
+        "newValue": "REVISED-91006"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0098, column name, to \"REVISED-91006\", and save the file.",
+      "instructionSha256": "04a1ad98c687884037f161a02912925572ce3d7f0dcacc40f1deb5e7eeeee4fd",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-014",
+      "demonstrationFamily": "record-edit:qty",
+      "fixtureSeed": "fr-v1-a-04",
+      "fixtureSha256": "c9c514d16a3097e492d8a5bc1ca6092ed74cf19219999204382e48cf7b4e6a62",
+      "intent": {
+        "rowKey": "EMP-0007",
+        "column": "qty",
+        "newValue": "1321"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0007, column qty, to \"1321\", and save the file.",
+      "instructionSha256": "643458fa92c2d9d1873246a86d109ee4cd8dadb008b616fb576ca50879fcc401",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-015",
+      "demonstrationFamily": "record-edit:joined",
+      "fixtureSeed": "fr-v1-a-05",
+      "fixtureSha256": "7911567b54ed81d5bf4223a0f62ba0c6d0466a05d2929b1717280bde088a5271",
+      "intent": {
+        "rowKey": "EMP-0045",
+        "column": "joined",
+        "newValue": "2024-01-08"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0045, column joined, to \"2024-01-08\", and save the file.",
+      "instructionSha256": "dddb5e6bd2dc41a616bdf63f10b105bda13464f54e981919db0376508f0bf513",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-016",
+      "demonstrationFamily": "record-edit:salary",
+      "fixtureSeed": "fr-v1-a-06",
+      "fixtureSha256": "22773fa15444c5b4b6b95ddac994c89ab3be0160a914c301e08f91a8b1ec60a1",
+      "intent": {
+        "rowKey": "EMP-0083",
+        "column": "salary",
+        "newValue": "$35066.30"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0083, column salary, to \"$35066.30\", and save the file.",
+      "instructionSha256": "bb4a987de6dcce683a3b6fd22ade0767f56d44e9396f485077ddf94333615d9f",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-017",
+      "demonstrationFamily": "record-edit:name",
+      "fixtureSeed": "fr-v1-a-07",
+      "fixtureSha256": "7a2ba360548569212c647c8fe9608c262c997e6458255a9f5555d68722ca742e",
+      "intent": {
+        "rowKey": "EMP-0017",
+        "column": "name",
+        "newValue": "REVISED-122608"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0017, column name, to \"REVISED-122608\", and save the file.",
+      "instructionSha256": "464518e2be161d734884966cc065a7af04b56f9aaf2d31b1414bff5f3f7f15e3",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-018",
+      "demonstrationFamily": "record-edit:qty",
+      "fixtureSeed": "fr-v1-a-08",
+      "fixtureSha256": "06678785dee09558491c2daddf0094d2ed8924eb0b94ec24c0b34a21d1145c31",
+      "intent": {
+        "rowKey": "EMP-0093",
+        "column": "qty",
+        "newValue": "5866"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0093, column qty, to \"5866\", and save the file.",
+      "instructionSha256": "7dd535913200fde3b226de1df470ff9795a52e316796641c70f60e483b720623",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-019",
+      "demonstrationFamily": "record-edit:joined",
+      "fixtureSeed": "fr-v1-a-09",
+      "fixtureSha256": "f6d9e744516ed7ccbcb4974dd3fcf83e4017a460b84f8fd46369f6df947aaf4a",
+      "intent": {
+        "rowKey": "EMP-0114",
+        "column": "joined",
+        "newValue": "2024-07-26"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0114, column joined, to \"2024-07-26\", and save the file.",
+      "instructionSha256": "99623ab8f0f1e2846f5df657a4f552efabbc00b0a947e41572d2b04018b1d913",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-020",
+      "demonstrationFamily": "record-edit:salary",
+      "fixtureSeed": "fr-v1-a-10",
+      "fixtureSha256": "2dbacf92c74c05aca90c1e40ef6975af4bff6f72e92c6dfa81f0c747e619e9a6",
+      "intent": {
+        "rowKey": "EMP-0017",
+        "column": "salary",
+        "newValue": "$23620.09"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0017, column salary, to \"$23620.09\", and save the file.",
+      "instructionSha256": "64be317fe2812e7c6730cb70ad5a846ded21bffb80b0e34781f66a9a7611ff7d",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-021",
+      "demonstrationFamily": "record-edit:name",
+      "fixtureSeed": "fr-v1-a-01",
+      "fixtureSha256": "6c80f6773c3492fefc2f7f076fe4c071e6993b63df8870819a953262c7351bda",
+      "intent": {
+        "rowKey": "EMP-0011",
+        "column": "name",
+        "newValue": "REVISED-784528"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0011, column name, to \"REVISED-784528\", and save the file.",
+      "instructionSha256": "64adc7eee09f287355b12641fb701427cf4b9fa85bbaf449fa7a88070b9e676d",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-022",
+      "demonstrationFamily": "record-edit:qty",
+      "fixtureSeed": "fr-v1-a-02",
+      "fixtureSha256": "59557e0d174feaadfcf6c2a1ffba76e14b4c2dea41acd8fe8cc5e7de80bd6db6",
+      "intent": {
+        "rowKey": "EMP-0006",
+        "column": "qty",
+        "newValue": "383"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0006, column qty, to \"383\", and save the file.",
+      "instructionSha256": "f662527f81bc4153c8345adbdf6e7a33892e889e4d7393339e25d0a34b1e6d08",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-023",
+      "demonstrationFamily": "record-edit:joined",
+      "fixtureSeed": "fr-v1-a-03",
+      "fixtureSha256": "d48802794fa540277b2409ecea65b703a8ab122eef1cbea37b6fe3cee60538c1",
+      "intent": {
+        "rowKey": "EMP-0072",
+        "column": "joined",
+        "newValue": "2024-11-02"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0072, column joined, to \"2024-11-02\", and save the file.",
+      "instructionSha256": "e2ecb5bcbaa876bc9d333568d52b80c131e015088596a0170009a6d2dfb8138c",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-024",
+      "demonstrationFamily": "record-edit:salary",
+      "fixtureSeed": "fr-v1-a-04",
+      "fixtureSha256": "c9c514d16a3097e492d8a5bc1ca6092ed74cf19219999204382e48cf7b4e6a62",
+      "intent": {
+        "rowKey": "EMP-0080",
+        "column": "salary",
+        "newValue": "$2100.11"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0080, column salary, to \"$2100.11\", and save the file.",
+      "instructionSha256": "05fd52021eedf768f8a4428aa76bc67f09e27312ea4a7d8872525eca3fd55277",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-025",
+      "demonstrationFamily": "record-edit:name",
+      "fixtureSeed": "fr-v1-a-05",
+      "fixtureSha256": "7911567b54ed81d5bf4223a0f62ba0c6d0466a05d2929b1717280bde088a5271",
+      "intent": {
+        "rowKey": "EMP-0035",
+        "column": "name",
+        "newValue": "REVISED-91749"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0035, column name, to \"REVISED-91749\", and save the file.",
+      "instructionSha256": "10de5a461f30f0ad9bc920b11bcc911d56ae6683ff9b2b7b13ac4fe073684abc",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-026",
+      "demonstrationFamily": "record-edit:qty",
+      "fixtureSeed": "fr-v1-a-06",
+      "fixtureSha256": "22773fa15444c5b4b6b95ddac994c89ab3be0160a914c301e08f91a8b1ec60a1",
+      "intent": {
+        "rowKey": "EMP-0014",
+        "column": "qty",
+        "newValue": "5372"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0014, column qty, to \"5372\", and save the file.",
+      "instructionSha256": "08f9a9fa1e8c8300097b770af3b8e504c49542798bbc7e3963253de7aa3aa8c8",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-027",
+      "demonstrationFamily": "record-edit:joined",
+      "fixtureSeed": "fr-v1-a-07",
+      "fixtureSha256": "7a2ba360548569212c647c8fe9608c262c997e6458255a9f5555d68722ca742e",
+      "intent": {
+        "rowKey": "EMP-0053",
+        "column": "joined",
+        "newValue": "2024-01-14"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0053, column joined, to \"2024-01-14\", and save the file.",
+      "instructionSha256": "5e6a301d1f5c92b173d74c91c1f249f808034427272d552ce15cc7a6e9eea852",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-028",
+      "demonstrationFamily": "record-edit:salary",
+      "fixtureSeed": "fr-v1-a-08",
+      "fixtureSha256": "06678785dee09558491c2daddf0094d2ed8924eb0b94ec24c0b34a21d1145c31",
+      "intent": {
+        "rowKey": "EMP-0086",
+        "column": "salary",
+        "newValue": "$49240.67"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0086, column salary, to \"$49240.67\", and save the file.",
+      "instructionSha256": "8c72f1cbb734862dee588da1b5b9e5b5eec5953e7a5cb85f1ad2390a981b44cc",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-029",
+      "demonstrationFamily": "record-edit:name",
+      "fixtureSeed": "fr-v1-a-09",
+      "fixtureSha256": "f6d9e744516ed7ccbcb4974dd3fcf83e4017a460b84f8fd46369f6df947aaf4a",
+      "intent": {
+        "rowKey": "EMP-0089",
+        "column": "name",
+        "newValue": "REVISED-177575"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0089, column name, to \"REVISED-177575\", and save the file.",
+      "instructionSha256": "4ec0b1e8bc03c3a5a95694601dbc44b33a70aa6ce8cff5a9a94a0455cd5db9a9",
+      "persistedFormat": "csv"
+    },
+    {
+      "taskId": "fr-v1-030",
+      "demonstrationFamily": "record-edit:qty",
+      "fixtureSeed": "fr-v1-a-10",
+      "fixtureSha256": "2dbacf92c74c05aca90c1e40ef6975af4bff6f72e92c6dfa81f0c747e619e9a6",
+      "intent": {
+        "rowKey": "EMP-0113",
+        "column": "qty",
+        "newValue": "7188"
+      },
+      "columnTypes": {
+        "id": "key",
+        "name": "text",
+        "qty": "integer",
+        "joined": "date",
+        "salary": "currency"
+      },
+      "instruction": "Set the cell at record EMP-0113, column qty, to \"7188\", and save the file.",
+      "instructionSha256": "e38d59835c18d7a1162999c105c4f91cec5e6ea58fc8ec870e63d5cfe37bd4b4",
+      "persistedFormat": "csv"
+    }
+  ]
+}

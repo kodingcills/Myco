@@ -1,0 +1,96 @@
+{
+  "runId": "adf243aa-df54-4ef5-b20a-6e3313215d2c",
+  "verdict": {
+    "status": "refuted",
+    "reasons": [
+      "document still modified (isModified=true): the edit was never saved"
+    ]
+  },
+  "guardFailure": {
+    "step": 3,
+    "phase": "postcondition",
+    "predicateName": "document not dirty after save",
+    "observed": "dirty=true",
+    "reason": "postcondition \"document not dirty after save\" not met after step 3"
+  },
+  "completed": false,
+  "elapsedMs": 62819,
+  "xlsxPath": "C:/myco/runs/myco-33871-1795590824962-682942180\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      5692,
+      5740
+    ],
+    "removed": [
+      "myco-33871-1795590824962-682942180",
+      "myco-33871-1795590824962-724769676"
+    ],
+    "residue": [],
+    "errors": [
+      "taskkill /IM soffice.bin: rc=128 survivors=[] ERROR: The process with PID 5740 (child process of PID 5248) could not be terminated.\nReason: There is no running instance of the task."
+    ]
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 22106,
+    "outcome": "arrived",
+    "hostLoadStart": 8.91,
+    "hostLoadEnd": 8.55
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 5623,
+        "durationMs": 6687,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3435,
+        "durationMs": 4077,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3143,
+        "durationMs": 3826,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 5014,
+        "durationMs": 5432,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 2945,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-dropped-save-14",
+    "dataRows": 48,
+    "csvSha256": "a186df4f4b3c12566d527378576d9da2d26317d52e2214336b4062331f731219"
+  },
+  "corruption": {
+    "mode": "dropped-save",
+    "applied": true,
+    "recovery": false,
+    "persistedValue": "Enzo Petrov",
+    "recoveryEvents": [],
+    "actionKinds": [
+      "click",
+      "setValue",
+      "keyPress"
+    ]
+  }
+}

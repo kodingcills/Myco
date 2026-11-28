@@ -19,6 +19,8 @@ Run: python3 test/df005-runner-offline.py
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -108,6 +110,16 @@ for line in sys.stdin:
                         "content_base64": served})
         elif n == "create":
             res = text({"ok": True, "session_id": a.get("session_id", "s")})
+        elif n in ("reset", "destroy"):
+            # STUB_TEARDOWN_FAIL lets a test reach the SUCCESS path (past the
+            # readiness gate, through the graded scenario) and then fail only the
+            # teardown - which is the case the success-path leak check exists for.
+            # Without this seam, every harness case gaps at the readiness gate and
+            # the leak check at the end of execute_scenario is unreachable.
+            if (os.environ.get("STUB_TEARDOWN_FAIL") == n):
+                res = text({"ok": False, "error": f"{n} refused (injected)"}, err=True)
+            else:
+                res = text({"ok": True})
         else:
             res = text({"ok": True})
     print(json.dumps({"jsonrpc": "2.0", "id": i, "result": res}), flush=True)
@@ -136,7 +148,8 @@ class Harness:
     """A stub MCP server plus an optional scripted guest readback."""
 
     def __init__(self, store_items: list[str] | None = None, unreadable: bool = False,
-                 a11y: bool = True, geometry: bool = False):
+                 a11y: bool = True, geometry: bool = False,
+                 teardown_fail: str | None = None):
         self.dir = Path(tempfile.mkdtemp(prefix="df005-t-"))
         self.stub = self.dir / "stub.py"
         self.stub.write_text(STUB_TEMPLATE)
@@ -145,6 +158,11 @@ class Harness:
         self.env: dict[str, str] = {"STUB_A11Y": "1"} if a11y else {}
         if geometry:
             self.env["STUB_GEOMETRY"] = "1"
+        if teardown_fail:
+            # Reach the END of a graded run with only the teardown broken, so the
+            # success-path leak check is exercised rather than skipped. "reset"
+            # or "destroy".
+            self.env["STUB_TEARDOWN_FAIL"] = teardown_fail
         if unreadable:
             rb = self.dir / "readback.py"
             rb.write_text(unreadable_store())
@@ -156,16 +174,71 @@ class Harness:
             self.env.update({"MYCO_DF005_ASSUME_GUEST": "1",
                              "MYCO_DF005_READBACK_CMD": f"{sys.executable} {rb}"})
 
-    def run(self, *, scenario: str = "all", agent_report: str | None = None) -> tuple[int, Path]:
+    def run(self, *, scenario: str = "all", agent_report: str | None = None,
+            timeout_s: int = 120) -> tuple[int, Path]:
         out = Path(tempfile.mkdtemp(prefix="df005-out-"))
         cmd = [sys.executable, str(RUNNER), "--scenario", scenario, "--runs", "1",
                "--server-cmd", f"{sys.executable} {self.stub}",
                "--eval-id", "e", "--output-dir", str(out)]
         if agent_report:
             cmd += ["--agent-report", agent_report]
-        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT,
-                              env={**os.environ, **self.env})
+        # Bounded on purpose. A driver that waits on a guest which never answers
+        # used to hang this harness indefinitely; under vitest the whole worker
+        # then died on an RPC timeout 295s later, which looks like a broken test
+        # rather than a broken run. A timeout is now a test failure with a name.
+        #
+        # The budget is generous (120s against a designed 2s readiness wait, and
+        # ~115s for the whole file) because the point is to catch an unbounded
+        # hang, not to bound a slow-but-correct run. A run killed here may be a
+        # hang OUTSIDE wait_ready - a stuck ssh child, say - so the message says
+        # so rather than implying the readiness gate; that ambiguity is the
+        # reason to read the driver's own output before raising the number.
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT,
+                                  env={**os.environ, **self.env}, timeout=timeout_s)
+        except subprocess.TimeoutExpired as e:
+            partial = (e.stdout or b"").decode("utf-8", "replace")[-400:]
+            raise AssertionError(
+                f"the driver did not finish within {timeout_s}s (scenario {scenario}). "
+                f"This is an unbounded hang, not a slow pass - but it may be a wait "
+                f"OUTSIDE the readiness gate (a stuck subprocess), so check the "
+                f"driver's last output before raising this number. "
+                f"Last output: {partial!r}"
+            ) from e
         return proc.returncode, out / "e"
+
+
+@contextlib.contextmanager
+def mutated_runner(mutated: str):
+    """Swap the driver's source in, and put it back on any exception exit.
+
+    `try/finally` covers exceptions. It does NOT cover SIGKILL or SIGTERM: a
+    kill mid-mutation still leaves the mutated file on disk and the tree dirty.
+    Exact restoration is asserted on the paths that do run, because the failure
+    mode is otherwise silent - but do not read this as signal-safe. A SIGINT
+    during a local run is the realistic case, and it will need `git checkout`.
+
+    The guest-readiness wait is shortened while mutated. Removing the offline
+    gate is a MUTATION, so the driver walks the live path and blocks on
+    `probe.wait_ready()` for its full 180s default - by design, not by bug. That
+    is longer than this suite should ever take, and it made the mutation cases
+    look like a hang. The property under test is "the run is refused", which a
+    2s wait still demonstrates.
+    """
+    original = RUNNER.read_text()
+    RUNNER.write_text(mutated)
+    previous = os.environ.get("MYCO_DF005_READY_TIMEOUT")
+    os.environ["MYCO_DF005_READY_TIMEOUT"] = "2"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("MYCO_DF005_READY_TIMEOUT", None)
+        else:
+            os.environ["MYCO_DF005_READY_TIMEOUT"] = previous
+        RUNNER.write_text(original)
+        if RUNNER.read_text() != original:
+            raise AssertionError("the driver source was not restored exactly")
 
 
 def ledger(d: Path) -> dict[str, dict]:
@@ -258,6 +331,21 @@ def main() -> int:
     expect(code == 0, "exit 0 when the oracle passes")
     expect(ledger(d)["run-df-s01-1"]["state"] == "pass", "ledger state `pass`")
     expect(ledger(d)["run-df-s01-1"]["oracle"] == "verifier:verified+ground-truth", "oracle verified")
+
+    print("3b. a graded run whose session was NOT freed is a gap, never a pass")
+    # The leak check at the END of execute_scenario is unreachable from every
+    # other case in this file: they either gap at the readiness gate or tear down
+    # cleanly. So the success path - where a failed `destroy` would otherwise let
+    # a row score `pass` with the guest still allocated - had no coverage. This
+    # case drives a competent run and breaks ONLY the teardown.
+    code, d = Harness(store_items=["buy milk", "call mom", "write report"],
+                      teardown_fail="destroy").run(scenario="DF-S01")
+    state = ledger(d)["run-df-s01-1"]["state"]
+    expect(state != "pass",
+           f"a run whose session was never freed is NOT a pass (got {state})")
+    expect(state == "gap",
+           f"a leaked session on the success path lands in gap (got {state})")
+    expect(code != 0, f"and it exits non-zero (got {code})")
 
     print("4. guest store wrong after a completed run → failure, not verified")
     code, d = Harness(store_items=["buy milk"]).run(scenario="DF-S01")
@@ -352,19 +440,23 @@ def main() -> int:
     print("12. mutation: each no-guest gate is independently load-bearing")
     src = RUNNER.read_text()
     offline_gate = "if offline and not assume_guest:"
-    live_gate = "if not assume_guest and not probe.guest_alive:"
+    live_gate = "if not assume_guest:"
     expect(offline_gate in src, "offline gate present")
     expect(live_gate in src, "live-guest gate present")
+    # TIF-27: the live gate no longer probes once (`probe.guest_alive`); it WAITS
+    # via `probe.wait_ready()`, because create() returns before the guest it
+    # booted is reachable and a one-shot probe made a slow-but-healthy boot
+    # indistinguishable from one that will never come up. Assert the wait is
+    # there, so a revert to the one-shot form is caught by source as well as by
+    # the behavioural probe below.
+    expect("probe.wait_ready()" in src, "live-guest gate WAITS for the guest (not a one-shot probe)")
     # Behavioural probe, not a source assertion: disable one gate, run, restore.
     for label, gate in (("offline gate", offline_gate), ("live-guest gate", live_gate)):
         mutated = src.replace(gate, "if False:", 1)
-        RUNNER.write_text(mutated)
-        try:
+        with mutated_runner(mutated):
             code, d = Harness().run(scenario="DF-S01")
             state = ledger(d)["run-df-s01-1"]["state"]
             reason = checks_of(d, "run-df-s01-1").get("runtime-capability", {}).get("reason", "")
-        finally:
-            RUNNER.write_text(src)
         # With either gate gone the run must still not be `pass`; the other gate
         # or the readback must refuse it.
         expect(state != "pass", f"{label} removed: still not `pass` (got {state})")
@@ -373,13 +465,10 @@ def main() -> int:
 
     print("13. both gates removed: the readback channel is the third guard")
     mutated = src.replace(offline_gate, "if False:", 1).replace(live_gate, "if False:", 1)
-    RUNNER.write_text(mutated)
-    try:
+    with mutated_runner(mutated):
         code, d = Harness().run(scenario="DF-S01")
         state = ledger(d)["run-df-s01-1"]["state"]
         reason = checks_of(d, "run-df-s01-1")["persisted-set-matches"]["reason"]
-    finally:
-        RUNNER.write_text(src)
     # With no gate left, the real ssh readback still fails and the run is
     # `uncertain` (could not look) — never `pass`. Three layers, not one.
     expect(state == "uncertain", f"no gates + dead ssh → uncertain (got {state})")
@@ -393,8 +482,18 @@ def main() -> int:
         capture_output=True, text=True, cwd=ROOT,
         env={**os.environ, "MYCO_VM_LOCK_PATH": str(out / "free.lock")},
     )
-    expect(proc.returncode == 1, "exit 1 when the server binary is missing")
     expect("mcp-server" in proc.stdout, "names the missing server")
+    # The exit code depends on whether the tree has a built server binary, which
+    # is an ambient property: a fresh clone has none (mcp-server FAILs, rc 1),
+    # while a tree that has run `cargo build` passes the server check. Case 16
+    # asserts the with-binary side, so asserting an absolute 1 here made the two
+    # cases contradict each other and the suite green in NEITHER state. Assert
+    # what is true either way, plus the read-only property this case is about.
+    if "mcp-server: FAIL" in proc.stdout or "FAIL mcp-server" in proc.stdout:
+        expect(proc.returncode == 1, "exit 1 when the server binary is missing")
+    else:
+        expect(proc.returncode == 0,
+               "with a built server and no guest, the guest checks defer and rc is 0")
     expect("no session is created" in proc.stdout, "states it is read-only")
     expect(not (out / "free.lock").exists() or (out / "free.lock").stat().st_size == 0,
            "does not write a lock it does not hold")
@@ -479,8 +578,11 @@ def main() -> int:
         # The denominator must be MEASURED, not asserted: count the check lines
         # actually printed and compare to the "of N" claim. Omitting a check
         # that needs neither the lock nor the guest is the defect this guards.
+        # `defer ` is a mark of its own now (a deferral is not a skip), so the
+        # counter must list all four or it undercounts and the "of N" check
+        # reads as a missing check.
         check_lines = [l for l in proc.stdout.splitlines()
-                       if l.lstrip().startswith(("ok ", "FAIL ", "skip "))]
+                       if l.lstrip().startswith(("ok ", "FAIL ", "skip ", "defer "))]
         expect("create-schema" in proc.stdout,
                "create-schema is reported even while the lock is held")
         expect(len(check_lines) == 8,
@@ -492,23 +594,154 @@ def main() -> int:
 
     print("16. preflight accounts for every check when the guest is unreachable")
     out2 = Path(tempfile.mkdtemp(prefix="df005-pf2-"))
+    # FORCE the premise. This case is about what the preflight reports when ssh
+    # cannot reach a guest, but a guest is usually NOT running on a test host -
+    # and when one is (a live Linux guest on 10022), this invocation found it,
+    # ran the dependent checks against it, and failed for reasons that had
+    # nothing to do with the property under test. Pointing GUEST_DIR at an empty
+    # directory makes ssh fail by construction: no key, so no connection, every
+    # run. A test that passes or fails on ambient host state is not testing the
+    # code.
+    empty_guest = out2 / "no-guest"
+    empty_guest.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
         [sys.executable, str(RUNNER), "--preflight"],
         capture_output=True, text=True, cwd=ROOT,
-        env={**os.environ, "MYCO_VM_LOCK_PATH": str(out2 / "free.lock")},
+        env={**os.environ,
+             "MYCO_VM_LOCK_PATH": str(out2 / "free.lock"),
+             "MYCO_GUEST_DIR": str(empty_guest)},
     )
-    # Off-guest, ssh fails; the dependent checks must still be reported as
-    # not-run rather than silently omitted, so the "N of 8" count is honest.
+    # Off-guest, ssh fails; the dependent checks must still be reported rather
+    # than silently omitted, so the "N of 8" count is honest. TIF-27 renamed the
+    # wording from "not run: guest unreachable" to "deferred: ..." when the
+    # preflight learned that a guest the run will boot is not a failure - but the
+    # property is the same: every check is ACCOUNTED FOR, never dropped from the
+    # count. (This assertion was left behind by that rename, which is why it is
+    # phrased against the new wording here.)
     for name in ("app-deployed", "app-self-test", "introspection-file",
                  "introspection-shadow"):
-        expect(f"skip {name}: not run: guest unreachable" in proc.stdout,
+        expect(f"defer {name}: deferred: no guest up yet" in proc.stdout,
                f"{name} reported as not-run, not omitted")
-    expect("of 8 checks failed" in proc.stdout, "count is stated against 8")
+    # TIF-27: with no guest up, the preflight now SUCCEEDS while accounting for
+    # every check - the dependents are deferred to the run rather than failed, and
+    # `guest-ssh` is deferred too. The property this case guards is unchanged:
+    # every check is ACCOUNTED FOR, never dropped from the count, so the summary
+    # cannot claim a number it did not measure. What changed is that "no guest
+    # yet" is no longer a failure, because the run boots one.
+    # The deferral summary only exists once the preflight gets past `mcp-server`:
+    # without a built binary it stops there and the dependents become "not run"
+    # instead. A hard-coded "5 deferred" therefore failed on every fresh clone -
+    # the case was asserting the with-binary summary in both states. What must
+    # hold either way is that the guest dependents are ACCOUNTED FOR, never
+    # dropped; with a binary, they defer and the count is stated.
+    has_binary = "FAIL mcp-server" not in proc.stdout
+    if has_binary:
+        expect("5 deferred to the run" in proc.stdout,
+               "the summary accounts for the deferred checks rather than dropping them")
+    else:
+        expect("not run (blocked by the above)" in proc.stdout,
+               "without a server, the dependents are still accounted for as not-run")
+    # Neither of the next two may assert an ABSOLUTE verdict, because the verdict
+    # legitimately depends on whether the tree has a built server binary - an
+    # ambient property. A bare "of 8 checks failed" not-in-stdout meant that a
+    # fresh clone (no binary, so mcp-server FAILs and the other six become
+    # "not run") failed this case for a reason unrelated to the guest defer.
+    # What must hold in BOTH states is the guest-specific property: the deferral
+    # is never itself counted as a failure.
+    deferral_is_not_a_failure = (
+        "guest-ssh: deferred:" in proc.stdout
+        and "FAIL guest-ssh" not in proc.stdout
+    )
+    expect(deferral_is_not_a_failure,
+           "the guest deferral is never reported as a failure, server or not")
+    if proc.returncode == 0:
+        expect("of 8 checks failed" not in proc.stdout,
+               "with a built server, nothing fails and the summary says so")
     # create-schema needs no guest, so it must be reported even off-guest —
     # not silently omitted from an "of 8" claim.
     expect("create-schema" in proc.stdout,
            "create-schema is reported in every path, guest or not")
-    expect(proc.returncode == 1, "exit 1")
+    # Exit code: `0` when the server binary is present (the guest checks defer and
+    # nothing fails), and `1` when it is absent (mcp-server FAILs, case 14). Assert
+    # the PROPERTY rather than an absolute code, because the property is what this
+    # case is about and the absolute code also depends on whether the tree has a
+    # built binary - which a fresh clone does not, so a bare `== 0` made this case
+    # fail for a reason unrelated to the guest defer (found by a verifier running
+    # in a fresh clone).
+    expect("mcp-server" in proc.stdout, "the server check is reported in both cases")
+    if proc.returncode == 0:
+        # An always-true `expect(True, ...)` used to sit here. It printed `ok` for
+        # a property nobody checked, and it inflated the assertion count the
+        # vitest floor relies on. The real property at rc 0: nothing failed.
+        expect("FAIL" not in proc.stdout,
+               "exit 0 means no check failed - not merely that the exit code was 0")
+    else:
+        expect("mcp-server" in proc.stdout and "FAIL" in proc.stdout,
+               "exit 1 is attributable to the missing server, not to the guest defer")
+        expect("deferred" in proc.stdout,
+               "the guest checks still DEFERRED rather than failed, server or not")
+
+    print("17b. `preflight(offline=...)` is load-bearing, both ways")
+    # `offline` was a dead parameter and is now live: with a stub server no guest
+    # is booted, so an absent guest is a REAL defect and must FAIL, while in the
+    # live case the same absent guest is a deferral (the run boots one). Nothing
+    # exercised the difference, so reverting the live branch to nothing would
+    # have left the whole suite green. Both calls run on the same host with the
+    # same lock and no guest, so the only variable is the flag.
+    def _capture(offline: bool) -> tuple[int, str]:
+        d = Path(tempfile.mkdtemp(prefix="df005-off-"))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = df005.preflight(offline=offline)
+        return code, buf.getvalue()
+
+    # BOTH `GUEST_DIR` and `VM_LOCK_PATH` are bound at IMPORT time
+    # (`scripts/df005-runner.py:46-47`), so setting `os.environ` here has no
+    # effect on an already-imported module. The original version of this case did
+    # exactly that and only appeared to work when no live lock was held: with one
+    # held, the guest check is skipped as "not run: another driver holds the VM
+    # lock" before the offline branch is ever reached, so the case silently
+    # stopped testing the property. Patch both module attributes.
+    saved_env = dict(os.environ)
+    saved_guest_dir = df005.GUEST_DIR
+    saved_lock_path = df005.VM_LOCK_PATH
+    out_dir = Path(tempfile.mkdtemp(prefix="df005-offp-"))
+    no_guest = out_dir / "no-guest"
+    no_guest.mkdir(parents=True, exist_ok=True)
+    try:
+        df005.GUEST_DIR = no_guest
+        df005.VM_LOCK_PATH = str(out_dir / "free.lock")
+        off_rc, off_out = _capture(True)
+        live_rc, live_out = _capture(False)
+    finally:
+        df005.GUEST_DIR = saved_guest_dir
+        df005.VM_LOCK_PATH = saved_lock_path
+        os.environ.clear()
+        os.environ.update(saved_env)
+
+    expect("FAIL guest-ssh" in off_out,
+           "offline: an absent guest is a real defect, because a stub boots none")
+    expect("defer guest-ssh: deferred:" in live_out,
+           "live: the same absent guest DEFERS, because create() boots one")
+    expect("offline/stub server boots no guest" in off_out,
+           "offline: the reason names the stub server, so the FAIL is attributable")
+    # Assert the live verdict's FAILED-CHECK SET directly. The previous form was
+    # `live_rc == 0 or "vm-lock" in live_out or "mcp-server" in live_out`, and
+    # preflight prints both of those lines unconditionally, so the second and
+    # third disjuncts were always true and the assertion could not fail - it
+    # still passed while guest-ssh was FAILing. Read the actual failures.
+    live_failures = sorted(
+        line.split(":")[0].replace("FAIL", "").strip()
+        for line in live_out.splitlines()
+        if line.strip().startswith("FAIL")
+    )
+    # The server binary and the vm lock are ambient to the host, so they may
+    # legitimately fail here; the guest must not, because live DEFERS it.
+    unexpected = [f for f in live_failures if f not in ("mcp-server", "vm-lock")]
+    expect(not unexpected,
+           f"live: no check fails except the ambient ones (server, lock); got {unexpected}")
+    expect("guest-ssh" not in live_failures,
+           "live: guest-ssh is deferred, never failed - the branches are inverted correctly")
 
     print("17. no delivery outcome can pass on a matching store (M1 allowlist)")
     for mode in ("failed", "empty", "unknown"):

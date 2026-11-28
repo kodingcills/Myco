@@ -1,7 +1,7 @@
 import { pixelAction, record, type Screenshot } from "./c1.ts";
 import type { Action, Claim, Usage } from "./index.ts";
 
-const SONNET = "claude-sonnet-5-5";
+export const SONNET = "claude-sonnet-5-5";
 /**
  * Error types we surface verbatim. This is an allowlist, not a filter: for a
  * type outside it we neither name the type nor keep its message, so the real
@@ -71,10 +71,33 @@ const PROVIDER_ERROR_TYPES = new Set([
 ]);
 const OLLAMA = "qwen3.8-uncensored";
 const MAX_INPUT = 5_000;
-const MAX_OUTPUT = 256;
+/**
+ * Output ceiling per model call. KEPT AT 1024, ON MEASUREMENT (TIF-200).
+ *
+ * r6's 19 completed trials hold **570 model calls**. Their completion sizes:
+ *
+ *     min 77 | median 254 | P90 400 | P99 535 | MAX 615
+ *
+ * **Nothing in any completed row reached 768**, so 1024 carries **~66% headroom over the
+ * largest reply ever measured here** (615) and 91% over P99 (535). Trial 20 truncated AT
+ * 1024 - the one call that ran past every other completion in the arm (570 recorded,
+ * of at least 571 attempted) - and the evidence says that is a
+ * DEGENERATE REPEAT rather than a ceiling that is too tight: every other call in the arm
+ * sat comfortably under it.
+ *
+ * A higher ceiling was implemented and then REVERTED on the lead's ruling, and the
+ * reasoning is worth keeping: raising it to 2048 would have made a degenerate repeat
+ * merely MORE EXPENSIVE, with only $1.75 of headroom left in the project cap. The
+ * runaway reply is the thing to bound, not the thing to accommodate.
+ *
+ * The failure mode is therefore handled where it belongs - a truncated reply books its
+ * ACTUAL cost and needs two consecutive occurrences to stop the arm - rather than by
+ * widening the bound that caught it.
+ */
+export const MAX_OUTPUT = 1024;
 // Integer microdollars at the frozen short-context input and output rates.
 export const MAX_CALL_MICROS = MAX_INPUT * 2 + MAX_OUTPUT * 10;
-const PROMPT = [
+export const PROMPT = [
   "Edit the open LibreOffice Calc document using the screenshot only. Save and close it.",
   "Find the row by its record key and the column by its header.",
   'Return a single JSON object, with no Markdown: {"claim":"done"} or {"claim":"failure"},',
@@ -103,7 +126,23 @@ function scrubBadRequestMessage(message: string, key: string): string {
   );
 }
 
-export class PlannerFailure extends Error {}
+/**
+ * A fault on OUR side of the boundary - an unusable provider response, a refusal, or a
+ * reply we declined to treat as an answer.
+ *
+ * `costMicros` carries the charge we can PROVE for the call that failed. A truncated
+ * reply is billed, and its usage is known, so the sweep can book the real figure instead
+ * of the full reservation. Leaving it undefined means unknown, and the sweep then keeps
+ * the reservation - the fail-closed direction, unchanged.
+ */
+export class PlannerFailure extends Error {
+  constructor(
+    message: string,
+    readonly costMicros?: number,
+  ) {
+    super(message);
+  }
+}
 
 export interface Planner {
   paid: boolean;
@@ -257,6 +296,23 @@ export function createPlanner(
               if (!allowFallback) throw new PlannerFailure("Anthropic call refused request");
               useSonnet = false;
             }
+            // A response cut off at the ceiling is not an answer, so it must not
+            // become a scored failure. Throwing PlannerFailure makes the sweep
+            // omit the trial (`planner-failed`) rather than record a model miss -
+            // the distinction this whole arm exists to measure. Without this the
+            // truncated call returns partial JSON, the planner finds no decision,
+            // and `planner-no-action` is scored against the agent.
+            if (data.stop_reason === "max_tokens")
+              throw new PlannerFailure(
+                `Anthropic response truncated at max_tokens=${MAX_OUTPUT}; the reply is partial and must not be scored as an agent decision`,
+                // The truncated call's usage was recorded above, so its cost is KNOWN
+                // and is carried out rather than discarded with the throw. Booking it
+                // is what makes a harness fault cost what it actually cost instead of
+                // the full reservation.
+                Math.round(
+                  calls.reduce((total, call) => total + (call.usage.cost ?? 0), 0) * 1_000_000,
+                ),
+              );
           } else {
             if (!allowFallback) throw new PlannerFailure("Anthropic messages API call failed");
             useSonnet = false;

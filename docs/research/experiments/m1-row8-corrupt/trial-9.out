@@ -1,0 +1,93 @@
+{
+  "runId": "5612e528-01e4-410f-91f6-080e6727400a",
+  "verdict": {
+    "status": "refuted",
+    "reasons": [
+      "cell B123 expected \"REVISED-25705\" but live document has \"Hana Jovic\""
+    ]
+  },
+  "guardFailure": {
+    "step": 2,
+    "phase": "postcondition",
+    "predicateName": "cell B123 holds \"REVISED-25705\"",
+    "observed": "value=\"Hana Jovic\"",
+    "reason": "postcondition \"cell B123 holds \"REVISED-25705\"\" not met after step 2"
+  },
+  "completed": false,
+  "elapsedMs": 66725,
+  "xlsxPath": "C:/myco/runs/myco-34005-1795588524451-243222687\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      1312,
+      8088
+    ],
+    "removed": [
+      "myco-34005-1795588524451-243222687",
+      "myco-34005-1795588524451-632946832"
+    ],
+    "residue": [],
+    "errors": []
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 28170,
+    "outcome": "arrived",
+    "hostLoadStart": 9.57,
+    "hostLoadEnd": 8.86
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 6843,
+        "durationMs": 7680,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4133,
+        "durationMs": 4860,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3266,
+        "durationMs": 3781,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4660,
+        "durationMs": 5130,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 2897,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-focus-change-9",
+    "dataRows": 163,
+    "csvSha256": "1e747c9ed738adcf0fdbf2b19d4d4ef1b389ae94ee2c562eb34bdda87c3d7b8b"
+  },
+  "corruption": {
+    "mode": "focus-change",
+    "applied": true,
+    "recovery": false,
+    "persistedValue": "Hana Jovic",
+    "recoveryEvents": [],
+    "actionKinds": [
+      "click",
+      "setValue"
+    ]
+  }
+}

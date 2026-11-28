@@ -1,0 +1,128 @@
+{
+  "schema": "myco.capability.prereg/1",
+  "track": "V",
+  "version": "v-v1",
+  "capability": "Recursive orchestration",
+  "bar": {
+    "spec": "docs/product/capability-spec-2.md",
+    "section": "### V. Recursive orchestration (to the next --- rule)",
+    "sectionSha256": "17117ede865f61aec233038501edcab87aa17e4c0218b50a17712332540d1d93",
+    "rules": "docs/product/capability-spec.md §1 (shared rules), §3 (pre-registration), §4 (measurement constraints); capability-spec-2.md §1.3 (verified per row kind), §1.5 (rows never R1 evidence)",
+    "fixedSequence": [
+      "1. Control properties (any breach voids the run): no tree exceeds its token (total and per worker), cost or wall budget, depth cap, concurrency cap or spawn caps; unmetered usage gives a null cost and refuses later spawns; the kill switch aborts in-flight workers, refuses later spawns and latches, leaving no orphaned desktop, worker trial or open ledger attempt; a ledger write failure halts the run.",
+      "2. Exact one-sided McNemar, V better than H on verified, p <= 0.05 with at least 5 discordant tasks."
+    ],
+    "guardrails": [
+      "False done in V no higher than in either baseline (H, C1), else not shown.",
+      "Any false VERIFIED in V (a part the gate verified that the grader did not pass) halts the run: void.",
+      "Every worker trial is in the attempt ledger; a tree whose worker-trial count disagrees with the ledger is refused.",
+      "Parity (Part 1 §1.5): every row of every arm within the per-task token budget (limits.maxTotalTokens) and the step budget (stepBudget.desktopActionsPerPart x part count), else not shown (PARITY_FAILED).",
+      "While proposedPendingLeadRuling is non-empty or ratification is not recorded (status ratified with lead rulings and their timestamps), the decision is never shown (LEAD_RULING_PENDING); the numbers are still reported."
+    ]
+  },
+  "arms": {
+    "V": "planner plus gated workers through the orchestrator (src/orchestrate/), workers on the hcu+shell surface; gated rows",
+    "H": "hcu+shell, one agent; gate-less rows",
+    "C1": "screenshot-only baseline, one agent; gate-less rows",
+    "primary": "V vs H",
+    "secondaryReported": "V vs C1 (exact one-sided McNemar p and discordant count; never a bar component: the arms also differ by the shell channel)",
+    "parity": "same model, same orch-v1 task instance, same per-task total token and step budget in every arm"
+  },
+  "verified": {
+    "V": "done claim AND every part's gate verdict verified AND every part graded pass by the independent grader (src/benchmark/grade/)",
+    "H": "done claim AND every part graded pass by the independent grader",
+    "C1": "done claim AND every part graded pass by the independent grader",
+    "falseDone": "done claim AND any part graded fail or ungradable"
+  },
+  "taskSet": {
+    "version": "orch-v1",
+    "path": "benchmark/orchestration/orch-v1",
+    "manifestSha256": "df86e3d93199b56885f063f0c08f66b1f64897638065d4246fee6f0d2f74fec1",
+    "tasks": 60,
+    "parts": 180,
+    "partsPerTask": { "2": 20, "3": 20, "4": 20 },
+    "partFamily": "calc-record-edit (persistedFormat csv)",
+    "builder": "src/orchestrate/orch-taskset.ts (npx tsx scripts/orch-taskset.ts --check)"
+  },
+  "seeds": {
+    "taskBuild": "part k of task orch-v1-NNN uses fixture seed orch-v1-NNN-k (src/orchestrate/orch-taskset.ts)",
+    "assignment": "v-v1-assign-2026-11-27-Qd7r",
+    "assignmentRule": "per task, the order of the three arms' trials is a seeded shuffle of [V, H, C1] keyed by assignment seed and task id; one trial per (arm, task)",
+    "bootstrap": null,
+    "bootstrapNote": "no ratio metric is a bar component in V; cost and wall time per verified are reported as point ratios"
+  },
+  "modelId": "claude-sonnet-5-5",
+  "stepBudget": {
+    "desktopActionsPerPart": 30,
+    "rule": "per task, at most 30 x (part count) desktop actions, summed over every agent of the tree in V; the same total for the single agent in H and C1"
+  },
+  "limits": {
+    "version": "myco.orchestrate.limits/v1",
+    "maxTotalTokens": 400000,
+    "maxTokensPerWorker": 80000,
+    "maxEstimatedCostMicroUsd": 4000000,
+    "estimateMicroUsdPerMInputTokens": 2000000,
+    "estimateMicroUsdPerMOutputTokens": 10000000,
+    "maxWallMs": 1800000,
+    "maxDepth": 2,
+    "maxConcurrentDesktops": 4,
+    "maxSpawnsPerPlanner": 8,
+    "maxTotalSpawns": 12
+  },
+  "limitsNote": "the limits object is parsed as myco.orchestrate.limits/v1 for every V tree; maxTotalTokens is also the per-task token budget of H and C1 (parity). Estimate prices are the frozen claude-sonnet-5-5 rates in src/pilot/cost.ts; cost is a token-derived estimate, never billed USD.",
+  "test": {
+    "name": "exact one-sided McNemar (sign test on discordant tasks)",
+    "sided": "one-sided, V better than H",
+    "alpha": 0.05,
+    "minDiscordant": 5,
+    "notShown": "p > 0.05; fewer than 5 discordant tasks (reported as underpowered at n = 60 with the discordant count); a guardrail breached; a parity check failed; a lead ruling pending; or a refused pack",
+    "power": "per Part 1 §1.5's table; at n = 60 a net gain of about 10-15 points may be underpowered, and a not-shown result is not evidence of no effect"
+  },
+  "secondary": [
+    "cost per verified task: token-derived estimate over ALL trials (workers included) / verified; null if any trial is unmetered, never 0",
+    "wall time per verified task",
+    "false done per arm",
+    "limits hit per tree",
+    "kill-switch latency (worst observed; no pre-registered target)",
+    "V vs C1 exact one-sided McNemar"
+  ],
+  "evidence": {
+    "rows": "experiment rows; never R1 evidence (capability-spec.md §3.4, capability-spec-2.md §1.5)",
+    "simulated": "a simulated row, or a planner that is not the pre-registered model id, refuses the pack (§3.5)",
+    "packs": "every pack records this pre-registration's hash (SHA-256 over canonical JSON of this file) and the commit it was frozen in (preregCommit, 40 hex); the analysis refuses a hash mismatch or a missing commit",
+    "constraints": "Claude Ultra only ($0 Anthropic API, no Messages-API calls); no runs until the integrity fixes land and the lead gives GO for track V; Codex gated; no public leaderboard; V runs on Linux desktops (tracks L and U), never the Windows VM at first"
+  },
+  "analysis": [
+    {
+      "path": "src/orchestrate/v-bar.ts",
+      "sha256": "d316e89dfadf07fcb92e1e33c78ff48349216a70fd44aef9f842c332d806d190"
+    },
+    {
+      "path": "src/orchestrate/v-prereg.ts",
+      "sha256": "b31014fb430f4efbb576e8376cf63dd30b2f61dd6aac67a7f480994fec81999f"
+    },
+    {
+      "path": "scripts/orch-v-bar.ts",
+      "sha256": "a99ec3c028514568b83e39be5f5aa5f8ee2bac41818c612f4c267130386b50d4"
+    }
+  ],
+  "analysisCommand": "npx tsx scripts/orch-v-bar.ts --pack <pack.json>",
+  "proposedPendingLeadRuling": [
+    "test.sided: one-sided against H only (Part 1 §1.5) vs #534's two-sided with Holm against both baselines (spec-2 §6)",
+    "verified: V gated vs H and C1 gate-less (spec-2 §1.3, §6); the alternative is a gate-present H",
+    "kill-switch latency target: none proposed; reported only (spec-2 §6)",
+    "limits.maxDepth and limits.maxConcurrentDesktops defaults (spec-2 §6), and the other limits values",
+    "stepBudget and the per-task token budget (limits.maxTotalTokens)",
+    "modelId"
+  ],
+  "leadRulings": [],
+  "leadRulingsCheckedAt": {
+    "where": "PR #643 comments and reviews",
+    "at": "2026-11-27T07:55:54Z",
+    "found": "none"
+  },
+  "ratification": {
+    "status": "not ratified",
+    "rule": "a lead ruling is binding once posted; it is applied here, with its posting time and source, before the freeze. After the freeze any ruling (a changed value, or ratifying the pending ones) makes v-v2 (Part 1 §3.3). The analysis reads proposedPendingLeadRuling, leadRulings and ratification.status: while anything is pending or status is not ratified, the decision is never shown (LEAD_RULING_PENDING)."
+  }
+}

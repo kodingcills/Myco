@@ -2,7 +2,7 @@ import { Popover } from "@base-ui/react/popover";
 import { Tabs } from "@base-ui/react/tabs";
 import { PanelLeft, PanelRight } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { parseHeadToHead } from "../data/head-to-head.ts";
+import { parseHeadToHead, resolveSameOriginReportUrl } from "../data/head-to-head.ts";
 import { joinSteps } from "../data/steps.ts";
 import { droppedFiles, selectionName } from "../open-files.ts";
 import { type Mode, useActiveRun, useViewer } from "../store.ts";
@@ -123,6 +123,7 @@ export function App() {
   const compareButton = useRef<HTMLButtonElement>(null);
   const wasComparing = useRef(false);
   const comparison = useViewer((state) => state.comparison);
+  const runs = useViewer((state) => state.runs);
   useEffect(() => {
     if (comparison) {
       wasComparing.current = true;
@@ -132,15 +133,22 @@ export function App() {
     }
   }, [comparison]);
   useEffect(() => {
-    const url = new URLSearchParams(location.search).get("compare");
-    if (!url) return;
+    const param = new URLSearchParams(location.search).get("compare");
+    if (!param) return;
+    // gui-spec §5: no network at runtime, and not a fetch-anything gadget. A `?compare=`
+    // that leaves this origin is refused by name rather than fetched.
+    const resolved = resolveSameOriginReportUrl(param, location.href);
+    if ("error" in resolved) {
+      setCompareError(resolved.error);
+      return;
+    }
     let cancelled = false;
-    void fetch(url)
+    void fetch(resolved.url)
       .then((response) => response.json())
       .then((value: unknown) => {
         const report = parseHeadToHead(value);
         if (cancelled) return;
-        if (report) useViewer.getState().openComparison(url, report);
+        if (report) useViewer.getState().openComparison(param, report);
         else setCompareError("That file is not a head-to-head report.");
       })
       .catch(() => {
@@ -412,6 +420,23 @@ export function App() {
             onClick={() => useViewer.setState({ inspectorOpen: !inspector })}
           >
             <PanelRight aria-hidden="true" />
+          </button>
+        )}
+        {runs.length > 0 && (
+          // TIF-148: the compare table from the runs already open — no file drop, no URL.
+          // Disabled while no run has a result.json, because there is nothing to compare.
+          <button
+            type="button"
+            data-button
+            disabled={!runs.some((run) => run.data.result !== undefined)}
+            onClick={() => {
+              setCompareError(undefined);
+              const opened = useViewer.getState().compareOpenRuns();
+              if (!opened) setCompareError("No open run carries a result.json to compare.");
+            }}
+            title="Compare the runs open in the sidebar"
+          >
+            Compare open runs
           </button>
         )}
         <button

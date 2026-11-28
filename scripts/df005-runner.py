@@ -68,6 +68,14 @@ APP_PATH = f"{GRANT_ROOT}/{APP_NAME}"
 # so the app writes exactly where `observe` reads.
 INTROSPECTION_PATH = "/tmp/myco-todo-state.json"
 
+# How long to wait for a guest this runner booted to answer SSH. Measured boot
+# from a warm overlay is ~20s (2026-11-23, `ssh up after 20s` on a fresh
+# `boot.sh`); 180s is that with generous headroom, chosen because the failure
+# this gate exists to catch is a guest that NEVER comes up, and a generous
+# ceiling costs nothing when the guest is healthy while a tight one would
+# flake under load.
+GUEST_READY_TIMEOUT_S = int(os.environ.get("MYCO_DF005_READY_TIMEOUT", "180"))
+
 # The oracle channel is a seam (`readback`), not a hard-coded ssh call: offline
 # contract tests substitute a stub that models a guest's store. The default is
 # always ssh to the real guest; there is no mode in which a stub is graded as a
@@ -454,23 +462,49 @@ class GuestProbe:
         self.offline = offline
         self._guest_alive: bool | None = None
 
+    def _probe_once(self) -> bool:
+        key = GUEST_DIR / "keys" / "id_ed25519"
+        cmd = [
+            "ssh", "-i", str(key), "-p", "10022",
+            "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
+            "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "myco@localhost", "uname -sm",
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+            return res.returncode == 0 and "Linux" in res.stdout
+        except Exception:  # noqa: BLE001
+            return False
+
     @property
     def guest_alive(self) -> bool:
+        """Whether a guest is up RIGHT NOW. One probe, cached - not a wait."""
         if self._guest_alive is None:
-            key = GUEST_DIR / "keys" / "id_ed25519"
-            cmd = [
-                "ssh", "-i", str(key), "-p", "10022",
-                "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
-                "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "myco@localhost", "uname -sm",
-            ]
-            try:
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
-                self._guest_alive = res.returncode == 0 and "Linux" in res.stdout
-            except Exception:  # noqa: BLE001
-                self._guest_alive = False
+            self._guest_alive = self._probe_once()
         return self._guest_alive
+
+    def wait_ready(self, timeout_s: int | None = None) -> tuple[bool, float]:
+        """Poll until the guest answers SSH, or the timeout expires.
+
+        The post-create gate. `create()` returns once the session is recorded,
+        not once the guest it booted can be reached: `provision()` runs boot.sh
+        and then waits, but a boot that never completes still returns a session.
+        Probing once makes a slow-but-healthy boot indistinguishable from a
+        guest that will never come up, so this waits and then fails closed.
+
+        Returns (ready, elapsed_seconds). Does not raise.
+        """
+        budget = GUEST_READY_TIMEOUT_S if timeout_s is None else timeout_s
+        started = time.time()
+        while True:
+            if self._probe_once():
+                self._guest_alive = True
+                return True, time.time() - started
+            if time.time() - started >= budget:
+                self._guest_alive = False
+                return False, time.time() - started
+            time.sleep(2)
 
 
 def execute_scenario(
@@ -549,10 +583,32 @@ def execute_scenario(
         cleanup(mcp, sid)
         return gap("REQ-01",
                    "offline/stub server: no guest behind this run, oracle not evaluable")
-    if not assume_guest and not probe.guest_alive:
-        cleanup(mcp, sid)
-        return gap("REQ-01",
-                   "guest unreachable: session created but no Linux guest answered ssh")
+    if not assume_guest:
+        # Post-create readiness gate (TIF-27). `create` returns once the session
+        # is recorded, not once the guest it booted is reachable, so probe ONCE
+        # and a slow-but-healthy boot is indistinguishable from one that will
+        # never come up. Wait, then fail closed and free what we started.
+        ready, waited = probe.wait_ready()
+        events.append({
+            "type": "action", "timestamp": started_at, "step": 0,
+            "action": {"kind": "launch",
+                       "detail": f"guest readiness: {'ready' if ready else 'TIMED OUT'} after {waited:.0f}s"},
+        })
+        if not ready:
+            teardown = cleanup(mcp, sid)
+            if teardown:
+                # No `dirty` bucket exists in scoring.md (success / false-success
+                # / refusal / uncertain / gap), and inventing one would fall
+                # outside every downstream count. The honest bucket is `gap` -
+                # the runtime could not execute the scenario - with the leaked
+                # session named so it is not lost in a generic "guest
+                # unreachable" gap, which would read as an ordinary failure.
+                return gap("REQ-01",
+                           f"guest never answered ssh within {GUEST_READY_TIMEOUT_S}s, "
+                           f"AND THE SESSION LEAKED (guest not freed): {teardown}")
+            return gap("REQ-01",
+                       f"guest never answered ssh within {GUEST_READY_TIMEOUT_S}s "
+                       f"(session freed)")
 
     # --- observe ---------------------------------------------------------
     try:
@@ -754,7 +810,29 @@ def execute_scenario(
         w_delivery,
     ))
 
-    cleanup(mcp, sid)
+    # The teardown result is not discardable on the SUCCESS path either. Every
+    # check below grades the persisted STORE, not the session, so a `destroy`
+    # that failed left `bucket = "success"` reachable with the guest still
+    # allocated - the exact false-success shape the M1 criterion is about, one
+    # layer below where it was first fixed. Same treatment as the readiness
+    # timeout above: no `dirty` bucket exists in scoring.md, so the honest bucket
+    # is `gap` (the runtime could not complete the scenario), naming the leak.
+    teardown = cleanup(mcp, sid)
+    if teardown:
+        # REQ-01, not REQ-05: the leak is a failure to complete the run, not an
+        # evidence-schema fault. Naming a requirement the reason does not match
+        # is how a ledger loses the ability to say which layer failed.
+        #
+        # A reviewer could argue for REQ-02, which is literally "Destroy: tear
+        # down a session and free its resources; no state leaks between
+        # sessions." It is NOT used anywhere in this runner, so choosing it here
+        # would be the first correct use of that id rather than a drift. The
+        # reason this uses REQ-01 anyway is CONSISTENCY: the readiness-timeout
+        # path below already attributes a leaked session to REQ-01, and two
+        # conventions for one condition is worse than one imperfect label. The
+        # precise signal is the message text, not the id.
+        return gap("REQ-01",
+                   f"the run completed but the session was NOT freed: {teardown}")
 
     all_passed = all(c["passed"] is True for c in checks)
     any_unknown = any(c["passed"] is None for c in checks)
@@ -953,14 +1031,36 @@ def act(mcp: McpClient, sid: str, action: dict[str, Any]) -> dict[str, Any]:
     return mcp.call_tool("act", {"session_id": sid, "action": action})
 
 
-def cleanup(mcp: McpClient, sid: str) -> None:
-    """Destroy the session. Failure to destroy is reported by the caller's
-    bucket only indirectly; destroy itself never decides a verdict."""
+def cleanup(mcp: McpClient, sid: str) -> str | None:
+    """Tear the session down. Returns None on success, or the failure as a string.
+
+    `reset` is best-effort and `destroy` is terminal, and BOTH must be attempted:
+    an early `return None` after `reset` succeeded would skip `destroy` on the
+    happy path, leaving the session alive on every run while reporting a clean
+    teardown - the exact leak this function was changed to surface. `reset`
+    transitions the session back to Ready; only `destroy` removes it
+    (runtime/crates/myco-rt-mcp/src/main.rs). So the loop must not stop early.
+
+    The reported failure is the LAST one, because `destroy` is the operation that
+    actually frees the guest: a `reset` failure followed by a successful destroy
+    is a clean teardown, while the reverse is a leak.
+
+    Returns rather than raises deliberately: there are twelve call sites, most of
+    them error paths that already have a bucket to report, and raising would turn
+    a reported gap into an unhandled exception. Callers that need to distinguish
+    a dirty teardown check the return value; the rest are unchanged.
+    """
+    destroy_error: Exception | None = None
     for tool in ("reset", "destroy"):
         try:
             mcp.call_tool(tool, {"session_id": sid})
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            if tool == "destroy":
+                destroy_error = e
+    # Success is `destroy` having worked - not `reset` having worked.
+    if destroy_error is None:
+        return None
+    return f"could not free session {sid}: {destroy_error}"
 
 
 def build_step_events(started_at: str, steps: list[tuple[dict[str, Any], dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -1127,21 +1227,55 @@ def create_accepts_introspection(timeout: float = 15.0) -> tuple[bool, str]:
     return False, "the server exposes no `create` tool"
 
 
-def preflight() -> int:
+def preflight(offline: bool = False) -> int:
     """Read-only readiness check, run inside an approved guest window.
 
-    Every check here is something that, if wrong, wastes the slot: a missing
-    server binary, an unreachable guest, an undeployed or stale app, a dead
-    introspection channel, or a held lock. Nothing is mutated — no create, no
-    launch, no reset — so this is safe to run first and cheap to repeat.
+    Most checks here are things that, if wrong, waste the slot: a missing server
+    binary, a held lock, or a `create` that does not declare `introspection_file`.
+    Those still hard-fail.
 
-    Exit 0 when every check passes, 1 otherwise. Prints one line per check.
+    The guest-dependent checks (`guest-ssh` and everything needing a live guest:
+    `app-deployed`, `app-self-test`, `introspection-file`, `introspection-shadow`)
+    are DEFERRED when no guest is up, and do NOT fail. That is deliberate: this
+    gate runs before `create()`, and `create()` is what boots the guest, so
+    requiring a guest here made the runner unreachable from an idle host. Booting
+    first instead deadlocks on the flock, which `boot.sh` holds for the guest's
+    lifetime. So "no guest yet" is not a defect - the run boots one, and the
+    trial path re-establishes each of these more strongly (see the comment at the
+    `deferred:` call site). What is NOT deferred is the accounting: a deferred
+    check is printed, excluded from `measured`, and never counted as passed, so
+    the summary cannot claim a count it did not measure.
+
+    Nothing is mutated — no create, no launch, no reset — so this is safe to run
+    first and cheap to repeat.
+
+    Exit 0 when no check fails, 1 otherwise. Prints one line per check.
     """
     results: list[tuple[str, bool, str]] = []
 
-    def record(name: str, ok: bool | None, detail: str) -> None:
-        results.append((name, ok, detail))
-        mark = "ok  " if ok is True else ("skip" if ok is None else "FAIL")
+    def record(name: str, ok: bool | None, detail: str,
+               deferred: bool = False) -> None:
+        """Record one check's outcome.
+
+        `deferred` is an explicit field, not inferred from the detail text. The
+        earlier version split results with `detail.startswith("deferred:")`,
+        which fails BOTH ways: a deferral whose wording changed would silently
+        become `skipped` (fails safe but wrongly), and a `skipped` check whose
+        reason happened to start with "deferred:" would silently count as
+        deferred - which does not fail the run at all. Failing OPEN is the one
+        outcome this gate must never produce, so the reason is now carried by
+        construction rather than by a string prefix. `ok is None and not
+        deferred` is a skip; `ok is None and deferred` is a deferral.
+        """
+        results.append((name, ok, detail, deferred))
+        if ok is True:
+            mark = "ok  "
+        elif deferred:
+            mark = "defer"
+        elif ok is None:
+            mark = "skip"
+        else:
+            mark = "FAIL"
         print(f"  {mark} {name}: {detail}")
 
     print("DF-005 preflight (read-only; no session is created)")
@@ -1222,7 +1356,39 @@ def preflight() -> int:
         return 1
 
     rc, out = guest("uname -sm")
-    record("guest-ssh", rc == 0 and "Linux" in out, out[:80] or "no answer")
+    guest_up = rc == 0 and "Linux" in out
+    if guest_up:
+        record("guest-ssh", True, out[:80])
+    elif offline:
+        # A stub/offline server boots no guest, so an absent guest is a REAL
+        # defect here, not a deferral: the claim "create() boots one" is false by
+        # construction. Fail it, so the parameter is load-bearing rather than
+        # decorative - and so an offline run cannot silently pass a check whose
+        # justification does not apply to it.
+        record("guest-ssh", False,
+               f"offline/stub server boots no guest, and none is listening ({out[:60] or 'no answer'})")
+    else:
+        # No guest listening, which is NORMAL before a run: `create()` boots one
+        # (`provision()` -> `boot.sh`), downstream of this gate. Recording it as
+        # `False` made the runner unreachable from a clean host.
+        #
+        # DEFERRED, not skipped. A skip means "we could not measure this and the
+        # run will be graded blind", which must never pass; a defer means "this
+        # can only be measured with a guest up, and the run boots one". The
+        # `deferred:` prefix is what tells the verdict logic which one this is, so
+        # it is load-bearing rather than cosmetic.
+        #
+        # Honest about the risk: deferring moves the check rather than removing
+        # it. `wait_ready()` after `create()` is the hard gate that replaces it -
+        # a guest that never comes up is a `gap`, and one that fails to be freed
+        # is reported as a leak. That is checked by the fault-injection test.
+        #
+        # The guest's own readiness is still verified; what is deferred is only
+        # the ability to ask BEFORE there is a guest to ask.
+        record("guest-ssh", None,
+               f"deferred: no guest yet ({out[:60] or 'no answer'}); "
+               "create() boots one and wait_ready() gates it",
+               deferred=True)
 
     if rc == 0:
         # 4. App deployed and current.
@@ -1283,14 +1449,24 @@ def preflight() -> int:
                f"with {INTROSPECTION_PATH} (equality is a proxy: it does not "
                "prove the app writes there)")
     else:
-        # No guest to ask: record the dependent checks as not-run rather than
-        # omitting them, so the summary never claims a count it did not measure.
+        # No guest to ask: record the dependents as DEFERRED (not skipped) for the
+        # same reason as guest-ssh above - the run boots the guest, so these become
+        # measurable then. Omitting them would let the summary claim a count it did
+        # not measure; calling them skipped would fail a run that is fine.
         for name in ("app-deployed", "app-self-test", "introspection-file",
                      "introspection-shadow"):
-            record(name, None, "not run: guest unreachable")
+            record(name, None, "deferred: no guest up yet; create() boots it",
+                   deferred=True)
 
-    failed = [n for n, ok, _ in results if ok is False]
-    skipped = [n for n, ok, _ in results if ok is None]
+    failed = [n for n, ok, _d, _dfr in results if ok is False]
+    # `deferred` is not `skipped`: a skip means "we could not measure this and the
+    # run will be graded blind", which must never pass. A defer means "this can
+    # only be measured with a guest up, and the run boots one". Distinguished so
+    # that "never report a partial run as a pass" keeps its teeth.
+    # `deferred` is a field now, not a string prefix (see record()). A skip means
+    # "we could not measure this"; a deferral means "the run will measure it".
+    skipped = [n for n, ok, d, dfr in results if ok is None and not dfr]
+    deferred = [n for n, ok, d, dfr in results if ok is None and dfr]
     print()
     if failed:
         print(f"preflight FAILED: {len(failed)} of {TOTAL_CHECKS} checks failed: "
@@ -1304,7 +1480,9 @@ def preflight() -> int:
         print(f"preflight INCOMPLETE: {len(skipped)} of {TOTAL_CHECKS} checks not run: "
               f"{', '.join(skipped)}")
         return 1
-    print(f"preflight OK: {len(results)}/{TOTAL_CHECKS} checks passed")
+    measured = len(results) - len(deferred)
+    print(f"preflight OK: {measured}/{TOTAL_CHECKS} measured, "
+          f"{len(deferred)} deferred to the run ({', '.join(deferred)})")
     return 0
 
 
@@ -1325,7 +1503,7 @@ def main() -> int:
     args = p.parse_args()
 
     if args.preflight:
-        return preflight()
+        return preflight(offline=args.server_cmd is not None)
 
     # A custom server command means "do not touch the real guest": such a run
     # can never be graded on guest state, so every trial is a gap by design.
@@ -1344,7 +1522,7 @@ def main() -> int:
         # wired to the action it guards is not a gate.
         if not args.skip_preflight:
             print("running preflight before taking the slot (--skip-preflight to override)")
-            rc = preflight()
+            rc = preflight(offline=args.server_cmd is not None)
             if rc != 0:
                 sys.exit(
                     "preflight failed; not taking the guest slot. Fix the checks above, "

@@ -24,6 +24,8 @@ PROGRESS="$OUT/progress.log"
 RECORDER=scripts/m1-corrupt-suite-record.py
 cd "$WS" || exit 1
 source "$WS/scripts/vm-lock.sh"
+source "$WS/scripts/load-gate.sh"
+source "$WS/scripts/trial-snapshot.sh"
 vm_lock_acquire m1-corrupt-suite.sh "$PROGRESS" || exit "$?"
 trap vm_lock_release EXIT
 
@@ -32,6 +34,12 @@ if [ -f "$LOG" ] && grep -q '"status": "seed-mismatch"' "$LOG"; then
   echo "REFUSED_SEED_MISMATCH_PRESENT $(date -u +%FT%TZ): start with a fresh OUT" | tee -a "$PROGRESS" >&2
   exit 9
 fi
+# The trial snapshot, pinned in $OUT (TIF-98, scripts/trial-snapshot.sh): a resume
+# on a different snapshot is refused (exit 11), so one OUT never mixes bases.
+SNAP=$(ts_resolve 2>>"$PROGRESS") || exit 11
+ts_pin "$OUT" "$LOG" "$SNAP" 2>>"$PROGRESS" || exit 11
+echo "trial snapshot: $SNAP $(date -u +%FT%TZ)" >> "$PROGRESS"
+TS_READY=""; TS_BOOT=""
 NEW_PARAMS=$(mktemp "$OUT/params.XXXXXX") || exit 1
 PENDING=$(mktemp "$OUT/pending.XXXXXX") || { rm -f "$NEW_PARAMS"; exit 1; }
 trap 'rm -f "$NEW_PARAMS" "$PENDING"; vm_lock_release' EXIT
@@ -48,7 +56,7 @@ python3 "$RECORDER" --pending "$PARAMS" "$LOG" > "$PENDING" || exit "$?"
 
 append_record() {
   local row
-  row=$(python3 "$RECORDER" --record "$PARAMS" "$@") || exit 1
+  row=$(python3 "$RECORDER" --record "$PARAMS" "$@" "--snapshot=$TS_READY" "--reset-boot=$TS_BOOT") || exit 1
   printf '%s\n' "$row" >> "$LOG" || exit 1
   if [[ "$row" == *'"status": "seed-mismatch"'* ]]; then
     echo "ABORT_SEED_MISMATCH at trial $i $(date -u +%FT%TZ): $row" | tee -a "$PROGRESS" >&2
@@ -64,17 +72,24 @@ while IFS=$'\t' read -r i MODE FS RK CL NV RECOVERY <&3; do
   # valid evidence. The value goes into the row so the JSONL shows it.
   AC_POWER=no; pmset -g batt | head -1 | grep -q "AC Power" && AC_POWER=yes
   echo "ac_power=$AC_POWER trial=$i" >> "$PROGRESS"
-  LOAD1=$(sysctl -n vm.loadavg | awk '{print $2}')
-  SWAP_FREE=$(sysctl -n vm.swapusage | sed -E 's/.*free = ([0-9.]+)M.*/\1/')
-  if awk -v l="$LOAD1" 'BEGIN{exit !(l>14.0)}'; then
-    echo "PAUSED_LOAD $LOAD1 at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit 4
-  fi
-  if awk -v f="${SWAP_FREE:-9999}" 'BEGIN{exit !(f<300)}'; then
-    echo "PAUSED_SWAP free=${SWAP_FREE}M at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit 6
+  # Host gate (TIF-218, scripts/load-gate.sh): net load = 1-min load minus the
+  # guest's own QEMU cores; pause above 14 (exit 4) or below 300 MB swap free
+  # (exit 6). Unreadable load or swap pauses (fail closed).
+  GATE=$(lg_now_decide); GATE_RC=$?
+  if [ "$GATE_RC" -ne 0 ]; then
+    echo "$GATE at trial $i $(date -u +%FT%TZ)" >> "$PROGRESS"; exit "$GATE_RC"
   fi
 
-  bash scripts/reset-trial-vm.sh >> "$PROGRESS" 2>&1 || {
-    append_record "$i" reset-failed; sleep 20; continue; }
+  # Every row carries the snapshot the reset reported ready on (null if it never
+  # got there). A reset ready on a different snapshot aborts the suite (exit 12).
+  TS_READY=""; TS_BOOT=""
+  ts_reset "$SNAP" "$PROGRESS" 2>>"$PROGRESS"; RESET_RC=$?
+  if [ "$RESET_RC" -eq 12 ]; then
+    echo "ABORT_SNAPSHOT_MISMATCH at trial $i $(date -u +%FT%TZ)" | tee -a "$PROGRESS" >&2; exit 12
+  fi
+  if [ "$RESET_RC" -ne 0 ]; then
+    append_record "$i" reset-failed; sleep 20; continue
+  fi
   perl -e 'alarm 400; exec @ARGV' agent/bootstrap/deploy-to-vm.sh >> "$PROGRESS" 2>&1 || {
     append_record "$i" deploy-failed; continue; }
   TOK=$(~/VMs/myco-win11/scripts/vssh 'Get-Content C:\ProgramData\Myco\agent.token' 2>/dev/null | tr -d '\r\n')
@@ -87,7 +102,11 @@ while IFS=$'\t' read -r i MODE FS RK CL NV RECOVERY <&3; do
   # nonzero. The Node process receives the watchdog signal directly.
   ARGS=(--mode "$MODE" --audit-corruption)
   if [ "$RECOVERY" = True ]; then ARGS+=(--recovery); fi
-  MYCO_AGENT_TOKEN="$TOK" perl -e 'alarm 1500; exec @ARGV' node --import tsx src/integration/run-live.ts \
+  # Watchdog 1800 s (TIF-219): the kill-recovery path's configured polls are 1290 s
+  # with the 360 s convert deadline (360 conversion + 360 two launches + 450 helpers
+  # + 120 verify/audit), plus ~110 s tunnel/health and ~160 s cleanup = ~1560 s.
+  # 1500 s would cut that path off before it can report; 1800 leaves ~240 s headroom.
+  MYCO_AGENT_TOKEN="$TOK" perl -e 'alarm 1800; exec @ARGV' node --import tsx src/integration/run-live.ts \
     "${ARGS[@]}" --seed "$FS" --row-key "$RK" --column "$CL" --new-value "$NV" \
     --runs-dir "$OUT/runs/$i" > "$OUT/trial-$i.out" 2> "$OUT/trial-$i.err" 3<&-
   unset TOK

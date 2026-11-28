@@ -23,5 +23,27 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["scripts/c1-spike.ts", "scripts/c1-sweep.ts", "scripts/myco-run.ts"]
+  "include": [
+    "scripts/c1-spike.ts",
+    "scripts/c1-sweep.ts",
+    "scripts/myco-run.ts",
+    "scripts/writer-lo-fixtures.ts",
+    "scripts/calc-xlsx-writer-fixtures.ts",
+    "scripts/linux-run.ts",
+    "scripts/myco-gate.ts",
+    "scripts/myco-state.ts",
+    "scripts/capability-i-analysis.ts",
+    "scripts/m2-fault-suite.ts",
+    "scripts/m2-evidence-check.ts",
+    "scripts/parallel-run.ts",
+    "scripts/m2-corrections-ab.ts",
+    "scripts/myco-schedule.ts",
+    "scripts/ci-required-green.ts",
+    "scripts/myco-record.ts",
+    "scripts/benchmark-release-package.ts",
+    "scripts/benchmark-release-check-archive.ts",
+    "scripts/r-v1-analysis.ts",
+    "scripts/s-v1-freeze.ts",
+    "scripts/s-v1-analysis.ts"
+  ]
 }

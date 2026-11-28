@@ -1,0 +1,87 @@
+{
+  "runId": "82e6dfdb-f5d6-478d-8dc1-c26097f425da",
+  "verdict": {
+    "status": "refuted",
+    "reasons": [
+      "cell B12 expected \"REVISED-32480\" but live document has \"Enzo Nakamura\""
+    ]
+  },
+  "guardFailure": {
+    "step": 2,
+    "phase": "precondition",
+    "predicateName": "act:setValue",
+    "observed": "stale ref winref:5:B12: issued for stateVersion 5, app is at 6",
+    "reason": "action dispatch failed on step 2: stale ref winref:5:B12: issued for stateVersion 5, app is at 6"
+  },
+  "completed": false,
+  "elapsedMs": 45881,
+  "xlsxPath": "C:/myco/runs/myco-4583-1795587684130-150821139\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      2144,
+      7528
+    ],
+    "removed": [
+      "myco-4583-1795587684130-150821139",
+      "myco-4583-1795587684130-41959126"
+    ],
+    "residue": [],
+    "errors": [
+      "taskkill /IM soffice.bin: rc=128 survivors=[] ERROR: The process with PID 2144 (child process of PID 4112) could not be terminated.\nReason: There is no running instance of the task."
+    ]
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 14700,
+    "outcome": "arrived",
+    "hostLoadStart": 8.88,
+    "hostLoadEnd": 9.07
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 9957,
+        "durationMs": 10886,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3604,
+        "durationMs": 4148,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 2890,
+        "durationMs": 3500,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 635,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-invalid-target-7",
+    "dataRows": 49,
+    "csvSha256": "c168af9bf947e3db1bc095c40176a337627b404ca2ecedd65f5481aa54c2283f"
+  },
+  "corruption": {
+    "mode": "invalid-target",
+    "applied": true,
+    "recovery": false,
+    "persistedValue": "Enzo Nakamura",
+    "recoveryEvents": [],
+    "actionKinds": [
+      "click"
+    ]
+  }
+}

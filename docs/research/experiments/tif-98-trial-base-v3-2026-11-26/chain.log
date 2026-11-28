@@ -1,0 +1,8 @@
+chain: 21:10:45Z attempt-2 wrapper exited; last: v3-wrapper: 21:10:39Z STOP: two identical failures: build-trial-base: idle/maintenance tasks did not finish (see 06-idle.log)
+chain: 21:10:45Z attempt 2 deadline line: idle: not quiet after 60 min; running: \Microsoft\Windows\Multimedia\SystemSoundsService, \Microsoft\Windows\WDI\ResolutionHost, \Microsoft\Windows\Wininet\CacheTask
+chain: 21:10:45Z lock free
+chain: 21:10:45Z vm status: stopped
+chain: 21:10:46Z egress status: utm isolate-from-host: true utm network config: nics=1;mode=emulated;isolate=true;pfs=1;pf=TCP|127.0.0.1|2222||22 running guest network: FAIL: expected exactly one running guest, found 0 
+chain: 21:10:46Z snapshots: trial-base-v2, cua-c1-base, m1-agent-live, clean-base-live, clean-base
+chain: 21:10:46Z checks passed; launching attempt 3
+chain: 22:54:28Z attempt 3 session exit=0

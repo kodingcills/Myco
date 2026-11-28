@@ -1,0 +1,10 @@
+# Python packages the agent needs inside LibreOffice's bundled Python on the
+# guest (CPython 3.13, win_arm64). Installed OFFLINE by guest-deploy.ps1 from
+# wheels the host fetched and copied in (TIF-275): the guest has no internet.
+# Pinned by version and sha256; pip refuses any wheel whose hash differs.
+# To bump: python3 -m pip download --only-binary=:all: --platform win_arm64 \
+#   --python-version 3.13 --implementation cp --abi cp313 --abi none <pkg>==<ver>
+# then `shasum -a 256` the wheel and update the line.
+pywin32==312 --hash=sha256:59aba5d5940842075343a5ddc6b11f1cdf0d1567fe745290359dfbcc7c2eb831
+comtypes==1.5.0 --hash=sha256:c648ed3b243b1eb3b7cb893a873d1b35104ca1c8922061f4b1efafeb255bacb5
+uiautomation==2.0.29 --hash=sha256:5dd51c9e77e70470142a13d903be67f256c445e7cf20b47ada0ece2bdaff9f32

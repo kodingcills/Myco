@@ -10,6 +10,7 @@
  * `-env:UserInstallation` isolation the verifier uses for its CSV readback.
  */
 
+import { loadavg } from "node:os";
 import type { FixtureConverter } from "../tasks/fixture.ts";
 import type { AgentClient } from "../win/agent-client.ts";
 
@@ -21,6 +22,8 @@ export interface WindowsFixtureConverterOptions {
   profileDir?: string;
   /** Timeout for the convert round-trip, ms. */
   timeoutMs?: number;
+  /** Host load-average reader (TESTS ONLY seam; defaults to `os.loadavg`). */
+  loadAverage?: () => number[];
 }
 
 /**
@@ -31,11 +34,35 @@ export interface WindowsFixtureConverterOptions {
  * `durationMs` is wall time and can exceed `deadlineMs` on a miss: the deadline is
  * checked before each poll, so one in-flight `read_file` (up to its own RPC timeout)
  * may finish after the deadline passes.
+ *
+ * `hostLoadStart` / `hostLoadEnd` (TIF-219) are the host's 1-minute load average when
+ * the convert began and when it ended, so a slow or missed convert can be attributed to
+ * host CPU starvation (the guest's QEMU competes for the same cores) or ruled out.
  */
 export interface ConvertTiming {
   deadlineMs: number;
   durationMs: number;
   outcome: "arrived" | "deadline" | "error";
+  /** Host 1-minute load at convert start; `null` if it could not be read. */
+  hostLoadStart: number | null;
+  /** Host 1-minute load at the last timing update; `null` if it could not be read. */
+  hostLoadEnd: number | null;
+}
+
+/**
+ * Host 1-minute load average, two decimals, or `null`. Diagnostic only: it never
+ * feeds a verdict, so a failed or nonsensical read must never fail a convert
+ * (TIF-219 round-1 finding D1).
+ */
+function hostLoad1m(read: () => number[]): number | null {
+  try {
+    const value = read()[0];
+    return typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? Math.round(value * 100) / 100
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 interface ConvertResult {
@@ -54,6 +81,7 @@ export class WindowsFixtureConverter implements FixtureConverter {
   readonly #guestDir: string;
   readonly #profileDir: string;
   readonly #timeoutMs: number;
+  readonly #loadAverage: () => number[];
   #lastConvert: ConvertResult | null = null;
   #lastTiming: ConvertTiming | null = null;
   /** Set before the first await so a half-failed convert can still be cleaned. */
@@ -64,6 +92,7 @@ export class WindowsFixtureConverter implements FixtureConverter {
     this.#guestDir = options.guestDir.replaceAll("\\", "/").replace(/\/$/, "");
     this.#profileDir = options.profileDir ?? `${this.#guestDir}/profiles`;
     this.#timeoutMs = options.timeoutMs ?? 60_000;
+    this.#loadAverage = options.loadAverage ?? loadavg;
   }
 
   /**
@@ -78,8 +107,15 @@ export class WindowsFixtureConverter implements FixtureConverter {
     const profile = `${this.#profileDir}/${nonce()}`;
     this.#lastDirs = { runDir: dir, profile };
     const started = Date.now();
+    const hostLoadStart = hostLoad1m(this.#loadAverage);
     const timing = (outcome: ConvertTiming["outcome"]): ConvertTiming => {
-      this.#lastTiming = { deadlineMs: this.#timeoutMs, durationMs: Date.now() - started, outcome };
+      this.#lastTiming = {
+        deadlineMs: this.#timeoutMs,
+        durationMs: Date.now() - started,
+        outcome,
+        hostLoadStart,
+        hostLoadEnd: hostLoad1m(this.#loadAverage),
+      };
       return this.#lastTiming;
     };
     timing("error"); // overwritten below; stays "error" if the write/launch throws

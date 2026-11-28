@@ -1,0 +1,18 @@
+{"type":"run-start","runId":"f634b7e2-419b-4b62-aaa0-69ad4e1c2f8c","taskId":"calc-record-edit","startedAt":"2026-11-25T04:44:55.014Z"}
+{"type":"fault-injection","timestamp":"2026-11-25T04:48:16.317Z","fault":"cleanup","detail":"killed=[2656,7772] removed=[myco-58191-1795581902068-347254791,myco-58191-1795581902068-629959304] residue=[]"}
+{"type":"observation","timestamp":"2026-11-25T04:48:16.318Z","stateVersion":1,"nodeCount":0}
+{"type":"action","timestamp":"2026-11-25T04:48:16.318Z","step":0,"action":{"kind":"click","ref":{"nodeId":"A1"}}}
+{"type":"guard-evaluation","timestamp":"2026-11-25T04:48:16.318Z","step":0,"phase":"pre","results":[{"predicateName":"intent targets an existing record and column (fixture \"seed-f\")","passed":true,"observed":"intent valid"},{"predicateName":"document open","passed":true,"observed":"documentPath=\"C:/myco/runs/myco-58191-1795581902068-347254791\\\\fixture.xlsx\""}],"stateVersionBefore":1,"stateVersionAfter":1}
+{"type":"guard-evaluation","timestamp":"2026-11-25T04:48:16.318Z","step":0,"phase":"post","results":[{"predicateName":"document open","passed":true,"observed":"documentPath=\"C:/myco/runs/myco-58191-1795581902068-347254791\\\\fixture.xlsx\""}],"stateVersionBefore":1,"stateVersionAfter":2}
+{"type":"observation","timestamp":"2026-11-25T04:48:16.318Z","stateVersion":3,"nodeCount":0}
+{"type":"action","timestamp":"2026-11-25T04:48:16.318Z","step":1,"action":{"kind":"click","ref":{"nodeId":"C10"}}}
+{"type":"guard-evaluation","timestamp":"2026-11-25T04:48:16.318Z","step":1,"phase":"pre","results":[{"predicateName":"intent targets an existing record and column (fixture \"seed-f\")","passed":true,"observed":"intent valid"},{"predicateName":"document open","passed":true,"observed":"documentPath=\"C:/myco/runs/myco-58191-1795581902068-347254791\\\\fixture.xlsx\""},{"predicateName":"cell C10 located at record EMP-0009, column qty, holds fixture value \"400\"","passed":true,"observed":"value=\"400\""}],"stateVersionBefore":3,"stateVersionAfter":3}
+{"type":"guard-evaluation","timestamp":"2026-11-25T04:48:16.318Z","step":1,"phase":"post","results":[],"stateVersionBefore":3,"stateVersionAfter":4}
+{"type":"observation","timestamp":"2026-11-25T04:48:16.318Z","stateVersion":5,"nodeCount":0}
+{"type":"action","timestamp":"2026-11-25T04:48:16.318Z","step":2,"action":{"kind":"setValue","ref":{"nodeId":"C10"},"value":"2723"}}
+{"type":"guard-evaluation","timestamp":"2026-11-25T04:48:16.318Z","step":2,"phase":"pre","results":[{"predicateName":"document open","passed":true,"observed":"documentPath=\"C:/myco/runs/myco-58191-1795581902068-347254791\\\\fixture.xlsx\""},{"predicateName":"cell C10 located at record EMP-0009, column qty, holds fixture value \"400\"","passed":true,"observed":"value=\"400\""}],"stateVersionBefore":5,"stateVersionAfter":5}
+{"type":"guard-evaluation","timestamp":"2026-11-25T04:48:16.318Z","step":2,"phase":"post","results":[{"predicateName":"cell C10 holds \"2723\"","passed":true,"observed":"value=\"2723\""}],"stateVersionBefore":5,"stateVersionAfter":6}
+{"type":"observation","timestamp":"2026-11-25T04:48:16.318Z","stateVersion":7,"nodeCount":0}
+{"type":"action","timestamp":"2026-11-25T04:48:16.318Z","step":3,"action":{"kind":"keyPress","keys":"ctrl+s"}}
+{"type":"guard-evaluation","timestamp":"2026-11-25T04:48:16.318Z","step":3,"phase":"pre","results":[{"predicateName":"cell C10 holds \"2723\"","passed":true,"observed":"value=\"2723\""}],"stateVersionBefore":7,"stateVersionAfter":7}
+{"type":"guard-evaluation","timestamp":"2026-11-25T04:48:16.318Z","step":3,"phase":"post","results":[{"predicateName":"document not dirty after save","passed":true,"observed":"dirty=false"}],"stateVersionBefore":7,"stateVersionAfter":8}

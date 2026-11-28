@@ -1,0 +1,257 @@
+/**
+ * `myco-gate` CLI (TIF-265). `scripts/myco-gate.ts` is a thin shell over `main`.
+ *
+ * Every input is a flag; no TTY is read. The operator flags (`--evidence-root`, `--tasks`,
+ * `--audit`) configure the gate; only `check`'s `--task`, `--run` and `--claim` are the
+ * request, and they go through the same parser an MCP call goes through.
+ */
+import { appendFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Readable, Writable } from "node:stream";
+import { writeDemoEpisodes, writeMultiStepDemoEpisodes } from "../episode/demo.ts";
+import { EpisodeStore, type WriteResult } from "../episode/store.ts";
+import type { GateResult } from "./api.ts";
+import { correctionsEnabled } from "./corrections.ts";
+import { renderDemo, runMockDemo } from "./demo.ts";
+import {
+  buildRegistry,
+  createGate,
+  fileEvidenceReader,
+  type GateDiagnostic,
+  type TaskEntry,
+} from "./gate.ts";
+import { serveStdio } from "./mcp-server.ts";
+import { renderMultiStepDemo, runMultiStepMockDemo } from "./multistep-demo.ts";
+import { builtinTasks, loadTasksFile } from "./tasks.ts";
+
+export const EXIT_VERIFIED = 0;
+export const EXIT_REFUTED = 1;
+export const EXIT_UNCERTAIN = 2;
+export const EXIT_USAGE = 3;
+
+export const USAGE = `usage:
+  myco-gate check --evidence-root <dir> --task <id> --run <id> [--claim <text>] [options]
+  myco-gate mcp   --evidence-root <dir> --task <id> --run <id> [options]
+  myco-gate demo  --transport mock [--family todo-items|calc-multi-step] [--out <dir>] [--json]
+
+operator options (check, mcp):
+  --evidence-root <dir>  persisted state is read from <dir>/<runId>/<task stateFile>
+                         (mock-path and development stand-in only; a gated run reads
+                         the sealed capture, see docs/gate/api.md)
+  --task <id> --run <id> the assignment: the one task and run this gate serves (mcp: the
+                         agent's trial; any other task or run is ASSIGNMENT_MISMATCH)
+  --tasks <file>         extra tasks: { "tasks": [ { id, family, stateFile, spec } ] }
+  --no-builtin           do not register the built-in myco-run tasks (df-s01, df-s02)
+  --audit <file>         append every decision as one JSON line (fails closed if unwritable)
+  --corrections <ids>    agent-safe corrections for these task families (comma-separated:
+                         calc-record-edit, calc-multi-step); off when absent. R1
+                         evidence refuses rows recorded with corrections on
+  --json                 check: print the GateResult as JSON
+
+exit (check): 0 verified, 1 refuted, 2 uncertain, 3 usage
+exit (mcp):   0 when stdin closes, 3 usage
+exit (demo):  0 when every scenario behaves as expected, 1 otherwise, 3 usage
+`;
+
+export interface Io {
+  readonly stdin: Readable;
+  readonly stdout: Writable;
+  readonly stderr: Writable;
+}
+
+type Flags = Map<string, string | true>;
+
+const VALUE_FLAGS = new Set([
+  "--evidence-root",
+  "--tasks",
+  "--audit",
+  "--task",
+  "--run",
+  "--claim",
+  "--out",
+  "--transport",
+  "--family",
+  "--corrections",
+]);
+const BOOL_FLAGS = new Set(["--json", "--no-builtin"]);
+
+function parseFlags(argv: readonly string[]): Flags | string {
+  const flags: Flags = new Map();
+  for (let index = 0; index < argv.length; index++) {
+    const flag = argv[index] ?? "";
+    if (BOOL_FLAGS.has(flag)) flags.set(flag, true);
+    else if (VALUE_FLAGS.has(flag)) {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith("--")) return `${flag} needs a value`;
+      flags.set(flag, value);
+      index += 1;
+    } else return `unknown option ${flag}`;
+  }
+  return flags;
+}
+
+function str(flags: Flags, name: string): string | undefined {
+  const value = flags.get(name);
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * The operator's view of an error the agent sees only as a code (stage and code, then the
+ * raw message). Written to stderr: in `mcp` mode stdout is the agent's JSON-RPC channel and
+ * stderr is the operator's.
+ */
+function writeDiagnostic(stderr: Writable, diagnostic: GateDiagnostic): void {
+  stderr.write(
+    `myco-gate: ${diagnostic.stage} error (${diagnostic.code}): ${String(diagnostic.error)}\n`,
+  );
+}
+
+function operatorGate(flags: Flags, stderr: Writable) {
+  const task = str(flags, "--task");
+  const run = str(flags, "--run");
+  if (task === undefined || run === undefined)
+    throw new UsageError("--task and --run are required (the gate serves one assigned run)");
+  const root = str(flags, "--evidence-root");
+  if (root === undefined) throw new UsageError("--evidence-root is required");
+  const entries: TaskEntry[] = flags.has("--no-builtin") ? [] : builtinTasks();
+  const tasksFile = str(flags, "--tasks");
+  if (tasksFile !== undefined) entries.push(...loadTasksFile(tasksFile));
+  if (entries.length === 0)
+    throw new UsageError("no tasks registered (--no-builtin without --tasks)");
+  const audit = str(flags, "--audit");
+  const corrections = str(flags, "--corrections");
+  const policy =
+    corrections === undefined
+      ? undefined
+      : { families: corrections.split(",").filter((id) => id !== "") };
+  const tasks = buildRegistry(entries);
+  const gate = createGate({
+    tasks,
+    reader: fileEvidenceReader(root),
+    assignment: { taskId: task, runId: run },
+    onDiagnostic: (diagnostic) => writeDiagnostic(stderr, diagnostic),
+    ...(policy === undefined ? {} : { corrections: policy }),
+    ...(audit === undefined
+      ? {}
+      : {
+          onDecision: (result: GateResult) => appendFileSync(audit, `${JSON.stringify(result)}\n`),
+        }),
+  });
+  // createGate has validated the policy; whether it covers the assigned task decides the
+  // agent-facing MCP instructions (N1).
+  const assigned = tasks.get(task);
+  const correcting = assigned !== undefined && correctionsEnabled(policy, assigned);
+  return { gate, correcting };
+}
+
+class UsageError extends Error {}
+
+function exitFor(result: GateResult): number {
+  return result.verdict === "verified"
+    ? EXIT_VERIFIED
+    : result.verdict === "refuted"
+      ? EXIT_REFUTED
+      : EXIT_UNCERTAIN;
+}
+
+export async function main(argv: readonly string[], io: Io): Promise<number> {
+  const [command, ...rest] = argv;
+  if (
+    command === undefined ||
+    command === "--help" ||
+    command === "-h" ||
+    rest.includes("--help")
+  ) {
+    io.stdout.write(USAGE);
+    return command === undefined ? EXIT_USAGE : 0;
+  }
+  const flags = parseFlags(rest);
+  if (typeof flags === "string") {
+    io.stderr.write(`myco-gate: ${flags}\n${USAGE}`);
+    return EXIT_USAGE;
+  }
+  try {
+    switch (command) {
+      case "check": {
+        // The operator's own call: the request is the assignment.
+        const { gate } = operatorGate(flags, io.stderr);
+        const task = str(flags, "--task") as string;
+        const run = str(flags, "--run") as string;
+        const claim = str(flags, "--claim");
+        const result = await gate.check({
+          taskId: task,
+          runId: run,
+          ...(claim === undefined ? {} : { claim }),
+        });
+        io.stdout.write(
+          flags.has("--json")
+            ? `${JSON.stringify(result, null, 2)}\n`
+            : `${result.verdict}${result.accepted ? " (accepted)" : " (not accepted)"}: ${result.reasonCodes.join(", ")}\n${result.reasons.map((r) => `  - ${r}\n`).join("")}${(result.corrections ?? []).map((c) => `  correction: ${JSON.stringify(c)}\n`).join("")}`,
+        );
+        return exitFor(result);
+      }
+      case "mcp": {
+        const { gate, correcting } = operatorGate(flags, io.stderr);
+        await serveStdio(gate, io.stdin, io.stdout, { corrections: correcting });
+        return 0;
+      }
+      case "demo": {
+        if (str(flags, "--transport") !== "mock") {
+          throw new UsageError("demo needs --transport mock (the live path is M2-12)");
+        }
+        const family = str(flags, "--family") ?? "todo-items";
+        if (family !== "todo-items" && family !== "calc-multi-step") {
+          throw new UsageError(`demo --family must be todo-items or calc-multi-step`);
+        }
+        // One out dir for the demo and its SIMULATED episodes (docs/data/episode-format.md).
+        const outDir = str(flags, "--out") ?? mkdtempSync(join(tmpdir(), "myco-gate-demo-"));
+        const opts = { outDir };
+        // Data capture never changes the demo's outcome: a store error is reported, not raised.
+        const episodes = (write: (store: EpisodeStore) => WriteResult[]) => {
+          try {
+            const results = write(EpisodeStore.open(join(outDir, "episodes"), { simulated: true }));
+            const refused = results.filter((r) => r.status === "refused").length;
+            io.stderr.write(
+              `episodes: ${results.length - refused} simulated episode(s) saved to ${join(outDir, "episodes")}, ${refused} refused\n`,
+            );
+          } catch (error) {
+            io.stderr.write(
+              `episodes: not saved (${error instanceof Error ? error.message : String(error)})\n`,
+            );
+          }
+        };
+        if (family === "calc-multi-step") {
+          // TIF-270: multi-step Calc with one retry from the last verified checkpoint.
+          const report = await runMultiStepMockDemo(opts);
+          episodes((store) => writeMultiStepDemoEpisodes(report, store));
+          io.stdout.write(
+            flags.has("--json")
+              ? `${JSON.stringify(report, null, 2)}\n`
+              : renderMultiStepDemo(report),
+          );
+          return report.ok ? 0 : 1;
+        }
+        const report = await runMockDemo(opts);
+        episodes((store) => writeDemoEpisodes(report, store));
+        io.stdout.write(
+          flags.has("--json") ? `${JSON.stringify(report, null, 2)}\n` : renderDemo(report),
+        );
+        return report.ok ? 0 : 1;
+      }
+      default:
+        throw new UsageError(`unknown command ${command}`);
+    }
+  } catch (error) {
+    if (
+      error instanceof UsageError ||
+      (error instanceof Error &&
+        /^invalid gate (task registry|assignment|corrections)/.test(error.message))
+    ) {
+      io.stderr.write(`myco-gate: ${error.message}\n`);
+      return EXIT_USAGE;
+    }
+    io.stderr.write(`myco-gate: ${String(error)}\n`);
+    return EXIT_USAGE;
+  }
+}

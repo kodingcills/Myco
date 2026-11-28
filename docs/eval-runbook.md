@@ -1,6 +1,6 @@
 # M1 evaluation runbook
 
-From a `clean-base` snapshot to a validated evidence set: reset → deploy → prove the agent is
+From the trial base snapshot (`trial-base-v3`; `trial-base-v2` and `clean-base` are the rollbacks, [§3.5](#35-trial-base-trial-base-v3-and-rollback-to-trial-base-v2-or-clean-base)) to a validated evidence set: reset → deploy → prove the agent is
 on the desktop → generator proof → trials → evidence. Written to be followed by a coding agent
 with no prior context. Every command is transcribed from the repo or the host VM scripts; the
 two steps that need a human are marked GUI-ONLY.
@@ -8,17 +8,48 @@ two steps that need a human are marked GUI-ONLY.
 Scope: M1-016 (TIF-20), acceptance row 8 of `docs/architecture/m1.md`. Environment facts:
 `docs/env/windows.md`. Incident history quoted inline: `docs/coordination/m1-state.md` log N.
 
-**Read this first.** Nothing below was executed while writing it: `myco-win11` was held by the
-coordinator and UTM was being restarted in the GUI (log 37). So every expected output is a
-*shape*, not a transcript, except where a measured value is quoted with its log or date.
-Commands needing the VM are therefore **UNVERIFIED** until you run them — verify each output
-before moving on.
+**Read this first.** This file was originally written without executing anything — `myco-win11`
+was held by the coordinator (log 37) — so the expected outputs are *shapes*, not transcripts,
+except where a measured value is quoted with its log or date.
+
+**It has since been executed end to end, and the markers are no longer uniform.** As of
+2026-11-24: §1, §2, §3.2, §4 and §5 have each been run and their outputs matched
+(`docs/research/experiments/m1-row8/`), and **§6 has since PASSED 20/20** (`S6-PASS.md`). Fresh
+row-8 operators have since re-run §3.1 (2026-11-24 and 2026-11-25) and §4 on post-TIF-220 code
+(2026-11-25: `verified 13 files on the guest against the source (sha256)`, `DEPLOY OK`), §5
+against the real guest (2026-11-25, exit 0, the expected stdout below), and the §7.3 sweep
+(28/30 verified, `docs/research/experiments/m1-row8-sweep2/`). §7.4 was run by a fresh
+operator on 2026-11-25: 18/18 recorded and eligible, 0 false successes, every recovery trial
+verified (`docs/research/experiments/m1-row8-corrupt/`), and §8 was reproduced on both runs. Take a step-level `UNVERIFIED` marker as
+"not re-checked recently", not as "never run" — and where a section's own marker contradicts this
+paragraph, the section is the one to fix (F3, 2026-11-24).
+
+Commands needing the VM still deserve a check of their output before you move on.
 
 | Marker | Meaning |
 |---|---|
 | (measured) | A real recording, cited to its log/date |
 | **UNVERIFIED** | Correct shape, not executed at writing time; confirm the output yourself |
 | **GUI-ONLY** | Cannot be done over SSH or by a script (2 steps, both in §1/§3) |
+
+**Row-8 lessons (2026-11-25).** What the row-8 operators had to learn the hard way. Each line
+points to the section that holds the detail; read it there.
+
+- **Token:** the deploy writes the fresh token to `${MYCO_TOKEN_OUT:-~/.myco-token}`. Always set a
+  private path under your own clone, and pass it to `run-live` and `session_info` as
+  `--token-file` ([§4](#4-deploy-the-agent), [§5](#5-prove-the-agent-is-on-the-desktop)).
+- **Deploy copy:** hash-checked (`verified N files on the guest`), redone in full if sshd drops it,
+  3 attempts at most ([§4](#4-deploy-the-agent), "If it fails").
+- **Cold reset:** the readiness gate waits for a stable sshd, 3 consecutive answers 5 s apart
+  ([§3.1](#31-cold-path--primary)).
+- **Convert deadline:** 360 s. A miss is `uncertain` and tagged as a harness fault
+  ([§7.1](#71-normal-trial)).
+- **Agent calls:** `run-live` times out an agent call at 60 s (TIF-216) ([§7.1](#71-normal-trial)).
+- **Load gate:** resume a paused sweep only when the net 1-min load stays under 10 for 3 minutes;
+  pause above 14. Net load is the host 1-min load minus the guest's own QEMU cores
+  (`scripts/load-gate.sh`, TIF-218) ([§7.3](#73-the-30-trial-sweep)).
+- **Validation:** `validate-live` fails on 0 run dirs, and `--expect N` pins the count
+  ([§8.2](#82-validate)).
 
 ## 1. Preconditions
 
@@ -27,9 +58,11 @@ before moving on.
 | Item | Where | Notes |
 |---|---|---|
 | UTM 5.0.9+ with VM `myco-win11` | macOS host, GUI session | UUID `6C6414A1-9449-4E30-9503-F3F6726C8FFE`, 6 vCPU / **6 GB** (8 GB until 2026-11-21; see `~/VMs/myco-win11/README.md` Changelog) / VirtIO disk, en-US Win11 Pro ARM64 26100 |
-| Snapshot `clean-base` | inside the VM bundle | disk-only, VM powered off. The cold reset target |
+| Snapshot `trial-base-v3` | inside the VM bundle | disk-only, VM powered off. The default cold reset target since TIF-98's v3 switch: the same build as `trial-base-v2`, rerun with every build boot classified cold (§3.5) |
+| Snapshot `trial-base-v2` | inside the VM bundle | disk-only, VM powered off. The first rollback (`MYCO_TRIAL_SNAPSHOT=trial-base-v2`, §3.5); before the v3 switch, the default cold reset target: `clean-base` with its maintenance done and the maintenance and Windows Update triggers disabled (§3.5) |
+| Snapshot `clean-base` | inside the VM bundle | disk-only, VM powered off. The second rollback (`MYCO_TRIAL_SNAPSHOT=clean-base`, §3.5) and the source both trial bases were built from |
 | Snapshot `clean-base-live` | inside the VM bundle | RAM+disk, desktop logged in. Restores in ~8 s but wedges UTM under rapid cycling (§3.3) |
-| Host SSH config + key | `~/VMs/myco-win11/{ssh_config,id_ed25519}` | alias `myco-win11` → 127.0.0.1:2222, user `myco`, key-only |
+| Host SSH config + key | `~/VMs/myco-win11/ssh_config` and the private key it names | alias `myco-win11` → 127.0.0.1:2222, user `myco`, key-only. **Check:** `test -e ~/VMs/myco-win11/ssh_config`; the key's only check is §2's `vssh 'whoami'` answering. Never test, read or name the key file in a command: the host secret guard blocks it (TIF-206) |
 | VM lifecycle scripts | `~/VMs/myco-win11/scripts/` | `vm.sh`, `reset.sh`, `wait-ssh.sh`, `vssh`, `shutdown.sh`. **Not in the repo** |
 | Guest toolchain | baked into the snapshots | LibreOffice 26.8.3 native ARM64, Python 3.12.10 at `C:\Program Files\Python312-arm64\python.exe`, pywin32 312 / comtypes 1.5.0 / pywinauto 0.6.9 / uiautomation 2.0.29, OpenSSH 9.5 |
 | Interactive launcher | guest `C:\myco\bin\run-interactive.ps1` | the only way to start a GUI process from SSH (session-0 problem, §5) |
@@ -44,9 +77,38 @@ pnpm install --frozen-lockfile
 pnpm typecheck && pnpm lint && pnpm test && pnpm build
 ```
 
-Expected: four green commands. `pnpm test` runs vitest and then `schemas/validate-artifacts.ts`
+Expected: four green commands. `pnpm test` (`package.json` `scripts.test`) runs vitest **twice**,
+then `schema-validate`: first the main suite (every file except the s0 launcher test), then a
+second run of `test/discovery/s0-live-launcher.test.ts` alone with `--pool=forks
+--no-file-parallelism`, so a second, short `Test Files 1 passed` block is expected; then
+`schema-validate` (the pnpm alias; the file is `schemas/validate-artifacts.ts`)
 (→ `validated artifacts for N trials (all ok)`). This proves the host half without touching the
-VM; do it before any VM work so a later failure is unambiguous.
+VM; do it before any VM work so a later failure is unambiguous. `schema-validate` prints its
+per-trial `ok …` lines with no newline between them, so expect one long line before the summary.
+
+**`Ignored build scripts: esbuild@…` is expected (row-8 J1).** `pnpm install` prints a warning
+box `Ignored build scripts: esbuild@<version>. Run "pnpm approve-builds" …`. pnpm 10 skips
+dependency build scripts unless the project allows them, and this repo allows none
+(`package.json` and `pnpm-workspace.yaml` list no `onlyBuiltDependencies`). It is harmless:
+`tsx` works without that script (check with `pnpm exec tsx --version`), and every step in this
+runbook passed with the script skipped. **Do not run `pnpm approve-builds`**: it writes the allow list
+into the repo's config files, which is a change to the repo, not a setup step.
+
+**Which of the two lines are required (row-8 J2).** `pnpm install --frozen-lockfile` is required
+before any VM step, always: every later step runs through `pnpm exec tsx`, and §8.4's check needs
+the dev dependencies. The second line (typecheck, lint, test, build) is the host-half proof. A
+full row-8 reproduction runs it, because every step is part of what is tested (the same rule as
+§6 F20). A bounded re-run whose scope says §1 already passed at the same HEAD may skip it; record
+the skip, and why, with your results, as §6 F20 asks for a skipped reset. If a later VM step then
+fails in a way that could be host-side, run the second line before blaming the VM.
+
+**Run `pnpm test` on a quiet host** (raw 1-min load under 10: here the guest's own CPU counts too,
+because it slows the tests; the §7.3 resume gate uses the same number on net load).
+Under load it fails on timeouts alone: on 2026-11-25, with the 1-min load at 12.9–15.4 while a
+sweep ran, 43 of 1080 tests failed, every one a 5 s timeout (vitest's default `testTimeout`, and
+`spawnSync(..., {timeout: 5000})` at `test/vm-lock.test.ts:27`), with no logic failure. If every
+failure is a timeout, wait for the load to drop and re-run before blaming the repo. A running VM
+guest alone can hold the load at 12–15 (row-8 operator report, S8).
 
 ### 1.3 What a fresh operator cannot improvise
 
@@ -55,13 +117,36 @@ VM; do it before any VM work so a later failure is unambiguous.
 | The VM and its snapshots | environment owner | The image is built by `build-all.sh` (in the repo at `docs/env/vm-toolchain/`) from a Windows ISO, an offline installer payload and a uupdump-built ISO — none of those inputs are in the repo, and the script has never been run end to end from the repo (§10) |
 | `~/VMs/myco-win11/ssh_config`, `id_ed25519` | environment owner | Hosts the port, user, key path; `AgentClient`/`SshTunnel` default to these paths (`src/win/agent-client.ts:202-208`) |
 | `~/VMs/myco-win11/scripts/*` | environment owner | The reset/sanity primitives live outside the repo on purpose (PR #28's in-repo reset was reverted, PR #31) |
-| The agent token | produced by the deploy | Rotated on every deploy (§4); read it from the guest, never from a file committed or cached |
+| The agent token | produced by the deploy | Rotated on every deploy (§4); the verified deploy writes it to `~/.myco-token` (or `$MYCO_TOKEN_OUT`) on the host. Never commit it or reuse a copy from before your deploy |
 | LibreOffice MSI SHA-256 | `8ee2ef81ca4103d3eeb06ca9f4ef0b5cbb83357d21d14a449f767bfb29183158` | SHA-256 of the retained `LibreOffice_26.8.3_Win_aarch64.msi` in the environment owner’s offline payload |
 
 Overridable host values (defaults in parentheses): `MYCO_VM_SCRIPTS`
 (`~/VMs/myco-win11/scripts`), `VM_SSH_CONFIG` (`~/VMs/myco-win11/ssh_config`), `VM_SSH_HOST`
 (`myco-win11`), `MYCO_AGENT_PORT` (8765), `MYCO_TOKEN_PATH`
-(`C:\ProgramData\Myco\agent.token`).
+(`C:\ProgramData\Myco\agent.token`), `MYCO_TOKEN_OUT` (`~/.myco-token`, the host file the deploy
+writes the token to; a path, never a secret).
+
+**The host secret guard still treats `MYCO_TOKEN_OUT` as a secret (row-8 J4).** Its value is a
+path, but the guard on this Mac (TIF-206) matches the `TOKEN` in the name: it blocks any command
+that prints or echoes the variable's value, and even a command that only quotes such a print as
+text (a report append, for example). Refer to it only as `"$MYCO_TOKEN_OUT"` inside the commands
+that use it, and do not echo it. To record the path, copy it from the deploy's own
+`==> wrote the fresh token to … (mode 600)` line (§4). A guard block is not a failure of the
+step: drop the blocked command and carry on. Do not rephrase it to get past the guard.
+
+**The readiness gate is repo-only, by design.** `scripts/wait-guest-ready.sh` is resolved
+from the checkout by `reset-trial-vm.sh` (`REPO_GATE`, line 42) and **no host script calls
+it** — so a fresh `~/VMs/myco-win11/scripts` copy neither has it nor needs it, and
+`sync-toolchain.sh` does not deploy it (that script mirrors `docs/env/vm-toolchain/`, and
+the gate is not in there). This is why #318 could be closed: moving the gate into the synced
+toolchain was unnecessary once it resolves from the repo. If you are debugging a gate
+failure, check the **checkout's** copy — the host directory is not involved.
+
+**Precedence, exactly:** `gate_script()` checks in this order — (1) `MYCO_VM_SCRIPTS` if
+set, (2) the in-repo `REPO_GATE` if it is executable, (3) `$VM_SCRIPTS` as a fallback. So
+the host path is reachable only when `MYCO_VM_SCRIPTS` is set **and** the in-repo copy is
+missing or not executable. Setting `MYCO_VM_SCRIPTS` is how a test stubs the gate; leaving
+it unset is how a normal run uses the repo's copy.
 
 ### 1.4 The two GUI-only steps
 
@@ -76,7 +161,8 @@ Overridable host values (defaults in parentheses): `MYCO_VM_SCRIPTS`
 
 ## 2. Sanity: the VM is reachable and healthy
 
-**UNVERIFIED** (no VM at writing time).
+(measured) Run by a fresh row-8 operator on 2026-11-24 with the expected outputs below (operator
+report S2). Only the optional `smoke.ps1` check was not re-run.
 
 ### 2.0 Is a guest running at all? (do this first)
 
@@ -108,31 +194,77 @@ Expected: `started`. Other values: `stopped` → start it; `resuming` → wedge,
 snapshot.
 
 **Ownership is the flock, never the lock file.** `/tmp/myco-win11.vm.lock` keeps
-the last writer's `<pid> <driver>` after release, so its contents name a dead pid
+the last writer's `<pid> <driver>` after release (every driver except `vm-session.sh`, which
+clears its own record on exit, §6, so an empty file is normal too), so its contents name a dead pid
 routinely — two different stale contents were read on the morning of 2026-11-23
-while the flock was free both times. Take a non-blocking `flock` to learn whether
-the host is in use:
+while the flock was free both times. Check whether the host is in use with `lsof`,
+read-only:
 
 ```bash
-python3 -c 'import fcntl,sys
-f=open("/tmp/myco-win11.vm.lock","a+")
-try: fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB); print("FREE")
-except BlockingIOError: print("HELD — someone owns the host")
-finally: fcntl.flock(f,fcntl.LOCK_UN)' 2>/dev/null || true
+lsof /tmp/myco-win11.vm.lock || echo free     # a table = someone owns it; free = nobody does
 ```
 
-A **`HELD` flock is the only evidence of ownership.** Free + a named pid means the
-file is stale; free + `vm-state.sh` exit 0 means a guest is running with nobody
-holding the lock, which is the case to stop and report rather than proceed.
+**A process holding the file open (an `lsof` table) is the only evidence of
+ownership.** `free` plus a named pid in the file means the file is stale.
+
+This is the only ownership check to use. Do not probe with `fcntl.flock`: a probe takes the
+flock for an instant, and `scripts/vm-lock.sh:34` acquires with `LOCK_NB` and no retry, so a
+probe and a real driver starting in the same moment can make the driver refuse with exit 10
+(measured as F5 on 2026-11-24). The same `lsof` line is the gate check before every step in §6.
+
+**Free + a running guest is the NORMAL state, not a stop.** It is what every driver
+leaves behind when it releases — r6 and the §6 attempts both finish with the guest
+still up. Report it and proceed; do not stop and ask. (An earlier revision said
+"stop and report", which a fresh operator read literally and would have stopped at
+§2 on every run — finding F4, 2026-11-24.) The state that IS worth reporting is the
+opposite one: a guest that is running while some *other* process claims to own it.
+
+**NEVER hold the flock as a "reservation".** This section has no way to express *"the VM is
+reserved for you"*, so a coordinator who holds the lock to keep the VM free **makes the VM
+unusable to the very operator being tested** — a held flock is indistinguishable from a
+competing owner, and the primary reset (§3.1) will refuse. That happened on 2026-11-24 and cost
+the row-8 operator its §3.1 step and two "should I break this lock?" questions it could not
+answer. **If the VM must be kept free, do it by agreement, not by holding the lock.** The test
+begins only when **both** are true: the `lsof` check prints `free` **and** no process outside the operator's
+own work holds a claim on the guest.
+
+**The stale lock file is expected, and it is not a signal.** Its contents name the last writer
+and routinely name a dead pid. Read `lsof`; ignore the text. (Same class as TIF-180.)
+
+**To clear a stale record** — do it under the lock, so it cannot race a driver acquiring it:
+
+```bash
+python3 - <<'PY'
+import fcntl
+f = open("/tmp/myco-win11.vm.lock", "a+")
+try:
+    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    raise SystemExit("HELD - a driver owns the host; do not touch the record")
+f.seek(0); f.truncate(0); f.flush()
+print("cleared a stale lock record (the flock was free)")
+PY
+```
+
+Clearing is housekeeping, not a prerequisite: `vm_lock_acquire` truncates and rewrites the
+record only after the kernel grants the lock, so a stale pid never blocks a driver. It is worth
+clearing because a dead pid in that file reads exactly like a live owner - the 2026-11-24
+row-8 operator saw `44837 reset-trial-vm.sh` (dead) with the flock free and had no way to tell
+the two apart from the file alone.
 
 ```bash
 ~/VMs/myco-win11/scripts/wait-ssh.sh 120
+
 ~/VMs/myco-win11/scripts/vssh 'whoami'
 ```
 
 Expected: `ssh up after Ns` (17 s fresh boot, longer after a cold restore under load), then
 `myco-win11\myco`. A timeout here with UTM showing `started` is usually host RAM pressure
 (§9, contention row) — check for other QEMU guests before touching the VM.
+
+**`vssh 'whoami'` answering is also the §1.1 check that the host SSH key is present and
+accepted.** The guest is key-only, so an answer proves the key works; there is no separate key
+check, and you must not `test`, `cat` or `ls` the key file (the secret guard blocks it).
 
 Optional deep check of the guest toolchain (197 UIA elements, 6/6 recorded):
 
@@ -149,29 +281,92 @@ the agent install, so a reset deletes the agent (log 10).
 
 ### 3.1 COLD path — primary
 
-**UNVERIFIED** — `scripts/reset-trial-vm.sh` is the deliverable of PR #32
-(`feat/m1-013-cold-reset`), still open and pending its 5-consecutive-cold-reset check (log 37).
-It is **not on `main`** (`main` has no `scripts/` directory). Get it from the PR branch, or use
-§3.2.
+**Verified, and on `main`.** `scripts/reset-trial-vm.sh` is present and executable at the
+checkout you are reading (PR #32 merged long ago; the 5-consecutive-cold-reset check was
+recorded at log 37). The earlier "not on `main` / get it from the PR branch" note was stale by
+2026-11-24 — `main` has a `scripts/` directory, and §1.3 and §2.0 above already use it.
 
 ```bash
-scripts/reset-trial-vm.sh            # optional arg: snapshot name; default clean-base
+scripts/reset-trial-vm.sh            # optional arg: snapshot name; default trial-base-v3 (§3.5)
 ```
 
 What it does (read from the script): force-stop → wait for `stopped` (30 s cap) → **refuse** if
-the state is `resuming` → restore → start → `wait-ssh.sh 600` → resync the guest clock. It
-accepts only `clean-base`, `clean-base-live`, `m1-agent-live` as snapshot names and never
-restores onto a running VM.
+the state is `resuming` → restore → start → `wait-guest-ready.sh 600` (guest CPU must advance;
+then SSH must answer 3 consecutive probes whose **starts** are at least 5 s apart, TIF-220/TIF-98) →
+resync the guest clock. It accepts only **`trial-base-v3`** (the default), `trial-base-v2`, `clean-base`,
+`clean-base-live`, `m1-agent-live` and **`cua-c1-base`** (the C1 screenshot-baseline snapshot,
+and the one the C1 arms run on) as snapshot names, and never restores onto a running VM.
+With no argument it restores `$MYCO_TRIAL_SNAPSHOT` (only `trial-base-v3`, `trial-base-v2` or
+`clean-base`), or `trial-base-v3` when that is unset.
 
-Expected: `reset-trial-vm: ready on 'clean-base'`. Cold boot costs ~21 s once UTM is warm, and
-~134-152 s measured across 5 consecutive resets immediately after a UTM restart (m1-state log 39);
-the script header's ~165 s figure is a single earlier sample. That is the price of a reset that
-cannot wedge, versus the live path's ~7 s when healthy.
+**Every boot must be a full cold boot (TIF-98).** The first start after a UTM configuration
+write (`scripts/guest-egress.sh allow` or `deny` rewrites it, even with no change) boots the
+same restored disk with most of Windows' boot work skipped: 4 s of guest CPU at the first ssh
+answer instead of 272-312 s. A trial on such a guest starts from a different state. So the reset
+classifies each boot by the guest CPU the gate reports at its first ssh answer:
+- at or above `MYCO_COLD_MIN_GUEST_CPU` (default 100 s) it is cold;
+- below it, the reset stops the VM by request and boots once more, and that boot is cold;
+- a second fast boot, or an unreadable first-ssh line, is refused.
+
+It prints `reset-trial-vm: boot class=cold first_ssh_s=… guest_cpu_first_ssh_s=… attempts=…`.
+After a config write, expect one reset to take about 3.5 min instead of about 2.5. The
+measurements and the threshold's basis are in `docs/research/experiments/tif-98-fast-reset-2026-11-26/`.
+
+Expected stderr tail, then the stdout line. This example is a `clean-base` reset from
+2026-11-25. With the default, the last line reads `ready on 'trial-base-v2'`:
+
+```
+wait-guest-ready: first ssh answer after 152s (guest CPU 270s)
+reset-trial-vm: boot class=cold first_ssh_s=152 guest_cpu_first_ssh_s=270 attempts=1
+reset-trial-vm: timing stop=1 restore=2 start=3 ready=199 egress=0 clock=11 total=214
+reset-trial-vm: host swap used 4460 of 6144 MB
+reset-trial-vm: ready on 'clean-base'
+```
+
+The `timing` line is the per-phase breakdown in seconds (TIF-98). `ready` includes the boot and the
+stability probes; the `first ssh answer` line splits them. `egress` is the TIF-275 check (§3.4); it
+reads the host process table and takes under a second. The `host swap` line is informational
+only. It records the host state the reset ran under.
+
+**Onto `clean-base`, plan for 190–260 s on this Mac; onto `trial-base-v2`, about 140–165 s
+(§3.5). `trial-base-v3` (the default) has no reset bench yet; its build's cold boot in place
+reached the first ssh answer after 149 s.** The `clean-base` figures were measured 2026-11-25: 8 recorded resets with the TIF-98 code and 5
+without, 185–254 s, median 213 s, at host 1-minute load 3.83–9.72;
+`docs/research/experiments/tif-98-reset/`. Where the time goes (a `clean-base` reset):
+
+| Phase | Typical | What it is |
+|---|---|---|
+| stop + restore + start | ~6 s | UTM AppleScript; restore is a qcow2 internal-snapshot apply |
+| boot to first SSH answer | 139–183 s | Windows booting. A plain in-guest reboot with no restore is just as slow, so the restore is not the cost |
+| stability probes | 29–54 s | each `echo ok` round trip took about 5–8 s on a guest still busy booting (a diagnostic-shell observation, not in the rows) |
+| clock resync | 6–18 s | one more SSH round trip |
+
+The guest's boot is slow because it is CPU-busy. It spends 264–314 guest CPU-seconds (median 281) before SSH
+answers, and Windows records 50+ s in session-manager init, against ~1 s on its first boot
+(2026-11-19). After SSH answers it stays busy: Defender, .NET optimization (`ngen`), scheduled
+tasks and Windows Update were still running 26 minutes after one boot, with QEMU at 187 % host CPU (a diagnostic-shell observation, not in the rows). Every reset reverts the disk, so the guest repeats that
+maintenance on every trial. `scripts/guest-boot-profile.sh` prints Windows' phase timings and the
+busiest guest processes, read-only.
+
+The older figures (~21 s "warm UTM", 25.8 s in m1-state log 44) were not reproduced: with swap
+freed to ~4.5 GB and 61–72 % host memory free, resets still took 213–254 s. Host swap pressure makes
+things worse (QEMU resident about 1.8 GB for a 6 GB guest at 9.9 GB swap, a diagnostic-shell
+observation, not in the rows), but it is not the main cost.
+
+**Timing a reset.** `scripts/reset-bench.sh reset N out.jsonl [label]` runs N resets.
+`scripts/reset-bench.sh cycle N out.jsonl [label]` runs N reset → deploy → `session_info` cycles
+and needs `MYCO_TOKEN_OUT` (§4). Both check `lsof` before every step and hold at net load ≥ 10
+(`scripts/load-gate.sh`) until it has stayed under 10 for 3 minutes. Each run is one JSON row: phases, load, host swap, free
+memory, QEMU resident size, exit codes. `scripts/reset-bench-summary.py label=file.jsonl …` turns
+rows into the median/min/max table. Raw step logs stay in `out.jsonl.logs/`, outside the evidence.
 
 ### 3.2 Fallback — `reset.sh cold`
 
 **UNVERIFIED**, but this one is already exercised: `reset.sh cold` restore `clean-base` → cold
-boot, ~20 s (VM README, measured 2026-11-18).
+boot; the ~20 s figure is the VM README's and is **wrong for the in-repo path** — a
+cold reset measured **279 s end to end (234 s to SSH)** on 2026-11-24 under load ~9.7, and
+**134–152 s** when quiet. **Use 180–280 s as the planning range**, and see the decision rule in
+§6: a step that exceeds its range is *evidence about the host*, not about the repo.
 
 ```bash
 ~/VMs/myco-win11/scripts/reset.sh cold
@@ -205,62 +400,387 @@ instead of hanging; `reset.sh` (§3.2) does not, which is why the cold path is t
 The `resuming` wedge remains an **open hypothesis** about rapid live-resume cycling, not a
 conclusion (log 37).
 
+### 3.4 Guest egress: default deny (TIF-275)
+
+The guest has **no outbound network**. Its only network is QEMU user-mode networking, and UTM's
+**"isolate from host"** flag on that NIC adds slirp `restrict=on`: the guest cannot open any
+connection to the internet, the LAN or the host. The one explicit `hostfwd` rule,
+host `127.0.0.1:2222` → guest `:22`, still works because the host initiates it. Everything Myco
+does with the guest rides that inbound forward: `scp`/`ssh` for reset and deploy, and the agent's
+port 8765 through `ssh -L`, since the agent listens on the guest's loopback.
+
+| Direction | Allowed | How |
+|---|---|---|
+| host → guest | TCP `127.0.0.1:2222` → guest `:22` only | UTM port forward (slirp `hostfwd`) |
+| guest → internet (DNS, HTTP(S), NTP, Windows Update, activation, PyPI) | **nothing** | slirp `restrict=on` |
+| guest → host (`10.0.2.2`) | **nothing** | slirp `restrict=on` |
+
+**Every reset and every deploy checks it.** After the boot gate, `scripts/reset-trial-vm.sh`
+runs `scripts/guest-egress.sh verify`, and `agent/bootstrap/deploy-to-vm.sh` runs it before it
+copies anything. The deploy refuses outright under `MYCO_GUEST_EGRESS=open`. `verify` accepts
+exactly one configuration:
+
+- **In the live QEMU process**, whose argv is read exactly from the kernel (`KERN_PROCARGS2`),
+  not from `ps`:
+  - exactly argc strings are read and an empty argv[0] is refused; no mode prints an element
+    the allowlist has not accepted (refusals name the argv index only), so an environment
+    string left in the argv area by a process that rewrote it is never printed;
+  - every option must be on a fixed allowlist taken from UTM's launch, with its value in UTM's
+    shape; anything else is refused, including `-object` (any form), `-qmp`, `-qmp-pretty`,
+    `-monitor`, `-nic`, `-net`, `-global`, `-vnc`, a positional argument and any JSON value;
+  - no argv element may contain whitespace, and `-nodefaults` must be present;
+  - exactly one `-netdev`, of type `user`, with `restrict=on`, no `guestfwd` or other options,
+    and hostfwd rules of exactly `tcp:127.0.0.1:2222-:22`; `netdev=` only on the one NIC;
+  - chardevs only UTM's own (`spiceport`, `spicevmc`, the one pty `term0`, the swtpm socket),
+    and `-serial` only `chardev:term0`.
+- **In UTM:** one emulated NIC with "isolate from host" on and that one port forward.
+
+Anything else fails, including a second NIC, a `0.0.0.0` bind, an extra forward, a filter, a
+TCP chardev, an option UTM does not write, or anything it cannot read or parse. After a UTM
+upgrade, a refused option is updated as `docs/security/guest-egress.md` describes ("Updating
+the list"). `docs/security/guest-egress.md` lists every case. A failing reset prints:
+
+```
+reset-trial-vm: guest egress is not closed: refusing to call this guest ready. Run 'scripts/guest-egress.sh deny', then reset again (TIF-275, runbook §3.4)
+```
+
+Commands (each takes the VM lock where it changes anything; check `lsof` first as always):
+
+```bash
+scripts/guest-egress.sh status   # read-only: UTM flag and network config, the live netdev check
+scripts/guest-egress.sh verify   # exit 0 only if the live guest AND UTM match the allowlist exactly
+scripts/guest-egress.sh verify-all  # read-only: like verify, but lists EVERY refusal (argv index + fixed text, no values)
+scripts/guest-egress.sh probe    # from inside the guest: DNS, 3 internet TCP targets, the host; JSON
+python3 -I scripts/guest_egress_check.py argv   # the guest's argv; elements no rule accepts print as <redacted argv[N]>
+python3 -I scripts/guest_egress_check.py names  # option names only, each marked allowed / NOT ALLOWED (safe to paste)
+scripts/guest-egress.sh deny     # set the flag (force-stops the VM; reset afterwards)
+scripts/guest-egress.sh allow    # clear it: base-image maintenance ONLY
+```
+
+Expected `probe` on a restricted guest (every target fails):
+
+```
+{"dns_pypi_org":"timeout","tcp_pypi_org_443":"SocketException","tcp_1_1_1_1_443":"SocketException","tcp_8_8_8_8_53":"SocketException","tcp_host_10_0_2_2_2222":"SocketException"}
+```
+
+**Maintenance that needs the internet** (building a new base image, for example):
+
+1. `scripts/guest-egress.sh allow`.
+2. Reset with `MYCO_GUEST_EGRESS=open scripts/reset-trial-vm.sh`. It prints a `WARNING` and skips
+   the check.
+3. Do the work.
+4. `scripts/guest-egress.sh deny`, then reset again.
+
+Never run trials or deploy credentials into a guest reset that way.
+
+**The deploy needs no guest internet.** The host fetches the agent's Python wheels, pinned by
+version and sha256 in `agent/bootstrap/guest-requirements.txt`, into
+`~/.cache/myco/guest-wheels` (or `$MYCO_WHEEL_CACHE`), offline from that cache after the first
+fetch. The tree copy carries them in, and the guest installs them with `pip --no-index
+--require-hashes` (§4). An offline host can pre-stage them with `MYCO_GUEST_WHEELS=<dir>`.
+
+Background and threat model: `docs/security/guest-egress.md`.
+
+### 3.5 Trial base: `trial-base-v3`, and rollback to `trial-base-v2` or `clean-base`
+
+Trials reset to **`trial-base-v3`** by default (TIF-98). It is the `trial-base-v2` build below,
+rerun on 2026-11-26 with every build boot classified cold. Two of `trial-base-v2`'s build boots
+were fast boots (TIF-98 fast-reset evidence), so its maintenance ran on a guest that had skipped
+most of Windows' boot work. `trial-base-v3`'s did not:
+
+- step 1's reset: cold, first ssh after 154 s, 275 s of guest CPU (the first boot was fast and
+  the reset guard booted once more);
+- step 5's boot in place: the first start was fast (4 s of guest CPU, right after
+  `guest-egress.sh deny`), so the build shut down cleanly and started again: cold, 270 s.
+- Idle stage quiet with 0 counted tasks; full scan 1,982 s, 0 detections; egress verify plus all
+  5 probes denied before the snapshot.
+
+It took three attempts: attempts 1 and 2 timed out in the idle stage on `WDI\ResolutionHost`,
+which led to the third exclusion below (#557). Evidence, including both failures and every boot
+class: `docs/research/experiments/tif-98-trial-base-v3-2026-11-26/`. The table below is
+`trial-base-v2`'s; `trial-base-v3` has no reset bench or oracle parity run yet.
+
+**Rollbacks:** `MYCO_TRIAL_SNAPSHOT=trial-base-v2` (the previous default) or
+`MYCO_TRIAL_SNAPSHOT=clean-base`. Both stay on the allowlist.
+
+`trial-base-v2` is `clean-base` with its pending
+maintenance run to completion: a Defender signature update, `ngen executeQueuedItems`, Automatic
+Maintenance and idle tasks until quiet, and a Defender full scan. Then only the maintenance
+trigger and Windows Update were disabled. Defender real-time protection is on, with no
+exclusions.
+
+`scripts/build-trial-base.sh` built it on 2026-11-26. Egress was open only during the
+maintenance window and was proven closed (verify plus the TIF-275 probes) before the snapshot.
+No agent, token, credential or data has entered it. Evidence:
+`docs/research/experiments/tif-98-trial-base-v2-2026-11-26-run3/`.
+
+**Idle-stage exclusions (disclosed).** The build's idle stage waits until no `\Microsoft\Windows`
+task is running, except three tasks matched by full path that are logged in every sample but not
+counted: `Multimedia\SystemSoundsService` and `Wininet\CacheTask` (always running; ruling
+05:37Z), and `WDI\ResolutionHost` (ruling 20:3xZ, for the `trial-base-v3` rebuild from cold
+boots). On a cold boot, ResolutionHost ran in 85 of 103 samples through the 60-minute deadline
+with the guest otherwise idle (CPU 2–6%). It never appeared on the fast-booted `trial-base-v2`
+builds. The explanation (the Diagnostic Policy Service resolving the slow-boot event that a cold
+boot logs) is **unconfirmed**.
+
+| | `trial-base-v2` (default) | `clean-base` (rollback) |
+|---|---|---|
+| Memory state | none (disk-only, cold boot) | none (disk-only, cold boot) |
+| Reset total, same-session bench, 5 each | median 157 s (140–163) | median 221 s (204–222) |
+| First SSH answer | median 136 s | median 162 s |
+| Oracle parity (3 normal M1 Calc trials and 1 corrupted control) | identical to `clean-base`: `parity: PASS (4 trials)` | reference |
+
+The bench and parity evidence are in the `-run3/` and `-parity/` directories next to it.
+
+**Choosing the snapshot:**
+
+```bash
+scripts/reset-trial-vm.sh                              # trial-base-v3 (the default)
+scripts/reset-trial-vm.sh trial-base-v2                # one reset onto the previous default
+MYCO_TRIAL_SNAPSHOT=trial-base-v2 scripts/m1-sweep.sh OUT # a whole sweep on the previous default
+scripts/reset-trial-vm.sh clean-base                   # one reset onto the rollback base
+MYCO_TRIAL_SNAPSHOT=clean-base scripts/m1-sweep.sh OUT # a whole sweep on the rollback base
+MYCO_BENCH_SNAPSHOT=clean-base scripts/reset-bench.sh reset 5 out.jsonl   # bench onto clean-base
+```
+
+An explicit argument wins over `MYCO_TRIAL_SNAPSHOT`, and every name must pass the allowlist. A
+`*-live` snapshot is refused as a default (`MYCO_TRIAL_SNAPSHOT`), and so is an empty argument.
+
+**The sweep drivers pin the snapshot per `OUT`** (`scripts/trial-snapshot.sh`):
+
+- `m1-sweep.sh` and `m1-corrupt-suite.sh` write the resolved snapshot to `OUT/snapshot` on the
+  first run, and refuse a resume that resolves a different one (`REFUSED_SNAPSHOT_MISMATCH`,
+  exit 11).
+- An `OUT` with rows but no pin was started before pinning existed, on `clean-base`. It is
+  refused unless resumed with `MYCO_TRIAL_SNAPSHOT=clean-base` (`REFUSED_SNAPSHOT_UNKNOWN`,
+  exit 11). A symlink at `OUT/snapshot` is refused, and the pin is never written through one.
+- Only a Myco trial base resolves: `trial-base-v3`, `trial-base-v2` or `clean-base`. Anything else in
+  `MYCO_TRIAL_SNAPSHOT` (a typo, a `*-live` snapshot, the baseline arms' `cua-c1-base`) is
+  refused at the start, with exit 11.
+- Every row carries `snapshot`, parsed from the reset's `ready on '<snap>'` line (`null` when
+  the reset failed). That is the name the reset script reports it restored, not an observed
+  identity of the guest. A reset that reports ready on a different snapshot aborts the run
+  (`ABORT_SNAPSHOT_MISMATCH`, exit 12).
+
+**Comparison runs** (Myco against a baseline arm) keep both arms on the same base. The baseline
+arms run on `cua-c1-base`, a `clean-base` derivative, so the Myco arm of a comparison runs with
+`MYCO_COMPARISON_RUN=1 MYCO_TRIAL_SNAPSHOT=clean-base`. The drivers refuse a comparison run
+without that (exit 11), and refuse any `MYCO_COMPARISON_RUN` other than empty, `0` or `1`
+(exit 11), so a typo such as `true` never silently means "not a comparison".
+
+The join enforces it too, fail-closed: `scripts/row7-compare.py` refuses to pair a Myco row whose
+`snapshot` is not in the baseline's base family (`clean-base` for `cua-c1-base`). A Myco row with
+no `snapshot` key predates the field and counts as `clean-base`. Any new comparator that pairs
+Myco rows with a baseline arm must apply the same check. See
+`docs/baseline/screenshot-agent.md` §2.
+`clean-base` and `clean-base-live` are never modified or deleted. A new trial base is a new
+versioned snapshot (`trial-base-v3`, and so on), never an overwrite: `build-trial-base.sh`
+refuses an existing name.
+
 ## 4. Deploy the agent
 
 ```bash
 agent/bootstrap/deploy-to-vm.sh
 ```
 
-Foreground, 100–180 s (measured 126.9 s and ~176 s). It copies the agent tree to
+> **Before any sweep (§7.3, §7.4): the token file must be replaceable, or every trial fails
+> (TIF-229).** Every deploy rewrites `~/.myco-token`, or `$MYCO_TOKEN_OUT` if it is set in the
+> driver's environment, and the sweep drivers run this deploy once per trial
+> (`scripts/m1-sweep.sh`, `scripts/m1-corrupt-suite.sh`). If the deploy cannot replace that file,
+> it exits 1 before copying anything, the driver records the trial `deploy-failed`, and the next
+> trial hits the same wall: **all 30 trials end `deploy-failed`**, with the reason only in
+> `$OUT/progress.log` (a `deploy-to-vm: MYCO_TOKEN_OUT …` line).
+>
+> The deploy writes a temp file in the file's **directory** and renames it over the file. So the
+> rule is: the directory must exist and be writable and searchable by you, and an existing file
+> (or symlink) at the path must be **owned by you**. Its own mode does not matter (a mode-400 file
+> of yours is replaced), and a symlink is replaced, never written through. Check, from the shell
+> that launches the sweep, without printing the path (§1.3, J4):
+>
+> ```bash
+> d=$(dirname "${MYCO_TOKEN_OUT:-$HOME/.myco-token}"); f="${MYCO_TOKEN_OUT:-$HOME/.myco-token}"
+> [ -d "$d" ] && [ -w "$d" ] && [ -x "$d" ] && echo "dir ok" || echo "DIR NOT WRITABLE"
+> { [ ! -e "$f" ] && [ ! -L "$f" ]; } || [ -n "$(find "$f" -maxdepth 0 -user "$(id -u)")" ] \
+>   && echo "file ok" || echo "FILE OWNED BY ANOTHER USER"
+> ```
+>
+> Fix: `mkdir -p -m 700` the directory if it is missing; `chmod u+wx` it if it is yours and not
+> writable; otherwise, or if the file belongs to another operator, set a private
+> `MYCO_TOKEN_OUT` under your clone (below) and export it in the shell that launches the sweep.
+> The deploy prints the same remedy in its refusal line. A one-off `deploy-to-vm.sh` by hand is
+> the quickest end-to-end check: it refuses in under a second, before touching the guest, if the
+> path is wrong.
+
+Foreground, **100–420 s** (measured 126.9 s and ~176 s quiet; **418 s** on 2026-11-24 under
+load ~9.7). The 100–180 s figure is the quiet case only. It copies the agent tree to
 `C:\Program Files\Myco\agent`, writes a **fresh token** to `C:\ProgramData\Myco\agent.token`,
 installs pywin32/comtypes/uiautomation into LibreOffice's own Python, registers the `MycoAgent`
 task, launches it through `run-interactive.ps1` (interactive session), and pings it through
-`ssh -L 8765:127.0.0.1:8765`.
+`ssh -L 8765:127.0.0.1:8765`. (The script's header comment, lines 6–7, still says it starts the
+agent "via schtasks /run". That comment is stale; the launch is `run-interactive.ps1`, as the
+script's own output says.)
 
-Expected tail:
+Expected tail (the last lines it prints):
 
 ```
+==> wrote the fresh token to /Users/<you>/.myco-token (mode 600)
 ==> ping verified:
-{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": 1, ...}}
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "<random hex GUID, not 1>", ...}}
+
 DEPLOY OK
+  token   : per-deploy; in /Users/<you>/.myco-token on this host and C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F <ssh_config> -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
 ```
 
-**The token rotates on every deploy.** `run-live.ts` reads `MYCO_AGENT_TOKEN`, falling back to
-`~/.myco-token` (`src/integration/run-live.ts:32-41`). Re-fetch it after every deploy:
+`DEPLOY OK` is not the last line: the three `token` / `tunnel` / `ops` hint lines follow it
+(`agent/bootstrap/deploy-to-vm.sh`, its last lines). None of them carries the token: the `token`
+line names the host file the deploy wrote and the guest path, and `ops` prints a literal `<token>`.
+
+**Other output that is expected and harmless:**
+
+- **OpenSSH post-quantum warnings (row-8 J5).** The deploy's `ssh`/`scp` calls can print
+  `** WARNING: connection is not using a post-quantum key exchange algorithm` (with a
+  `See https://openssh.com/pq.html` line), several times per deploy. It is the host's OpenSSH
+  client commenting on the guest sshd's key exchange, not a deploy fault. The same warning can
+  appear on any `ssh`, `scp` or `vssh` call in this runbook. Judge the deploy by its own lines:
+  the sha256 copy check, `ping verified` and `DEPLOY OK`.
+- **No pip output (row-8 J6).** The dependency install is an **offline**
+  `pip install --quiet --no-index --find-links <agent>\wheels --require-hashes -r guest-requirements.txt`
+  in `guest-deploy.ps1`'s `register` stage (run by the `==> registering MycoAgent task …` step).
+  The guest has no internet (§3.4): the deploy stages the pinned wheels on the host first
+  (`==> staged 3 wheels for the guest (installed offline, hash-pinned)`) and copies them with the
+  tree. A successful install prints nothing. There is no separate pip log on the host or the guest. On
+  failure, pip's error comes back over ssh on the deploy's stderr, followed by
+  `pip install into LO python failed: <exit code>`, and the deploy exits non-zero before the ping
+  step. The evidence that the install worked is §5 passing.
+
+**The token rotates on every deploy, and the deploy leaves the fresh one on the host.** Once the
+ping check passes, `deploy-to-vm.sh` writes the token to `~/.myco-token` (or `$MYCO_TOKEN_OUT`) and
+prints only the path: `==> wrote the fresh token to … (mode 600)`. There is nothing to fetch back
+from the guest. The token never passes through argv, the operator's shell or the output; inside
+the script it is an unexported variable (the host's secret guard refuses commands that carry it,
+TIF-206; §5). (row-8 H5: on 2026-11-25 the old guest
+fetch was refused by an agent session's permission system, and §5 and §6 then failed
+`AUTH_FAILED` on a stale file.)
+
+- **Written only after a verified deploy.** The token goes to a `mktemp` file in the same
+  directory (created mode 600; `umask 077` and `chmod 600` as defence in depth), which is then
+  `mv`ed into place, so it is never world-readable and never half-written. A symlink at the path
+  is replaced by the file, not written through. A deploy that fails (copy, register or ping) leaves any existing file byte-identical.
+  The guest token may already have rotated by then, so after a failed deploy that file can be stale:
+  fix the deploy and re-run it, do not run trials on the old file.
+- **Each deploy rotates the token**, including the deploy inside every §7.3/§7.4 trial. A copy from
+  before your latest deploy fails `AUTH_FAILED`.
+- **`~/.myco-token` is one path shared by every operator on this Mac (G25).** Another operator's
+  deploy overwrites it, and their guest token replaces yours. Nothing in the repo tells you whether
+  someone else is using the Mac right now, so **always use a private path under your own clone**
+  (row-8 J3), and pass the same path to §5, §6 and §7:
+
+  ```bash
+  mkdir -p -m 700 runs/token-"$USER"                # under your own clone; runs/ is gitignored
+  export MYCO_TOKEN_OUT="$PWD/runs/token-$USER/agent-token"
+  agent/bootstrap/deploy-to-vm.sh
+  ```
+
+  Avoid a `mktemp -d` path under `$TMPDIR`: macOS cleans old files out of it, so the token can
+  vanish between the deploy and a later trial.
+
+  Then pass `--token-file "$MYCO_TOKEN_OUT"` in §5, §6 and §7, from the same shell. An agent whose
+  tool calls do not share one shell loses the exported variable between calls: re-set it in each
+  call, to the same path (`export MYCO_TOKEN_OUT="$PWD/runs/token-$USER/agent-token"` from the same
+  clone root), before the command that uses it (row-8 J9). Do not print it to check it (§1.3,
+  J4). The directory
+  must exist and be writable by you, and an existing file there must be yours (its mode does not
+  matter: it is replaced, not written into); the deploy checks this before it copies anything,
+  and otherwise refuses with a remedy (exit 1, guest untouched; the box at the top of §4).
+  Even with a private file, a later deploy by anyone rotates the guest token, so do not run
+  single trials while a sweep is deploying.
+- **`run-live.ts` reads `--token-file PATH`, else `MYCO_AGENT_TOKEN`, else `~/.myco-token`**
+  (`src/integration/run-live-token.ts`). With the default path, leave `MYCO_AGENT_TOKEN` unset
+  (`unset MYCO_AGENT_TOKEN` if an earlier shell exported a stale one: a set variable wins over the
+  default file). `--token-file` wins over the variable and never falls back. The §5 CLI reads only
+  a file (`--token-file`, default `~/.myco-token`).
+- **The `ops` line in the deploy output holds no token.** It prints a literal `<token>`
+  placeholder, but the host secret guard redacts it, so on screen the tail can *look* as if it
+  printed one.
+
+**Fallback, only for a guest deployed by something else** (an older checkout's deploy, a
+pre-deployed snapshot, or another tool): then no host file was written for you, and the token
+exists only on the guest. Fetch it into a file, never through a shell variable, with `umask 077`
+first. Do **not** do this after a `deploy-to-vm.sh` from this checkout: it is redundant, and an
+agent's permission system may refuse it.
 
 ```bash
-export MYCO_AGENT_TOKEN="$(~/VMs/myco-win11/scripts/vssh 'Get-Content C:\ProgramData\Myco\agent.token')"
+(umask 077; ~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -Command "Get-Content C:\ProgramData\Myco\agent.token"' > ~/.myco-token)
 ```
+
+PowerShell ends the line with CRLF; both readers trim it (`src/integration/session-info-core.ts`
+`readTokenFile`, used by `run-live` too).
+
+**Known gap: the drivers do not follow the token-file rule (G28, not fixed here).**
+`scripts/m1-sweep.sh:89,94` and `scripts/m1-corrupt-suite.sh:80,94` read the token into a shell
+variable (`TOK=$(vssh … Get-Content …)`) and pass it to `run-live` as `MYCO_AGENT_TOKEN`, so it
+sits in a long-lived process's environment for the whole trial. This is a known exception to the
+rule above, tracked separately; it is not something an operator should copy. By hand, use the
+file.
 
 If it fails:
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `deploy-to-vm: missing ssh config …` / `nc not found` / `openssl not found` | host prerequisite | fix the host (§1) |
-| `ModuleNotFoundError` on `session_info`, or `uia`/`pywin32` import errors from the agent | deps missing from **LibreOffice's** Python | `guest-deploy.ps1` installs them; re-run the deploy and read its pip output |
+| `ModuleNotFoundError` on `session_info`, or `uia`/`pywin32` import errors from the agent | deps missing from **LibreOffice's** Python | `guest-deploy.ps1` installs them, silently on success (`pip --quiet`, J6 above); re-run the deploy and read its stderr: a failed install prints pip's error and `pip install into LO python failed: <exit code>`, and the deploy exits non-zero |
 | agent answers on the wrong interpreter, or `uno` fails to import | agent started under system Python instead of `C:\Program Files\LibreOffice\program\python.exe` | you are on old bootstrap code; the interpreter is fixed on `main` (log 18) |
-| `scp: Connection closed` | guest or UTM unhealthy | §2, then §3.3 |
+| `deploy-to-vm: copy attempt 1/3 failed; redoing the whole copy` | sshd dropped a connection while settling after a cold boot (TIF-220; 1 in 28 cycles) | nothing, if a later attempt prints `copy succeeded … verified`. The copy is redone in full and hash-checked, never resumed. A clean first attempt prints only `==> verified N files on the guest against the source (sha256)`: the `copy succeeded on attempt N/3` line appears only after a retry |
+| `scp: Connection closed` followed by `copy to guest failed on all 3 attempts` | guest or UTM unhealthy, not a settling blip | §2, then §3.3 |
 | ping never answers, no error | agent started in session 0 | §5 — this is the failure that matters |
 
 ## 5. Prove the agent is on the desktop
 
 The agent's `ping` reports its session; `session_info` reports the window station and desktop
-(both ops, `agent/README.md`). **UNVERIFIED** as a command — the shape is the one
-`deploy-to-vm.sh` uses for `ping`, with the op swapped:
+(both ops, `agent/README.md`). The old inline recipe printed the token into the command line,
+which the host's enforced secret guard refuses (TIF-206, F16), so no agent could run it; it is
+replaced by a repo CLI that reads the token from a file. (measured) **Passed against the real
+guest on 2026-11-25** (fresh row-8 operator, HEAD `bfbe277`): exit 0 in 7 s, stdout identical to
+the expected JSON below. Its other exit codes are covered by unit tests
+(`test/session-info.test.ts`).
+
+No token fetch: the deploy wrote the fresh token to `~/.myco-token` (or `$MYCO_TOKEN_OUT`) after it
+verified the agent (§4). Only for a guest deployed by something else, use the §4 fallback first.
+Pass the same path the deploy wrote:
 
 ```bash
-ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11 &
-printf '{"id":1,"token":"%s","op":"session_info","params":{}}\n' "$MYCO_AGENT_TOKEN" | nc -w 5 127.0.0.1 8765
+pnpm exec tsx src/integration/session-info.ts --token-file "$MYCO_TOKEN_OUT"   # your private path (§4); ~/.myco-token only if you deployed without it
 ```
 
-Expected:
+The CLI opens its own ssh tunnel (`SshTunnel`), takes and releases the VM lock, prints the
+`session_info` result JSON to stdout, and always stops the tunnel — so the old manual-tunnel
+teardown is no longer needed; nothing of §5 is left listening on 8765.
+
+Exit codes (`src/integration/session-info-core.ts` header): `0` desktop proof passed;
+`2` the agent is in session 0 and/or not on `WinSta0` — **stop, do not run trials**;
+`3` could not ask the agent or could not evaluate its answer — bad invocation (usage); token file
+missing, unreadable, or empty; tunnel did not come up or agent unreachable; auth failure or any
+other `ok:false`; a malformed `session_info` result (including `ok:true` with no result); the
+tunnel teardown failing;
+`10` `REFUSED_VM_LOCKED: …` — the VM lock is held (holder named), or its state could not be
+determined.
+
+Expected stdout on the passing path:
 
 ```json
-{"ok": true, "id": 1, "result": {"session_id": 1, "window_station": "WinSta0", "desktop": "Default", "user": "MYCO-WIN11\\myco"}}
+{"session_id":1,"window_station":"WinSta0","desktop":"Default","user":"MYCO-WIN11\\myco"}
 ```
 
-`run-live.ts` prints the same fact in one line before every trial:
-`agent ping ok: 0.1.0 session 1` on stderr.
+**`run-live`'s per-trial line is NOT this proof, and cannot be.** It prints
+`agent ping ok: 0.1.0 session <id>` on stderr (`src/integration/run-live.ts:68`), and that id is
+`ping`'s `session_id`, which is a **random hex GUID generated per agent start**
+(`agent/myco_agent/__init__.py:4`, `uuid.uuid4().hex`; returned by `agent/myco_agent/ops.py:8`).
+It is **not the Windows session number**, so no value of that line can distinguish session 1 from
+session 0. The desktop proof is the `session_info` call above, which reads the real number through
+`ProcessIdToSessionId` (`agent/myco_agent/windows_backend.py:288-321`). An earlier revision
+presented the ping line as "the same fact"; it is not (F9/F10, 2026-11-24).
 
 **Why this is a gate, not a nicety.** Windows puts services in session 0, which has no visible
 window station; `sshd` is a service, so everything it spawns inherits session 0 and cannot see or
@@ -283,18 +803,288 @@ trials.
 Prerequisite for reliability numbers: if a generated value does not survive Calc's input path,
 a `refuted` verdict may be a generator defect rather than an execution defect.
 
-**UNVERIFIED.** Reset (§3) and deploy (§4) first, then run once on a quiet host. Do **not**
+(measured) **PASSED 20/20.** The coordinator's run on 2026-11-24 08:34–08:49Z gave 20/20
+verified, exit 0 (`docs/research/experiments/m1-row8/S6-PASS.md`), and a fresh row-8 operator's
+run on 2026-11-24 11:42–11:59Z gave 20/20 verified, exit 0, `validate-live` ALL OK on its runs
+dir (recorded in the host-only operator report, not committed; that run skipped the §3 reset and
+§4 deploy, F20). Reset (§3) and deploy (§4) first, then run once on a quiet host.
+
+**When you may skip §3 and §4 (F20).** On a **row-8 reproduction run, never**: the point of the
+run is that a fresh operator can do every step, so reset, deploy and §5 are part of what is being
+tested. Outside row 8, for example re-measuring the generator on a guest that another driver
+has just released, skipping is acceptable only when all three hold: §5 passes on the guest as it
+stands, your token file holds the token from the last deploy (that deploy wrote it, or, for a
+guest deployed by something else, you ran the §4 fallback after it), and §6.1 prints nothing after
+cleanup.
+Record the skip, and why, next to the §6 result. A skip that is not recorded reads as a full run.
+
+**The lock procedure: each step takes and releases the lock itself, or one `vm-session.sh` holds
+it for the whole session (F20; TIF-210).** Never hold the VM flock by hand across steps (an
+interactive `exec 9>>`, a python `flock` left open): a child accepts an ancestor's lock only when
+the ancestor is one of the named drivers (`m1-sweep.sh`, `m1-corrupt-suite.sh`, `c1-baseline.sh`,
+`c1-sweep.sh`, `c1-spike.sh`, or the session wrapper `vm-session.sh`, per `vm_lock_owned_by_parent`
+in `scripts/vm-lock.sh` and `PARENT_DRIVERS`/`FD_PROVEN_PARENT_DRIVERS` in
+`src/integration/vm-lock.ts`). Under a hand-held lock, §3.1 and §6 refuse with exit 10. **Before
+every step, or before starting a session,** run the gate check, read-only:
+
+```bash
+lsof /tmp/myco-win11.vm.lock || echo free     # a table = someone owns the VM: wait
+```
+
+Use `lsof`, not a `fcntl.flock` probe: a probe holds `LOCK_EX` for an instant, and a driver
+starting in that instant refuses with exit 10 (F5).
+
+| step | how it holds the lock |
+|---|---|
+| §3.1 `scripts/reset-trial-vm.sh` | takes it, releases on exit |
+| §4 `agent/bootstrap/deploy-to-vm.sh` | **does not take it.** Run it straight after the gate check prints `free`. Inside a §7.3 sweep it runs as a child of `m1-sweep.sh` and is covered by the sweep's lock |
+| §5 the `session_info` check | takes it, releases on exit (TIF-209) |
+| §6.1 check and cleanup (`vssh`/`scp`) | **do not take it.** Run them straight after the gate check |
+| §6 and §7.1/§7.2 `run-live` | takes it, releases on exit |
+| §7.3 `scripts/m1-sweep.sh`, §7.4 `scripts/m1-corrupt-suite.sh` | take it for the whole sweep; their children inherit it |
+
+Between steps the VM is unlocked, so another driver can take it. If a step exits 10, wait for the
+named holder and re-run the step. If the gate check shows an owner you did not expect, stop and
+report it. Do not break the lock.
+
+**To keep the VM yours across several steps, use the session wrapper (TIF-210).** When the
+steps must run back to back with nothing in between (reset → deploy → `session_info` → §6.1 → §6,
+or a §7.1/§7.2 trial right after a reset), run them under one `scripts/vm-session.sh`, straight
+after the gate check prints `free`:
+
+```bash
+lsof /tmp/myco-win11.vm.lock || echo free     # must print free
+scripts/vm-session.sh -- bash -c '
+  set -e
+  scripts/reset-trial-vm.sh
+  agent/bootstrap/deploy-to-vm.sh
+  node --import tsx src/integration/session-info.ts --token-file "$MYCO_TOKEN_OUT"
+  node --import tsx src/integration/run-live.ts --mode values ...   # §6, flags as in §6.2
+'
+lsof /tmp/myco-win11.vm.lock || echo free     # free again once the session and every child holding FD 9 exit
+```
+
+The wrapper takes the lock once (record `<pid> vm-session.sh`), runs the command with the lock's
+descriptor (FD 9) inherited, and releases it when the command exits: normally, on a crash, or on
+Ctrl-C / `kill`. A SIGINT, SIGTERM or SIGHUP reaches every process of the command's process group
+**once**, so every step of a `bash -c '<step>; <step>'` gets it, a step's `EXIT` trap can finish
+its cleanup, and later steps do not start. The wrapper then waits until the command and every
+other process of that group have gone, and exits `128+signal`. That holds for a signal that
+reaches the wrapper at any point while the command runs, also one that lands just as the
+command exits; only a signal that comes after the wrapper has collected the command's exit and
+started to leave is dropped, and the exit status is then the command's own. Every signal it forwards is
+followed by a `SIGCONT`, so a stopped step still gets it. A signal that was ignored when the
+wrapper started stays ignored: under `nohup scripts/vm-session.sh -- …` a hangup does not end
+the session.
+
+- **Started straight from your terminal** (the form above), the wrapper and its command are one
+  job. Ctrl-C reaches every step and ends the session, a step can still prompt, Ctrl-Z stops the
+  whole job (the lock stays held while it is stopped) and `fg` resumes it. The terminal already
+  sends Ctrl-C and a hangup to every step, so the wrapper does not send SIGINT or SIGHUP again: a
+  second copy would cut a step's `EXIT` trap short (§4's deploy leaves its token file and tunnel
+  behind). To end such a session from another terminal, send **SIGTERM** to the wrapper (`kill
+  <pid>`, pid from the lock file); a `kill -INT` or `kill -HUP` aimed at the wrapper alone does not
+  reach the steps.
+- **Started from a script** (or any way that does not make it a job of its own), the command gets
+  its own process group and every signal is forwarded to it. If that script runs in your terminal,
+  a step that reads the terminal is stopped (SIGTTIN) and Ctrl-Z stops only the script and the
+  wrapper, not the steps. The wrapper reports a stopped step within a second or two; end the
+  session with `kill <wrapper pid>`. To use the terminal inside a session, start the wrapper
+  straight from your shell.
+- **If something is still running 5 s after a signal**, the wrapper keeps the lock and its record,
+  prints which processes it is waiting for (again every 30 s), and keeps waiting; it never gives
+  up on its own. A SIGTERM to the wrapper is forwarded to them. Two cases look like this: a
+  background child that ignores SIGINT and was not stopped by its step (below), and a step whose
+  `bash` took the Ctrl-C as handled because its foreground command exited normally at that
+  instant (bash's own rule). Press Ctrl-C again or send SIGTERM.
+- A background descendant that kept FD 9 keeps the lock held after the wrapper exits, until it
+  exits too. After a normal exit the wrapper does not wait for it; after a signal it does (as
+  above) while it is still in the command's process group.
+
+On those exits it clears its record, so the lock file is normally empty afterwards (unlike the
+other drivers, §2). Three cases leave `<pid> vm-session.sh` behind: (1) a SIGKILLed wrapper;
+(2) a signal in the few milliseconds while its python3 supervisor starts; (3) anything else that
+kills the wrapper between taking the lock and starting the supervisor without running its traps.
+No command has run in cases 2 and 3. That is safe: a step accepts the record only from a descendant of that pid that carries its
+FD 9, so an unrelated process, including one that later reuses the pid, is refused. It exits
+**10** with `REFUSED_VM_LOCKED` if the lock is held, **125** if python3 is missing or the python3
+supervisor could not be started (nothing ran), and otherwise with the command's own status. While it runs, `lsof` lists the wrapper and its
+children, which is correct: the VM is in use.
+
+- A step accepts the session's lock only if it **inherited FD 9** from the wrapper: it must be a
+  descendant of the recorded wrapper, *and* its FD 9 must be the lock file *and* the open file
+  description that holds the flock. Being a descendant alone, or setting `MYCO_VM_LOCK_OWNER` to
+  the wrapper's pid, is not enough, and a
+  second wrapper, a sweep or any other driver started elsewhere still refuses with exit 10.
+- **Start TypeScript steps with `node --import tsx`, not `pnpm exec tsx`, under the wrapper.**
+  `pnpm exec`, `npx` and the `tsx` CLI start their child with stdio only, so FD 9 does not reach
+  it and `run-live`/`session_info` refuse with exit 10 (fail closed, nothing touched). Outside a
+  session `pnpm exec tsx` stays fine.
+- Do **not** run `m1-sweep.sh`, `m1-corrupt-suite.sh` or the c1 drivers under it: they take the
+  lock for themselves and refuse (exit 10). They hold it for their whole run anyway.
+- Do not use the wrapper to "reserve" the VM with an idle command (`sleep`): that is the
+  hand-held lock this section forbids, with the same effect on everyone else.
+
+Do **not**
 interleave with other work on the guest. `--mode values` runs its parameter sets back to back
 without resets, so running it on a contaminated guest (leftover `soffice`, leftover run dirs)
 measures the contamination, not the generator (log 27).
 
+### 6.1 Prove the guest is clean before you start
+
+`--mode values` runs 20 sets back to back on one guest, so **a single leftover run dir fails
+every row** — measured 2026-11-24: 20/20 `uncertain`, every reason
+`could not look: guest contaminated — leftover run dirs: myco-54774-…; refusing to read a
+foreign document`. That is the M1-019 guard doing its job; it will not score someone else's
+document. Do not start §6 until this prints nothing.
+
+The host-side copies of these scripts go under `runs/row8-host/` in **your clone** (gitignored,
+and private to your checkout). Do not use fixed `/tmp/...` names: several operators share this
+Mac, and a fixed name lets one operator's script overwrite another's between the write and the
+`scp`. (The guest-side `C:\myco\guest-clean.ps1` is shared too; that is unavoidable, so run the
+write, `scp` and `vssh` back to back.) Run these from the repo root:
+
 ```bash
-pnpm exec tsx src/integration/run-live.ts --mode values --limit 20
+mkdir -p runs/row8-host
+cat > runs/row8-host/guest-clean.ps1 <<'EOF'
+Get-Process soffice* -ErrorAction SilentlyContinue | ForEach-Object { "soffice $($_.Id)" }
+# Everything that is not ours, minus the two names the agent owns. NOT a 'myco-*' filter:
+# a C1 run leaves C:\myco\runs\20, which 'myco-*' does not match, so that filter prints
+# nothing (a false clean) and every row then fails 'leftover run dirs: 20' (F13).
+Get-ChildItem C:\myco\runs -Directory -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -notin @('myco-admin','profiles') } |
+  ForEach-Object { "run-dir $($_.Name)" }
+EOF
+scp -q -F ~/VMs/myco-win11/ssh_config runs/row8-host/guest-clean.ps1 myco-win11:'C:/myco/guest-clean.ps1'
+~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\myco\guest-clean.ps1'
 ```
+
+On a guest just restored from the trial base (`trial-base-v3`, `trial-base-v2`, or `clean-base`),
+`C:\myco\runs` does not exist yet, and that is a clean guest. The `-ErrorAction SilentlyContinue` keeps the check silent in that case. An older
+copy of this check without it prints `Cannot find path 'C:\myco\runs' because it does not exist`
+instead, which also means clean (operator report S5).
+
+**If a previous §6 attempt was aborted** — killed, Ctrl-C'd, or interrupted by a guest reset —
+it leaves one `run-dir myco-<hostpid>-<nonce>-<nonce>` and possibly one `soffice` behind. A run
+that is not a trial — the C1 arms write `C:\myco\runs\<index>` — leaves a directory whose name
+matches nothing in particular, including a bare number. Clean them before re-running, or the
+re-run measures the residue.
+
+**A stray C1 guest dir is not row-8 evidence. Copy it aside, then clean it (F17).** A
+`C:\myco\runs\<index>` directory belongs to a C1 arm's trial, not to this run. It proves
+nothing about row 8 and must not be cited as row-8 evidence. But it may be the only guest-side
+copy of that C1 trial, so do not delete it unseen. For each `run-dir` line the check printed
+whose name is not `myco-<hostpid>-<nonce>-<nonce>` (your own aborted §6 residue), copy the
+directory to the host first:
+
+```bash
+mkdir -p runs/row8-host/guest-residue
+scp -q -r -F ~/VMs/myco-win11/ssh_config myco-win11:'C:/myco/runs/<name>' runs/row8-host/guest-residue/
+```
+
+Record the copied absolute path in your report so the C1 owner can find it (`runs/` is
+gitignored, so the copy is never committed by accident). Then run the cleanup:
+
+```bash
+cat > runs/row8-host/guest-cleanup.ps1 <<'EOF'
+Get-Process soffice* -ErrorAction SilentlyContinue | Stop-Process -Force
+# Same reason as the check above: remove everything except the agent's own names.
+Get-ChildItem C:\myco\runs -Directory -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -notin @('myco-admin','profiles') } |
+  Remove-Item -Recurse -Force
+Get-ChildItem C:\myco\profiles -Directory -ErrorAction SilentlyContinue | Where-Object Name -like 'myco-*' | Remove-Item -Recurse -Force
+EOF
+scp -q -F ~/VMs/myco-win11/ssh_config runs/row8-host/guest-cleanup.ps1 myco-win11:'C:/myco/guest-cleanup.ps1'
+~/VMs/myco-win11/scripts/vssh 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\myco\guest-cleanup.ps1'
+```
+
+Then re-run `guest-clean.ps1` and confirm it prints nothing.
+
+**Do not delete** `C:\myco\runs\profiles` or `C:\myco\runs\myco_uia_act.py*` — those are the
+profile root and the agent's own script plus its result files, not trial residue.
+
+**What trips the trial's contamination guard (F18).** From `src/integration/guest-health.ts`
+(`probeGuestHealth`, `guestContaminated`): **any** running `soffice`, and **any** directory
+directly under `C:\myco\runs` other than `myco-admin`, `profiles` and the trial's own, **whatever
+its name**: `myco-*`, a bare `20` or `29`, anything. Sub-directories *inside*
+`C:\myco\runs\profiles` are reported as `leftover profiles` but do **not** trip the guard. The
+§6.1 check above prints exactly the set that trips it, so a clean check means a clean guard.
+
+### 6.2 Hold the VM, or nothing else may touch it
+
+`run-live` **takes the VM flock itself** (TIF-191). If another driver owns the host it refuses
+before touching the guest:
+
+```
+REFUSED_VM_LOCKED: holder 36343 c1-baseline.sh
+exit 10
+```
+
+Exit **10** is that refusal, and it is not a generator failure — wait for the named holder to
+finish, then re-run. Nothing has been created on the guest or in `runs/` when it happens.
+
+This was not always so, and the reason is worth keeping. Measured 2026-11-24: a baseline driver
+acquired the lock and cold-reset the guest to its own snapshot ~55 s into a §6 run. The first
+row verified; the tunnel then died with the guest, and **the next 19 rows each returned
+`uncertain` in 0–1 ms** — `could not look: agent unreachable — ssh tunnel is not running (call
+start() first)`. The run exited 1 with one genuine verdict and 19 harness aborts, which reads
+exactly like a generator defect and was not one.
+
+A driver that spawns `run-live` as a child (§7.3, §7.4) keeps working: the child inherits the
+lock its ancestor owns (`MYCO_VM_LOCK_OWNER`) instead of refusing it. So the sweep does not need
+to change, and running `run-live` **by hand** is the case this guards.
+
+Before §6, run the gate check from §6's top once more, read-only. `free` plus a running guest is
+the good state; an `lsof` table means another driver owns the VM, so wait:
+
+```bash
+lsof /tmp/myco-win11.vm.lock || echo free     # a table = someone owns the VM: wait
+```
+
+Then the §6 run itself:
+
+```bash
+pnpm exec tsx src/integration/run-live.ts --mode values --limit 20 --runs-dir runs/s6-final \
+  --token-file "$MYCO_TOKEN_OUT"   # your private path (§4); ~/.myco-token only if you deployed without it
+```
+
+**Use an explicit `--runs-dir`.** Without it the run writes into `runs/`, which §1.2's `pnpm test`
+has already filled with schema-valid fixture directories — so §8.2's `validate-live` can report
+`ALL OK` on the *tests'* artifacts rather than on this run (F11/F14, 2026-11-24). A dedicated
+directory also makes the §6 evidence unambiguous.
+
+**Two runs-dir names, one for each kind of run (row-8 J7).** A full 20-row run uses
+`--runs-dir runs/s6-final`. Any `--limit N` subset uses `--runs-dir runs/s6-subset`. Never point
+a subset at `runs/s6-final`, so a subset can never be mistaken for the 20-row evidence dir.
 
 Expected: a JSON array of 20 rows, every one `"status": "verified"`, exit code 0 (non-zero if any
 row is not verified; exit 2 if the generator yields no sets — a broken generator must not look
-like a pass). Row shape, from the committed run
+like a pass). A non-verified row includes `uncertain` and `harness-error`, not only `refuted`.
+
+**A run with a different `--limit N` (a subset, or a bounded re-check).** `--limit` is what makes
+the run 20 rows: without it `run-live` takes up to 40 sets (`src/integration/run-live.ts`,
+`--mode values`). With `--limit N` the pass condition is the same shape at size N: **a JSON array
+of N rows, every one `"status": "verified"`, exit code 0.** Any non-verified row, or a non-zero
+exit, fails it. An N-row pass is evidence for the generator on those N sets only; it never
+replaces the 20/20. **Row 8's bounded re-check may use such a subset**, always with
+`--runs-dir runs/s6-subset` (for example `--limit 4 --runs-dir runs/s6-subset`); the full 20/20
+for row 8 stands from the recorded runs above (`S6-PASS.md`, and the fresh operator's 2026-11-24
+11:42–11:59Z run). In the retry rule and decision table below, read "20/20" as "N/N" for a subset
+run.
+
+**After a passing run (full or subset), leave the guest as `run-live` left it (row-8 J11).**
+Each row is one trial, and every trial cleans up after itself in a `finally`
+(`cleanupAfterTrial` in `src/integration/trial.ts`, calling `cleanupTrialGuest` in
+`src/integration/guest-health.ts`): it kills every `soffice` and deletes its own run dir and UNO
+profile, then lists again to check. Before each trial, `probeGuestHealth` aborts the trial on a stray
+`soffice` or a leftover run dir (`guestContaminated`, the set §6.1 prints), so in a run where
+every row verified, every cleanup except the last one has already
+been checked by the next row's probe. You do not need to re-run §6.1 or the cleanup. The next
+operator's own §6.1 check is what protects them. If you do re-run the §6.1 check (it is
+read-only) and it prints a line, that is the last trial's cleanup residue: run the §6.1 cleanup,
+then the check again, and record it.
+
+Row shape, from the committed run
 (`docs/research/experiments/m1-013-generator-proof.json`):
 
 ```json
@@ -304,36 +1094,99 @@ like a pass). Row shape, from the committed run
 
 Recorded result: **20/20 verified** (5 values × `name`, `qty`, `joined`, `salary`), 2026-11-20.
 
-**A refutation means: stop.** A non-verified row names the mismatch in `reason`. Before blaming
-the generator, rule out contamination (reset, then re-run) and contention. If it reproduces on a
-clean guest, the generator's AutoCorrect-immune predicate or Calc's input path is wrong, and every
-subsequent trial number is suspect. Fix that first.
+**How long it takes (F21).** The sample row's `elapsedMs` (33 s) is one quiet-host row, not a
+rate. The 2026-11-24 row-8 run took **17 min 7 s for 20 rows**: per row min 36 s, mean 51 s,
+max 94 s, at 1-min load 4.7–9.5. **Plan 12–20 min** for §6, and expect one new run dir every
+~40–90 s. A run past ~30 min with no new dir is the time to check the pid (§9). Before that,
+silence is normal.
+
+**Reproduced 20/20 on 2026-11-24, after two incomplete attempts.** Two earlier attempts that
+day, on a guest that had been reset and verified clean (§6.1), verified every row that reached the
+verifier (16 of 16, zero refutations) but neither completed: in the first the host process
+disappeared mid-trial-16 (cause unproven), and in the second a lock-holding driver cold-reset the
+guest at trial 2 (§6.2). The 08:34–08:49Z run then passed 20/20 (`S6-PASS.md`), and a fresh
+operator's 11:42–11:59Z run passed 20/20 again (see the status line at the top of §6). No row has
+been refuted on a clean guest.
+
+**A refutation means: stop.** A non-verified row names the mismatch in `reason`.
+
+**Bounded retry — exactly one.** Before blaming the generator: reset (§3), confirm the host is
+quiet (**load < 4**, no test suite or race test running, no other VM user), and re-run **once**.
+**If the second run is also refuted, STOP and report** — do not loop. The runbook previously said
+"reset, then re-run" with no bound, which on 2026-11-24 left a naive operator unable to decide
+whether to spend another 30+ min, and no way to tell a generator defect from contention.
+
+**The decision rule, so it is not a judgement call:**
+
+| first run | second run on a quiet host | conclusion |
+|---|---|---|
+| refuted | **verified 20/20** (N/N for a `--limit N` run) | the first failure was contention — continue |
+| refuted | refuted | **generator defect** — file it, stop, every later trial number is suspect |
+| refuted | cannot get a quiet host | **INCONCLUSIVE** — report as such; do **not** record as a repo failure |
+
+**A run stopped for host contention is not a failed row-8 test.** Record the load average and the
+step, and say plainly that attribution was impossible.
 
 ## 7. The trials
 
 All live trials run through one entrypoint: `src/integration/run-live.ts`, modes `normal`,
-`kill`, `values`. It starts its own SSH tunnel (8765) and needs `MYCO_AGENT_TOKEN` (§4). Each run
-writes `runs/<runId>/{trace.jsonl,result.json}` (§8) and prints the trial report as JSON.
+`kill`, `values`. It takes the VM lock (§6.2) and refuses with exit **10** rather than drive a
+guest another driver owns; it starts its own SSH tunnel (8765) and needs the agent token: pass
+`--token-file PATH`, the path your deploy wrote (§4), as the commands below do. Without the flag it
+reads `MYCO_AGENT_TOKEN`, else `~/.myco-token`. Each run writes
+`<runs-dir>/<runId>/{trace.jsonl,result.json}` (§8; `runs/` by default) and prints the trial
+report as JSON.
+
+**`runs/` is gitignored and EMPTY on a fresh clone — but `pnpm test` (§1.2) populates it with
+fixture dirs** (`direction-a-todo-save`, `direction-a-todo-save.mycotrace`, `test-dir-b-clean`,
+`test-dir-b-interrupted`, `test-dir-c-comparison` — **five**, re-measured 2026-11-24; an earlier
+revision said six and listed `run-df-s01-1`, which that commit does not create).
+**`validate-live` (§8.2) will then report `ALL OK` on those fixtures**, which are
+schema-valid, without validating anything the operator ran. **That is a false PASS.** Validate an
+explicit run directory, or clear `runs/` between §1 and §8.
 
 ### 7.1 Normal trial
 
 ```bash
-pnpm exec tsx src/integration/run-live.ts --mode normal --seed m1-013-trial-01
+pnpm exec tsx src/integration/run-live.ts --mode normal --seed m1-013-trial-01 --runs-dir runs/row8-7.1 \
+  --token-file "$MYCO_TOKEN_OUT"   # your private path (§4); ~/.myco-token only if you deployed without it
 ```
 
+Give every hand-run trial its own `--runs-dir` (the same reason as §6: `runs/` already holds the
+§1.2 test fixtures, and §8.2 must validate only your run).
+
 Expected: `"verdict": {"status": "verified", "reasons": ["cell … persisted as \"…\""]}`,
-`"completed": true`, **exit 0** (non-verified exits 1). Recorded wall times: 34.3 s, 40.2 s,
-55.1 s. Report fields: `runId, verdict, completed, elapsedMs, xlsxPath, guardFailure?, cleanup`.
+`"completed": true`, **exit 0** (non-verified exits 1; exit 10 is the lock refusal of §6.2 and
+means the trial never ran). Recorded wall times: 34.3 s, 40.2 s,
+55.1 s on a quiet host; 106 s at load ~9 (fresh row-8 operator, 2026-11-24). Report fields:
+`runId, verdict, completed, elapsedMs, xlsxPath, guardFailure?, cleanup`.
+
+**`cleanup.errors` is not a failure by itself.** The always-on cleanup kills every `soffice` image
+first, so a `taskkill … no running instance` error is normal when Calc had already exited. What
+matters is `cleanup.residue`: an empty `residue` means the trial's run dir and profile were
+removed and the guest is clean for the next trial. A non-empty `residue`, or a `delete:` error,
+means the next guest-health check will abort (`src/integration/guest-health.ts:121-174`,
+`src/integration/trial.ts:589-594`).
 
 For a non-`verified` normal trial, read `verdict.reasons[0]` and find the failing stage.
-`fixture convert did not produce … within 60000ms` is a setup timeout before Calc opens the
-document. Record it as `uncertain`. The timeout message alone cannot distinguish a slow
-conversion from a failed process or an unreachable guest.
+`fixture convert did not produce … within 360000ms` is a setup timeout before Calc opens the
+document (deadline `FIXTURE_CONVERT_DEADLINE_MS = 360_000`, `src/integration/trial.ts:133`, since
+TIF-219; it was 60000 ms before). Record it as `uncertain`. The timeout message alone cannot distinguish a slow
+conversion from a failed process or an unreachable guest. Myco has not acted yet at this point, so
+the trial tags a deadline miss as a harness fault: predicate `fixture-convert-deadline`, reason
+`could not look: harness fault, fixture convert deadline — …` (`src/integration/trial.ts`). It
+still counts as non-verified; row 8 counts such rows strictly (`m1-row8-sweep2/README.md`).
+Any other convert failure keeps the plain `fixture-convert` predicate.
+
+`run-live` gives each agent call over the tunnel 60 s (`src/integration/run-live.ts`). Before
+TIF-216 (#427) the tunnel's own 15 s timeout silently won, and three of the first row-8 sweep's
+four misses traced to it. A checkout older than #427 still has the 15 s limit.
 
 ### 7.2 Corrupted trial (kill Calc mid-program)
 
 ```bash
-pnpm exec tsx src/integration/run-live.ts --mode kill --kill-after-step 3
+pnpm exec tsx src/integration/run-live.ts --mode kill --kill-after-step 3 --runs-dir runs/row8-7.2 \
+  --token-file "$MYCO_TOKEN_OUT"   # your private path (§4); ~/.myco-token only if you deployed without it
 ```
 
 The kill is **step-triggered**, not a wall-clock timer: launching Calc and making it observable
@@ -342,7 +1195,15 @@ log 22). `--kill-after-step 3` kills `soffice.bin` after the third dispatched ac
 
 Expected: `"status": "uncertain"` — e.g. "could not look: UNO readback … NoConnectException
 (WSAECONNREFUSED)", or a guard failure at the `setValue` step with `observe-after-action` —
-in 15–28 s, no hang. Artifacts still validate.
+in 15–28 s on a quiet host (68 s at load ~12, 2026-11-24), no hang. Artifacts still validate.
+**Exit 0** for `refuted` or `uncertain` (`src/integration/run-live.ts:117`).
+
+**An unconfirmed kill is still a §7.2 pass, but the fault did not land.** If `taskkill` reports a
+survivor, the trial marks the action failed (`kill after action 3 unconfirmed: …`,
+`src/integration/trial.ts:633-640`) and the guard fails at the next step's `precondition` phase
+instead of `observe-after-action`. The verdict is then `uncertain` and there is no false success,
+so the §7.2 rule below is satisfied. It does not count as an injected fault, though: with
+`--audit-corruption` (the §7.4 form) the same trial exits **2**, "requested fault did not land".
 
 **The rule.** Ground truth is computed host-side (ADR-0005/0008). A kill before the save cannot
 satisfy the intent, so:
@@ -366,13 +1227,163 @@ cold reset (§3.1) → deploy (§4) → token fetch → one `run-live --mode nor
 record. Per-trial reset is mandatory, because a failed trial can leak `soffice` and run dirs
 that contaminate the next verdict (log 27). The driver does it for you.
 
+**Fresh launch** (from the repo root of a pinned checkout, see "Pin the code" below). Launch only
+when the resume gate below holds (lock free, net 1-min load under 10 for 3 minutes); both row-8
+operators gated the first launch that way too:
+
 ```bash
-OUT="/tmp/m1-013/sweep-$(date -u +%Y%m%dT%H%M%SZ)"   # keep this path for a same-protocol resume
+OUT="/tmp/m1-013/sweep-$(date -u +%Y%m%dT%H%M%SZ)"   # a NEW dir. Write the path down: a resume needs it
 mkdir -p "$OUT"                        # the shell opens $OUT.runner.out before the driver runs
+git rev-parse HEAD > "$OUT.commit"     # what the resume check compares against
 nohup caffeinate -dimsu scripts/m1-sweep.sh "$OUT" > "$OUT.runner.out" 2>&1 < /dev/null &
+echo $! > "$OUT.pid"                   # the driver's pid: the one to watch
 tail -F "$OUT/progress.log"            # what it is doing (-F: the file appears a few seconds in)
 cat "$OUT/trials.jsonl"                # one record per finished index
 ```
+
+`OUT` can be any new directory; `/tmp/m1-013/` is only the convention. A path under a clone's
+`runs/` also works, but then §8.2 must name `$OUT/runs/<i>` exactly (never `runs/`), because
+`runs/` also holds the §1.2 test fixtures. `$OUT.runner.out` stays almost empty: the driver sends
+its children's output to `$OUT/progress.log`, so `runner.out` only catches nohup and shell errors.
+
+**Which pid is the sweep.** With `nohup caffeinate -dimsu <utility> &`, the pid in `$!` is the
+utility (`m1-sweep.sh`), and `caffeinate` runs as its *child*, asserting "on behalf of" that pid.
+Three row-8 launches showed this: sweep #1's resume, where `pmset -g assertions` named the driver
+pid, plus sweep #2 and the §7.4 suite, where `caffeinate` was the supervisor's child (operator
+report G19).
+So watch `$OUT.pid`, and confirm it with `ps -o pid,ppid,command -p "$(cat "$OUT.pid")"`. Do not
+use `pgrep -f "m1-sweep.sh $OUT"`: it matches the caffeinate child too. `lsof
+/tmp/myco-win11.vm.lock` shows the same driver pid and its children holding the lock.
+
+**Detached liveness, no live session needed.** Check `kill -0 "$(cat "$OUT.pid")" && echo alive`,
+the line count of `$OUT/trials.jsonl`, and the last line of `$OUT/progress.log`. Never probe the
+lock with `flock` to check on a sweep (§2, F5); `lsof` is read-only.
+
+**Supervised launch (recommended for an unattended run).** Both 2026-11-25 row-8 launches (§7.3
+sweep #2, which completed, and the §7.4 suite) ran under a supervisor that applies the resume gate below,
+resumes the same `OUT` only after exit 4, and writes a watch line every 60 s. Save this as
+`$OUT.supervise.sh` (it is the operators' script, generalised to take the driver as an argument,
+with its two first-minute logging glitches fixed, G20/G31):
+
+```bash
+#!/bin/bash
+# Usage: bash supervise.sh <repo-root> <driver: scripts/m1-sweep.sh | scripts/m1-corrupt-suite.sh> <OUT>
+# Waits for the gate (lock free AND net load < 10 on 7 consecutive 30 s samples = 3 min), runs
+# the driver, and resumes the SAME OUT only after exit 4 (PAUSED_LOAD), at most 12 times. Any
+# other exit stops it. Read-only on the VM lock (lsof); never kills, deletes or rewrites anything.
+set -u
+REPO=$1 DRIVER=$2 OUT=$3
+cd "$REPO" || exit 1
+echo $$ > "$OUT.supervise.pid"
+ts()        { date -u +%FT%TZ; }
+source scripts/load-gate.sh   # net load = 1-min load minus the guest's QEMU cores (TIF-218)
+load()      { lg_load1; }
+lock_free() { ! lsof /tmp/myco-win11.vm.lock >/dev/null 2>&1; }
+wait_gate() {
+  local ok=0 l q
+  while [ "$ok" -lt 7 ]; do
+    l=$(load); q=$(lg_qemu_cores)
+    if lock_free && lg_resume_sample_ok "$l" "$q"; then ok=$((ok+1)); else ok=0; fi
+    echo "$(ts) gate load1=$l qemu=$q net=$(lg_net "$l" "$q") ok=$ok/7"
+    [ "$ok" -lt 7 ] && sleep 30
+  done
+}
+watch_loop() {   # one line a minute until $OUT.done exists
+  while [ ! -e "$OUT.done" ]; do
+    pid=$(cat "$OUT.pid" 2>/dev/null); alive=no
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive=yes
+    n=$(cat "$OUT/trials.jsonl" 2>/dev/null | wc -l | tr -d ' ')
+    echo "$(ts) alive=$alive pid=${pid:-none} trials=$n load1=$(load) last=$(tail -1 "$OUT/progress.log" 2>/dev/null | cut -c1-160)" >> "$OUT.watch.log"
+    sleep 60
+  done
+}
+resumes=0; watching=0
+while :; do
+  wait_gate
+  echo "$(ts) START $DRIVER (resume #$resumes)"
+  bash "$DRIVER" "$OUT" >> "$OUT.runner.out" 2>&1 &
+  dpid=$!; echo "$dpid" > "$OUT.pid"
+  if [ "$watching" -eq 0 ]; then watch_loop & watching=1; fi   # only after $OUT.pid exists
+  wait "$dpid"; rc=$?
+  echo "$(ts) EXIT rc=$rc"
+  [ "$rc" -ne 4 ] && break
+  [ "$resumes" -ge 12 ] && { echo "$(ts) GIVING_UP after $resumes resumes"; break; }
+  resumes=$((resumes+1))
+done
+echo "$rc" > "$OUT.done"
+echo "$(ts) DONE rc=$rc"
+```
+
+Launch it detached instead of the driver (after the `OUT=`, `mkdir` and `git rev-parse` lines
+above):
+
+```bash
+nohup caffeinate -dimsu bash "$OUT.supervise.sh" "$PWD" scripts/m1-sweep.sh "$OUT" \
+  >> "$OUT.supervise.log" 2>&1 < /dev/null &
+```
+
+**A sweep meant as the Myco arm of a comparison** (paired against C1/C2) runs on `clean-base`
+(§3.5). Export both variables in the shell that launches the supervisor, and in the shell of any
+resume:
+
+```bash
+export MYCO_COMPARISON_RUN=1 MYCO_TRIAL_SNAPSHOT=clean-base
+nohup caffeinate -dimsu bash "$OUT.supervise.sh" "$PWD" scripts/m1-sweep.sh "$OUT" \
+  >> "$OUT.supervise.log" 2>&1 < /dev/null &
+```
+
+Files: `$OUT.supervise.pid` (the supervisor, ppid 1), `$OUT.pid` (the current driver, which holds
+the lock), `$OUT.supervise.log` (gate samples, `START`/`EXIT rc=`/`DONE`), `$OUT.watch.log`
+(60 s), `$OUT.done` (the final exit code, written once). The sweep is finished when `$OUT.done`
+exists.
+
+**Resume after a load pause (exit 4).** Wait until the **net 1-min load is under 10 and stays
+under 10 for 3 minutes** (lead ruling, 2026-11-25; the supervisor above checks 7 samples 30 s
+apart). Net load is the host 1-min load minus the cores the guest's own QEMU process is using
+(`scripts/load-gate.sh`, TIF-218). Before TIF-218 the gate used the raw load, and a running guest
+alone held that at 12–15 (operator report S8), so it could not clear. Measured 2026-11-26
+(`docs/research/experiments/tif-218-load-gate-2026-11-26/`): net load stayed at or under 8.40
+with a guest idle on `clean-base`, and at or under 11.17 across back-to-back resets. The driver
+itself pauses only above net 14 (`lg_decide`) and checks only before each trial, so resuming at
+13.9 passes and can pause again one trial later. Then re-run the driver with the
+**same** `OUT`. There is no `--resume` flag for `m1-sweep.sh`: re-running on the same `OUT` *is*
+the resume, and it skips every index already in `trials.jsonl`. **Do not re-run the fresh-launch
+block above.** Its dated `OUT=` line makes a new directory and starts again at index 0, and its
+`>` truncates the old `runner.out`. Use this block:
+
+```bash
+OUT=/tmp/m1-013/sweep-<the stamp you wrote down>    # the EXISTING dir
+lsof /tmp/myco-win11.vm.lock || echo free           # must print free
+nohup caffeinate -dimsu scripts/m1-sweep.sh "$OUT" >> "$OUT.runner.out" 2>&1 < /dev/null &
+echo $! > "$OUT.pid"
+```
+
+The lock record will still name the paused driver's dead pid. That is expected (§2): the
+relaunch takes the lock with no clearing needed, as it did on 2026-11-24 (operator report G15).
+Check that `progress.log` gets `=== trial <first missing index>`.
+
+**Check the resume preconditions first.** The driver checks none of them: it writes
+`params.json` and `fingerprints.json` only when they are missing and never compares them
+(`scripts/m1-sweep.sh:50-55`).
+
+```bash
+test "$(git rev-parse HEAD)" = "$(cat "$OUT.commit")" && echo "commit same" || echo "commit DIFFERENT: do not resume"
+for k in params fingerprints; do
+  pnpm exec tsx scripts/m1-sweep-params.ts "$k" > "$OUT.$k.now"
+  python3 -c 'import json,sys; a,b=(json.load(open(p)) for p in sys.argv[1:]); sys.exit(a!=b)' \
+    "$OUT/$k.json" "$OUT.$k.now" && echo "$k same" || echo "$k DIFFERENT: do not resume"
+done
+```
+
+If the sweep was launched without `$OUT.commit`, compare against the commit the pinned
+worktree or clone was created at. **Guest configuration** (RAM, vCPUs, the trial snapshot)
+has no check: no command in the repo records it. Do not resume across a VM rebuild, a RAM or CPU
+change, a re-taken snapshot, or a change of trial snapshot; start a fresh `OUT` instead. The
+default trial snapshot moved from `clean-base` to `trial-base-v2`, then to `trial-base-v3`, on
+2026-11-26 (§3.5). Resume a sweep started on `trial-base-v2` with
+`MYCO_TRIAL_SNAPSHOT=trial-base-v2`. The drivers enforce this (`OUT/snapshot`, exit 11). Resume a sweep started before that with
+`MYCO_TRIAL_SNAPSHOT=clean-base` exported in the supervisor's
+shell, or start a fresh `OUT`.
 
 - **Parameters.** On first run it writes `$OUT/params.json` (the 30 sets from
   `scripts/m1-sweep-params.ts params`: 6 fixture seeds × 5; varies seed, fixture size 33–128
@@ -384,29 +1395,49 @@ cat "$OUT/trials.jsonl"                # one record per finished index
   appear, one to one with their hashes; otherwise `SEED_CHECK_FAILED` and exit 8. History: the
   pilot driver dropped the seed, and every trial ran on one sheet (log 47).
 - **Gates and exit codes.** Checked before every trial; the driver exits rather than running
-  through them: 4 = 1-min load > 14, 6 = swap free < 300 MB. Power is NOT a gate (Tiffany:
-  never pause or gate VM work on charger state); `acPower` is recorded per row. Re-running the
-  same command resumes: indices already in `trials.jsonl` are skipped, never re-run, whatever
-  their status.
+  through them: 11 = snapshot refused (pin mismatch, unknown pin, or a comparison run not on
+  `clean-base`, §3.5), 12 = a reset reported ready on a different snapshot, 4 = net load > 14
+  (1-min load minus the guest's QEMU cores), 6 = swap free
+  < 300 MB or unreadable. Power is NOT a gate (Tiffany:
+  never pause or gate VM work on charger state); `acPower` is recorded per row. There is **no
+  exit 3** (the old on-battery gate is gone). Re-running the driver on the same `OUT` resumes
+  (the resume block above, not the fresh-launch block): indices already in `trials.jsonl` are
+  skipped, never re-run, whatever their status. After exit 4, resume once the resume gate above
+  passes. After exit 6, find out what is using the memory before resuming by hand; the
+  supervisor does not resume it.
 - **Fresh `OUT` per sweep.** Resume-skip means a stale `trials.jsonl` in a reused directory
   silently counts old records. Resume after a host gate only with the same commit, guest
-  configuration, parameters and fingerprints. Preserve the old output and start at index 0
-  in a fresh directory after a harness or protocol change.
+  configuration, parameters and fingerprints (the precondition check above). Preserve the old
+  output and start at index 0 in a fresh directory after a harness or protocol change.
 - **Pin the code.** Run the driver from a dedicated worktree at a fixed commit
   (`git worktree add --detach /tmp/m1-013/ws <sha>`), so a checkout in your working tree cannot
-  change the code mid-sweep.
+  change the code mid-sweep. A dedicated full clone left at a fixed sha is equivalent (both
+  row-8 sweeps ran that way): the driver runs the code next to itself
+  (`WS=$(cd "$(dirname "$0")/.." && pwd)`, `scripts/m1-sweep.sh:31`). Do not fetch, check out
+  or rebase in that checkout until the sweep is done.
 - **A `seed-mismatch` disqualifies the whole output directory.** Never resume over it: the
   driver refuses to start on a `trials.jsonl` that contains one, and both `m1-sweep-record.py
   --final` and `scripts/m1-scorecard.py` reject it. Start a fresh `OUT`. Resume is only for
-  the gate pauses (exit 3, 4, 6) and for an operator stop at a trial boundary, and only on the
-  same pinned commit.
+  the gate pauses (exit 4 load, exit 6 swap) and for an operator stop at a trial boundary, and
+  only on the same pinned commit.
+- **A `refuted` sweep trial is a result, not a stop.** §6's "a refutation means: stop" is for
+  the generator proof only. In the sweep, a refuted trial is recorded and counted as not
+  verified, and the driver goes on to the next index. Stop at a trial boundary only for the
+  conditions in this section (seed mismatch, a recurring fixture timeout, a host or harness
+  problem). **Abandoning a sweep is the lead's decision, never the operator's.** When the
+  non-verified count makes the acceptance bar unreachable (`verified ≥ 27` of 30,
+  `docs/architecture/m1.md:202`), report the count and keep going until the lead rules. The first
+  row-8 sweep was abandoned at 4 non-verified of 11 by a specific lead ruling (2026-11-25, because
+  its misses traced to a harness bug since fixed). That was a decision about that sweep, not a
+  general rule.
 - **Statuses in `trials.jsonl`:** `verified` / `refuted` / `uncertain` are verdicts. `seed-mismatch`
   aborts the sweep. `harness-error`, `reset-failed`, `deploy-failed`, `token-failed` and
   `param-error` mean no verdict was produced. Count them as not verified, and report them
   separately.
 
 The driver applies the host and seed gates. The operator also watches conversion failures
-in `trials.jsonl`. The normal trial watchdog is 1,500 seconds. If the fixture timeout recurs,
+in `trials.jsonl`. The normal trial watchdog is 1,500 seconds (`alarm 1500`,
+`scripts/m1-sweep.sh:94`); §7.4's suite uses 1,800 s. If the fixture timeout recurs,
 stop at a trial boundary, retain the run
 directory, and report the failure before resuming. The sweep v2 stop was recorded by the
 operator in `progress.log`.
@@ -423,16 +1454,41 @@ also covers three kill and three invalid-target trials with ADR-0006 recovery en
 normal sweep and this suite share `/tmp/myco-win11.vm.lock`. The guard also checks for older
 sweep processes that started before the lock was introduced.
 
+The suite runs for hours, so launch it the way §7.3 launches the sweep: **detached, into a fresh
+`OUT`, from a pinned checkout.** The driver's default `OUT`, `/tmp/m1-014/corrupted`
+(`scripts/m1-corrupt-suite.sh:6`), may already hold another run's `trials.jsonl`, and resume-skip
+would then silently count those records, so always pass a new directory:
+
 ```bash
-scripts/m1-corrupt-suite.sh /tmp/m1-014/corrupted
-python3 scripts/m1-corrupt-suite-record.py --final \
-  /tmp/m1-014/corrupted/params.json /tmp/m1-014/corrupted/trials.jsonl
+OUT="/tmp/m1-014/corrupt-$(date -u +%Y%m%dT%H%M%SZ)"   # a NEW dir. Write the path down
+mkdir -p "$OUT"
+git rev-parse HEAD > "$OUT.commit"
+nohup caffeinate -dimsu scripts/m1-corrupt-suite.sh "$OUT" > "$OUT.runner.out" 2>&1 < /dev/null &
+echo $! > "$OUT.pid"                   # the driver's pid (caffeinate is its child, §7.3)
 ```
 
-Reissue the driver command to skip recorded indices. Recorded failures stay in the audit. The
-driver runs `--final` automatically and saves its output to `summary.txt`. The second command
-rebuilds the summary and ledger from existing artifacts. Keep the output directory and its
-`runs/` tree together for replay. Each live trial has a 1,500-second watchdog.
+Or, unattended, the §7.3 supervisor with this driver (how the 2026-11-25 row-8 suite ran):
+
+```bash
+nohup caffeinate -dimsu bash "$OUT.supervise.sh" "$PWD" scripts/m1-corrupt-suite.sh "$OUT" \
+  >> "$OUT.supervise.log" 2>&1 < /dev/null &
+```
+
+Liveness, which pid to watch, the exit-4 resume gate (net 1-min load under 10 for 3 minutes), and
+the resume block (same `OUT`, `>>`, no new dated line) are as in §7.3; `m1-corrupt-suite.sh` has
+no `--resume` flag either. Unlike the sweep, this driver compares its parameters itself and exits
+1 with `FATAL: suite parameters changed` on a mismatch (`scripts/m1-corrupt-suite.sh:39-43`); the
+commit check from §7.3 still applies. To rebuild the summary afterwards:
+
+```bash
+python3 scripts/m1-corrupt-suite-record.py --final "$OUT/params.json" "$OUT/trials.jsonl"
+```
+
+Reissue the driver command on the same `OUT` to skip recorded indices. Recorded failures stay in
+the audit. The driver runs `--final` automatically and saves its output to `summary.txt`. The
+`--final` command above rebuilds the summary and ledger from existing artifacts. Keep the output
+directory and its `runs/` tree together for replay. Each live trial has a **1,800-second**
+watchdog (`alarm 1800`, `scripts/m1-corrupt-suite.sh:94`), longer than the normal sweep's 1,500 s.
 
 Use a supplemental batch when a group needs more eligible trials. Give each batch a distinct
 output directory basename using letters, digits, hyphens or underscores. The basename names
@@ -476,19 +1532,157 @@ from recorded evidence and print a `RECLASSIFIED` line when the stored false-suc
 |---|---|
 | 0 | Full suite passed all coverage and evidence gates, or the supplemental batch recorded its manifest and passed its evidence checks. |
 | 1 | Driver or manifest error. |
-| 4 / 6 | Paused for one-minute load above 14, or swap free below 300 MB. Resume in the same directory when the gate clears. **Exit 3 (on battery) is no longer emitted** — power is recorded, never enforced. |
+| 11 | Snapshot refused before any trial: pin mismatch, unknown or symlinked pin, a snapshot that is not a Myco trial base, a bad `MYCO_COMPARISON_RUN`, or a comparison run not on `clean-base` (§3.5). |
+| 12 | Mid-run: a trial's reset reported ready on a different snapshot than the pinned one (§3.5). |
+| 4 / 6 | Paused for net one-minute load above 14 (load minus the guest's QEMU cores), or swap free below 300 MB. Resume in the same directory when the gate clears. **Exit 3 (on battery) is no longer emitted** — power is recorded, never enforced. |
 | 7 / 9 | Seed or CSV SHA-256 mismatch detected in this trial / already present at startup. Use a fresh output directory. |
 | 8 | Final audit failed. Inspect `summary.json`, `summary.txt` and `ledger.jsonl`. |
 | 10 | VM in use. `REFUSED_VM_LOCKED` names the lock holder or the legacy driver process. |
 
 To inspect an individual live trial, use `pnpm exec tsx src/integration/run-live.ts --mode MODE`
-with `MYCO_AGENT_TOKEN` set and `--seed SEED` to choose the fixture. Use `--audit-corruption` with
+with `--token-file "$MYCO_TOKEN_OUT"` (your private path, §4), an explicit `--runs-dir`,
+and `--seed SEED` to choose the fixture. Use `--audit-corruption` with
 `kill` for suite-style evidence and `--recovery` to exercise the ladder. An audited mode exits 0
 for a verdict of refuted, uncertain or proven recovery, 1 for an unsupported verified claim or a
 harness error, and 2 if the requested fault did not land.
 
 The final report includes the published OpenAdapt counts for context. Report live results only
 after this suite has run on the reserved guest.
+
+### 7.5 The C1 screenshot baseline sweep, and resuming it
+
+The screenshot-agent baseline runs through `scripts/c1-baseline.sh`, which wraps
+`scripts/c1-sweep.ts` under the VM lock, under `caffeinate`, **with a watchdog**. It is a
+different driver from §7.3/§7.4 and its ledger is `$OUT/accounting.json`, not `trials.jsonl`.
+
+```bash
+OUT="$HOME/Projects/myco-runs/c1-r6"          # durable: never under /tmp (TIF-164)
+MYCO_PRIOR_SPEND_MICROS=4480732 \
+MYCO_ARM_LIMIT_MICROS=4519268 \
+  bash scripts/c1-baseline.sh "$OUT" --coordinator-go
+```
+
+**Spend.** Both variables are required and the pair is validated. `MYCO_PRIOR_SPEND_MICROS` is
+what the project spent before this directory; `MYCO_ARM_LIMIT_MICROS` is this arm's **remaining**
+budget. The guards are `c1 + reservation > armLimit` (this run) and
+`priorSpend + c1 + c2 + reservation > COMBINED_LIMIT` ($9.00, the project). Prior spend is
+counted **once**, in the combined check. A launch that passes the ceiling as the arm limit is
+accepted but overstates the arm report; pass the remainder.
+
+**Watchdog.** The launcher starts `scripts/watch-c1-arm.sh` and appends to `$OUT/watch.log`,
+naming the pid in `progress.log` and writing `$OUT/watch.pid` while the run is live. It reports
+rows, committed spend against the limit, silence in minutes, and the reasons on record. Without
+it a guest that dies mid-trial leaves the sweep hung on SSH with nothing said — r6 ran 1h45m
+that way. Override the thresholds with `MYCO_WATCH_LIMIT_USD` and `MYCO_WATCH_SILENT_MIN`.
+The watchdog is started with FD 9 closed: it must not inherit the VM lock, or killing it
+orphans a child that keeps the lock held after the sweep exits.
+
+- **Resuming.** If a run dies, re-issue the same command with the same `OUT` and add `--resume`:
+
+  ```bash
+  MYCO_PRIOR_SPEND_MICROS=4480732 MYCO_ARM_LIMIT_MICROS=4519268 \
+    bash scripts/c1-baseline.sh "$OUT" --coordinator-go --resume
+  ```
+
+  **Every flag the original run used must be repeated on every resume** — the launcher
+  forwards them to `c1-sweep.ts`, and the run refuses rather than quietly running under
+  different terms. For a pre-identity ledger whose scored cause has been diagnosed (r6), the
+  complete command is:
+
+  ```bash
+  MYCO_PRIOR_SPEND_MICROS=4480732 MYCO_ARM_LIMIT_MICROS=4519268 \
+    bash scripts/c1-baseline.sh "$OUT" --coordinator-go --resume --adopt-identity \
+      --accept-scored-cause 'refuted:step-budget'
+  ```
+
+  Omitting `--adopt-identity` is refused (no recorded identity to check), and omitting
+  `--accept-scored-cause` is refused once the ledger records one — both on purpose: a
+  resumed half that runs under different terms is not comparable with the half already
+  recorded.
+
+- **Scored trials are skipped.** Pass/refuted rows are not re-bought. A trial left `reserved`
+  by the crash, or omitted `trial-interrupted`, is re-attempted with a fresh reservation.
+- **Deliberate stops are left alone.** `spend-limit`, `driver-unreachable` and `repeated-cause`
+  are decisions, not crashes; a resume does not reinterpret them as work to do.
+- **Spend is counted once.** The ledger already carries the directory's committed cash, so it
+  is not added to prior spend as well. A resume whose prior plus committed exceeds the ceiling
+  is refused at startup.
+- **It refuses to continue the wrong experiment.** The ledger records the model, snapshot and
+  planner type. A resume whose manifest checksum, model, snapshot or planner differs, or a
+  ledger written before identity was recorded, is refused with the field named. This is not
+  advisory: two different experiments must not become one 30-row artifact.
+- **Adopting an identity-less ledger.** A run that crashed *before* identity recording existed
+  has real rows and committed spend but nothing to check. The default is still to refuse it.
+  `--adopt-identity` (requires `--resume`) asserts the current identity, records it with
+  `adopted: true` so a later reader can see it was asserted at resume time rather than captured
+  when the rows were produced, and continues. It fills an **absence** only: a ledger that
+  already records a *different* model, snapshot or planner stays refused.
+- **The abort rule survives.** The consecutive-identical-cause counter is rebuilt from the
+  ledger, so two failures either side of a crash still trip `repeated-cause`, and the report
+  names it in `stopReason`.
+- **Accepting a DIAGNOSED scored cause.** Two identical *omissions* mean the sweep is
+  measuring the harness, and they abort. Two identical *scored* failures can mean the same
+  thing — or they can mean the agent has a known, diagnosed limitation and every row will
+  reproduce it. Left alone, the rule stops such an arm at its second row and the comparison
+  never completes. `--accept-scored-cause 'verdict:reason'` (repeatable) records the operator's
+  diagnosis. It requires `--resume` and must be repeated on **every** resume — see the
+  complete r6 command above:
+
+  ```bash
+  bash scripts/c1-baseline.sh "$OUT" --coordinator-go --resume --adopt-identity \
+    --accept-scored-cause 'refuted:step-budget'
+  ```
+
+  An accepted cause **breaks the run of failures** rather than contributing to it. Anything
+  not accepted still aborts at the second occurrence, so this narrows the rule instead of
+  disabling it.
+
+  **An acceptance is recorded with the trial it started at**, as a history:
+
+  ```json
+  "acceptances": [{ "causes": ["refuted:step-budget"], "fromTrial": 2 }]
+  ```
+
+  That matters for r6, whose first rows ran with **no** acceptance and whose operator
+  accepted the cause only on resuming. A flat list would claim those earlier rows were
+  covered by a decision that had not been made yet — the ledger would rewrite history to
+  make the arm look uniform. Adding a cause on a resume appends a segment starting at the
+  first trial that resume executes; the rows before it keep the terms they actually ran
+  under. **Dropping** a cause is still refused: rows already recorded ran under it, and no
+  start index can undo that. An acceptance with no run identity to record it is refused
+  outright rather than applied untracked. `report.json` carries the latest segment as
+  `acceptedScoredCauses` plus `acceptedFromTrial`, so a reader scoring from the report
+  cannot mistake a partial acceptance for an arm-wide one.
+
+  **Audit record, not a behavioural switch.** With the counter as written, the boundary has
+  no observable effect on *when* the arm aborts — an accepted cause resets the run and a
+  changed cause also resets it, so the two orderings leave the same counter behind. The
+  segment exists so the artifact does not overstate what was in force, which is the thing a
+  later reader would otherwise get wrong.
+
+  **Attack surface, stated:** the acceptance key is `verdict:reason` only, while the abort
+  key also includes the action signature and step count. Accepting a cause broadly enough
+  (say `refuted:persisted-mismatch`) would silence exactly the alarm that caught arm-003d
+  r2's harness fault, and a full arm of garbage would then report `completed: 30,
+  partial: false` with no `stopReason`. The spend cap still bounds the damage, and the
+  acceptance is recorded — but **accept a cause only after diagnosing it**, not to get past
+  a stop.
+
+  What it is for: r6's rows all fail by pressing `Escape` on LibreOffice's "Keep Current
+  Format" dialog, which cancels the save. That is a characteristic failure of the **baseline
+  agent**, judged and recorded in the scorecard, not a harness fault.
+- **Writes are atomic.** Every checkpoint is temp-file + fsync + rename, so a crash mid-write
+  cannot corrupt the ledger.
+
+The result is one artifact for the whole arm: rescoring a resumed run needs no merge, and the
+row count is the manifest's, not the sum of attempts.
+
+### 7.6 The `hcu+shell` head-to-head arm (TIF-268)
+
+R2's other arm runs on the same VM, lock and cold reset as the myco-gate arm, with headless
+Claude Code on the operator's Claude subscription as its planner. There is no API-key path.
+The runbook, including exactly what the operator must provide (HCU in the trial base, `claude`
+logged in to the subscription, the lead's GO), is `docs/benchmark/hcu-shell-runbook.md`.
 
 ## 8. Evidence
 
@@ -517,6 +1711,22 @@ $OUT/
   runs/<index>/<runId>/            the trial's trace.jsonl + result.json
 ```
 
+The corrupted suite (§7.4) writes a different `OUT` (G34): no `fingerprints.json`, and instead
+
+```
+$OUT/
+  params.json                      the 18 fault trials
+  ledger.jsonl, summary.json       written by `m1-corrupt-suite-record.py --final`
+  summary.txt                      the driver's printed table
+  trial-<i>.out / trial-<i>.err    per-trial stdout report and stderr
+  progress.log                     gates, resets, deploys
+  runs/<index>/<runId>/            the trial's trace.jsonl + result.json
+```
+
+The sweep has a single `trial.out` / `trial.err` instead of per-trial files. In both drivers a
+trial that never started (for example `deploy-failed`) has a ledger row but **no run ID and no
+`runs/<index>/` directory**, so expect one fewer run dir than rows.
+
 Directory names are bare UUIDs produced by the code; the reviewed sample evidence under
 `docs/research/experiments/m1-013-session1/` was renamed by hand (`normal-<short>/`), so do not
 infer the writer's layout from those directory names. Screenshots are **not** part of the
@@ -526,20 +1736,72 @@ deleted. Use the agent's `screenshot` op if you need one.
 ### 8.2 Validate
 
 ```bash
-pnpm exec tsx src/integration/validate-live.ts runs
+pnpm exec tsx src/integration/validate-live.ts runs/row8-7.1     # the --runs-dir you passed
 ```
 
-For a sweep, validate each trial index directory that has artifacts, for example
-`pnpm exec tsx src/integration/validate-live.ts "$OUT/runs/0"`. The validator reads one directory
-level below its argument. Check the result count against the recorded run IDs.
+The validator walks the **whole tree** under its argument (TIF-223, TIF-226): it never stops
+descending at a run directory. `runs/`, `$OUT`, `$OUT/runs` (`runs/<index>/<runId>/`), a single
+run dir and a `--mode values` tree (§6, `values/<runId>/`) all work. A directory holding
+`result.json` or `trace.jsonl` with no run files anywhere below it is a run directory; each one is
+validated and counted, and `--expect` compares against that count. The rules
+(`src/integration/validate-live.ts`, its header comment):
 
-Expected: `validated N result.json + M trace events in runs: ALL OK` (recorded: 4 + 51 at PR #18;
-11 + 77 at PR #11). Non-zero exit and `INVALID …` lines name the offending file and JSON path.
+- **Run files at two levels fail as ambiguous.** A directory that holds run files *and* has runs
+  below it (a stray `result.json` at the top of `$OUT`, or a run nested inside a run) is reported
+  as `AMBIGUOUS run dir <path>: …` and counts as a failure. Its own files are not counted; every
+  run below it is still validated.
+- **Symlinks are refused, never followed:** `REFUSED symlink <path>: …`, a failure. Pass the link's
+  target to validate it. The root argument itself may be a symlink.
+- **Hidden directories are validated** like any other, so a run under `.old/` is checked and
+  counted, not skipped.
+- **Unreadable or malformed entries are reported per path** on stderr (`UNREADABLE <path>: …`,
+  `MALFORMED result …`, `MALFORMED trace …[i]`), and the summary line is still printed, ending
+  `K FAILURES`, with exit 1. A socket, FIFO or device is reported as `SKIPPED <path>: …` and is not
+  a failure. Nothing is skipped silently.
+- **An empty `trace.jsonl` fails:** `INVALID trace <run>: empty trace: a run must record events`.
+- It also fails when it finds no run directory (`NO RUN DIRS …`), when a run directory has only one
+  of the two files (`INCOMPLETE run dir <path>: missing …`), and on any schema-invalid record.
+
+Before TIF-223 it read one level only and printed `ALL OK` with exit 0 on **0** files (operator
+report G30); if you run an older checkout, a `0 result.json` line is a failure, not a pass.
+
+**For a sweep (§7.3) or the suite (§7.4), check the count against the ledger.** Pass the ledger's
+run count as `--expect`; any other count exits non-zero:
+
+```bash
+pnpm exec tsx src/integration/validate-live.ts "$OUT/runs" --expect "$(grep -c '"runId": "' "$OUT/trials.jsonl")"
+```
+
+The per-index loop below stays valid as a cross-check, one directory per ledger row:
+
+```bash
+total=0
+for d in "$OUT"/runs/*/; do
+  line=$(pnpm exec tsx src/integration/validate-live.ts "$d") || echo "FAILED: $d"
+  echo "$line"
+  total=$((total + $(echo "$line" | awk '/^validated/{print $2}')))
+done
+echo "result.json validated: $total"
+grep -c '"runId": "' "$OUT/trials.jsonl"    # the ledger's run count: the two must match
+```
+
+A ledger row with no run (`reset-failed`, `deploy-failed`, `token-failed`) has no `runId` string
+and no artifacts, so it is in neither number. The 2026-11-25 sweep validated 29 results + 516 trace
+events this way, for 29 runs in its 30-row ledger (`docs/research/experiments/m1-row8-sweep2/`).
+
+Expected: `validated N result.json + M trace events in <dir>: ALL OK` with N ≥ 1
+(recorded: 4 + 51 at PR #18; 11 + 77 at PR #11). Non-zero exit and `INVALID …` lines name the offending file and JSON path.
 
 `pnpm schema-validate` is **not** this check: it validates a freshly generated fake-app sample,
 which is what CI proves. Use `validate-live.ts` for your run directory.
 
 ### 8.3 Ledger
+
+**The derived sweep ledger below is specific to sweep v3** (G35): it hard-codes index 3's refusal,
+the 88-row count and a `/tmp` path, and no script derives it. For any other sweep there is no
+mapping rule yet for `uncertain` or never-started rows, so do not invent one. The sweep's evidence
+is `trials.jsonl`, the seed check in `progress.log`, `scripts/m1-scorecard.py`, and the per-index
+schema validation in §8.2.
 
 For normal sweep v3, join each `trials.jsonl` row to
 `runs/<index>/<runId>/{result.json,trace.jsonl}`. Require indices 0–29,
@@ -563,9 +1825,85 @@ with `node --import tsx scripts/m1-corrupt-suite-ledger.ts <ledger-path>`.
 
 `runs/<evalId>/ledger.jsonl` — one row per (trial, corruption-class, action-kind) with an explicit
 oracle and refusal code. The corrupted-suite recorder writes its live conformance ledger to
-`OUT_DIR/ledger.jsonl` during `--final`. False successes carry the `ground-truth:false` or
+`OUT_DIR/ledger.jsonl` during `--final`. **`--final` rewrites `ledger.jsonl` and `summary.json`
+in place, and takes the ledger's eval ID from the directory name** (G36,
+`scripts/m1-corrupt-suite-record.py:269,281,329`). To re-check a finished run, copy the OUT to a
+scratch directory with the **original OUT's basename** and run it there. `summary.txt` is not
+rebuilt, so capture the script's printed summary and compare that.
+
+**A committed pack has been renamed, so its directory name is not the original basename.** Read
+the original from the ledger: the `evalId` of the first row of `ledger.jsonl`.
+
+```bash
+head -1 docs/research/experiments/m1-row8-corrupt/ledger.jsonl | python3 -c 'import json,sys; print(json.load(sys.stdin)["evalId"])'
+# → corrupt-20261125T052233Z
+```
+
+For the committed `m1-row8-corrupt` pack, the exact replay (run from the repo root after §1.2's
+`pnpm install`, because `--final` runs `node --import tsx`; `runs/` is gitignored, and the
+committed pack is never touched):
+
+```bash
+mkdir -p runs/row8-host/replay
+cp -R docs/research/experiments/m1-row8-corrupt runs/row8-host/replay/corrupt-20261125T052233Z
+OUT=runs/row8-host/replay/corrupt-20261125T052233Z
+python3 scripts/m1-corrupt-suite-record.py --final "$OUT/params.json" "$OUT/trials.jsonl" > runs/row8-host/replay/summary.out
+cmp "$OUT/ledger.jsonl" docs/research/experiments/m1-row8-corrupt/ledger.jsonl
+cmp "$OUT/summary.json" docs/research/experiments/m1-row8-corrupt/summary.json
+diff runs/row8-host/replay/summary.out docs/research/experiments/m1-row8-corrupt/summary.txt
+node --import tsx scripts/m1-corrupt-suite-ledger.ts "$OUT/ledger.jsonl"
+```
+
+Pass: `cmp` and `diff` print nothing, and the ledger check reports `"unaccounted":0`. Copied
+under the committed name (`m1-row8-corrupt`) instead, the rebuilt ledger carries
+`"evalId": "m1-row8-corrupt"` and differs from the committed one. That is the wrong basename, not
+a failed reproduction.
+
+**What a reproduction of a committed pack must match (both packs):**
+
+| check | command | must match |
+|---|---|---|
+| schema counts | §8.2 `validate-live "$OUT/runs" --expect <ledger run count>` | the totals in the pack's `schema-validation.log` (sweep2: 29 result.json + 516 trace events; corrupt: 18 + 321), and exit 0 with the `--expect` count |
+| reliability tally (sweep) | `python3 scripts/m1-scorecard.py <pack>/trials.jsonl` | the pack's committed `final-scorecard.md`, byte for byte (`diff` prints nothing). For sweep2: 28/30 verified over a 30-trial denominator |
+| seed check (sweep) | `grep SEED_CHECK <pack>/progress.log` | `"problems": []` |
+| ledger and summary (corrupt suite) | the replay above | `ledger.jsonl` and `summary.json` byte-identical; printed summary identical to `summary.txt` |
+
+"Reliability tally" means the verified count over every recorded trial (the denominator includes
+`uncertain`, `deploy-failed` and every other non-verified row), exactly as `m1-scorecard.py` prints
+it on its `Reliability:` line. False successes carry the `ground-truth:false` or
 `recovery:missing-proof` oracle. `OUT_DIR/summary.json` and the driver's `summary.txt` include
 the per-trial recovery results, `falseSuccesses` total and `auditLedgerRows` accounting.
+
+### 8.4 Scorecard check
+
+`scripts/scorecard-check.py` recomputes every number in `docs/m1-scorecard.md`'s in-scope
+sections from committed artifacts (row 8 step 8; the script's docstring has the full scope).
+It needs no VM, only python3 and the dev dependencies from `pnpm install` (§1.2). Run it from the
+repo root with no arguments (row-8 J8):
+
+```bash
+python3 scripts/scorecard-check.py
+```
+
+It prints one line per claim, then the section classification, then two closing lines. The
+**summary line** is the second to last, the counts:
+
+```
+<n> ok, 0 mismatch, 0 unattributed, <n> not machine-checked, <n> artifact-consistency, <n> skipped, <n> sections swept clean, <n> identifier words skipped; <n> sections out of scope
+SCORECARD CHECK OK: every number in the in-scope sections matches its committed artifact or is listed as unchecked
+```
+
+**Pass: exit 0, the summary line shows `0 mismatch, 0 unattributed`, and the last line is
+`SCORECARD CHECK OK: …`.** The script also runs two sub-checks, `scripts/check-scorecard-links.py`
+and `scripts/scorecard-viewer-links.py --check`, unless you pass `--no-subchecks`; do not pass
+it. Any `MISMATCH` or `UNATTRIBUTED` claim exits 1 (a failed artifact check or sub-check is
+counted as a mismatch), and the failing claims are printed to stderr instead of the
+`SCORECARD CHECK OK` line. Without the dev dependencies the script stops with a Python traceback
+(`CalledProcessError` on `node --import tsx scripts/m1-corrupt-suite-ledger.ts …`) and exit 1;
+that is a setup failure, not a scorecard mismatch: run `pnpm install --frozen-lockfile` and re-run. The
+`not machine-checked` and `skipped` counts are not failures: each such claim prints its reason.
+The check reads the tree and writes nothing in it, so `git status --short` should be unchanged
+afterwards.
 
 ## 9. Troubleshooting
 
@@ -574,13 +1912,14 @@ Every row is a failure we actually hit.
 | Symptom | What it is | Fix |
 |---|---|---|
 | `session_info` → `session_id: 0`, `window_station: Service-0x0-…`; `uia_tree` returns ~6 title-bar nodes; trials fail at `adapter-available` | Agent in session 0: no window station, UIA blind. `schtasks /Run` from SSH does not move it | Redeploy (§4) so it starts via `run-interactive.ps1`; re-check §5. Delete trials run in this state (log 16/18) |
-| `scp: Connection closed` during deploy | Guest unreachable mid-resume, or UTM wedged | §2; if `resuming`, §3.3 (log 35) |
+| `scp: Connection closed` during deploy, then `copy to guest failed on all 3 attempts` | Guest unreachable mid-resume, or UTM wedged. A single drop that a later copy attempt recovers is sshd settling after a cold boot (TIF-220), not this | §2; if `resuming`, §3.3 (log 35) |
 | `UTM error -2700 "Operation not available"`; `status` stuck `resuming`; `kill` says "not running" while status says `resuming` | The live-resume wedge | **GUI-ONLY**: quit + reopen UTM, re-run the cold reset. §3.1 detects it (log 35/37) |
 | Trial `uncertain`, reason `fixture convert did not produce … within <N>ms` | The guest-side headless convert did not write the workbook before the deadline. A cold convert right after a reset was measured at 30.8 s and once at 169.4 s (`docs/research/experiments/m1-013-convert-timeout.md`), so this can happen on a healthy host. Heavy host contention (another QEMU guest, Ollama, swap exhaustion) makes it worse (log 30) | **Count it**: it is an `uncertain` verdict and stays in the denominator. Never drop it from reliability numbers. If it recurs, stop at a trial boundary and investigate; separately, check the host gates and that no other guest is running |
 | Text value `refuted`; persisted value is sentence-cased (`revised-908578` → `Revised-908578`) | Calc AutoCorrect rewrote a lowercase-leading value | Correct behaviour of the verifier. Use the generator's values (`REVISED-######`, numerics) or `--new-value` with an AutoCorrect-immune string. A case-insensitive check here would be a false success (log 21; `src/tasks/intent.ts`) |
 | Cell holds **another record's** value; several `soffice` alive; hundreds of `C:\myco\runs\myco-*` dirs | Cross-trial contamination: a failed trial leaked state and a later trial read a foreign document | Reset + redeploy, then re-run the same intent — it should flip to `verified`. Reset per trial, always. M1-019's host-side always-cleanup + `guest-contaminated` guard now aborts `uncertain` instead of guessing; its real-Windows behaviour is still unvalidated (log 27, 29, 36) |
 | Agent behaves like an older build right after a reset | Stale pre-deployed snapshot: `m1-agent-live` contains whatever agent existed when it was taken. `ping` cannot reveal this — `agent_version` is the constant `0.1.0` | Prefer cold reset + deploy (§3.1/§4). Trust a pre-deployed snapshot only if you know its commit; re-take it after any agent change (PR #28, reverted; PR #31) |
-| `agent ping ok …` never printed; `MYCO_AGENT_TOKEN is required (or ~/.myco-token from vssh)` | Missing/stale token | Re-fetch from the guest after every deploy (§4) |
+| `agent ping ok …` never printed; `no agent token: …` (default path) or `cannot read token file …` / `token file … is empty` (`--token-file`), exit 1 | **Missing or empty** token file: no `--token-file`, `MYCO_AGENT_TOKEN` unset and `~/.myco-token` missing, unreadable or empty; or the `--token-file` path is (`src/integration/run-live-token.ts`) | Re-run the deploy (§4); it writes the fresh token to `~/.myco-token` or `$MYCO_TOKEN_OUT`. Pass that path as `--token-file`. Guest deployed by something else: the §4 fallback |
+| `run-live` exits **1** within a second, stdout empty, no run directory written (the `--runs-dir` itself may exist, empty: it is created just before the ping); stderr is an uncaught stack trace starting `AgentOpError: agent op failed (AUTH_FAILED): missing or invalid token` (`at … run-live.ts`, the initial `ping`). `session-info.ts` prints `agent op failed (AUTH_FAILED): missing or invalid token` and exits 3 | **Stale** token: the file exists but holds a token from an earlier deploy (yours or another operator's, §4: `~/.myco-token` is shared), a failed deploy that rotated the guest token after the file was written, or a stale exported `MYCO_AGENT_TOKEN` winning over the default file. The agent rejects it (`agent/myco_agent/protocol.py`), `AgentClient` throws `AgentOpError` (`src/win/agent-client.ts`), and `run-live`'s top-level handler prints the stack and exits 1 | Re-run the deploy (§4) so it writes a fresh file, pass that path as `--token-file`, and re-run. **Do not read exit 1 alone as "a row not verified"**: the same exit code means both. Tell them apart by output: a real run prints the JSON rows on stdout and writes run dirs under the runs dir; the auth failure prints no rows and writes no run dir |
 | Port 8765 already in use / two tunnels | A manual tunnel from an earlier step; `run-live` cannot bind its own and silently reuses the stale one | Close any manual tunnel first (`lsof -nP -iTCP:8765 -sTCP:LISTEN`); let `run-live` own the tunnel |
 
 ## 10. What is NOT reproducible from scratch

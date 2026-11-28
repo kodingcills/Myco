@@ -1,0 +1,120 @@
+{
+  "runId": "853088d5-f49d-49b0-95db-ebd2ead07968",
+  "verdict": {
+    "status": "verified",
+    "reasons": [
+      "cell B5 (record EMP-0004, column name) persisted as \"REVISED-419474\""
+    ]
+  },
+  "completed": true,
+  "elapsedMs": 111082,
+  "xlsxPath": "C:/myco/runs/myco-55861-1795586281009-213075583\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      2084,
+      5820
+    ],
+    "removed": [
+      "myco-55861-1795586281009-213075583",
+      "myco-55861-1795586281009-276858522"
+    ],
+    "residue": [],
+    "errors": [
+      "taskkill /IM soffice.bin: rc=128 survivors=[] ERROR: The process with PID 2084 (child process of PID 5608) could not be terminated.\nReason: There is no running instance of the task."
+    ]
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 13062,
+    "outcome": "arrived",
+    "hostLoadStart": 8.21,
+    "hostLoadEnd": 7.49
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 7994,
+        "durationMs": 8952,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4470,
+        "durationMs": 5122,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3042,
+        "durationMs": 3538,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4460,
+        "durationMs": 5089,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "focus",
+        "elapsedMs": 5684,
+        "durationMs": 7253,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4730,
+        "durationMs": 5513,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "save",
+        "elapsedMs": 4509,
+        "durationMs": 5545,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 3124,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      },
+      {
+        "durationMs": 224,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-kill-4",
+    "dataRows": 47,
+    "csvSha256": "313721dda4c9855b638dfa8cb0c04d6c67d60348edb0d06e998464d055c2b016"
+  },
+  "corruption": {
+    "mode": "kill",
+    "applied": true,
+    "recovery": true,
+    "persistedValue": "REVISED-419474",
+    "recoveryEvents": [
+      "retry:1-failed",
+      "retry:2-failed",
+      "relaunch:resumed",
+      "relaunch:completed"
+    ],
+    "actionKinds": [
+      "click",
+      "setValue",
+      "keyPress"
+    ]
+  }
+}

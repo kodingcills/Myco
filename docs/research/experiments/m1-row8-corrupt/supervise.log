@@ -1,0 +1,11 @@
+2026-11-25T05:22:33Z START m1-corrupt-suite.sh (resume #0)
+/private/tmp/row8-op4/runs/corrupt-20261125T052233Z.supervise.sh: line 18: /private/tmp/row8-op4/runs/corrupt-20261125T052233Z/trials.jsonl: No such file or directory
+/private/tmp/row8-op4/runs/corrupt-20261125T052233Z.supervise.sh: line 18: /private/tmp/row8-op4/runs/corrupt-20261125T052233Z/trials.jsonl: No such file or directory
+/private/tmp/row8-op4/runs/corrupt-20261125T052233Z.supervise.sh: line 18: /private/tmp/row8-op4/runs/corrupt-20261125T052233Z/trials.jsonl: No such file or directory
+/private/tmp/row8-op4/runs/corrupt-20261125T052233Z.supervise.sh: line 18: /private/tmp/row8-op4/runs/corrupt-20261125T052233Z/trials.jsonl: No such file or directory
+/private/tmp/row8-op4/runs/corrupt-20261125T052233Z.supervise.sh: line 18: /private/tmp/row8-op4/runs/corrupt-20261125T052233Z/trials.jsonl: No such file or directory
+/private/tmp/row8-op4/runs/corrupt-20261125T052233Z.supervise.sh: line 18: /private/tmp/row8-op4/runs/corrupt-20261125T052233Z/trials.jsonl: No such file or directory
+/private/tmp/row8-op4/runs/corrupt-20261125T052233Z.supervise.sh: line 18: /private/tmp/row8-op4/runs/corrupt-20261125T052233Z/trials.jsonl: No such file or directory
+/private/tmp/row8-op4/runs/corrupt-20261125T052233Z.supervise.sh: line 18: /private/tmp/row8-op4/runs/corrupt-20261125T052233Z/trials.jsonl: No such file or directory
+2026-11-25T07:36:16Z EXIT rc=0
+2026-11-25T07:36:16Z DONE rc=0

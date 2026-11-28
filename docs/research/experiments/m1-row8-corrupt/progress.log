@@ -1,0 +1,487 @@
+=== trial 0 (kill) 2026-11-25T05:22:35Z
+ac_power=yes trial=0
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "85b02822339d4bebb98e2152fc58c0f1", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 1 (invalid-target) 2026-11-25T05:29:55Z
+ac_power=yes trial=1
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "50fcdd092a29412ba3a33f6c22aaf3ab", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 2 (dropped-save) 2026-11-25T05:36:44Z
+ac_power=yes trial=2
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "57b63784798343a0ace31afacab1c8fe", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 3 (focus-change) 2026-11-25T05:43:53Z
+ac_power=yes trial=3
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "98d0da98acbe406ea56b7ed4cf9ce61b", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 4 (kill) 2026-11-25T05:51:51Z
+ac_power=yes trial=4
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "c05adeac71b14ecfbe1b02a394f64cdc", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 5 (invalid-target) 2026-11-25T06:00:11Z
+ac_power=yes trial=5
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "4a063b492a084bde9ead7fa64518caed", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 6 (kill) 2026-11-25T06:07:57Z
+ac_power=yes trial=6
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "d20713c7fb30459aa9f087d7f13e1c7a", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 7 (invalid-target) 2026-11-25T06:15:22Z
+ac_power=yes trial=7
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "44f7542d28824b9692d43624e0f8fc13", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 8 (dropped-save) 2026-11-25T06:22:28Z
+ac_power=yes trial=8
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "bbf25e8562c84be78b023a0ce71d4cc1", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 9 (focus-change) 2026-11-25T06:29:44Z
+ac_power=yes trial=9
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "47fa0ea9e76f4dddb78233af8294157f", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 10 (kill) 2026-11-25T06:36:48Z
+ac_power=yes trial=10
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "21da11e5fa4f4cfd972bfa3834204a46", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 11 (invalid-target) 2026-11-25T06:45:55Z
+ac_power=yes trial=11
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "2fce56e84ca24bffb05c9779c6194e69", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 12 (kill) 2026-11-25T06:55:59Z
+ac_power=yes trial=12
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "60171dff33944d5fb2c738f48f26f41a", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 13 (invalid-target) 2026-11-25T07:02:27Z
+ac_power=yes trial=13
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "d5e6f528fd2c474e9b2a7f62d0d5a0f7", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 14 (dropped-save) 2026-11-25T07:08:41Z
+ac_power=yes trial=14
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "40bc6a4be2e04552b3a11823c5386ba6", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 15 (focus-change) 2026-11-25T07:15:05Z
+ac_power=yes trial=15
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "546586ae0ab24e34b6ac71e534e51d3f", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 16 (kill) 2026-11-25T07:22:03Z
+ac_power=yes trial=16
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "ffe97147742b477684eca7d54f155c9d", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+=== trial 17 (invalid-target) 2026-11-25T07:29:18Z
+ac_power=yes trial=17
+reset-trial-vm: ready on 'clean-base'
+==> copying agent tree to guest (C:/Program Files/Myco/agent)
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+prepared C:\Program Files\Myco\agent and C:\ProgramData\Myco
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+==> verified 13 files on the guest against the source (sha256)
+==> writing token file (C:\ProgramData\Myco\agent.token)
+==> registering MycoAgent task and starting it in the interactive session
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+started task myco-agent
+MycoAgent task registered; agent launched in the interactive session
+==> verifying ping over ssh -L 8765:127.0.0.1:8765
+==> ping verified:
+{"ok": true, "id": 1, "result": {"agent_version": "0.1.0", "session_id": "8f648b2cf98c433ba6a796dc180ec6b6", "backend": "windows"}}
+
+DEPLOY OK
+  token   : per-deploy; it is in C:\ProgramData\Myco\agent.token on the guest
+  tunnel  : ssh -F ~/VMs/myco-win11/ssh_config -N -L 8765:127.0.0.1:8765 myco-win11
+  ops     : printf '{"id":1,"token":"<token>","op":"ping","params":{}}\n' | nc 127.0.0.1 8765
+SUITE_DONE 2026-11-25T07:36:16Z

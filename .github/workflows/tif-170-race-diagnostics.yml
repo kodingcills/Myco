@@ -1,0 +1,150 @@
+# TIF-170: the s0-live launcher race fails only on ubuntu-latest CI.
+#
+# `test/discovery/s0-live-launcher.test.ts` "admits exactly one --run under a real
+# race" reported `expected 2 to be 1` on four consecutive main runs, and ~13,000 racer
+# invocations on the macOS dev host have not reproduced it. This job runs that one test
+# on the runner that sees it, and writes what a failing round left behind to a file and
+# to the job log.
+#
+# Diagnostics are off unless MYCO_TIF170_DIAG is set, so this branch's test file is the
+# same test everywhere else. SYNCING THIS FILE TO MAIN IS NOT A FIX: it is the harness
+# for the investigation, and the quarantine in #333 stays until a round explains itself.
+name: TIF-170 race diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: How many full test invocations to run
+        default: "20"
+        required: false
+      rounds:
+        description: Rounds inside each invocation (8 racers a round)
+        default: "30"
+        required: false
+      launcher:
+        description: Launcher under scripts/ the fixture copies (s0-live.sh or a variant)
+        default: s0-live.sh
+        required: false
+  pull_request:
+    paths:
+      - .github/workflows/tif-170-race-diagnostics.yml
+      - test/discovery/s0-live-launcher.test.ts
+      - scripts/s0-live.sh
+      - scripts/s0-live-stopowner.sh
+      - scripts/s0-live-guardclosed.sh
+      - scripts/s0-live-guardwide.sh
+
+permissions:
+  contents: read
+
+# A newer push to the same PR cancels its superseded run; each manual dispatch gets
+# its own group (github.run_id) and is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  race:
+    name: race x${{ inputs.runs || 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MYCO_TIF170_DIAG: ${{ github.workspace }}/.tif-170
+      MYCO_TIF170_ROUNDS: ${{ inputs.rounds || 30 }}
+      # Which launcher the fixture copies. The default is the shipped one; the variant
+      # differs only in whether `--stop` removes the lock unconditionally.
+      MYCO_TIF170_LAUNCHER: ${{ inputs.launcher || 's0-live.sh' }}
+      # Read by the Race step from env, not interpolated into the script (TIF-241:
+      # no `${{ inputs.* }}` inside `run:`).
+      TIF170_RUNS: ${{ inputs.runs || 1 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      # The race test is gated on MYCO_TIF170_DIAG, the env this job sets. A run that
+      # silently skipped it would execute zero rounds and report green, which is the
+      # failure mode this step exists to catch: prove the gate resolves to "runs" here.
+      - name: The race test runs in this job
+        run: |
+          set -euo pipefail
+          mkdir -p .tif-170
+          npx vitest run --pool=forks --no-file-parallelism \
+            test/discovery/s0-live-launcher.test.ts --reporter=json --outputFile=.tif-170/guard.json \
+            >/dev/null 2>&1 || true
+          if grep -q '"status": "skipped"' .tif-170/guard.json &&
+             grep -q 'admits exactly one --run under a real race' .tif-170/guard.json; then
+            echo "::error::the race test was skipped in this job; the diagnostics ran zero rounds"
+            exit 1
+          fi
+          if ! grep -q 'admits exactly one --run under a real race' .tif-170/guard.json; then
+            echo "::error::the race test is not registered at all"
+            exit 1
+          fi
+          echo "the race test ran under MYCO_TIF170_DIAG"
+      # One invocation is 30 rounds; `runs` repeats the whole file. A repeat is a fresh
+      # vitest process, so a failure in one run never hides the others, and the step
+      # never exits non-zero: the point is to collect all 20, then read the artifacts.
+      #
+      # GitHub runs this file with `bash -e`, and a failing pipeline is a failing last
+      # command (`tee`), so `-e` killed the step before the loop could record the rc —
+      # the first three dispatches each died mid-run and left an empty summary. The
+      # `set +e` around the pipeline only suspends `-e` for it; `-u` stays, so a typo
+      # in a variable name is still an error rather than an empty string.
+      - name: Race
+        run: |
+          set -uo pipefail
+          mkdir -p .tif-170
+          : > .tif-170/summary.tsv
+          failures=0
+          for run in $(seq 1 "$TIF170_RUNS"); do
+            echo "::group::run $run"
+            set +e
+            npx vitest run --pool=forks --no-file-parallelism \
+              test/discovery/s0-live-launcher.test.ts 2>&1 | tee ".tif-170/run-$run.log"
+            rc=${PIPESTATUS[0]}
+            set -e
+            printf 'run\t%s\trc\t%s\n' "$run" "$rc" >> .tif-170/summary.tsv
+            echo "::endgroup::"
+            if [ "$rc" -ne 0 ]; then
+              failures=$((failures + 1))
+              # A failing round is the finding; stop early rather than burn the
+              # remaining budget on runs that can only add the same evidence.
+              break
+            fi
+          done
+          {
+            echo "### TIF-170 race summary"
+            echo '```'
+            cat .tif-170/summary.tsv
+            echo '```'
+            echo "failing runs: $failures"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Anomaly rounds in the log
+        if: always()
+        run: |
+          if ls .tif-170/round-*.failure.txt >/dev/null 2>&1; then
+            for f in .tif-170/round-*.failure.txt; do
+              echo "::group::$f"
+              cat "$f"
+              echo "::endgroup::"
+            done
+          else
+            echo "no failing round in this job"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: tif-170-race-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .tif-170
+          # The whole point of the dir is its dot prefix; v4 skips hidden paths by
+          # default and the first dispatch uploaded nothing.
+          include-hidden-files: true
+          if-no-files-found: warn

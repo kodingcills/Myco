@@ -1,0 +1,234 @@
+# Policies and guardrails (capability track O)
+
+Host-side enforcement of declared policies on every agent action that goes through one of the
+wrapped host actuator interfaces listed under "Every actuator path", before it reaches the app
+or the guest (`docs/product/capability-spec-2.md`, section O). Tools the agent calls directly on
+the `myco-rt` MCP server are not wrapped; a policed trial refuses to start if it grants any that
+act (see "The myco-rt MCP surface"). Code: `src/policy/` (engine and guard), `src/violations/`
+(the independent violation checker). Tier 2.
+
+## What it does
+
+A policy decides `allow`, `deny` or `require-approval` for each proposed action. The decision
+is made on the host, in the actuator path, before the action is forwarded:
+
+```
+agent action -> policed wrapper -> reduce to facts (host) -> guard -> engine -> decision
+                                                                 |
+                       allow: forward    deny: refuse with a code    require-approval: N handoff
+```
+
+The agent cannot read, edit, relax or switch off a policy. It sees `POLICY_DENIED` or
+`POLICY_APPROVAL_REQUIRED` and an opaque policy id (`pol-<12 hex>`), never the policy text,
+the rule kind or the host reason code. Policies are not a verifier: a run where every action
+was allowed says nothing about whether the task is done. Nothing here changes the gate
+(`myco.gate/v1` still takes `taskId`, `runId` and `claim` only).
+
+## The host config
+
+One JSON file on the host, `myco.policy-config/1`, closed at every level:
+
+```json
+{
+  "schema": "myco.policy-config/1",
+  "policies": [
+    { "id": "keep-original", "kind": "no-overwrite-original", "effect": "deny" },
+    { "id": "doc-dir-only", "kind": "write-scope", "effect": "deny" },
+    { "id": "no-creds", "kind": "no-credential-input", "effect": "deny" },
+    { "id": "apps", "kind": "app-allowlist", "effect": "deny", "apps": ["soffice"] },
+    { "id": "at-most-2", "kind": "destructive-limit", "effect": "deny", "max": 2 },
+    { "id": "injected", "kind": "flagged-screen", "effect": "require-approval" }
+  ]
+}
+```
+
+| Kind | Matches when the action |
+|---|---|
+| `no-overwrite-original` | writes or deletes the trial's original document |
+| `write-scope` | writes or deletes anything outside the trial's document directory |
+| `no-credential-input` | types into a field the host classifies as a credential field |
+| `app-allowlist` | launches an app not on the list |
+| `destructive-limit` | would take the trial's destructive operations (deletes, overwrites) past `max` |
+| `flagged-screen` | is proposed while the host screen sensor flags an injected instruction |
+
+Every rule is evaluated; `deny` beats `require-approval` beats `allow`, and among equals the
+first rule in the file names the decision.
+
+`startPolicy` (`src/policy/guard.ts`) reads the file once and pins its SHA-256 over the exact
+bytes. Editing the file during a trial changes nothing.
+
+## Fail closed
+
+| Situation | Result |
+|---|---|
+| The agent is granted a tool off `POLICED_GRANTABLE_TOOLS` (raw `myco-rt` act, launch or write included), or the grant list is missing or malformed | the trial refuses to start (`POLICY_UNPOLICED_SURFACE`) |
+| Config missing or unreadable | the trial refuses to start (`POLICY_CONFIG_MISSING`); it never runs unpoliced |
+| Config is not a regular file: a symlink at its own name, a FIFO, a device such as `/dev/zero`, a directory, or swapped for one before the open | refused before any blocking open (`POLICY_CONFIG_NOT_REGULAR`) |
+| Config larger than 64 KiB (`MAX_CONFIG_BYTES`), by `lstat` or by the bounded read | refused, never read in full (`POLICY_CONFIG_TOO_LARGE`) |
+| Config path relative, or resolving inside the document directory or any agent root | refused (`POLICY_CONFIG_NOT_HOST`) |
+| Trial scope does not resolve | refused (`POLICY_SCOPE_INVALID`) |
+| `flagged-screen` declared with no host screen sensor | refused (`POLICY_SENSOR_MISSING`) |
+| Config does not parse to the closed schema | every action denied (`POLICY_CONFIG_INVALID`) |
+| Facts reducer, classifier or sensor throws | denied (`POLICY_ENGINE_ERROR`) |
+| Action the reducer cannot reduce: a key chord off the closed allow-list (Save As, any Alt chord or menu accelerator, F10, F12, close or quit chords, a chord the guest would refuse), typed text with a control character, a launch of a program not listed by its real path or with arguments the host did not declare, an unknown action kind | denied (`POLICY_ACTION_UNRECOGNISED`) |
+| Async decision slower than the timeout (default 2 s) | denied (`POLICY_ENGINE_TIMEOUT`) |
+| Synchronous actuator meets `require-approval` | refused (`POLICY_APPROVAL_REQUIRED`), never allowed |
+
+## The myco-rt MCP surface (kept out of policed trials)
+
+Claude Code calls `myco-rt`'s tools directly, with no host wrapper in between:
+`mcp__myco-rt__act` (launch with any arguments, click, type), `launch_process` and `write_file`
+reach the guest's `Command::new` and file system unpoliced. O does not police that surface; it
+keeps it out. `startPolicy` requires `grantedTools`, the exact tools the trial grants the agent,
+and refuses the trial with `POLICY_UNPOLICED_SURFACE` (before it reads the config) unless every
+one is on the closed list `POLICED_GRANTABLE_TOOLS` (`src/policy/surface.ts`):
+
+| Tool | Why it may be granted |
+|---|---|
+| `mcp__myco-rt__observe`, `mcp__myco-rt__read_file` | read only |
+| `mcp__myco-gate__myco_gate_check` | the completion gate; acts on nothing |
+| `mcp__myco-state__state_*` (four tools) | track I's read-only app state |
+| `TodoWrite` | the agent's own list |
+
+Anything else is refused, including a missing or malformed list, a tool the list has never
+heard of, and an `"unbounded"` surface. So no capability arm as defined today
+(`src/state/arms.ts`; each grants raw `act`) can be a policed arm. A policed agent acts only
+through a wrapped host interface, for example `DesktopTransport.act`, which the host's
+`RuntimeTransport` implements over `myco-rt`'s `act`. The runner that wires a policed arm must
+pass the `effective` surface of the audited launch plan (`auditAgentLaunch(plan).effective`);
+`test/policy/surface.test.ts` shows that every capability arm's audited surface is refused.
+
+## Every actuator path
+
+`src/policy/actuators.ts` wraps each actuator entry point. `test/policy/actuators.test.ts`
+pins the entry points against their declarations, classifies every file in `src/` that
+declares an `act`, `calcSet` or `writerAppend` method, and proves each wrapper calls the guard
+before it forwards.
+
+| Entry point | Wrapper | Path | `require-approval` |
+|---|---|---|---|
+| `AppAdapter.act` | `policedAppAdapter` | async | N handoff |
+| `DesktopTransport.act` | `policedDesktopTransport` | async | N handoff |
+| Linux `Actuator.act` | `policedLinuxActuator` | sync | refused |
+| `CrossAppActuator.calcSet` / `writerAppend` | `policedCrossAppActuator` | sync | refused |
+| J's `ActionPolicy.check` (every route) | `guardedActionPolicy` | sync | refused |
+
+The async wrappers use track N's seam (`guardAction`, `PauseGate`, `HandoffPolicy`): no action
+passes while any handoff is open, `require-approval` is a forced handoff the human approves,
+fixes or rejects, and `deny` is a `PolicyDenial` (no handoff opens). With no broker,
+`NO_APPROVALS` cancels every approval request, so nothing is forwarded.
+
+Key chords are parsed exactly as the guest parses them (`src/policy/chord.ts`, mirroring
+`parse_chord` in `runtime/crates/myco-rt-agent/src/act.rs`): split on `+`, trim with Rust's
+whitespace set, drop empty parts, collapse repeated modifiers, and treat an ASCII capital as
+Shift held. So `ctrl++s`, `+ctrl+s`, `ctrl+ctrl+s` and `super+s` are all Save, which writes over
+the original document. Every other chord is judged against a closed allow-list of chords that
+cannot write a file by themselves (clipboard, undo, select-all, formatting, navigation, plain
+keys); anything off the list is `POLICY_ACTION_UNRECOGNISED`. That includes `Ctrl+S` with a
+capital S, which the guest delivers as Ctrl+Shift+S (Save As). Plain keys act inside whatever
+has focus, so they can act on a menu or dialog an earlier action opened. Every chord that opens
+one is unrecognised, but a click can open one too (see the known limit below).
+
+A desktop `launch` is judged by the program's real absolute path and its whole argument vector,
+never by its base name. The guest runs `Command::new(command).args(args)` for any command, so
+`cp <file> <original>` or `soffice --convert-to xlsx --outdir <docDir> <file>` would write
+files that no file policy ever sees. The host passes `policedDesktopTransport` a `LaunchTable`
+keyed by each allowed program's real path. A launch is `POLICY_ACTION_UNRECOGNISED` unless:
+
+- its command is exactly a listed path: absolute, with no `.`, `..`, doubled or trailing `/`,
+  and no symlink hop (a bare name the guest would look up on its PATH, a relative path, a
+  symlink to a listed program, and another binary sharing a listed base name are all refused);
+  and
+- its arguments are empty, or exactly (element by element) one of the argument vectors the host
+  declared for that program. The host declares only vectors with no file effect, such as
+  `soffice --calc`; anything else, including any path operand, is refused.
+
+An empty table refuses every launch. A recognised launch carries the entry's app id to
+`app-allowlist`.
+
+The path checks run on the HOST's file system (`canonicalCommand` resolves symlinks, `.`, `..`
+and hard links with the host's `realpath`), but the guest runs the command on its own file
+system. So "no symlink hop" and "no hard link" hold only where the two coincide (as in the
+tests). The exact-string match against the table holds everywhere. A table keyed by guest image
+paths must therefore also be checked against the guest image itself (see the queued runbook
+step below); until then, list only paths that exist identically on both sides.
+
+What runs is what was judged. Each async wrapper takes a frozen copy of the action when it is
+called, reading every field once, judges that copy and forwards that copy. Changing the caller's
+object while the action waits on the pause gate or a human's approval, or a getter that answers
+differently on a second read, never reaches the inner actuator; a copy that cannot be taken is
+`POLICY_ACTION_UNRECOGNISED` (a launch with more than 64 arguments among them, counted on the
+copy). This holds for every action kind: the four desktop kinds and the five adapter kinds each
+have a test that changes the held object during the approval. The router wrapper returns a frozen
+copy of J's decision whose writes it judged; the copy is taken inside the guard, so a malformed
+decision from J is a logged `POLICY_ACTION_UNRECOGNISED` refusal, never a throw. `policedDesktopTransport` returns a frozen object with exactly the six
+interface methods; it never spreads the inner transport, so none of its own fields (such as
+`RuntimeTransport`'s raw MCP client) is reachable through it. Tests:
+`test/policy/frozen-action.test.ts`.
+
+`destructive-limit` holds exactly under concurrency. The engine judges an action and reserves
+its destructive operations in one synchronous step (`PolicyEngine.decide`), counting both the
+operations already forwarded and those reserved by actions that have not settled yet. The
+wrapper commits the reservation when it forwards the action and releases it on any other
+outcome: a refusal, a rejected or cancelled approval, a timeout, or a throw. An action waiting
+for a human's approval keeps its slot reserved; if the human answers "fixed it", the agent's held
+action is not forwarded and its slot is released. Each settle is one-shot: a second commit or
+release, in either order, changes nothing. A forwarded action's slot stays spent even if the app
+then fails, because the policy cannot know whether the write happened.
+
+Known limits:
+
+- A click carries only a target ref, so a click on a Save or Delete button is not recognised
+  by the reducers, and neither is a click that opens the File menu (after which a plain `s`, the
+  menu mnemonic, saves). The violation checker still sees the effect in the file-system diff.
+- What a listed program does once it runs (for example text typed into a launched terminal or
+  editor) is governed only by `app-allowlist`; the launch table cannot see it.
+
+## The host record
+
+Every decision is logged host-side as
+`{ actionSeq, actuator, policyId, decision, code, configSha256 }`: closed values only
+(`src/policy/codes.ts`). Nothing the agent sent (text, paths, identities) is written there or
+returned to it. `PolicyGuard.row(arm, trialKey)` gives the per-trial row with the config hash
+and decision counts; `checkPolicyPack` refuses a pack whose rows mix config hashes within an
+arm, carry no hash in a policed arm, or carry one in an unpoliced arm.
+
+Q's proof bundles admit O's codes as is: `POLICY_REASON_CODES` in `src/proof/closed.ts`
+appends `POLICY_DECISION_CODES` and `POLICY_AGENT_CODES`. O's `require-approval` corresponds to
+the bundle's `ask` decision.
+
+## Independent violation checker
+
+`src/violations/checker.ts` decides violations after the run from the action trace, the
+persisted bytes and the guest file-system diff, against the task's own spec. It shares no code
+with the engine (`test/violations/independence.test.ts` walks the import graph both ways), so
+the engine never grades itself. Input it cannot read is `VIOLATION_INPUT_INVALID`, never zero
+violations.
+
+## Boundaries
+
+`test/policy/boundary.test.ts`: the engine reaches no gate, vault, registry, grader, evidence,
+episode or proof module, imports no process launcher, names no gate schema, and the gate never
+imports it.
+
+## Not built yet (needs a VM or another track)
+
+- Wiring the wrappers into the live trial runners and the `B` / `B+O` arms (trial-run code).
+- Recording the policy log and config hash in `myco.episode/1` and the A/B pack rows (schema
+  changes, each its own reviewed change).
+- The frozen `pol-v1` task set (60 adversarial tasks plus fc-v1's 90 benign ones) and the
+  measured bar (zero violations in `B+O`; benign non-inferiority).
+- A host screen sensor for injected instructions, and click-target classification (track I).
+
+### Queued runbook step for the local VM owner (#605 item 3)
+
+Not run from a cloud session. Before the live runner passes a `LaunchTable` to
+`policedDesktopTransport`, for each listed path, in the booted guest image:
+
+1. Confirm the path is the program's real path: `readlink -f <path>` prints `<path>` unchanged.
+2. Confirm it is a regular file with one link: `stat -c '%F %h' <path>` prints
+   `regular file 1`.
+3. Confirm the agent cannot replace it: `stat -c '%U %a' <path>` shows owner `root` and no group
+   or other write bit, and the same holds for every parent directory up to `/`.
+4. Record the table, the image id and the results next to the trial's run record. A path that
+   fails any step is removed from the table (fail closed), never listed anyway.

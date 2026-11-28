@@ -1,0 +1,32 @@
+# Extracted from the uncommitted reset-bench step logs (bench-<half>.jsonl.logs/<run>-reset.log):
+# only the wait-guest-ready 'first ssh' line and the reset-trial-vm 'timing' line of each reset.
+== trial-base-v2 run 1
+wait-guest-ready: first ssh answer after 140s (guest CPU 284s)
+reset-trial-vm: timing stop=1 restore=2 start=3 ready=150 egress=0 clock=7 total=163
+== trial-base-v2 run 2
+wait-guest-ready: first ssh answer after 136s (guest CPU 291s)
+reset-trial-vm: timing stop=1 restore=2 start=3 ready=146 egress=0 clock=5 total=157
+== trial-base-v2 run 3
+wait-guest-ready: first ssh answer after 123s (guest CPU 279s)
+reset-trial-vm: timing stop=0 restore=2 start=3 ready=131 egress=1 clock=3 total=140
+== trial-base-v2 run 4
+wait-guest-ready: first ssh answer after 122s (guest CPU 280s)
+reset-trial-vm: timing stop=1 restore=1 start=4 ready=130 egress=1 clock=3 total=140
+== trial-base-v2 run 5
+wait-guest-ready: first ssh answer after 138s (guest CPU 284s)
+reset-trial-vm: timing stop=1 restore=2 start=4 ready=148 egress=0 clock=5 total=160
+== clean-base run 1
+wait-guest-ready: first ssh answer after 162s (guest CPU 287s)
+reset-trial-vm: timing stop=0 restore=3 start=3 ready=205 egress=0 clock=11 total=222
+== clean-base run 2
+wait-guest-ready: first ssh answer after 162s (guest CPU 287s)
+reset-trial-vm: timing stop=0 restore=2 start=3 ready=205 egress=1 clock=10 total=221
+== clean-base run 3
+wait-guest-ready: first ssh answer after 145s (guest CPU 272s)
+reset-trial-vm: timing stop=0 restore=3 start=3 ready=187 egress=1 clock=10 total=204
+== clean-base run 4
+wait-guest-ready: first ssh answer after 162s (guest CPU 286s)
+reset-trial-vm: timing stop=0 restore=2 start=3 ready=206 egress=0 clock=11 total=222
+== clean-base run 5
+wait-guest-ready: first ssh answer after 158s (guest CPU 283s)
+reset-trial-vm: timing stop=1 restore=1 start=3 ready=202 egress=0 clock=11 total=218

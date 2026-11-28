@@ -11,8 +11,9 @@ as citing a `schema-validation.log` that no commit ever contained.
 Two link forms are accepted and both are checked:
 
   - an inline path:        `docs/research/experiments/m1-runs/<pack>/trial-<n>/`
-  - a fragment deep link:  `...#?run=trial-<n>`  (the viewer's `run` key is the
-                            top-level directory under the folder you open)
+  - a fragment deep link:  `...#?run=<runId>`  (the viewer's `run` key is the run's
+                            own `runId` from its `result.json`, not the folder name;
+                            the fragment is checked against that artifact)
 
 For each run directory the checker also asserts the two files the viewer actually
 needs are present. `trace.jsonl` alone renders nothing; the viewer pairs it with
@@ -22,6 +23,7 @@ Exit 0 = every link resolves. Exit 1 = at least one does not, with each failure
 named. Exit 2 = the scorecard could not be read.
 """
 
+import json
 import re
 import pathlib
 import sys
@@ -30,6 +32,24 @@ import sys
 RUN_LINK = re.compile(r"(?P<path>docs/research/experiments/m1-runs/[A-Za-z0-9._-]+/trial-\d+)")
 # The viewer needs both of these; a directory with only one renders nothing.
 REQUIRED = ("result.json", "trace.jsonl")
+# A scorecard row: label, run directory, and the viewer deep link.
+ROW = re.compile(
+    r"^\| (?P<label>[^|]+?) \| \[`(?P<path>docs/research/experiments/m1-runs/[^`]+)`\]\([^)]+\) \| "
+    r"\[View\]\([^)]*#\?run=(?P<run>[^)\s]+)\) \|$"
+)
+
+
+def result_run_id(target: pathlib.Path) -> str | None:
+    """The runId the viewer will key this run by, straight from its result.json."""
+    result = target / "result.json"
+    if not result.is_file():
+        return None
+    try:
+        value = json.loads(result.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    run_id = value.get("runId")
+    return run_id if isinstance(run_id, str) and run_id else None
 
 
 def main(argv: list[str]) -> int:
@@ -52,6 +72,31 @@ def main(argv: list[str]) -> int:
             if not (target / name).is_file():
                 problems.append(f"{link} is missing {name} (the viewer renders neither alone)")
 
+    # A viewer link is only useful if its fragment names the run it sits beside: the
+    # viewer keys a run by result.json's runId, so a wrong id opens the wrong trace
+    # or nothing. Checked against the artifact, not against the row.
+    seen_views = 0
+    for line in text.splitlines():
+        row = ROW.match(line)
+        if not row:
+            continue
+        seen_views += 1
+        target = root / row.group("path")
+        expected = result_run_id(target)
+        if expected is None:
+            problems.append(f"{row.group('path')} has no runId in result.json to link to")
+        elif row.group("run") != expected:
+            problems.append(
+                f"{row.group('label').strip()} links run={row.group('run')} "
+                f"but its result.json says {expected}"
+            )
+
+    if seen_views != len(set(links)):
+        problems.append(
+            f"{len(set(links))} run link(s) but {seen_views} row(s) with a viewer link; "
+            "every row must carry one"
+        )
+
     if problems:
         for p in problems:
             print(f"FAIL {p}", file=sys.stderr)
@@ -61,6 +106,7 @@ def main(argv: list[str]) -> int:
     unique = sorted(set(links))
     print(f"scorecard trace links: {len(unique)} distinct run directories, all resolve")
     print(f"each carries: {', '.join(REQUIRED)}")
+    print(f"viewer deep links: {seen_views}, every fragment matches its result.json runId")
     return 0
 
 

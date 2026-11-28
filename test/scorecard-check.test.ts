@@ -1,0 +1,550 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+// Row 8 step 8 (re-scoped 2026-11-25): scripts/scorecard-check.py recomputes the numbers
+// in docs/m1-scorecard.md's in-scope sections from committed artifacts, fails on any
+// mismatch, and fails on any number-like token no claim covers.
+const CHECK = "scripts/scorecard-check.py";
+const SCORECARD = "docs/m1-scorecard.md";
+
+function run(...args: string[]) {
+  return spawnSync("python3", [CHECK, ...args], { encoding: "utf8", timeout: 120_000 });
+}
+
+function checkMutated(text: string) {
+  const doc = join(mkdtempSync(join(tmpdir(), "scorecard-check-")), "m1-scorecard.md");
+  writeFileSync(doc, text);
+  const result = run("--doc", doc, "--no-subchecks");
+  const lines = (prefix: string) =>
+    result.stderr.split("\n").filter((line) => line.startsWith(prefix));
+  return {
+    status: result.status,
+    mismatch: lines("MISMATCH"),
+    unattributed: lines("UNATTRIBUTED"),
+  };
+}
+
+function mutate(text: string, from: string, to: string): string {
+  expect(text).toContain(from);
+  return text.replace(from, to);
+}
+
+describe("scorecard-check", () => {
+  it("passes on the committed scorecard and reports its coverage", () => {
+    const result = run();
+    expect(result.stderr).not.toContain("MISMATCH");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("SCORECARD CHECK OK");
+    expect(result.stdout).toMatch(/\d+ ok, 0 mismatch, 0 unattributed, \d+ not machine-checked/);
+    expect(result.stdout).toContain("unchecked");
+    expect(result.stdout).toMatch(/in scope +## Open risk: guest-side fixture convert/);
+    expect(result.stdout).toMatch(/in scope +## Second reason arm-002 is superseded/);
+  }, 120_000);
+
+  it("fails and names each row when one number changes in rows 3, 4 and 6", () => {
+    let text = readFileSync(SCORECARD, "utf8");
+    text = mutate(
+      text,
+      "recorded 29 verified and one refuted",
+      "recorded 28 verified and one refuted",
+    );
+    text = mutate(text, "`falseSuccesses: 0`", "`falseSuccesses: 1`");
+    text = mutate(text, "**929 trace events**", "**930 trace events**");
+    const doc = join(mkdtempSync(join(tmpdir(), "scorecard-check-")), "m1-scorecard.md");
+    writeFileSync(doc, text);
+
+    const result = run("--doc", doc, "--no-subchecks");
+    expect(result.status).toBe(1);
+    const lines = result.stderr.split("\n").filter((line) => line.startsWith("MISMATCH"));
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatch(
+      /^MISMATCH row 3: .*expected 'recorded 29 verified.*found 'recorded 28 verified/,
+    );
+    expect(lines[1]).toMatch(/^MISMATCH row 4: .*`falseSuccesses: 0`.*found .*`falseSuccesses: 1`/);
+    expect(lines[2]).toMatch(
+      /^MISMATCH row 6: .*\*\*929 trace events\*\*.*found .*\*\*930 trace events\*\*/,
+    );
+  }, 120_000);
+
+  // Regression: the evidence commit used to print `ok` from the COMMIT file alone.
+  it("fails when row 4's evidence commit or PR changes in the doc", () => {
+    const original = readFileSync(SCORECARD, "utf8");
+    const cases: [string, string][] = [
+      ["committed by #269 (`3eaa23c`)", "committed by #269 (`3eaa23d`)"],
+      ["committed by #269 (`3eaa23c`)", "committed by #270 (`3eaa23c`)"],
+    ];
+    for (const [from, to] of cases) {
+      const result = checkMutated(mutate(original, from, to));
+      expect(result.status).toBe(1);
+      expect(result.mismatch).toHaveLength(1);
+      expect(result.mismatch[0]).toMatch(
+        /^MISMATCH row 4: evidence commit and PR: expected 'evidence committed by #269 \(`3eaa23c`\)'/,
+      );
+    }
+  }, 240_000);
+
+  it("fails and names rows 7 and 8 when an action count and the sweep's second mention change", () => {
+    let text = readFileSync(SCORECARD, "utf8");
+    text = mutate(text, "all 30 actions are clicks", "all 29 actions are clicks");
+    text = mutate(text, "the 28/30 sweep", "the 27/30 sweep");
+    const result = checkMutated(text);
+    expect(result.status).toBe(1);
+    expect(result.mismatch).toHaveLength(2);
+    expect(result.mismatch[0]).toMatch(
+      /^MISMATCH row 7: .*expected 'all 30 actions are clicks'.*found 'all 29 actions/,
+    );
+    expect(result.mismatch[1]).toMatch(
+      /^MISMATCH row 8: .*expected 'the 28\/30 sweep'.*found 'the 27\/30 sweep'/,
+    );
+  }, 120_000);
+
+  // TIF-211: row7-compare --check reads only the `| 7 |` row. These figures outside it
+  // (the slots table, the cap total, the unruled-row count) are guarded here instead.
+  it.each([
+    [
+      "slots pass rate",
+      "**0/30 verified** (30 refuted",
+      "**1/30 verified** (30 refuted",
+      /^MISMATCH slots: baseline pass rate/,
+    ],
+    [
+      "slots paired table",
+      "**b = 29** (Myco only)",
+      "**b = 28** (Myco only)",
+      /^MISMATCH slots: paired table/,
+    ],
+    ["slots Wilson interval", "**0.000–0.114**", "**0.000–0.115**", /^MISMATCH slots: Wilson 95%/],
+    [
+      "slots cap total",
+      "= **$7.8521 of $9.00**",
+      "= **$7.8522 of $9.00**",
+      /^MISMATCH slots: spend/,
+    ],
+    [
+      "row 7 cap total",
+      "= **$7.8521 of the $9.00 cap**",
+      "= **$7.8522 of the $9.00 cap**",
+      /^MISMATCH row 7: spend/,
+    ],
+    [
+      "row 7 unruled rows",
+      "the other 18 of the 27",
+      "the other 17 of the 27",
+      /^MISMATCH row 7: unruled rows with the pattern/,
+    ],
+  ])(
+    "fails when row 7's %s changes outside the `| 7 |` row check",
+    (_name, from, to, line) => {
+      const result = checkMutated(mutate(readFileSync(SCORECARD, "utf8"), from, to));
+      expect(result.status).toBe(1);
+      expect(result.mismatch).toHaveLength(1);
+      expect(result.mismatch[0]).toMatch(line);
+    },
+    120_000,
+  );
+
+  // The five 2026-11-25 doc fixes and row 8's step-1 figures are checked claims: changing
+  // any of them must fail, and the uncommitted booked spike figures must not print `ok`.
+  it.each([
+    [
+      "**rows 3 and 29 have the zero-step shape**",
+      "**rows 3 and 28 have the zero-step shape**",
+      /^MISMATCH arm002-truncation: rows with the truncation signature/,
+    ],
+    [
+      "spend is $0.076808 (",
+      "spend is $0.076800 (",
+      /^MISMATCH arm002-truncation: spike trial's committed spend/,
+    ],
+    [
+      "(`PROMPT` in `src/baseline/planner.ts`)",
+      "(`PROMPTS` in `src/baseline/planner.ts`)",
+      /^MISMATCH arm002-decision: the system prompt symbol/,
+    ],
+    [
+      "Index 6 is the one row",
+      "Index 7 is the one row",
+      /^MISMATCH arm002-decision: what the modified rows typed/,
+    ],
+    ["§3.1 reset (185 s,", "§3.1 reset (180 s,", /^MISMATCH row 8: re-run §3\.1 reset/],
+    [
+      "4/4 verified, exit 0, 182 s",
+      "4/4 verified, exit 0, 128 s",
+      /^MISMATCH row 8: re-run §6 subset/,
+    ],
+    [
+      "removed here.",
+      "removed here. `validate-live` reports ALL OK on 0 files.",
+      /^MISMATCH row 8: J10 settled/,
+    ],
+  ])(
+    "fails when %s changes",
+    (from, to, expected) => {
+      const result = checkMutated(mutate(readFileSync(SCORECARD, "utf8"), from, to));
+      expect(result.status).toBe(1);
+      expect([...result.mismatch, ...result.unattributed]).toContainEqual(
+        expect.stringMatching(expected),
+      );
+    },
+    120_000,
+  );
+
+  it("checks the M1 sign-off figures and fails when one changes", () => {
+    const ok = run("--no-subchecks");
+    expect(ok.stdout).toMatch(/in scope +## M1 sign-off/);
+    expect(ok.stdout).toMatch(
+      /^ok +signoff +v3 verified and Wilson .*29\/30 verified, Wilson 0\.833–0\.994/m,
+    );
+    expect(ok.stdout).toMatch(
+      /^unchecked +signoff +scorecard-check\.py: 134 ok.*before this record was added/m,
+    );
+
+    const result = checkMutated(
+      mutate(
+        readFileSync(SCORECARD, "utf8"),
+        // Anchored without the run path: probe-directory.test.ts forbids tests naming a live run dir.
+        "29/30 verified, Wilson 0.833",
+        "28/30 verified, Wilson 0.833",
+      ),
+    );
+    expect(result.status).toBe(1);
+    expect(result.mismatch).toContainEqual(
+      expect.stringMatching(
+        /^MISMATCH signoff: v3 verified and Wilson: expected .*29\/30 verified.*found .*28\/30/,
+      ),
+    );
+  }, 120_000);
+
+  it("pins who signed M1 off, on whose delegation and when, and fails when any of them changes", () => {
+    const ok = run("--no-subchecks");
+    expect(ok.stdout).toMatch(/^unchecked +signoff +sign-off signer, delegator and dates/m);
+    const original = readFileSync(SCORECARD, "utf8");
+    for (const [from, to] of [
+      ["by Grok Bot (outer-loop engineering lead)", "by Someone (outer-loop engineering lead)"],
+      ["Grok Bot (outer-loop engineering lead)", "Grok Bot (contributor)"],
+      ["Tiffany McCormick's delegation", "Someone's delegation"],
+      ["signed off 2026-11-25", "signed off 2026-11-26"],
+      ["delegation of 2026-11-23", "delegation of 2026-11-22"],
+    ] as const) {
+      const result = checkMutated(mutate(original, from, to));
+      expect(result.status, `${from} -> ${to}`).toBe(1);
+      expect(result.mismatch).toContainEqual(
+        expect.stringMatching(
+          /^MISMATCH signoff: sign-off signer, delegator and dates: inventoried as unchecked, but the doc no longer says/,
+        ),
+      );
+    }
+  }, 120_000);
+
+  it("lists the booked spike and the $1.632162 total as unchecked, never ok", () => {
+    const result = run("--no-subchecks");
+    const lines = result.stdout.split("\n").filter((line) => line.includes("1.632162"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^unchecked +arm002-truncation .*unverifiable/);
+  }, 120_000);
+
+  it("fails on a number no claim covers, and on a section it does not classify", () => {
+    let text = readFileSync(SCORECARD, "utf8");
+    text = mutate(text, "with trace evidence |", "with trace evidence in 12 traces |");
+    text = mutate(text, "## Open risk:", "## A new section\n\nNothing.\n\n## Open risk:");
+    const result = checkMutated(text);
+    expect(result.status).toBe(1);
+    expect(result.unattributed).toEqual([expect.stringMatching(/^UNATTRIBUTED row 5: .*\['12'\]/)]);
+    expect(result.mismatch).toEqual([
+      expect.stringMatching(/^MISMATCH layout: ## A new section: .*does not classify/),
+    ]);
+  }, 120_000);
+
+  // Round 2: each defect class the final review found, as a case that must exit 1.
+  const R3 = "re-verified tonight. **Note";
+  const inRow3 = (text: string): [string, string] => [R3, `re-verified tonight. ${text} **Note`];
+  const TABLE_END = "|\n\n## M1 sign-off";
+  const SEPARATOR = "|---|---|---|---|---|";
+  const REGENERATE_END = "from the runbook.\n\n## Open risk:";
+  const appendToRegenerate = (text: string): [string, string] => [
+    REGENERATE_END,
+    `from the runbook.\n\n${text}\n\n## Open risk:`,
+  ];
+  const cases: [string, [string, string], RegExp][] = [
+    [
+      "a new reference (TIF-999)",
+      [
+        "**Derived from committed logs, not quoted** (TIF-139)",
+        "**Derived from committed logs, not quoted** (TIF-139) and TIF-999",
+      ],
+      /^UNATTRIBUTED row 6: .*'TIF-999'/,
+    ],
+    ["a sentence-final number", inRow3("A rerun verified 31."), /^UNATTRIBUTED row 3: .*\['31'\]/],
+    [
+      "a number with a unit suffix",
+      inRow3("It finished in 31s"),
+      /^UNATTRIBUTED row 3: .*\['31'\]/,
+    ],
+    [
+      "both ends of a range",
+      inRow3("It held over 31-40 trials"),
+      /^UNATTRIBUTED row 3: .*\['31', '40'\]/,
+    ],
+    [
+      "a mid-sentence (7)",
+      inRow3("A recheck refuted (7) of them."),
+      /^UNATTRIBUTED row 3: .*\['7'\]/,
+    ],
+    [
+      "an out-of-sequence enumerator",
+      ["(0 rows) |", "(0 rows). (7) More |"],
+      /^UNATTRIBUTED row 7: .*\['7'\]/,
+    ],
+    [
+      "a word-internal figure not on the identifier list",
+      inRow3("It took n31 retries"),
+      /^UNATTRIBUTED row 3: .*\['n31'\]/,
+    ],
+    [
+      "a new | 9 | row",
+      [TABLE_END, "|\n| 9 | Extra | **DONE** | nothing | — |\n\n## M1 sign-off"],
+      /^MISMATCH layout: criterion table: unexpected criterion row 9/,
+    ],
+    [
+      "a duplicate | 3 | row",
+      [TABLE_END, "|\n| 3 | Reliability | **DONE** | more | — |\n\n## M1 sign-off"],
+      /^MISMATCH layout: criterion table: duplicate criterion row 3/,
+    ],
+    [
+      "a paragraph between the table and the first ##",
+      [TABLE_END, "|\n\nAn extra paragraph.\n\n## M1 sign-off"],
+      /^MISMATCH layout: between table and sections: unclassified text: 'An extra paragraph\.'/,
+    ],
+    [
+      "a paragraph in the preamble",
+      ["\n\n| # |", "\n\nAn extra 31 trials passed.\n\n| # |"],
+      /^UNATTRIBUTED status: .*\['31'\]/,
+    ],
+    [
+      "a # Foo H1 section",
+      ["## Open risk:", "# Foo\n\nNothing.\n\n## Open risk:"],
+      /^MISMATCH layout: # Foo: .*does not classify/,
+    ],
+    // TIF-230: the gaps the #434 verifier found, each a mutation main's checker passed.
+    [
+      "a number in the Trial traces section",
+      [
+        "|\n\n## Evidence durability",
+        "|\n\nAll 31 of these trials verified.\n\n## Evidence durability",
+      ],
+      /^UNATTRIBUTED traces: .*\['31'\]/,
+    ],
+    [
+      "a renumbered Trial traces label",
+      ["| M1-013 #05 |", "| M1-013 #50 |"],
+      /^MISMATCH traces: m1-013: 30 rows/,
+    ],
+    [
+      "an out-of-scope heading with extra text",
+      ["## Reliability row, regenerate\n", "## Reliability row, regenerate: 31 of 40\n"],
+      /^MISMATCH layout: ## Reliability row, regenerate: 31 of 40: .*does not classify/,
+    ],
+    [
+      "the test-plan heading with extra text",
+      [
+        "## Reproducibility test plan (row 8)\n",
+        "## Reproducibility test plan (row 8): 31 of 40 passed\n",
+      ],
+      /^MISMATCH layout: ## Reproducibility test plan \(row 8\): 31 of 40 passed: .*does not classify/,
+    ],
+    [
+      "Sweep v3 renamed Sweep v2",
+      ["Sweep v3 ran all 30", "Sweep v2 ran all 30"],
+      /^MISMATCH row 1: identifier words: word 1/,
+    ],
+    [
+      "a trial-0 identifier changed",
+      ["`#?run=trial-0` selects", "`#?run=spike-trial-0` selects"],
+      /^MISMATCH viewer: identifier words: word 7/,
+    ],
+    [
+      "one pinned identifier swapped for another (r6 for r3)",
+      ["arm-003 r6 vs Myco", "arm-003 r3 vs Myco"],
+      /^MISMATCH row 7: identifier words: word 3: the doc has 'r3' where IDENTIFIER_PINS has 'r6'/,
+    ],
+    [
+      "a (1) enumerator outside row 7",
+      inRow3("(1) refute was re-run."),
+      /^UNATTRIBUTED row 3: .*\['1'\]/,
+    ],
+    [
+      "a (5) enumerator after row 7's (4)",
+      ["(0 rows) |", "(0 rows). (5) Five rows were re-graded |"],
+      /^UNATTRIBUTED row 7: .*\['5'\]/,
+    ],
+    [
+      "row 7 losing an enumerator",
+      ["(3) The transcripts", "The transcripts"],
+      /^MISMATCH row 7: enumerators: 2 in-order/,
+    ],
+    // TIF-230 round 2, D1: the criterion table's header and separator lines sat in no
+    // segment, so a number on either escaped the sweep.
+    [
+      "a figure in the criterion table's Status header",
+      ["| # | Criterion | Status |", "| # | Criterion | Status (8/8) |"],
+      /^MISMATCH layout: criterion table: the header line must be exactly/,
+    ],
+    [
+      "a figure in the criterion table's Criterion header",
+      ["| # | Criterion |", "| # | Criterion (31 of 30) |"],
+      /^MISMATCH layout: criterion table: the header line must be exactly/,
+    ],
+    [
+      "a trailing number on the criterion table's separator",
+      [`${SEPARATOR}\n| 1 |`, `${SEPARATOR} 31\n| 1 |`],
+      /^MISMATCH layout: criterion table: the separator line must be exactly/,
+    ],
+    [
+      "a trailing comment on the criterion table's separator",
+      [`${SEPARATOR}\n| 1 |`, `${SEPARATOR} <!-- 8 rows -->\n| 1 |`],
+      /^MISMATCH layout: criterion table: the separator line must be exactly/,
+    ],
+    // TIF-230 round 2, D2: every rendered heading form, placed at the end of an
+    // out-of-scope section, starts an unknown section instead of inheriting the exemption.
+    [
+      "an ATX heading indented by three spaces",
+      appendToRegenerate("   ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: {4}## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "a setext heading underlined with ---",
+      appendToRegenerate("Sweep v3 result\n---\n\n31 of 30 verified."),
+      /^MISMATCH layout: Sweep v3 result \/ ---: .*does not classify/,
+    ],
+    [
+      "a setext heading underlined with ===",
+      appendToRegenerate("Sweep v3 result\n===\n\n31 of 30 verified."),
+      /^MISMATCH layout: Sweep v3 result \/ ===: .*does not classify/,
+    ],
+    [
+      "an HTML <h2> heading",
+      appendToRegenerate("<h2>Sweep v3 result</h2>\n\n31 of 30 verified."),
+      /^MISMATCH layout: <h2>Sweep v3 result<\/h2>: .*does not classify/,
+    ],
+    // TIF-230 round 3, D3: a pipe line with no delimiter row under it is a paragraph, so
+    // an underline makes it a setext heading.
+    [
+      "a pipe line underlined with === (no delimiter row, so not a table)",
+      appendToRegenerate("| Sweep v3 result |\n===\n\n31 of 30 verified."),
+      /^MISMATCH layout: \| Sweep v3 result \| \/ ===: .*does not classify/,
+    ],
+    [
+      "a pipe line underlined with --- (no delimiter row, so not a table)",
+      appendToRegenerate("| Sweep v3 result |\n---\n\n31 of 30 verified."),
+      /^MISMATCH layout: \| Sweep v3 result \| \/ ---: .*does not classify/,
+    ],
+    // TIF-230 round 3, D4: a heading inside a container (blockquote, list item, or a
+    // nesting of them) is still a heading.
+    [
+      "an ATX heading in a blockquote",
+      appendToRegenerate("> ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: > ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a - list item",
+      appendToRegenerate("- ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: - ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a * list item",
+      appendToRegenerate("* ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: \* ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a + list item",
+      appendToRegenerate("+ ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: \+ ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a 1. list item",
+      appendToRegenerate("1. ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: 1\. ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a 1) list item",
+      appendToRegenerate("1) ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: 1\) ## Sweep v3 result: .*does not classify/,
+    ],
+    [
+      "an ATX heading in a list item inside a blockquote",
+      appendToRegenerate("> - ## Sweep v3 result\n\n31 of 30 verified."),
+      /^MISMATCH layout: > - ## Sweep v3 result: .*does not classify/,
+    ],
+  ];
+  it.each(cases)(
+    "fails on %s",
+    (_name, [from, to], expected) => {
+      const result = checkMutated(mutate(readFileSync(SCORECARD, "utf8"), from, to));
+      expect(result.status).toBe(1);
+      expect([...result.mismatch, ...result.unattributed]).toContainEqual(
+        expect.stringMatching(expected),
+      );
+    },
+    120_000,
+  );
+
+  // TIF-230: a compact `|2|31` first cell. Main skipped a fixed five characters, so the
+  // 31 escaped, and its status check missed row 2's DONE, so "All 7 of 8" passed too.
+  it("fails on a compact |2|31 row prefix: only the row number is skipped", () => {
+    let text = readFileSync(SCORECARD, "utf8");
+    text = mutate(text, "| 2 | Independent", "|2|31 Independent");
+    text = mutate(text, "All 8 rows are DONE", "All 7 of 8 rows are DONE");
+    const result = checkMutated(text);
+    expect(result.status).toBe(1);
+    expect(result.unattributed).toContainEqual(
+      expect.stringMatching(/^UNATTRIBUTED row 2: .*\['31'\]/),
+    );
+    expect(result.mismatch).toContainEqual(
+      expect.stringMatching(/^MISMATCH status: rows DONE: expected 'All 8 rows are DONE'/),
+    );
+  }, 120_000);
+
+  // TIF-230 round 2, D2: a `---` that is a thematic break (after a blank line) or ends a
+  // table is not a setext underline, so neither adds a heading.
+  // Round 3 (D3): only a real table (header + delimiter row) shields the line above an
+  // underline; under one, `---` is a thematic break and `===` is another table row.
+  it("does not read a thematic break or a --- after a table as a setext heading", () => {
+    const text = mutate(
+      readFileSync(SCORECARD, "utf8"),
+      REGENERATE_END,
+      "from the runbook.\n\n---\n\n| Step | Command |\n|---|---|\n| regenerate | the script |\n---\n\n" +
+        "| Step | Command |\n|---|---|\n| regenerate | the script |\n===\n\n## Open risk:",
+    );
+    const result = checkMutated(text);
+    expect(result.mismatch).toEqual([]);
+    expect(result.unattributed).toEqual([]);
+    expect(result.status).toBe(0);
+  }, 120_000);
+
+  it("sweeps Trial traces as an in-scope section", () => {
+    const result = run("--no-subchecks");
+    expect(result.stdout).toMatch(/in scope +## Trial traces/);
+    expect(result.stdout).toMatch(/^swept +traces +number sweep/m);
+    expect(result.stdout).toMatch(
+      /^ok +traces +the table is the header and exactly the committed trials/m,
+    );
+  }, 120_000);
+
+  // The identifier pins are exactly the word-internal digit runs of the committed doc:
+  // nothing in it is unused, and nothing the sweep skipped is missing from it.
+  it("skips exactly the listed identifier words in the committed scorecard", () => {
+    const result = run("--identifiers");
+    expect(result.status).toBe(0);
+    const { skipped, allowlist } = JSON.parse(result.stdout) as {
+      skipped: string[];
+      allowlist: string[];
+    };
+    expect(skipped).toEqual(allowlist);
+    for (const word of skipped) {
+      expect(word).toMatch(/[A-Za-z_-]\d/);
+    }
+  }, 120_000);
+});

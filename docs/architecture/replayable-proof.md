@@ -1,0 +1,444 @@
+# Replayable proof (capability track Q)
+
+Status: M2 capability track Q, Tier 2 (#553, superseding #548 and #533). Code: `src/proof/`,
+CLI `scripts/proof.ts`, tests `test/proof/`. Local only: no network, no model, no VM.
+
+**Allowlist export (lead decision, #553).** A bundle writes ONLY closed-schema fields. Every
+free-text or path-capable value (paths, filenames, command lines, error text, notes, URLs, any
+string from the agent, the host or the harness) is replaced **structurally** before it is
+written, by its sha256, never by pattern-based redaction. The pattern scanner stays only as a
+backstop that fails the export closed if it ever fires. #533 and #548 used all their rounds on
+one leak class because a denylist scanner kept missing new path forms; under the allowlist a
+path never reaches the bundle whatever its form, because no string field can hold it: every
+string field is an enum, a strict id grammar with no separator, a digest, or a hash. (Round 1
+of #553 found one exception, `evidence.mediaType`, whose `type/subtype` grammar admitted a
+lower-case relative `dir/<user>` path; it is now a closed enum, see below.)
+
+## What it is
+
+A **proof bundle** is one JSON file that records one run so someone else can check it. It
+is a tamper-evident **container over the attempt's canonical episode record**, not a second
+per-attempt record: `myco.episode/1` (data capture, #542; capability spec part 2, #538 §3) is
+the one canonical record of an attempt. The bundle's `run.episode` references that episode by
+`episodeId` and sha256 (or is `null` for a run written before episodes exist), its `run` fields
+(`runId`, `taskId`, `arm`, `simulated`) are a projection of the episode's, and the rest is Q's
+own: the hash chain, evidence digests, the ledger anchor, and handoff and policy decisions.
+The episode is validated as a whole by #542's own `validateEpisode` (`src/episode/validate.ts`,
+called, not modified) before anything is projected from it: the export and the verifier refuse
+an episode #542 refuses (`PROOF_EPISODE`, naming #542's issue codes only, never a path or a
+value), so an invalid episode is never reported as cross-checked. The id and digest are #542's
+`episodeIdOf` and `canonicalJson`. With `--episode E` the verifier also recomputes the
+episode's id and digest and refuses any projected field that disagrees (`PROOF_EPISODE`);
+`episodeChecked` is true only when the episode is valid and every check passed. The digest is over the episode's canonical
+JSON without the trailing newline #542's store appends, not over the file's bytes. Without
+`--episode`, a bundle that references an episode still verifies, but the reference is **not
+cross-checked**: the result says `episodeChecked: false` and the report says "reference only:
+not checked here". The bundle never copies the episode's other groups (ground truth, agent
+claim, provenance, observations).
+
+The bundle carries:
+
+- the ordered **actions** (agent or harness, the tool id, and the summary as a digest);
+- the **gate verdicts** (`myco.gate/v1`: verdict, `accepted`, reason **codes** only, never
+  free-text reasons) and the evidence each verdict cites;
+- **evidence digests** (sha256 and byte count of each artifact, and the digest of its path;
+  no artifact is ever inlined);
+- **checkpoints** of multi-step tasks;
+- **handoffs** between agents or sessions (shape lands with track N);
+- **policy decisions** (allow / deny / ask, with a code; shape lands with track O);
+- a **ledger anchor** and the **attempt ledger** itself (#518's `attempts.jsonl` events,
+  verbatim), binding the run to its start and end events and to the ledger head.
+
+Every record is hash-chained: `prevSha256` is the sha256 of the previous record's canonical
+JSON (sorted keys). The first record's `prevSha256` is the sha256 of the canonical `run`
+header, so the run's ids, arm, `simulated` flag and episode reference are covered by the chain
+and the head. The bundle pins its head (record count, last hash). Apart from that genesis, this
+is the attempt ledger's construction (#518).
+
+The ledger anchor binds the run to one trial of the ledger: that trial's single start and end
+events, which must carry the run's task and the run's arm (an anchored run must state its arm;
+`hcu+shell` is a valid arm). It does not bind the run id, because the ledger has none.
+
+```
+npx tsx scripts/proof.ts export RUN.json --out bundle.json [--forbid-file F] [--user-file U] [--identity-file I]
+npx tsx scripts/proof.ts export-pilot RUN_DIR --trial KEY --out bundle.json [--forbid-file F] [--user-file U] [--identity-file I]
+npx tsx scripts/proof.ts verify bundle.json [--evidence-dir D] [--episode E] [--expect-head H] [--expect-ledger-head H] [--user-file U] [--identity-file I]
+npx tsx scripts/proof.ts report bundle.json --out report.html [verify flags]
+```
+
+Exit codes: 0 ok, 1 refused, 2 usage. `RUN.json` is a `ProofRunInput` (`src/proof/bundle.ts`)
+written by the harness, never by the agent. `RUN.json` may name `episodeFile`, the attempt's
+episode. Nothing from `RUN.json` is written as text (see "Allowlist export"). `--forbid-file`
+lines (literals) and `--user-file` lines (account names, matched as whole words in any letter
+case) feed the **backstop**: the exporting host's account name, home, temp and checkout
+directories are registered automatically, and if any registered value still appears in an
+output (for example a closed id that equals the guest's account name), the command fails
+closed. Register the guest's account name in `--user-file`. Neither file's contents are ever
+printed. `--identity-file` lines (a full name, other names) and `--user-file` lines are also
+**identity strings** for the identity guard (below), with the host's account name, hostname
+and home directory.
+
+### From an R1 pilot run directory (#674)
+
+`export-pilot` (`src/proof/from-pilot.ts`, `pilotProofInput`) builds the `ProofRunInput` of one
+trial from what the R1 runner already leaves on disk, so no hand-written `RUN.json` is needed.
+`RUN_DIR` is the R1 pilot's `--out`, or one corrections A/B arm directory (the same runner writes
+both). It only reads; no runner file changes. It has no write path into the run either: an
+`--out` inside `RUN_DIR` or inside the directory of its external #518 anchor (symlinks followed
+on the path's existing prefix), or an `--out` that is itself a symlink, is refused before
+anything is read (`PROOF_PILOT_OUT`). The bundle is written to a temporary file beside `--out`
+and renamed into place, so an existing `--out` that is a hard link to a run file is replaced,
+never written through. The result goes through `exportProofBundle` like any `RUN.json`, so the
+allowlist, the identity guard and the self-verify all still apply.
+
+| Source (in `RUN_DIR`) | Becomes |
+|---|---|
+| `pilot-progress.jsonl` (read by the runner's own `loadLedger`) | `run.runId` and `run.taskId` from the trial's start line, `run.arm` from its end line's arm row, `run.simulated` from the header |
+| `SIMULATED` marker (any entry, even a dangling symlink) | `run.simulated: true`, whatever the header says (fail toward "never evidence") |
+| `trials/<KEY>/gate-tasks.json` | evidence `gate-tasks` (kind `gate-registry`, `application/json`) |
+| `trials/<KEY>/doc.csv` | evidence `persisted-doc` (kind `persisted-document`, `text/csv`); it must hash to the arm row's `persistedSha256`, and must be absent when that is null |
+| `attempts.jsonl` (#518), when present | the ledger, with its head taken from the **external** anchor (`anchorPathFor`, outside `RUN_DIR`) and checked by #518's own `verifyAnchor` |
+
+Evidence paths are relative to the trial directory, so
+`verify bundle.json --evidence-dir RUN_DIR/trials/KEY` re-checks the files. The R1 pilot alone
+writes no #518 ledger (only the A/B arm directories do), so its bundles carry no ledger anchor.
+
+**No verdict record (stated gap).** The runner records the gate's verdict on the arm row, but
+not the reason codes, evidence refs or oracle of its post-stop check. A verdict record needs the
+codes (`verified` requires `ORACLE_PASS`), and codes are never inferred. So a bundle from a
+pilot directory has no verdict record (`verdictCarried: false`) until the runner persists the
+gate result per trial. That change is in `src/pilot/runner.ts`, the critical path, and is left
+to its owner (#674).
+
+**`gate-tasks.json` is bound to nothing the runner recorded (stated gap).** `doc.csv` must match
+the arm row's `persistedSha256`, but the runner records no digest of the gate registry, so the
+`gate-tasks` evidence attests whatever bytes are on disk at export time: a registry replaced
+after the run exports without refusal. Binding it needs the runner to record its digest on the
+arm row (a `src/pilot/runner.ts` change, left to its owner).
+
+`export-pilot` refuses, with a code and a structural message (never a path, a key or a value):
+
+| Export code | Refused when |
+|---|---|
+| `PROOF_PILOT_TRIAL` | the trial key is not a closed id (it names a directory, so no separator and no `..` is ever joined), or it is not in the progress ledger exactly once |
+| `PROOF_PILOT_OUT` | `--out` is inside `RUN_DIR` or inside its external anchor directory, or is a symlink (checked before anything is read) |
+| `PROOF_PILOT_PROGRESS` | no progress ledger, one that is a symlink, one that does not load, or one with no header (an empty file) |
+| `PROOF_PILOT_OPEN` | the trial has no end, or its end has no arm row (a crash closure) |
+| `PROOF_PILOT_MISMATCH` | the arm row names another trial or task |
+| `PROOF_PILOT_EVIDENCE` | `doc.csv` differs from the arm row's digest, is missing when recorded, or is present when none was recorded; an evidence file is not a regular file (a symlink, even a dangling one); `trials/` or `trials/KEY/` is a symlink; no evidence at all |
+| `PROOF_LEDGER_CHAIN` / `PROOF_LEDGER_ANCHOR` | #518's ledger is not a regular file (a symlink, even a dangling one, is not read as "no ledger"), fails its own check, has no external anchor or disagrees with it (a consistent rewrite that was not re-anchored); a trial whose fault class #518 cannot name has no end there, so its export is refused |
+
+Every bundle built from a pilot directory so far comes from a SIMULATED dry run (the tests).
+Simulated rows are never evidence.
+
+## The verifier
+
+`verify` recomputes every record hash and chain link, the head, every artifact digest when
+`--evidence-dir` points at the run's evidence (a file is matched to its record by the digest of
+its path relative to that directory; a symlink out of it is refused), and the whole attempt
+ledger. Every message is built from closed values and schema field names: no message quotes a
+value from the bundle. It refuses (exit 1, a code per error) on:
+
+| Code | Cause |
+|---|---|
+| `PROOF_CHAIN` | an edited, removed or reordered record, or an edited `run` header (the chain breaks) |
+| `PROOF_GAP` | a `seq` that is not the record's index (a gap or a reorder) |
+| `PROOF_TRUNCATED` | the records do not reach the pinned head (tail cut or extended) |
+| `PROOF_SCHEMA` | not JSON, any unknown field, any value outside its closed type (a free-text string where a digest is, an id outside the closed grammar, a non-code reason, an inlined artifact) |
+| `PROOF_CLAIM` | the claim is not the fixed statement below (no stronger claim) |
+| `PROOF_EVIDENCE` / `PROOF_EVIDENCE_DIGEST` / `PROOF_EVIDENCE_MISSING` | a duplicate id, an evidence path that escapes the evidence dir, an original file that changed or is missing |
+| `PROOF_VERDICT` | `accepted` without `verified`, `verified` without `ORACLE_PASS` or `ORACLE_PASS` without `verified`, a verdict for another task or run, or citing evidence not recorded before it |
+| `PROOF_LEDGER_CHAIN` / `PROOF_LEDGER_HEAD` / `PROOF_LEDGER_ANCHOR` | an edited, reordered or truncated ledger; a ledger event that fails #518's own check (`verifyAttemptLedger`: unknown field, unknown arm, a start with an outcome, an end without one, a harness class without `harness-fault` or the reverse); a ledger with no anchor or an anchor with no ledger; an anchor that does not point at exactly one start and one end of the run's trial, for the run's task and arm |
+| `PROOF_EPISODE` | with `--episode`: an episode #542's `validateEpisode` refuses (codes only), an episode whose id is not its content hash, that differs from `run.episode`, whose run id, task, arm, simulated flag or trial key differs from the bundle's, whose gate result disagrees with the bundle's last verdict record (`verdict`, `accepted`, and the reason codes as a multiset when the episode records them; an episode with no gate result must have no verdict record, and one with a gate result must have one), or an episode given for a bundle that references none |
+| `PROOF_ANCHOR_MISMATCH` | a head differs from the one given out of band |
+| `PROOF_IDENTITY` | a string of the bundle that is not a constant of the format (every value and key except schema field names, enum members, `const`s and digests) contains, case-insensitively, a configured identity string (the verifying host's account name, hostname, home directory, an `--identity-file` or `--user-file` line) or a generic identity shape; reported as a count and classes (`identity`, `home-path`, `key-like`), before any other message is built |
+| `PROOF_REDACTION` | the backstop fires: a parsed string value or key carries something it recognises (a secret shape, a host-path shape, a registered literal or account name), in any decoded form |
+
+The exporter runs the same verifier on what it built and refuses to write a bundle that would
+not verify. The report refuses to render one, and refuses to return HTML that the backstop
+flags. The CLI scans each line it prints and prints only error codes if one would
+leak.
+
+## Security model (stated plainly)
+
+**Tamper-evident, not tamper-proof.** The claim every bundle carries, and the only claim the
+verifier accepts, is:
+
+> Tamper-evident, not tamper-proof: any edit, gap, reordering or truncation of these records or
+> of the attempt ledger they carry is detected when checked against the heads pinned here (the
+> attempt ledger's guarantee, #518, and no more). The trusted harness that wrote the run is the
+> boundary: the chains are unkeyed and unsigned, so whoever can write the whole bundle can
+> regenerate a consistent one; only a head received out of band detects that. A verdict record is
+> what the gate said, not a finding that it was right.
+
+This is exactly #518's ruled threat model (`src/m2/attempt-ledger.ts`, lead ruling on #518 D3),
+and no more:
+
+- **The adversary is the checked agent and any guest-side process. The harness is trusted.**
+  Against that adversary, and against accidental drops or edits, the bundle is tamper-evident.
+- **It is not proof against a malicious bundle author.** Whoever controls the harness and
+  writes the whole bundle can write a consistent one.
+- **A verdict record is what the gate said, never a finding that the gate was right.** Whether
+  it was right is the independent grader's call; the report says so next to every verdict.
+- **The trusted harness is the boundary.** The bundle proves that what you hold is what the
+  harness wrote, as far as partial changes go. It does not prove the harness recorded honestly.
+- **Whole-bundle regeneration is not detected** unless you check a head you received separately
+  (`--expect-head`, `--expect-ledger-head`; for example the pack's ledger pin recorded
+  host-side). A test pins this limit ("STATED LIMIT") so it stays visible.
+- **Nothing is signed or keyed.** Rewrite resistance (a signed or externally anchored head) is
+  the same open decision as #518's and is not built here.
+- **Simulated runs are never evidence.** `run.simulated` is covered by the chain (the run
+  header seeds it); the verifier reports it and the report shows a banner.
+- **The gate is unchanged.** The bundle is built after the run from the harness's own records.
+  The agent still supplies only `taskId`, `runId` and `claim`; nothing here is a new gate input.
+
+### Allowlist export
+
+The exporter does not look at what a string says. It looks at which field it is in:
+
+| Type | Written as | Fields |
+|---|---|---|
+| enum | as is; any other value is refused (`PROOF_INPUT`) | `action.actor`, `verdict.verdict`, `verdict.reasonCodes` (the gate's reason codes), `checkpoint.verdict`, `policy.decision` |
+| boolean | as is; any other value is refused | `run.simulated`, `verdict.accepted` |
+| integer | as is; any other value is refused | `checkpoint.checkpoint`, `handoff.checkpoint` |
+| sha256 digest | as is; any other value is refused | `verdict.oracle.specSha256` |
+| id | as is when it matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` **and** passes the identity guard (below), else **hashed**: `h-<60hex>` (below; itself a closed id, so equality is still checked). An input that is exactly `h-<60hex>` is kept as is only when harness-produced (#579, the hash ledger below), else hashed; any other `h-` form (either case) is hashed, and a bundle id starting `h-` in any other form is refused | `run.runId`, `run.taskId`, `evidence.evidenceId`, `evidence.evidenceKind`, `verdict.taskId`, `verdict.runId`, `verdict.evidence`, `verdict.oracle.family`, `verdict.oracle.version`, `handoff.from`, `handoff.to`, `policy.policyId` |
+| agent-produced name (#562, F1) | as is only when it is a member of a **closed vocabulary** (`src/proof/vocab.ts`), exact case and spelling, else **hashed**; never a grammar (an id grammar wrote a foreign `jsmith`, `Users.jsmith.Documents` or `com.apple.Safari` verbatim, and the identity guard only knows this host). Tools: `TOOL_NAMES` (#542's action kinds, the runtime desktop actions, the Calc router kinds, the fast-path tools, the Windows guest agent ops, `myco_gate_check`). Apps: `REGISTERED_APPS` (`calc`, `writer`, `libreoffice-calc`, `libreoffice-writer`, `localc`, `lowriter`, `soffice`, `myco-todo`). Subject: a tool or a registered app. Keys: 1 to 4 space-separated chords, each a named key (`KEY_NAMES`: `Return`, `Tab`, `Escape`, `F1`-`F12`, ...) with optional modifiers (`ctrl`, `shift`, `alt`, `super`, `meta`, `cmd`) or one lower-case letter or digit with at least one modifier (`ctrl+s`); a bare letter is not a chord, so a sequence cannot spell a word; a key sequence is also put to the identity guard | `action.tool`, `action.keys`, `action.app`, `policy.subject` |
+| arm | as is when it is `myco-gate` or `hcu+shell`, else as an id | `run.arm` |
+| policy code | as is only when it is a member of the **closed enum** `POLICY_REASON_CODES` (the gate's `REASON_CODES` plus the repo's policy and handoff codes: `POLICY_ALLOW`, `POLICY_DENIED`, `POLICY_ERROR`, `POLICY_INVALID`, `TASK_NOT_ALLOWED`, `HUMAN_REJECTED`, `STILL_PAUSED`, `HANDOFF_TIMEOUT`, `HANDOFF_CANCELLED`, `ATTEMPT_ENDED`), else **hashed**; never a grammar (an upper-case grammar wrote `ZQGPTRR` or an account name in capitals verbatim, #553 r2 N1) | `policy.reasonCode` |
+| media type | as is only when it is a member of the **closed enum** `MEDIA_TYPES` (`application/json`, `image/jpeg`, `image/png`, `text/csv`, `text/plain`), else **hashed**; never a grammar (a `type/subtype` grammar admits `srv/<user>`) | `evidence.mediaType` |
+| text | **always hashed**: a `TextRef` `{sha256, chars}`, the digest of the raw value and its length | `action.summary`, `handoff.summary`, `evidence.path` |
+| artifact | **never written**: its sha256 and byte count only | `evidence.content` |
+| ledger | verbatim, because every field is closed under #518's schema (enums, integers, digests, and ids in #518's grammar `^[A-Za-z0-9._:-]{1,128}$`), NARROWED by Q: every `trialKey` and `taskId` must also match the closed id grammar above (no `:`, starts alphanumeric), since #518's grammar can spell `C:<user>` or `..`; a ledger that fails #518's check or the narrowing is refused, on export and verify; a `trialKey` or `taskId` that carries an identity string cannot be digested (it is under #518's chain), so the export is **refused** (`PROOF_IDENTITY`, the event index, field and class only) | `ledger.lines`; `ledger.trialKey` (the input) is only used to find the trial: the anchor's trial key is taken from the ledger, never from the input |
+| episode | **never written**: its id and digest only | `episode` |
+
+**Identity guard (#553 r3, lead ruling 21:52Z; #562 D1 and D2).** A bare username, or any configured identity
+string, is a leak on its own, not only inside a path, and a closed id such as `alice`,
+`ALICE-run-1` or `run.alice` matches the id grammar. So every value the exporter would write
+as is from its input (every id and non-enum arm) is first put to `src/proof/identity.ts`. A
+value that **contains**, case-insensitively, a configured identity string is hashed like any
+value outside the grammar; a ledger id is refused instead (above). The scope is #560's leak
+guard:
+
+- configured strings come from the host at write time (`os.userInfo().username`,
+  `os.hostname()`, `os.homedir()`), the lines of an optional identity file whose path is
+  passed in (`--identity-file`: a full name, other names), `--user-file` lines and the
+  backstop's registered account names. The host's identity is **always** in the guard: an
+  identity a library caller passes to `exportProofBundle`, `assembleProofBundle` or
+  `verifyProofBundle` is **merged** with `hostIdentity()` (`guardWithHost`, as #560's
+  `mergeIdentity(hostIdentity(), ...)`), never used instead of it, so fake host facts or an
+  empty identity cannot turn the host's account name or hostname off (#562 D1). There is no
+  "no identity" argument;
+- matching is on a normal form (NFKC, **full Unicode case folding**, accents stripped (#579 O2:
+  NFD, combining marks removed, `ø`/`ł`/`æ` transliterated, so `JOSE` matches `josé` and `rena`
+  matches `reña`), every non-letter,
+  non-digit removed, on both sides). The fold upper-cases then lower-cases until nothing
+  changes, so `ß`, `ẞ` and `SS` all fold to `ss` (a configured `Groß` matches `GROSS`, #562
+  D2), dotless `ı` folds to `i`, and final `ς` is mapped to `σ` after the fold (lower-casing
+  picks one from context, so `Νίκος` alone and `ΝίκοςTrial` would otherwise disagree). So `Alice`, `ALICE`, `a.l.i.c.e`,
+  `run-alice-1` all contain `alice`, a full name `First Last` matches **joined** as
+  `firstlast` (`FirstLast`, `first.last`, `first_last`, `First-Last`, `FIRSTLAST`) and by
+  each word of three or more characters alone (`<first>_trial`, `<Last>2`, `xx<first>`; the
+  rule is shared with the episode export and the track U container since #580 O1,
+  `src/export-guard/identity-words.ts`), a
+  hostname matches whole and by its first DNS label, and a home directory whole and by its
+  last segment. A configured string under two characters after normalisation is not matched
+  (stated limit: a one-letter needle would match nearly every id);
+- generic shapes (key-like tokens, home-root and other host paths, `DOMAIN\user`,
+  `user@host`) are the backstop's own patterns, run on the raw value.
+
+**Known limit: unconfigured names (accepted residual risk, #580 O4).** The guard catches only
+configured identities (this host's account name, hostname and home, the identity file,
+`--user-file`) and the generic shapes above. A name nobody configured, in an id that matches the
+closed id grammar, is written as is. For example, another machine's host name
+(`<name>-MacBook-Pro.local` as a run or task id) and a dotted, path-like id with an unconfigured
+name (`Users.<name>.Documents`) are both kept verbatim. The remedy is to list every name that may
+appear in the identity file before exporting. A test pins this
+(`test/proof/identity-words.test.ts`, "O4 residual") so this paragraph stays true.
+
+Enum members (`MEDIA_TYPES`, `POLICY_REASON_CODES`, the known arms, and every schema enum
+and constant) are constants of this code, not host values, so they are written as is and
+skipped by the verify-time scan. The same holds for a single vocabulary member (`tool`,
+`app`, `subject`): it is one of a fixed set of constants, so it carries no information even
+when it happens to equal a configured string (`shell` for a configured `Kim Shell`), and it is
+written as is. A key sequence (`keys`) is COMPOSED from the vocabulary, so it is also put to
+the identity guard and hashed on a hit. Stated limit: a 2 to 4 character string can still be
+spelled one letter per modified chord (`ctrl+m ctrl+x`), and a longer one across several key
+actions; that is a low-rate channel for an adversarial agent and outside this guard's scope.
+A hit is reported as a class and a location only, never
+the value. Verify (and the exporter's self-verify) re-scans every non-constant string of the
+bundle with the configured identity (`PROOF_IDENTITY`).
+
+**Hashed, not placeholdered.** Every replacement is a digest: no field uses a fixed placeholder,
+so two equal values still compare equal (a verdict's hashed `runId` still binds to the run's).
+A digest is sha256 over `myco.proof.text/1`, a NUL byte, and the raw value's UTF-8 bytes. It
+does not reveal its input, but it is unsalted: a party who **guesses** the exact raw value (a
+likely path with a likely username) can confirm the guess by hashing it. That is the price of
+keeping equality checkable, and it is a stated limit.
+
+**One hashed form on every export surface** (lead ruling 23:06Z, shared with #559's track U
+container and the episode export): every hashed VALUE (an id, tool, app, key sequence,
+subject, policy code or media type that is not written as is) is `h-<60hex>`, `h-` plus the
+first 60 hex characters (240 bits) of that digest (`src/proof/hashed.ts`). Only digest hex is
+kept, so no input text survives. Every `h-` form other than exactly `h-<60hex>` (`h-<64hex>`,
+59 or 61 digits, upper case) is a plain value and is hashed. Even an exact `h-<60hex>` input is
+kept as is ONLY when the harness produced it (#579 O3, provenance-bound;
+`src/export-guard/provenance.ts`): the exporter's hash ledger records it at that field's scope,
+which is the RUN id plus the field's exact JSON path in the bundle, array indexes included
+(`$.run.runId`, `$.records[3].body.tool`, `$.records[5].body.evidence[0]`; `proofScope`, #599
+O-a and #602 N-a). That is the binding the episode export and track U use (episode id plus exact
+path): a harness hash recorded for one run, field or record is re-hashed in any other. Ids
+cross-reference (a verdict's `evidence` names evidence ids), and each position records its own
+value, so a re-export keeps every copy; a copy that is not kept is re-hashed and the self-verify
+refuses the export.
+
+**The importer trust boundary** (#599 follow-up 2; `src/export-guard/seal.ts`). A validator
+cannot tell who wrote a value, so a hand-edited bundle whose chain was recomputed still verifies.
+The harness therefore SEALS each bundle it writes: `sealProofBundle(text, key)` is
+`HMAC-SHA256(key, "myco.proof.seal/1" NUL sha256(text))`, stored next to the bundle.
+`bundleHashLedger(text, { key, seal })` refuses (`PROOF_SEAL`) unless the seal holds for exactly
+those bytes under the harness key, before it trusts any value; then the bundle must verify; then
+its hashed values are recorded at their scopes. So re-exporting a run from a sealed bundle's own
+values is byte-identical, and an agent's `h-<60hex>` planted in a bundle never reaches a ledger.
+The key is harness-private: it is loaded at the point of use from a key file (`loadSealKey(path)`,
+at least 32 bytes, refused if group- or world-accessible on POSIX), is never printed, and every
+refusal is a code. The seal is NOT a public signature: only the key holder can check it, and a
+third party still verifies a bundle by its chain and an out-of-band head. With no ledger every
+`h-<60hex>` input (an agent's) is re-hashed, so it cannot carry hex-encoded text or a hex-letter
+identity. A bundle written before #599 has no seal and cannot be imported: re-export it from the
+source run instead. A bundle whose hashed-value field holds any other `h-`
+form is refused (`PROOF_SCHEMA`). Full content digests are NOT truncated: `TextRef.sha256`,
+`evidence.sha256`, `prevSha256`, the head, the ledger head and the episode digest stay the full
+64-hex sha256.
+
+The bundle and record schemas are closed: every object has `additionalProperties: false`, and
+every string has a pattern or an enum. There is no free-text string type anywhere, so the
+verifier refuses a hand-edited bundle that puts any text (a path, a note) where a digest or a
+closed id belongs (`PROOF_SCHEMA`). A test walks the schemas and fails on any unpatterned
+string (`test/proof/allowlist.test.ts`).
+
+**Property test.** A seeded generator (`test/proof/path-fuzz.ts`) produces arbitrary host-path
+strings: spaces, `Documents and Settings`, UNC `\\server\share` and `//server` forms, `\\?\`,
+`\\.\` and `\??\` prefixes, `\Device\Mup`, 8.3 short names, mixed and repeated separators,
+unicode and RTL characters, percent, double-percent, JSON, `\u005c`, entity and `+` escapes,
+`~user`, `file://` and `smb://` URLs, `DOMAIN\user`, `user@host`, very long strings, behind
+arbitrary prefixes. Each is planted in every input field of a run, which is exported,
+verified and reported; no planted word may appear in any output byte (any letter case, and
+JSON-escaped). Each is also planted in every closed-type field, where the exporter must refuse
+without echoing it. Every probe the verifiers ran on #533 and #548 is a test too
+(`test/proof/probes.test.ts`).
+
+**Screenshots and frames are never inlined** (nothing is): the watch view has no merged
+pixel-redaction rules, and this track does not invent them.
+
+### Backstop
+
+The pattern scanner from #548 (`src/proof/backstop.ts`, unchanged patterns) runs over every
+output: the bundle (every parsed value and key, by the exporter's self-verify and by
+`verify`), the report's final HTML, and every line the CLI prints. It recognises registered
+literals (secrets, vault keys, host paths, account names in any letter case) and generic shapes
+(home roots, UNC and drive paths, POSIX absolute paths, `~user`, `file:` and network URLs,
+`DOMAIN\user`, `user@host`, key-shaped tokens), each in every decoded form (JSON escapes,
+percent-encoding, HTML entities), stacked up to three deep. If it fires, the export, verify or
+report fails closed (`PROOF_REDACTION`; the CLI prints only codes). It reports kinds and
+offsets, never the value.
+
+It is a backstop, not the guarantee. In an honest run it can fire only on a value the
+allowlist writes as is: a closed id that equals a forbidden literal. (A closed id that
+contains a registered account name or looks like a key, `sk_...`, is digested by the identity
+guard since #553 r3.) Its known misses (the earlier rounds' "Limits":
+an unlisted URL scheme, a spaced POSIX folder outside the home roots, obfuscated forms) no
+longer matter for export, because no path reaches a bundle in the first place; tests pin that
+those forms never reach a bundle.
+
+TO FILE: consolidate this scanner and #542's episode cleanliness scan (now on main, and run
+on every episode through `validateEpisode`) onto one canonical scanner, with a parity test
+over the probe corpus.
+
+### The report
+
+`report` writes one static HTML file: no script, no link, no image, no remote URL, a
+`default-src 'none'` CSP, and every value HTML-escaped. It shows only what the bundle holds:
+closed values, and each summary or path as its digest prefix and length ("text not carried"). Replay is read-only and needs no
+server, so there is nothing to bind to loopback.
+
+The renderer takes a bundle and a verification result. It renders only a passing result
+that belongs to that bundle: the result's head must name the same record count, and the chain
+recomputed from the bundle's run header over its records must end at that head. A passing
+result for another bundle, or for these records before an edit, is refused. The CLI always
+passes the result of verifying the same bytes.
+
+## Dependencies
+
+- **#542 (`myco.episode/1`), merged.** `src/proof/episode-ref.ts` imports #542's `Episode`
+  type, `episodeIdOf`, `canonicalJson` and `validateEpisode` (`src/episode/`, not modified) and
+  projects only the fields Q reads (`EPISODE_FIELDS_USED`, pinned by
+  `test/proof/episode-ref.test.ts`, with a parity test against main's `buildEpisode`). TO FILE:
+  make `run.episode` required and project the action and evidence records from the episode's
+  actions and observations instead of `RUN.json` steps.
+- **#518 (attempt ledger), merged.** `src/proof/ledger.ts` calls #518's own
+  `verifyAttemptLedger` and `eventSha256` (`src/m2/attempt-ledger.ts`, not modified), and
+  replaces its messages with structural ones (#518's schema messages may quote a value).
+- **Track N (handoffs), track O (policy decisions), in flight.** The bundle defines minimal
+  closed shapes (`HandoffBody`, `PolicyBody`). The record kinds land with N and O: their
+  records map onto these shapes, never the reverse. TO FILE: once `myco.episode/1` carries the
+  handoff log (N, #528's `handoffs` field) and policy decisions (O), the bundle references them
+  through the episode instead of restating them.
+- **Live runner wiring.** `export-pilot` (#674) reads `RUN.json`'s content from an R1 run
+  directory after the run, so the runner needs no Q-specific writer. What is still missing is
+  the gate result of each trial's post-stop check (reason codes, evidence refs, oracle), which
+  the runner does not persist; until it does, pilot bundles carry no verdict record (#674's
+  follow-up, for the critical path's owner).
+
+## Proposed pre-registered measurement bar (for `docs/product/capability-spec.md`)
+
+Proposed for the capability spec to adopt or amend before any measurement run. The runs need
+the integrity fixes and the lead's GO, on Claude Ultra. This PR runs none.
+
+**Arms.** Myco (gate + proof bundle) against the two baselines: **C1** (screenshot-only; its
+shareable record is the screenshot trail and transcript) and **hcu+shell** (its record is the
+transcript and shell log). The tasks and trials are the same for every arm, paired by trial.
+
+**Ground truth.** The **independent grader** (`src/benchmark/grade`, no code shared with the
+gate) grades each trial's persisted bytes. Simulated rows never count.
+
+**Q1, integrity (deterministic, no model, all-or-nothing).** Over every bundle from the
+measurement run (n ≥ 30):
+
+- 100% verify;
+- 100% of a pre-registered tamper battery is refused. The battery is edit, delete, swap and
+  truncate at every record position, plus ledger edit, reorder and truncate, plus an evidence
+  file swap: at least 300 cases;
+- 0 planted-word leaks in the allowlist property test (at least 600 generated paths, each
+  planted in every input field, and every #533/#548 probe).
+
+A single miss fails Q1. With 0 misses in 300 cases, the exact one-sided 95% upper bound on the
+miss rate is about 1%.
+
+**Q2, audit value over baseline (secondary; capability spec part 2 keeps Q1 as Q's acceptance
+bar).**
+
+- **Paired unit.** A *slot* is one pre-registered seeded task instance (task id plus seed,
+  seeded with silent-drop tasks of the df-s02 kind). Every slot is run once under each arm.
+  For the comparison of Myco with baseline B, a slot is a **pair** when, in BOTH arms' runs of
+  that slot, the agent claimed done and the independent grader says not done (false success
+  in both). Only pairs enter the test; a slot that is a false success in one arm only is
+  reported but does not enter it.
+- **Measure.** For each run in a pair, a blind auditor sees only that arm's shareable record
+  (Myco: the verified bundle; C1: the screenshot trail and transcript; hcu+shell: the
+  transcript and shell log), applies a fixed rubric, and answers "done" or "not done". The
+  auditor does not know the arm where the format allows. The run is a success when the answer
+  matches the grader's outcome. For Myco the answer must also be machine-checkable: a verified
+  bundle whose verdict is `refuted` or `uncertain`.
+- **Sample size and stopping.** Run slots until each comparison has at least 40 pairs, up to a
+  pre-registered cap of 200 slots. If the cap is reached with fewer than 40 pairs for a
+  comparison, that comparison fails (underpowered); the test is not switched afterwards.
+- **Test.** Exact McNemar on the pairs' discordant outcomes (Myco success and B failure against
+  the reverse), one-sided α = 0.05, Myco against C1 and Myco against hcu+shell, with Holm
+  correction over the 2 comparisons.
+- **Pass.** Both comparisons significant, and Myco's false-VERIFIED rate (the record shows done
+  but the grader says not done) is 0.
+
+**Cost.** Export and verify make no model calls, so the R7 numerator gains no tokens. R7 is
+unchanged: total cost of all trials divided by verified trials, a token-derived estimate, null
+cost never 0.

@@ -4,9 +4,10 @@ import os from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { independentC1Judge } from "../src/baseline/c1-judge.ts";
-import type { PreparedC1, RESET_SNAPSHOT } from "../src/baseline/c1-trial.ts";
+import { type PreparedC1, RESET_SNAPSHOT } from "../src/baseline/c1-trial.ts";
 import { mcpStdio } from "../src/baseline/mcp-stdio.ts";
-import { createPlanner } from "../src/baseline/planner.ts";
+import { createPlanner, SONNET } from "../src/baseline/planner.ts";
+import { resolveAnthropicKey } from "../src/baseline/secret-file.ts";
 import { runC1Sweep } from "../src/baseline/sweep.ts";
 import manifest from "../src/baseline/sweep-v3.json" with { type: "json" };
 import { cleanupTrialGuest } from "../src/integration/guest-health.ts";
@@ -15,16 +16,52 @@ import { generateFixture } from "../src/tasks/fixture.ts";
 import { groundTruth } from "../src/tasks/intent.ts";
 import { AgentClient, SshTunnel } from "../src/win/agent-client.ts";
 import { persistedDiagnostic, probeC1Driver } from "./c1-driver-preflight.ts";
+import { parseSpendCeiling } from "./spend-ceiling.ts";
 
 async function main() {
   if (!process.argv.includes("--coordinator-go")) throw new Error("Coordinator GO required");
-  const directory = process.argv[2] || "/tmp/baseline/c1";
-  console.log(`=== Starting C1 Screenshot Baseline Sweep in ${directory} ===`);
+  // `--resume` continues an interrupted run instead of starting fresh. Positional
+  // arg 2 stays the directory, so a resume is the SAME path plus the flag - which
+  // is the point: the ledger lives there, and a resume that pointed somewhere
+  // else would be a new run wearing a resume's name.
+  const resume = process.argv.includes("--resume");
+  // Adoption is its own flag rather than implied by --resume: resuming a ledger
+  // that records no identity is a judgement call about paid data, and it must be
+  // visible in the command that made it.
+  const adoptIdentity = process.argv.includes("--adopt-identity");
+  // `--accept-scored-cause refuted:step-budget` (repeatable). A scored cause the
+  // operator has DIAGNOSED as a genuine agent failure; every row reproducing it is
+  // then expected rather than a fault signature. Anything not accepted still
+  // aborts the arm at its second occurrence.
+  const acceptScoredCauses: string[] = [];
+  for (let i = 0; i < process.argv.length; i += 1) {
+    const arg = process.argv[i] ?? "";
+    if (arg === "--accept-scored-cause") {
+      const value = process.argv[i + 1];
+      if (!value || value.trim().length === 0 || value.startsWith("--"))
+        throw new Error(
+          "--accept-scored-cause requires a verdict:reason value, e.g. refuted:step-budget",
+        );
+      acceptScoredCauses.push(value);
+    } else if (arg.startsWith("--accept-scored-cause=")) {
+      const value = arg.slice("--accept-scored-cause=".length);
+      if (value.trim().length === 0)
+        throw new Error(
+          "--accept-scored-cause= needs a verdict:reason value, e.g. refuted:step-budget",
+        );
+      acceptScoredCauses.push(value);
+    }
+  }
+  const directory =
+    process.argv.slice(2).find((arg) => !arg.startsWith("--")) || "/tmp/baseline/c1";
+  console.log(
+    `=== ${resume ? "Resuming" : "Starting"} C1 Screenshot Baseline Sweep in ${directory} ===`,
+  );
 
   let activeTunnel: SshTunnel | undefined;
 
   /**
-   * Per-command budget for a guest round trip, matching the preflight's.
+   * Per-command budget for a guest round trip. SET FROM MEASUREMENT (TIF-186).
    *
    * These calls had NO timeout: execFileSync waits forever, so a wedged guest
    * hangs the sweep instead of failing it, and the arm reports nothing at all.
@@ -32,8 +69,32 @@ async function main() {
    * why an unbounded call is a real hazard rather than a theoretical one. This
    * is a liveness budget, not a performance target: a slow guest costs seconds,
    * a dead one fails.
+   *
+   * WHY 150s AND NOT 45s. The old 45s cap was BELOW the measured cost of the
+   * thing it bounds, so it had to fire. arm-003d r5 lost trials 2 and 3 to
+   * "Connection timed out during banner exchange" and burned $0.61 of cap each.
+   * Three back-to-back reset->SSH-ready timings on this host measured:
+   *
+   *     237s, 206s, 203s
+   *
+   * DECREASING, so that is the host's steady state rather than escalating
+   * thermal/disk/memory pressure. r3's reset was 152s for the same snapshot and
+   * script, so the reset itself accounts for ~150-200s of each figure above.
+   *
+   * 150s is therefore deliberately generous rather than tight. The readiness gate
+   * (wait-guest-ready.sh) only declares the guest up AFTER a real ssh round trip
+   * succeeds, so by the time the sweep issues its first guest command the
+   * transport is already warm and commands take the 6-11s measured under sweep
+   * load - NOT the ~85s difference between these timings and r3's reset. The
+   * budget is set to absorb a cold or slow guest without failing the arm, and it
+   * stays far below the 600s SSH_WAIT_TIMEOUT reset-trial-vm.sh already uses for
+   * this same guest.
+   *
+   * TIF-187: an earlier version of this comment claimed the ~85s was live SSH
+   * latency the budget had to cover. It is not reachable in the sweep, so the
+   * reasoning overstated the risk. The VALUE is unchanged and still right.
    */
-  const GUEST_TIMEOUT_MS = 45_000;
+  const GUEST_TIMEOUT_MS = 150_000;
 
   async function prepare(
     target: (typeof manifest.rows)[number],
@@ -316,15 +377,36 @@ async function main() {
   }
 
   try {
-    const planner = createPlanner(fetch, { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY });
+    const planner = createPlanner(fetch, { ANTHROPIC_API_KEY: resolveAnthropicKey() });
     console.log("--> Planner type: Paid Claude Sonnet (claude-sonnet-5-5) [fail-closed]");
+
+    // Prior spend and the remaining budget come from the environment, because
+    // the ceiling is a property of the PROJECT, not of this directory's ledger.
+    // Both are required together: a remaining budget without a stated prior spend
+    // would be un-auditable, and prior spend without a remaining budget would let
+    // the caller inherit a default that cannot be spent. Fail closed if either is
+    // missing rather than defaulting to zero, which is how a fresh directory
+    // silently got a full allowance it had already spent part of (arm-003d).
+    const { priorSpendMicros, remainingMicros } = parseSpendCeiling(process.env);
 
     const report = await runC1Sweep({
       coordinatorGo: process.argv.includes("--coordinator-go"),
       directory,
-      armLimitMicros: 4_500_000,
+      priorSpendMicros,
+      armLimitMicros: remainingMicros,
       planner,
       prepare,
+      resume,
+      adoptIdentity,
+      acceptScoredCauses,
+      // The identity a resume is checked against. Recorded on a fresh run so a
+      // later resume has something to compare, and asserted on a resume so a
+      // different model or snapshot cannot extend someone else's run.
+      identity: {
+        model: planner.paid ? SONNET : "stub",
+        snapshot: RESET_SNAPSHOT,
+        planner: planner.paid ? "paid" : "stub",
+      },
     });
 
     console.log("\n=== C1 SWEEP COMPLETE ===");

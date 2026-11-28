@@ -1,0 +1,91 @@
+{
+  "runId": "528c57c6-1a2f-47b5-8339-641a608ea0b6",
+  "verdict": {
+    "status": "uncertain",
+    "reasons": [
+      "could not look: UNO readback of B9 failed — agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)"
+    ]
+  },
+  "guardFailure": {
+    "step": 2,
+    "phase": "postcondition",
+    "predicateName": "observe-after-action",
+    "observed": "agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)",
+    "reason": "app became unobservable after step 2: agent op failed (OP_FAILED): com.sun.star.connection.NoConnectException: Connector : couldn't connect to socket (WSAECONNREFUSED, Connection refused)"
+  },
+  "completed": false,
+  "elapsedMs": 55411,
+  "xlsxPath": "C:/myco/runs/myco-90057-1795587247673-518542083\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      5240
+    ],
+    "removed": [
+      "myco-90057-1795587247673-518542083",
+      "myco-90057-1795587247673-812937473"
+    ],
+    "residue": [],
+    "errors": []
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 13469,
+    "outcome": "arrived",
+    "hostLoadStart": 8.07,
+    "hostLoadEnd": 7.21
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 6434,
+        "durationMs": 7217,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4077,
+        "durationMs": 4770,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3237,
+        "durationMs": 3768,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3891,
+        "durationMs": 4420,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 2795,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-kill-6",
+    "dataRows": 9,
+    "csvSha256": "048edd8ae5cedce256fd6264f9008c4bc40daa704400409f21521d6278850e42"
+  },
+  "corruption": {
+    "mode": "kill",
+    "applied": true,
+    "recovery": false,
+    "persistedValue": "Dara Petrov",
+    "recoveryEvents": [],
+    "actionKinds": [
+      "click"
+    ]
+  }
+}

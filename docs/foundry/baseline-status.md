@@ -45,6 +45,6 @@ of resets plus trial time for (4) at ~21 s per cold restore.
 
 - **screenshot-only** — not-run: Cua Driver C1 pixel arm needs coordinated VM time; planner: claude-sonnet-5-5.
 - **hcu** — not-run: Microsoft Hybrid Computer Use GUI channel needs coordinated VM time; planner: claude-sonnet-5-5.
-- **hcu+shell** — not-run: Needs coordinated VM time, trusted live evidence ingestion, complete tool-call audits, and independently observed save snapshots; planner: claude-sonnet-5-5.
+- **hcu+shell** — not-run: Built offline for the Calc task by TIF-268 with audited shell calls and an independent judge (docs/research/m2-hcu-shell-arm.md); needs an HCU GUI transport, coordinated VM time (M2-12) and trusted live evidence ingestion (TIF-125); planner: claude-sonnet-5-5.
 - **orgo** — blocked: account creation + card/credit; planner: unknown.
 - **simular-sai** — blocked: Google sign-in + API key + phone verification; hosted cloud computer is not our fixture host; planner: unknown.

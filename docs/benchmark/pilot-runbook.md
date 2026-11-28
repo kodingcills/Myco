@@ -1,0 +1,616 @@
+# R1 pilot runbook (30 trials, headless Claude Code on the subscription)
+
+Status: **wired, not launched.** The live driver with VM-side capture is wired (TIF-274):
+`launch` starts real trials once every precondition in the checklist below holds, and refuses
+with each unmet reason otherwise. Running the pilot is still the lead's decision.
+
+Code: `src/pilot/` (config, launch plan, ledger, runner, cost, dry run, live transport, VM
+step `vm-capture.ts`, live launch `live-launch.ts`), CLI `scripts/m2-r1-pilot.ts`, reviewed
+config `benchmark/pilot/r1/config.json`, tests `test/pilot/`.
+
+## What one live trial does (TIF-274)
+
+Per attempt, in order (`liveVmDriver`, `src/pilot/vm-capture.ts`; every failure is a harness
+fault with a fixed, code-only message, never an agent outcome):
+
+1. The runner seals the trial (`runGatedTrial`, #484) and audits the launch plan, as before.
+2. **Cold reset.** `scripts/reset-trial-vm.sh` (default snapshot `trial-base-v3`) runs with the
+   session's lock descriptor. Its `boot class=` line (#546) becomes the attempt's
+   `resetBootClass`. A failed reset is `spawn-failed`.
+3. **Deploy (#691).** `trial-base-v3` holds no in-guest agent, so every reset wipes it. After
+   each reset, on every attempt (first attempts, re-runs in place and after `--resume`), the
+   driver runs the M1 sweep's verified deploy, `agent/bootstrap/deploy-to-vm.sh`. That deploy
+   copies the agent tree and checks it, installs the agent and its scheduled task, checks
+   `ping`, and writes a fresh per-deploy token to the host token file. It is bounded at 400 s,
+   as in `scripts/m1-sweep.sh`. It succeeds only on exit 0 with its `DEPLOY OK` line. A failed
+   deploy is `transport-error` ("the in-guest agent deploy failed after the reset"): the
+   attempt is kept, the channel is not opened, and the trial re-runs in place under the usual
+   rules (two identical faults in a row stop the run with exit 6).
+4. **Seed.** The host opens the SSH tunnel to the in-guest agent. It reads the token from the
+   token file the deploy just wrote: `--token-file PATH` if given, else `MYCO_TOKEN_OUT`, else
+   `~/.myco-token`. That is one path for both steps, and an exported `MYCO_AGENT_TOKEN` is not
+   used, because the deploy has just rotated the token. The token is read at the point of use
+   and never printed. The host then writes the task's committed
+   fixture (sha-checked against `fixtureSha256`) to `C:\myco\pilot\<trialKey>\doc.csv`, then
+   reads it back and compares. That path comes from the trial key alone, so the agent cannot
+   name it. fc-v1's tasks declare `persistedFormat: "xlsx"`, but the live step seeds and
+   captures `doc.csv`: that matches the pilot's CSV-only row mapping and gate state.
+5. **Agent.** Headless Claude Code on the subscription, with the audited argv and allowlisted
+   environment names only (`claudeDriver`).
+6. **Capture.** After the agent stopped, the host reads the guest document back over the same
+   channel. Those bytes are `persisted/doc.csv` in the sealed vault, with a host provenance
+   record (`host-capture.json`: guest path, sha256, the seed's sha256, boot class). Nothing on
+   the host that the agent can write (its trial directory, transcript or gate evidence root) is
+   read. An unreadable document is a `transport-error` fault, never an empty document.
+7. The harness's own post-stop check decides on that capture, as before.
+
+## What the pilot is
+
+- **Trials.** 30 of fc-v1's 100 published tasks, in fc-v1's proportions: the first 18 `none`
+  tasks and the first 3 of each of `kill-app`, `delayed-save`, `focus-change` and
+  `invalid-target` (task ids `fc-v1-001`..`018`, `061`..`063`, `071`..`073`, `081`..`083`,
+  `091`..`093`). The three invalid-target tasks come back `unregistrable`.
+- **Agent.** Headless Claude Code (`claude -p`), model `claude-sonnet-5-5` (the hcu+shell
+  arm's model, so a later R2 pairing keeps the same planner), on Tiffany's Claude
+  subscription. There is no API-key path.
+- **What the agent can reach (#732).** Two MCP servers, kept separate: the agent acts with
+  the action tools and asks the gate only to verify.
+  - **Action tools: `myco-hcu`** (`scripts/myco-hcu.ts`, `src/pilot/hcu-actuator.ts`). It
+    grants `mcp__myco-hcu__screenshot`, `__click`, `__type_text` and `__press_key`. This is
+    the `hcu+shell` arm's desktop reach. It is the same Microsoft HCU in the guest, reached
+    over the trial VM's SSH channel (`~/VMs/myco-win11/ssh_config`, host `myco-win11`) with
+    the HCU guest command in its **attach form**:
+    `C:\myco\bin\computer-use.exe mcp --attach C:\Users\myco\AppData\Local\Temp\hcu--1\desktop-default.sock`
+    (`HCU_GUEST_COMMAND`, `src/pilot/hcu-actuator.ts`; it is in the reviewed config and the
+    plan hash). The actions are C1's
+    pixel actions, sent through the arm's own HCU client one action per call. The budget is
+    30 actions per trial, the arm's `STEP_BUDGET`; a screenshot spends none. The tools take
+    no path, task or run, and the agent gets codes back, never HCU's text. Before #732 the
+    agent had only the gate check and could not open, edit or save the document. All 5
+    trials of `r1-pilot-20261127b` ended gate-refuted, NOT DONE, and none of them is
+    evidence.
+  - **Why the attach form (VM-owner finding on #733, lead ruling 14:00Z).** An SSH session
+    runs in Windows session 0, where a bare `computer-use.exe mcp` sees no desktop. The trial
+    base (#734) registers a logon task, `MycoHCU`, that starts HCU's interactive-session
+    daemon in the `myco` user's logon session; `mcp --attach <session socket>` reaches it.
+    **Dependency on #734 (round 2 addendum, lead ruling 15:44Z):** the attach target is the
+    socket the trial base actually provides, which the VM owner found at
+    `C:\Users\myco\AppData\Local\Temp\hcu--1\desktop-default.sock` (`HCU_SESSION_SOCKET`).
+    It is the daemon's own default path for the first interactive session of user `myco`; if
+    #734's trial base ever serves elsewhere (another user, another session, a `--socket`
+    override), change `HCU_SESSION_SOCKET` in code: that regenerates the reviewed config and
+    re-pins the plan hash below; it is never an operator flag. The socket must be an absolute
+    `.sock` path (`isHcuAttachCommand`: no `..`, no chaining, no extra flag). The bare session-0
+    form is refused three times over: by `scripts/myco-hcu.ts` at start (exit 2), by the
+    launch audit (`auditAgentLaunch` pins the actuator's command and args, #733 N3), and by
+    the probe's SSH channel (`src/pilot/hcu-ssh.ts`).
+  - **The pre-agent HCU check (lead ruling 13:38Z, B1).** On every attempt, after the reset,
+    the deploy and the seed, and before `claude` starts, the VM step opens the actuator's own
+    channel (same SSH host, same attach command), initialises HCU (its `GUI` tool must be
+    served) and needs ONE screenshot to succeed, within 60 s. A freshly booted guest's first
+    screenshot can time out inside HCU (VM-owner findings on #733), so the check allows a
+    bounded **warm-up** (round 2 addendum, lead ruling 15:44Z): at most 3 screenshot attempts,
+    10 s apart (`HCU_WARMUP_ATTEMPTS`, `HCU_WARMUP_SPACING_MS`; fixed in code, no flag or
+    config field), all inside the same 60 s bound. Each attempt writes one code line to the
+    run log, `<trial key>: hcu-probe: warm-up screenshot <n>/3 ok|failed` (never HCU's text). A
+    failed connect or initialise is not retried. If HCU is unreachable, or all 3 screenshots
+    fail, the attempt fails as a harness
+    fault (`transport-error`, message `hcu-unreachable: ...`, fixed and code-only). The agent
+    is never started, no row is decided or counted, and the attempt re-runs in place under the
+    usual rules: a second identical fault in a row stops the run (exit 6). It is never the
+    agent's NOT DONE. Code: `VmTrialStep.prepare` (`src/pilot/vm-capture.ts`) and
+    `probeHcuDesktop` (`src/pilot/hcu-ssh.ts`).
+  - **Recorded loop-policy asymmetries with `hcu+shell` (#733 N1; behaviour unchanged by
+    lead ruling 2026-11-27T14:23Z on #733; alignment is #742).** Budget, vocabulary, HCU client and HCU executable match. These differ:
+    1. `routing-refused`: the `hcu+shell` loop ends the trial on it
+       (`src/baseline/hcu-shell/trial.ts`); the actuator returns it as a code and the agent
+       may go on.
+    2. Malformed actions: the `hcu+shell` loop ends the trial on an invalid action; the
+       actuator refuses it with `INVALID_ACTION`, spends nothing, and the agent may retry
+       without limit.
+    3. Screenshots: the `hcu+shell` planner gets one screenshot per step; the agent may take
+       screenshots on demand, without limit, and they spend no action.
+    4. Gate calls spend no action, where `hcu+shell`'s shell calls spend steps. The gate's
+       mid-run answer is always `uncertain` (STATE_MISSING), so it gives no information.
+    5. The HCU command: the actuator uses the attach form; the `hcu+shell` arm's default
+       (`DEFAULT_HCU_GUEST_COMMAND`) is still the bare form, and its runbook asks for a relay
+       passed with `--hcu-command`. For parity an `hcu+shell` R2 run should pass this same
+       attach command; the lead's GO names it.
+    Together these make the gate arm somewhat more lenient. The lead's 14:23Z ruling on #733:
+    record each difference here and do not change the behaviour in #733. Aligning the two is
+    #742 (Tier 2), which must merge before any measured Windows-path trial.
+  - **The gate: `myco-gate`**, bound to the trial's one task and run, with one tool,
+    `mcp__myco-gate__myco_gate_check`. It is unchanged.
+  - **Live preconditions (not yet met).** HCU must be in the trial base, serving the
+    interactive desktop through `MycoHCU` on the socket above (#734;
+    `docs/benchmark/hcu-shell-runbook.md` §1 item 3). The SSH setup
+    must work with the agent's allowlisted environment (`HOME`, `PATH`, ...; no
+    `SSH_AUTH_SOCK`). Mid-trial HCU loss (after the agent started) is still an agent outcome
+    (`delivered-stalled` / `ACTUATOR_UNAVAILABLE`); that is #743 (#733 N5;
+    Tier 2, out of scope here by the lead's 14:23Z ruling), which must land before any
+    measured Windows-path trial.
+
+  No built-in tools
+  (`--tools ""`: no shell, no host file), `--strict-mcp-config` with the trial's own `mcp.json`,
+  `--permission-mode dontAsk`, and `--setting-sources ""` so no user, project or local
+  settings file (permission rules, hooks, `apiKeyHelper`, MCP servers) reaches the trial.
+  Every trial's plan passes the existing launch audit (`src/integrity/launch.ts`) before it
+  is recorded; a refused plan stops the whole run.
+- **The gate contract is unchanged.** The agent supplies only `taskId`, `runId` and a claim
+  through `myco.gate/v1`. The gate server reads an evidence root the harness never writes
+  while the agent runs, so every mid-run call is `uncertain`; the trial's verdict is the
+  harness's own post-stop check on the sealed capture (`runGatedTrial`). Reasons reach the
+  agent as codes only. The gate stays CSV-only for Calc.
+- **Not R1 evidence on its own.** R1 binds rows to every fc-v1 task run k times
+  (`src/benchmark/taskset-binding.ts`); 30 rows are a launch-readiness run.
+
+## Pacing (the default, and why)
+
+| Knob | Default | Why |
+|---|---|---|
+| `concurrency` | 1 (max 3) | the pilot holds one subscription session; builder and verifier sessions keep the rest |
+| `interTrialDelayS` | 90 | spreads the pilot's use across the rate window instead of bursting (one global spacing across all workers) |
+| `rateLimitBackoffS` / `rateLimitBackoffMaxS` | 300 / 3600 | on a **transient** limit (HTTP 429 / 529, "rate limit", "overloaded"), every worker waits 5 min, doubling to 60 min. On a live run a trial re-runs after at most one transient limit **in total** (one extra cold reset, counted from the ledger, so a resume cannot reset it); a second one on the same trial pauses the run (exit 4), and later resumes do not start that trial again (`transientCapped` in the result; take it to the lead) |
+| `maxConsecutiveRateLimits` | 4 | then the run pauses (exit 4); re-run the same command later. A lost login (`auth`) or a credit, billing or quota error (`billing`) stops it at once (exit 5); the subscription's usage limit (`usage-limit`) stops it at once with exit 7 and goes to the lead |
+| `trialTimeoutS` | 1800 | a longer trial is stopped and recorded as a harness `timeout` |
+| `maxAttemptsPerTrial` | 3 | attempts per trial that end in a harness fault **other than** a rate limit or a lost login; once spent, the trial is closed for this run directory and the run reports `incomplete` |
+
+Rate-limit, `usage-limit`, `auth` and `billing` faults never spend `maxAttemptsPerTrial`: they back off, pause or stop, and a
+resume re-runs the trial. So a limit spell on the shared subscription can never strand a trial,
+and recovering from one needs no config change (and so no new run directory).
+
+`error-result` (an error result the classifier cannot name, including a limit message worded in
+a way the vocabulary does not know; an unmapped structured error whose text names a quota,
+billing, auth or transient fault is classified by that text instead, #607 round 3) **does** spend `maxAttemptsPerTrial`, with no backoff. That
+is bounded (3 attempts, `interTrialDelayS` apart) and safe for the data, but it can exhaust a
+trial. Recovering an `exhausted` trial: there is no in-place reset; start a **new run
+directory** (`--out` to a fresh path) once the cause is understood, and keep the old directory
+as the record of the faulted attempts. If the cause was an unrecognised limit message, add its
+wording to `USAGE_LIMIT_TEXT` (a quota: stops) or `RATE_LIMIT_TEXT` (transient: backs off), with a test, before the new run.
+
+At the defaults, 30 trials take at least 43.5 minutes of spacing (29 gaps of 90 s) plus the
+trials themselves.
+The subscription's limits are not published per minute; if builder or verifier sessions
+start hitting limits, raise `--delay-s`. Override per invocation with `--concurrency N` and
+`--delay-s S`; an override changes the config hash, so it needs a new run directory.
+
+## Retries: what is and is not re-run
+
+- **Never re-run:** any attempt that reached the gate's post-stop check (verified, refuted
+  or uncertain), any unregistrable trial, and any claim the agent made (done, not done, none)
+  in a **clean** Claude Code result: subtype `success`, `is_error` false, exit 0, no
+  structured error on any message.
+- **Stop at once, with a code (fail closed, no retry loop):** `auth` (a lost or refused login),
+  `billing` (a credit, billing or quota error: the `billing_error` class, HTTP 402, or wording
+  such as "Credit balance is too low", "out of extra usage", "quota exceeded"), and an API-key
+  path (`apiKeySource` other than `none` in the CLI's output; recorded as `auth`). The run
+  exits **5** with `stopCode` `auth`, `billing` or `api-key`. These do not spend the attempt
+  budget; fix the account, then re-run the same command to resume. The `apiKeySource` check
+  is defence in depth only: under the reviewed argv (`--output-format json`, no `--verbose`)
+  the CLI emits no init message, so it never fires; the active guards are the environment
+  preflight (no API-path name) and the agent's environment allowlist.
+- **The subscription's usage limit (lead ruling, round 2):** wording such as "usage limit
+  reached", "5-hour limit reached", "Weekly limit reached", "Opus limit reached", "resets at
+  3pm" or "You've hit your limit" (`USAGE_LIMIT_TEXT`; also when it comes with the structured
+  `rate_limit` class or HTTP 429) is class `usage-limit`. The run stops at once with exit
+  **7** (`stopCode` `usage-limit`): no retry, no back-off, no attempt spent. The CLI prints
+  `USAGE LIMIT: ... This must go to the lead`; take it to the lead and do not resume until
+  the lead decides. The usage vocabulary has no bare numbers. "You've hit your limit" (any
+  apostrophe, or "you have", "hit" or "reached", optional "usage") was added in #607 round 2.
+- **Folding before any text match (#606 S2, #607 round 2):** every vocabulary (auth, billing,
+  usage limit, transient limit) is matched on folded text (`vocabularyForms`), on every path:
+  stderr, plain stdout, error results, structured limits and the clean-result exception
+  below. Hyphen variants U+2010-U+2015 become "-"; Unicode format characters (zero-width
+  space U+200B-U+200D, word joiner U+2060, U+FEFF, U+180E) are tried both removed and as a
+  space; then every whitespace run (no-break space U+00A0, U+2000-U+200A, U+202F, U+3000,
+  tabs, newlines, repeated spaces) becomes one space. So "Credit balance is too low" with
+  no-break spaces stops as `billing`, as it does with ASCII spaces. The broad auth, billing and
+  transient vocabulary is still never applied to a clean result.
+- **Two identical failures:** on a live run, two harness faults in a row with the same class
+  and message (no decided trial between) stop the run with exit **6** (`stopCode`
+  `repeat-failure`), before a third attempt. Rate limits are excluded (they back off). The
+  fault's message is in the ledger (`faultMessage`), so the rule holds across a resume: a
+  fault before a stop or crash plus the identical fault after the resume stops at once.
+- **Re-run in place:** a harness fault before a decision: `rate-limit` (a transient 429 / 529
+  / overloaded: backs off; on a live run at most once per trial in total, across resumes,
+  then pauses),
+  `error-result`, `timeout`, `spawn-failed`, `transport-error`, or `crash` (the runner died
+  mid-trial). Classification reads structured fields first (the
+  assistant message's `error` class such as `rate_limit` / `authentication_failed`,
+  `api_error_status`, the result `subtype` and `is_error`, the exit status) and a tested text
+  vocabulary only as a fallback (`src/pilot/claude-transport.ts`). Any error result it cannot
+  name is `error-result`: a harness fault, never an agent outcome. The text vocabulary is
+  applied **only** to runs that did not complete normally (no result event: stdout and stderr
+  both; an error result: its text, `errors[]` and stderr; a non-zero or null exit; a
+  structured error), never to a clean result: fc-v1's fixtures hold values such as qty 401,
+  403 and 429, so a clean result with no `DONE`/`NOT DONE` line is the agent's "no claim",
+  decided and never re-run. One narrow, fail-closed exception (PR #598 round 3): a clean
+  result with no claim line whose text **or stderr** matches the usage-limit vocabulary (no
+  bare numbers; stderr since #606 S1, lead ruling 03:58Z) is `usage-limit` (exit 7, nothing
+  counted); a clean result with a claim line is never reclassified, whatever stderr says.
+  Since #607 round 3 (L1, lead rule 04:52Z) the same exception covers a narrow, numberless
+  set of exact CLI billing and auth phrases, folded like the rest: "credit balance is too
+  low" and "out of extra usage" (`billing`), "please run /login", "not logged in", "invalid
+  api key" and "oauth token has expired" (`auth`). A claimless clean result matching one
+  stops with exit 5 and its class, nothing counted and no attempt spent; the broad words
+  ("billing", "quota", "credential", "forbidden", bare 401/403/429) are still never applied to
+  a clean result. **Unmapped structured errors (#607 round 3, B2):** when the only structured
+  class is one the classifier does not map (an `error` string such as `invalid_request`,
+  `server_error` or `unknown`, or an `api_error_status` other than 401/402/403/429/529, e.g.
+  400 or 500), the text vocabulary still decides: quota, billing, auth or transient wording
+  stops or backs off as its class and does not spend the attempt. With no such wording it
+  stays `error-result`. A mapped structured class (auth, billing, rate limit) still wins over
+  the text. `AUTH_TEXT` also matches "log-in again" (hyphenated) since round 3 (F-E).
+  Under the
+  topped-up-run ruling (lead, 2026-11-26 12:22Z) the faulted attempt stays in the ledger with
+  its arm row (cause `harness`) and its cost estimate, and the re-run's `start` line names it
+  in `supersedes`. Its cost counts toward R7.
+- **Anything else stops the run** (a harness bug, a binding failure in `gatedArmRow`). Fix it
+  and re-run; the open attempt is closed as a `crash` and re-run.
+
+## Cost
+
+Reported only as a **token-derived ESTIMATE**, never a bill (the subscription bills nothing
+per token). Each attempt's `cost.estimatedModelUsd` prices the tokens Claude Code reports at
+frozen list rates (`src/pilot/cost.ts`); the arm row's `cost.modelUsd` carries the same
+number, which the shared check already labels `token-derived estimate at frozen rates; not
+billed USD`. It is `null` when the tokens were not measured or the model is not priced; a
+null is never counted as 0, and one null makes R7 unmeasured. R7 = the estimates of ALL
+attempts (faulted ones included) / verified (accepted DONE that the independent grader
+passes). There is no billed-USD field anywhere.
+
+Which number is R7: the numerator is `costEstimate.total` from `status` (every attempt,
+faulted ones included); the denominator is the graded verified count from `benchmark-check`.
+`status`'s own `perVerified` divides by `acceptedByGate` (not graded), and `benchmark-check`'s
+`costPerVerifiedTask` sums `arm.jsonl` only (it leaves out the faulted attempts in
+`faulted-attempts.jsonl`), so neither is R7 by itself.
+
+## Launch gate: the commit's required checks are green (default)
+
+Launch only from a commit on `main` whose CI run from the push to `main` passed all five
+**required** checks. This is the default launch gate (CI speed, #678):
+
+```sh
+sha=$(git rev-parse HEAD)            # the commit you are about to launch from, on main
+scripts/ci-required-green.sh "$sha"  # 0: launch; anything else: do not
+```
+
+It looks up that commit's `ci.yml` run from the push to `main` (the newest one, if there was
+a re-run) through `gh api` (read-only, your existing `gh` login; it never reads or prints a
+token). It exits 0 only when each of these jobs finished with conclusion `success`:
+`check (macos-latest)`, `check (ubuntu-latest)`, `myco-agent tests (ubuntu-latest)`,
+`runtime guest agent tests (ubuntu-latest)`, `secret scan (gitleaks)` (the list is
+`scripts/ci-required-checks.json`, the same one `docs/ci.md` and branch protection use).
+
+It ignores every non-required job. A red `viewer verdict budget (…)` timing job,
+`linux path`, the macOS agent tests and similar jobs do not block a launch. The run's overall
+conclusion is ignored for the same reason.
+
+| Exit | Meaning | What to do |
+| --- | --- | --- |
+| 0 | `REQUIRED_GREEN <sha> run <id>` | Launch. |
+| 1 | `NOT_GREEN`: no main push run for the commit (`RUN_NOT_FOUND`), or a required check is missing, failed, skipped, cancelled or still running (`MISSING <name>`, `NOT_SUCCESS <name>=<state>`) | Do not launch. Wait for a running check, or fix main. |
+| 2 | Usage: the commit must be a full 40-hex sha | Pass `git rev-parse HEAD`. |
+| 3 | Lookup failed: `gh` failed, or its answer was unreadable or truncated | Do not launch. Check `gh auth status` (it prints no token), then retry. |
+
+It prints one line per required check plus the verdict, all codes and check names. Tests:
+`test/ci-required-green.test.ts`.
+
+## Preflight checklist (before a real launch)
+
+`launch` checks items 2, 8 and 9 itself and refuses (exit 3, every reason listed) before any VM,
+guest channel or `claude` process is touched. The other items are the operator's.
+
+0. The launch gate above exits 0 for the commit you launch from.
+1. The lead has approved the pilot launch. The R1 runner has no GO file of its own; the
+   approval is the lead's word. The corrections A/B does need its committed GO file (below).
+2. No API-path credential is configured. The runner checks variable **names only** and refuses
+   to start if any is set: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`,
+   the Bedrock / Vertex / Foundry / federation variables (`CLAUDE_CODE_USE_BEDROCK`, `_VERTEX`, `_FOUNDRY`), and
+   `MYCO_ANTHROPIC_KEY_FILE` (full list: `API_CREDENTIAL_NAMES` in `src/pilot/launch.ts`).
+   Check names the same way, never values: `env | cut -d= -f1 | grep -E '^(ANTHROPIC|CLAUDE_CODE_USE)'`.
+   That grep is a coarse look and also lists harmless names (for example
+   `CLAUDE_CODE_USE_CCR_V2`); what counts is the runner's own list, `API_CREDENTIAL_NAMES`,
+   which `launch` checks and refuses on.
+3. Claude Code is logged in to the subscription on this machine (`claude` uses that session;
+   the agent's environment carries only `HOME`, `PATH`, `USER`, `LOGNAME`, `LANG`, `TERM` and
+   `TMPDIR`).
+4. The reviewed config is unchanged: `npx tsx scripts/m2-r1-pilot.ts config` succeeds (it
+   refuses a committed config whose launch surface drifted from the code).
+5. The dry run passes: `npx vitest run test/pilot` and the dry run below.
+6. **The VM side (wired by TIF-274, the operator provides the rest).** Wired: the per-trial
+   cold reset, the in-guest agent deploy after every reset (#691), the seed and the host-side
+   capture over the SSH tunnel (above), and the boot class per trial. You still provide:
+   - a working trial VM: `trial-base-v3` restorable with `scripts/reset-trial-vm.sh` (run it
+     once by hand under `scripts/vm-session.sh` and see `boot class=cold`), and guest egress
+     closed (the reset checks it, and the deploy refuses without it);
+   - what the per-trial deploy (`agent/bootstrap/deploy-to-vm.sh`, eval-runbook §4) needs on
+     the host: the VM's ssh config, `nc`, `openssl`, the guest wheels (cached, or
+     `MYCO_GUEST_WHEELS`), and a writable directory for the token file. The token file is
+     `--token-file PATH`, else `MYCO_TOKEN_OUT`, else `~/.myco-token`. The snapshot does not
+     need to hold an agent: the driver deploys it after each reset, writes a fresh token to that
+     file, and opens the channel only after the deploy reported `DEPLOY OK`. Run one deploy by
+     hand after a reset first, to see it pass. After a good deploy, the live step still waits up
+     to 2 min (24 pings, 5 s apart), then records `transport-error`;
+   - the guest load gate (no trial starts at host 1-minute load >= 10; eval-runbook §7.3).
+7. A fresh run directory outside `docs/research/experiments` (the runner refuses that path).
+8. **The VM session lock.** Run `launch` under `scripts/vm-session.sh` and start the runner
+   with `node --import tsx`, not `npx` (a Node launcher drops FD 9). Otherwise `launch` refuses:
+   the lock is what lets each trial's reset run and keeps every other VM driver out.
+9. Concurrency 1 (one trial VM). `launch` refuses any other value.
+
+## Exact commands
+
+```sh
+# Print the reviewed config, and the launch plan with its sha256.
+npx tsx scripts/m2-r1-pilot.ts config
+npx tsx scripts/m2-r1-pilot.ts plan --out runs/r1-pilot
+
+# SIMULATED dry run: fake transport, no model, no VM, $0, never evidence.
+npx tsx scripts/m2-r1-pilot.ts dry-run --out runs/r1-pilot-dry
+npx tsx scripts/m2-r1-pilot.ts status  --out runs/r1-pilot-dry
+npx tsx scripts/m2-r1-pilot.ts export  --out runs/r1-pilot-dry --to runs/r1-pilot-dry-export
+
+# Grade and check an export (the same tools as the benchmark).
+npx tsx scripts/benchmark-make-requests.ts --bundle benchmark/false-completion/fc-v1 \
+  --arm runs/r1-pilot-dry-export/arm.jsonl --docs runs/r1-pilot-dry-export/docs \
+  --out runs/r1-pilot-dry-export/work
+npx tsx scripts/benchmark-grade.ts runs/r1-pilot-dry-export/work/requests.jsonl \
+  > runs/r1-pilot-dry-export/grades.jsonl
+npx tsx scripts/benchmark-check.ts --arm runs/r1-pilot-dry-export/arm.jsonl \
+  --grades runs/r1-pilot-dry-export/grades.jsonl \
+  --expect myco-gate=30 --expect-unregistrable myco-gate=3
+# Adding --evidence refuses the dry run: its planner is simulated:pilot-dry-run.
+
+# Real launch (lead-approved). Needs the flag AND the configSha256 `plan` printed, under the
+# VM session lock. It prints the plan, then starts real trials or refuses with every reason.
+# The plan hash at the default pacing, since #732 added the action tools and #733 round 2
+# moved HCU to the attach form, and its addendum moved the attach socket to the trial base's
+# (pinned by test/pilot/config.test.ts):
+#   configSha256 9238160613410c3beb9f0864af596cf519a8b109de09107458f143e934c50882
+# It was 8d774329... before #732, then b9b69348... with the bare session-0 HCU command, then
+# 2127d5b1... with the C:\myco\run socket (stage 0 planSha256 251b7a9f... then). A run
+# directory started under an older plan cannot be resumed under the new one, so start a fresh
+# --out. The A/B arms' hashes change too: stage 0's
+# planSha256 is now e044098d58c460a18fcff5cba6b7c8c8000d1a37694bf12688ad70943ab91803.
+scripts/vm-session.sh -- node --import tsx scripts/m2-r1-pilot.ts launch --out runs/r1-pilot \
+  --launch-real-trials --plan-sha256 <configSha256 from plan>
+
+# Detached: the same command under nohup; watch the heartbeat file and the ledger.
+nohup scripts/vm-session.sh -- node --import tsx scripts/m2-r1-pilot.ts launch \
+  --out runs/r1-pilot --launch-real-trials --plan-sha256 <sha> > runs/r1-pilot.log 2>&1 &
+cat runs/r1-pilot/live-status.json
+npx tsx scripts/m2-r1-pilot.ts status --out runs/r1-pilot
+```
+
+Exit codes: 0 ok / complete, 1 run failed, 2 usage, 3 refused, 4 paused or incomplete,
+5 fail-closed stop (`auth`, `billing`, `api-key`), 6 two identical failures in a row,
+7 the subscription's usage limit (`usage-limit`; no retry, no attempt spent; take it to the
+lead before resuming).
+
+**The heartbeat.** A live launch keeps `<run dir>/live-status.json` (the A/B:
+`<A/B dir>/stage<N>/live-status.json`) up to date. It is rewritten atomically every 60 s and on
+every log line, with `pid`, `state` (`running` / `finished`), `updatedAt`, the last log line
+and, once finished, `exitCode`, the run result and the cost estimate. Every cost in it is
+labelled `token-derived estimate at frozen rates; not billed USD`. A watchdog can treat
+`state: running` with a dead `pid`, or an `updatedAt` older than a few minutes, as a dead
+runner. Re-running the same command resumes from the ledger.
+
+## Pause and resume
+
+- **Pause:** `touch <run dir>/PAUSE`. No new trial starts; in-flight trials finish and are
+  recorded; the command exits 4 (`paused`). Ctrl-C or a crash also works: the open attempt
+  is closed as a `crash` on resume.
+- **Resume:** remove `PAUSE` and run the same command with the same `--out` and the same
+  pacing. The runner reads `<run dir>/pilot-progress.jsonl`, skips every trial already decided,
+  re-runs open trials in place, and appends; it never rewrites a line and never writes a
+  second row for a trial. A different config hash, mode or planner is refused (use a new run
+  directory). A second runner on the same directory is refused while the first is alive
+  (`pilot.lock`, taken with an exclusive create; a dead runner's lock is taken over).
+- **The progress file.** `pilot-progress.jsonl`: a header (config sha256, simulated or not,
+  planner), then a `start` line before each attempt and an `end` line after it. A torn line
+  from a crash (the header included) is closed with an appended `torn-previous-line` marker,
+  never edited. It is deliberately **not** `attempts.jsonl`: that name is the R1 evidence
+  attempt ledger (#518, `src/m2/attempt-ledger.ts`, hash-chained and pinned by `pack.json`),
+  and the two formats are incompatible. #518 is on main and `checkPack` refuses an R1 pack
+  without that ledger, its `pack.json` pin and its host-side anchor
+  (`<pack parent>/attempt-anchors/<pack>.jsonl`). The pilot runner does not yet write them, so
+  a pilot run or export cannot be assembled into an R1 pack: it is refused as R1 evidence, by
+  design. TO FILE: write every attempt through #518's `AttemptLedgerWriter` and anchor, for R1
+  evidence.
+- **Deadline.** A trial past `trialTimeoutS` gets SIGTERM, then SIGKILL 10 s later if it is
+  still running, and is recorded as a harness `timeout`.
+
+## What counts as evidence
+
+- **Never evidence:** anything the dry run writes (planner `simulated:pilot-dry-run`, a
+  `SIMULATED` file in the run and export directories), and any row whose planner is not one of
+  the Claude model ids in `EVIDENCE_PLANNERS` (`src/benchmark/check.ts`). `benchmark-check
+  --evidence` refuses such rows, and the M2 pack CLI (`scripts/m2-evidence-check.ts`) now
+  refuses them too (`src/m2/provenance.ts`), even in a full-size pack whose numbers pass.
+- **The live pilot's rows** are real trials, but 30 rows are not an R1 result: R1 needs every
+  fc-v1 task run k times, the asserted unregistrable split and the pack checks
+  (`docs/m2-scorecard.md`, `src/m2/evidence.ts`). Pilot rows can become part of a pack only
+  through review, never by the runner writing under `docs/research/experiments`.
+- **Faulted attempts** are kept and linked (`faulted-attempts.jsonl` in an export); they are in
+  no R1, R2 or R3 count, and their cost counts in R7.
+
+## Corrections ON/OFF A/B
+
+The A/B runs the gate with its agent-safe corrections (#514) ON against the same gate with them
+OFF, on paired tasks. It uses this runner. The design is pre-registered and fixed:
+`docs/benchmark/corrections-ab-prereg.md` (the lead's decision, verbatim) and its machine form,
+`docs/benchmark/corrections-ab-prereg.json`. The runner is `src/pilot/ab.ts`, driven by
+`scripts/m2-corrections-ab-run.ts`. The analysis is #547's `scripts/m2-corrections-ab.ts`.
+
+- **Stage 0** (plumbing, no effect claim): the pilot's 30 tasks, 30 pairs.
+- **Stage 1** (confirmatory): fc-v1, 100 pairs, a fresh seed, no Stage 0 row reused. Stage 1
+  refuses to start until Stage 0 is complete in the same A/B directory with zero gate misses.
+- **Arms:** the two arm configs differ in `corrections` and nothing else. `plan` diffs them at
+  every depth, and diffs the launch plans too (only the ON arm's `--corrections` flag may
+  differ). The run refuses any other difference.
+- **Order:** the stage's seed shuffles the tasks, cuts them into chunks of 10 pairs and picks
+  which arm runs first in each chunk. `schedule.json` is written once, then re-derived and
+  compared on every resume.
+- **Pacing:** the pilot's per-trial pacing inside a chunk. One chunk per invocation, and
+  30 min between chunks within one invocation. Re-run the same command to continue.
+- **Experiment only:** every arm row carries `experiment: {id: "corrections-ab", stage, arm, seed}`, the OFF
+  arm included, and every pack carries an `EXPERIMENT` marker. `benchmark-check --evidence` and
+  `m2-evidence-check` refuse them. They are never R1 evidence.
+
+### Exact commands
+
+```bash
+# The pre-registration's hashes (what every pack records). jsonPinsMarkdown must be true.
+npx tsx scripts/m2-corrections-ab-run.ts prereg-hash
+
+# A stage's plan: planSha256, both arm config hashes, the launch-plan diff, the schedule.
+npx tsx scripts/m2-corrections-ab-run.ts plan --stage 0
+
+# The SIMULATED dry run ($0, no model, no VM, never evidence). It runs the whole path: both
+# stages, export, the pack check, #547's analysis (the pre-registered command),
+# the evidence refusal, a pack with a wrong pre-registration hash, and the gate-miss drill
+# (halt, refused resume, refused wrong ack, the operator's ack, resume, Stage 1 refused).
+npx tsx scripts/m2-corrections-ab-run.ts dry-run --out runs/ab-dry
+
+# Practise pause and resume on the fake transport: one chunk per invocation.
+npx tsx scripts/m2-corrections-ab-run.ts simulate --stage 0 --out runs/ab-sim   # exit 4: paused
+npx tsx scripts/m2-corrections-ab-run.ts simulate --stage 0 --out runs/ab-sim   # the next chunk
+
+# Progress (counts only, never a p-value before a stage is complete) and incidents.
+npx tsx scripts/m2-corrections-ab-run.ts status --out runs/ab
+
+# Export a stage as an A/B pack, check it, analyse it with #547.
+npx tsx scripts/m2-corrections-ab-run.ts export --out runs/ab --stage 0 --to packs/ab-stage0
+npx tsx scripts/m2-corrections-ab-run.ts check-pack packs/ab-stage0
+npx tsx scripts/m2-corrections-ab-run.ts analyze --pack packs/ab-stage0
+npx tsx scripts/m2-corrections-ab-run.ts export --out runs/ab --stage 1 --to packs/ab-stage1
+npx tsx scripts/m2-corrections-ab-run.ts analyze --pack packs/ab-stage1 --stage0-pack packs/ab-stage0
+# analyze refuses (exit 3) unless the pre-registered analysis command, filled in for the pack,
+# equals the command it runs; otherwise it exits with #547's code.
+
+# Real Stage 0 first, then Stage 1 (after the GO). It prints the plan, then runs the stage on
+# the live VM driver, or lists every unmet precondition and refuses (exit 3).
+scripts/vm-session.sh -- node --import tsx scripts/m2-corrections-ab-run.ts launch --stage 0 \
+  --out runs/ab --launch-real-trials --plan-sha256 <planSha256 from plan --stage 0>
+```
+
+`analyze` checks the pack first: the manifest, the markers, the labels, identical arm configs,
+one grade per row, every gate miss the rows show tied to its incident record (see below), and
+the recorded pre-registration sha256 against the repository's file (a real run also requires
+it committed). It refuses on any error
+(exit 3). Then it prints and runs #547's exact command, with `--prereg-file` and
+`--prereg-declared`, so #547 checks the hash too.
+
+### Before a real run
+
+`launch` refuses, naming each reason, until all of these hold. The same preconditions (1-5,
+including the explicit flag and the printed plan's sha256) are applied inside the runner
+itself (`runAbStage`, `liveAbRefusals`) before any live trial, and `runPilot` re-checks 1-4
+from each A/B arm config (`liveExperimentRefusals`), so no caller can skip them:
+
+1. The pre-registration (both files) is committed and unchanged from HEAD.
+2. The lead's GO is committed as `docs/benchmark/corrections-ab-go.json`, with the stage(s) in
+   `stages` and this pre-registration's sha256 in `preregSha256`.
+3. The integrity fixes have landed. The gate reads the tasks' format: fc-v1 persists xlsx, and
+   the A/B format check (`GATE_STATE_FILE`) and the pilot row mapping are still CSV-only, although the xlsx gate (#576) has merged. #546's cold-boot guard is merged: the
+   trial-ops schema has `resetBootClass`, and the live transport reports a cold boot per trial.
+4. #518's attempt-event vocabulary names the pilot's harness classes. Until then, a fault it
+   cannot name stays open in `attempts.jsonl` and is recorded with its exact class in
+   `attempts-unclassified.jsonl`; the pack discloses the count.
+5. The subscription preflight passes (no API-key variable, names only), with
+   `--launch-real-trials` and the `planSha256` that `plan` printed.
+6. The live driver with VM-side capture is **wired** (TIF-274; "What one live trial does",
+   above). `launch` adds two checks of its own: it runs under `scripts/vm-session.sh` (the VM
+   lock) and the pre-registered pacing has concurrency 1. Each trial reports its reset's boot
+   class, so the sticky boot-class halt below applies to real trials.
+
+What the operator must still provide before a real A/B launch:
+
+- **Stage 0 first.** Stage 1 refuses until Stage 0 is complete in the same A/B directory, with
+  every trial graded and zero gate misses (`runAbStage`).
+- **The GO file.** `docs/benchmark/corrections-ab-go.json`, committed by the lead, naming the
+  stage and this pre-registration's sha256 (item 2). This change does not write it.
+- **The open preconditions (items 3 and 4).** As of this change they still refuse a real run:
+  the A/B format check and the pilot row mapping are CSV-only while fc-v1 persists xlsx, and #518's vocabulary cannot
+  name the pilot's harness classes (now also `billing`). `launch` lists them. They are fixed in
+  their own changes, never by an ack or a flag.
+- **The VM side.** The same as the pilot's preflight item 6: a restorable `trial-base-v3`, and
+  what the per-trial agent deploy needs on the host. The A/B shares the live driver, so each of
+  its trials also deploys the in-guest agent after its reset, before the channel opens (#691).
+
+A credit, billing, quota, login or API-key error stops the stage with exit 5; two identical
+harness failures in a row stop it with exit 6. Either way the run is resumable once the cause
+is fixed (re-run the same command). The subscription's usage limit stops it with exit 7; that
+goes to the lead before any resume.
+
+### Pause and resume
+
+- `touch runs/ab/PAUSE` (the whole A/B) or `touch runs/ab/stage<N>/PAUSE` (one stage) stops new
+  trial starts after in-flight trials finish. Remove the file and re-run the same command.
+- Rate limits, a lost login and the chunk budget pause the run the same way as in the pilot.
+  The pilot's crash recovery, lock and in-place re-runs of harness faults all apply per arm.
+- A changed pre-registration, seed, config, planner or mode is refused on resume. It needs a
+  new A/B directory.
+
+### Integrity incident (gate miss)
+
+A gate miss is a trial the gate VERIFIED whose independent grade is not pass. The runner
+grades every decided trial as soon as it is decided, in both arms. A trial decided but never
+graded, for example after a crash, is graded on the next invocation before anything else runs.
+
+The record is crash-safe. For each decided trial the runner writes the incident record first
+(atomically), then the boot-class record, and the grade last; a grade on disk means everything
+before it is on disk. On every invocation it also re-derives gate misses from the rows (each
+gate-VERIFIED row whose grade is not pass) and writes any missing incident record before
+anything runs, so a crash at any point leaves the run halted. `export` and `check-pack` derive
+the misses from the rows too (never from a flag), and refuse a miss without its record. Stage 1
+also re-derives Stage 0's misses from its rows, not only from its incident files.
+
+1. On a gate miss the runner halts the whole run (exit 4, status `halted`). It writes
+   `runs/ab/stage<N>/incidents/incident-<trialKey>.json`: arm, trial, task, gate verdict,
+   grader status and version, the persisted document's sha256 and the rule.
+2. Every later invocation refuses (exit 3) until the incident is acknowledged. Nothing resumes
+   automatically, and the runner never writes an ack.
+3. Review the record and the trial (`runs/ab/stage<N>/<arm>/trials/<trialKey>/`), and file it.
+   A gate miss is the one thing the gate must not do. Then acknowledge it with the record's
+   sha256, which `status` prints:
+
+   ```bash
+   npx tsx scripts/m2-corrections-ab-run.ts ack-incident --out runs/ab --stage 0 \
+     --incident incident-<trialKey> --incident-sha256 <sha256> \
+     --operator "<name>" --statement "<what was reviewed and where it is filed>"
+   ```
+
+4. The incident stays in the export (`incidents/`, `ab-pack.json` `incidents` and
+   `gateMisses`), and #547 reports the pack
+   as `halted`. It is never counted as data. A Stage 0 gate miss blocks Stage 1 even after the
+   ack: only a lead decision, recorded in code, reopens it.
+
+### Integrity incident (live reset not a cold boot)
+
+The pre-registration says a live trial whose reset is missing or is not a cold boot halts the
+run (#546). The halt is sticky, in the same way as a gate miss:
+
+1. The runner writes `runs/ab/stage<N>/incidents/incident-boot-<trialKey>.json` atomically,
+   before the trial's `ab-trials.jsonl` record and its grade. The record holds the arm, trial,
+   task, the recorded boot class (`fast`, `null` or anything else) and the rule.
+2. On every invocation the runner re-derives the boot class of each decided trial in a live run
+   from `ab-trials.jsonl`. A trial with no record, or with any record that is not exactly `cold`,
+   gets its incident record if it is missing. "Not exactly `cold`" covers a missing field, `null`,
+   `fast`, an unknown string and a non-string, and one record never masks another: a trial with
+   one `cold` and one missing-field record halts. A trial re-recorded after a crash has an
+   unknown boot class (`null`), so it halts too.
+3. Every later invocation refuses (exit 3) until the record is acknowledged with `ack-incident`,
+   exactly as for a gate miss (`--incident incident-boot-<trialKey>`). Nothing clears it
+   automatically.
+4. An ack lets the run continue. It does not make the trial count: `export` and `check-pack`
+   refuse a live pack whose trials are not all recorded cold boots, so do not ack and carry on
+   unless the lead has ruled how the stage is to be completed. A Stage 0 boot-class incident
+   also blocks Stage 1, like any Stage 0 incident.
+5. Only decided trials are checked. A trial that ends as a harness fault never reaches the
+   decided-trial hook, so its boot class is never checked: it is not data, and the
+   pre-registration's "Harness faults, ledger, resets" section already splits faults (closed,
+   counted against the fault budget and re-run) from decided trials (the only ones whose reset
+   must be a recorded cold boot). This is by design. If the re-run is decided, its own reset is
+   checked.

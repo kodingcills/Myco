@@ -52,6 +52,11 @@ the five action helpers, and 120 s for verification and audit readbacks). An exh
 watchdog can leave no report. The combined audit retains that recorded gap and requires
 eligible coverage from other trials. Explicit fixture identity mismatches still fail.
 
+**Updated by TIF-219 (2026-11-24):** the convert deadline is now 360 s, not 240 s. The
+normal sweep's slow-but-passing path becomes ~1,290 s all-in (alarm 1,500 s). The corrupted
+suite's kill recovery becomes 1,290 s of polls, ~1,560 s with tunnel/health and cleanup, so
+its alarm moves to 1,800 s. The 240 s figures above are the historical M1-014 values.
+
 **UNVERIFIED on real Calc:** the revised timeouts, the timing fields, and whether the
 supplemental batches close live coverage gaps. Host-only tests use synthetic evidence.
 

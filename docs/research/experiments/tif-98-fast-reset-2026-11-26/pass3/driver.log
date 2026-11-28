@@ -1,0 +1,14 @@
+fastreset3: 17:28:09Z config before captured
+fastreset3: 17:30:52Z reset cold: rc=0 first ssh answer after 143s (guest CPU 287s) total=163
+fastreset3: 17:30:52Z argv cold captured (104 lines)
+fastreset3: 17:34:52Z cpu samples cold done: {"label":"cold","secondsAfterReady":240,"qemuCpuS":471,"load1":3.21}
+fastreset3: 17:35:09Z boot profile cold rc=0
+fastreset3: 17:35:29Z stopped by request
+fastreset3: 17:35:30Z guest-egress deny rc=0
+fastreset3: 17:35:30Z config after-config-write captured
+fastreset3: 17:35:56Z reset fast: rc=0 first ssh answer after 13s (guest CPU 4s) total=26
+fastreset3: 17:35:56Z argv fast captured (104 lines)
+fastreset3: 17:39:57Z cpu samples fast done: {"label":"fast","secondsAfterReady":240,"qemuCpuS":70,"load1":3.38}
+fastreset3: 17:40:08Z boot profile fast rc=0
+fastreset3: 17:40:08Z final egress verify rc=0
+fastreset3: 17:40:18Z done: VM stopped

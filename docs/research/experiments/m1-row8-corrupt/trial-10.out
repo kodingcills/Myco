@@ -1,0 +1,118 @@
+{
+  "runId": "f8d213b5-aa5a-4b04-917b-c99cbe22ce16",
+  "verdict": {
+    "status": "verified",
+    "reasons": [
+      "cell B62 (record EMP-0061, column name) persisted as \"REVISED-25483\""
+    ]
+  },
+  "completed": true,
+  "elapsedMs": 99839,
+  "xlsxPath": "C:/myco/runs/myco-52625-1795589037475-53253913\\fixture.xlsx",
+  "cleanup": {
+    "killed": [
+      2572,
+      2832
+    ],
+    "removed": [
+      "myco-52625-1795589037475-53253913",
+      "myco-52625-1795589037475-850747170"
+    ],
+    "residue": [],
+    "errors": []
+  },
+  "fixtureConvert": {
+    "deadlineMs": 360000,
+    "durationMs": 16763,
+    "outcome": "arrived",
+    "hostLoadStart": 13.92,
+    "hostLoadEnd": 12.25
+  },
+  "timings": {
+    "helpers": [
+      {
+        "op": "focus",
+        "elapsedMs": 10028,
+        "durationMs": 10929,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3549,
+        "durationMs": 4146,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 3371,
+        "durationMs": 3809,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4620,
+        "durationMs": 5126,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "focus",
+        "elapsedMs": 3124,
+        "durationMs": 3911,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "nametype",
+        "elapsedMs": 4545,
+        "durationMs": 5153,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      },
+      {
+        "op": "save",
+        "elapsedMs": 4391,
+        "durationMs": 5047,
+        "deadlineMs": 90000,
+        "outcome": "ok"
+      }
+    ],
+    "unoReady": [
+      {
+        "durationMs": 3804,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      },
+      {
+        "durationMs": 282,
+        "deadlineMs": 90000,
+        "outcome": "ready"
+      }
+    ]
+  },
+  "fixture": {
+    "seed": "m1-014-kill-10",
+    "dataRows": 100,
+    "csvSha256": "3b280eb39fddcd1d5241f92017b9003bc0a80caa53aad60756d12f7e5ccb7046"
+  },
+  "corruption": {
+    "mode": "kill",
+    "applied": true,
+    "recovery": true,
+    "persistedValue": "REVISED-25483",
+    "recoveryEvents": [
+      "retry:1-failed",
+      "retry:2-failed",
+      "relaunch:resumed",
+      "relaunch:completed"
+    ],
+    "actionKinds": [
+      "click",
+      "setValue",
+      "keyPress"
+    ]
+  }
+}

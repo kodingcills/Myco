@@ -57,6 +57,28 @@ entirely in background.
 Only a genuine save failure counts against the model; a routing refusal, a
 delivered action, and a stalled confirmation do not.
 
+### Run condition, stated for the record (arm-003d)
+
+**A `Transcript.deliveries` entry is written for EVERY action, save steps
+included**, carrying `step`, `mode`, `escalated`, and `outcome`. This is the arm
+condition, not incidental telemetry: a row produced with foreground delivery is
+not the same measurement as one produced entirely in background, and the
+difference is invisible unless it is recorded per action.
+
+**Escalation is declared, not hidden.** `key_combo` attempts background first and
+escalates **once** to `delivery_mode: "foreground"` on a background refusal. Any
+row where a save escalated is therefore labelled as such.
+
+**Read a save's success from the judge, never from the transport.** `delivered`
+means the input landed and says nothing about whether the document changed, which
+is why `save-failed` is a reserved name that `classify` cannot produce. The model
+outcome is the judge's `modified`, per row.
+
+**The comparison axis is arm-002's 16 `modified` rows**, each already carrying
+"Document left open, unsaved (`c1-judge.ts:32`)". arm-003d's save rows must stay
+comparable to those, which is why the vocabulary is not being changed to fuse the
+transport and document layers.
+
 ## Note for the arm-003d operator (TIF-169)
 
 **Check duplicate stalls BY HAND in this arm.** A `Ctrl+S` that stalls and is then

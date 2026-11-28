@@ -70,6 +70,23 @@ At 10,000 steps the job median must clear both limits in `viewer/e2e/perf-baseli
 
 The independent review reproduced the two-job macOS calibration. It verified two of the seven Ubuntu jobs. The remaining five Ubuntu job or attempt IDs are needed to independently reproduce the pooled baseline.
 
+#### macOS recalibration from 94 main-branch jobs (2026-11-25)
+
+The two-job macOS baseline above was too low. The 10,000-step check failed on 9 of 94 `main` runs although no viewer code changed. Runs 45263153179 (`d9cc7491`, the last viewer change) through 45583189082 (`a7d2cd27`) each recorded 20 samples per size in the job log. Those 94 macOS job medians at 10,000 steps:
+
+| min | p10 | p50 | p90 | p95 | max |
+|---:|---:|---:|---:|---:|---:|
+| 184.0 | 249.4 | 339.1 | 421.8 | 443.8 | 681.3 |
+
+The noise sits between jobs. Some jobs land on a faster or slower runner, and the whole job shifts with it. Within-job statistics shift by the same amount. Across jobs, the coefficient of variation is 22.3% for the minimum, 23.0% for the fastest-half median and 22.7% for the median. Warm-up exclusion or a different within-job statistic therefore cannot remove this noise. The job median also drifted on unchanged code: the first 47 jobs had a p50 of 319.9 ms and the last 47 had 364.4 ms.
+
+- **Baseline:** `darwin.10000.baselineMedian` = 339.1 ms, the median of the 94 job medians. `relativeTolerance` stays 0.35, so the limit is 339.1 × 1.35 = 457.8 ms.
+- **False failures on the observed jobs:** 3 of 94 single measurements (3.2%: 469.6, 470.0 and 681.3) exceed 457.8. With the old 425.8 ms limit, 9 of 94 did (9.6%).
+- **The window's 10th failure was at 1,000 steps:** run 45387175502 failed the darwin 1,000-step hard median limit (150.1 ms against 150 ms), while its 10,000-step median was 389.1 ms and passed. This recalibration does not change the 1,000-step limit. The retry below covers that case too, because it applies to every CI budget miss at either size.
+- **Retry once:** after a CI budget miss, the test takes a second full measurement (1 warm-up + 20). It fails only if both medians miss. Both attempts go to the report with an `attempt` field. A retry is visible in CI: the test prints `verdict budget retry (<steps> steps): attempt 1 missed; re-measuring once.` with the first attempt's misses to its stdout, which the default dot reporter echoes into the job log, and the attempt 2 report line carries the same text in a `note` field (printed under "raw samples" in the job log; the job summary lists attempt 2 as its own row). Within one job, the median of 20 has a standard error of about 12 ms. The median within-job interquartile range is 57.7 ms, so σ ≈ 57.7 / 1.349 = 42.8 and the standard error ≈ 1.253 × 42.8 / √20 = 12.0. A job just over the limit therefore often passes the retry, while a real slowdown misses twice. We do not yet know how often a retry passes, because the runner may stay slow for the whole job. The new `attempt` records will measure this.
+- **A real regression still fails:** a 1.5× slowdown on a baseline-speed runner gives 1.5 × 339.1 = 508.7 ms. That is 50.9 ms (about 4 standard errors) over 457.8, so both attempts fail. If the 94 observed medians are scaled by 1.5, 74.5% of them exceed the limit; scaled by 2×, 90.4% do. The fastest runner class (job medians 184–215 ms) cannot show a 1.5× slowdown against any shared limit.
+- **Proof:** `MYCO_VIEWER_BUDGET_INJECT_MS` is test-only. It blocks the main thread for the given number of milliseconds inside every timed drop. On the M4 Pro (`CI=true`, unpadded median 127.0 ms), with the run limited to the 10,000-step test (`-g "10000 steps"`; at 212 ms of padding the 1,000-step test fails its 150 ms hard limit), padding 212 ms emulates a baseline-speed runner: the median was 343.2 ms and the test passed. Padding 382 ms (212 plus 0.5 × 339.1 ≈ 170) gives a 1.5× regression: the medians were 509.4 and 508.9 ms, both attempts missed, and the test failed. With `MYCO_VIEWER_BUDGET_INJECT_ATTEMPT=1` the padding applies to attempt 1 only. On the same machine (2026-11-25, `CI=true`, `-g "10000 steps"`, 400 ms on attempt 1), attempt 1's median was 535.6 ms and missed, the retry note printed in the dot reporter's output, attempt 2's median was 135.0 ms, and the test passed.
+
 Both hosted runner images already exceed 150 ms at baseline. Their checks can detect drift relative to runner performance. The strict local check still enforces the 150 ms spec maximum.
 
 ## Other §8 measurements (current build)

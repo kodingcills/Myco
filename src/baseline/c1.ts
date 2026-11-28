@@ -26,7 +26,11 @@ export interface Screenshot {
  *                       it within its budget. NOT a model outcome: it is unproven
  *                       whether the app acted, and Cua requires reading the target
  *                       before repeating rather than blind-retrying.
- * - `delivered`         the input landed and Cua verified it.
+ * - `delivered`         the input landed, and `verified` says whether Cua
+ *                       confirmed it took effect. Always carries that flag.
+ *                       `verified: false` means the call succeeded without
+ *                       confirmation - it is NOT the same as a stall, which says
+ *                       the target never acknowledged reading it.
  * - `save-failed`       a save was attempted, was delivered, and did not take. This
  *                       is the ONLY outcome that counts against the model.
  *
@@ -38,6 +42,20 @@ export interface Screenshot {
  * resolved into, and so a caller cannot add a fifth without noticing. Writing it
  * from `classify` would be reporting a delivery as a document state, which is
  * exactly the conflation this type exists to undo.
+ *
+ * **IF YOU WANT THE MODEL OUTCOME, READ THE JUDGE'S `modified`.** That is where it
+ * lives, per row and with attribution - arm-002 scored 16 rows `modified` with
+ * "Document left open, unsaved (c1-judge.ts:32)", and those rows are the
+ * comparison axis for anything after them. A transport outcome saying
+ * `delivered` means only that the input landed; it is silent on whether the
+ * document changed, and reading `delivered` as success is the mistake this whole
+ * type was introduced to prevent.
+ *
+ * This name is reserved rather than removed so that the boundary is visible at
+ * the place a reader would otherwise expect a save verdict to be. If a future arm
+ * needs a save outcome on the transport side, that is a deliberate contract
+ * change against evidence the judge's vocabulary is insufficient - not a value
+ * to start writing from `classify`.
  */
 export type CuaOutcome = "routing-refused" | "delivered" | "delivered-stalled" | "save-failed";
 
@@ -97,7 +115,11 @@ function classify(result: unknown): {
   if (typeof path === "string" && !["pixel", "key_events", "key_events_fg"].includes(path))
     throw new PixelRouteError("unexpected Cua delivery path");
 
-  const verifiedField = typeof verified === "boolean" ? { verified } : {};
+  // Always a boolean, never absent. `verified` used to be spread in only when Cua
+  // supplied it, so a `delivered` could carry no verification flag at all - and a
+  // consumer reading "no flag" as "no problem" would treat an unconfirmed delivery
+  // as a confirmed one. The absent case is now an explicit `false`.
+  const verifiedField = { verified: verified === true };
 
   // The delivery layer declined, and says a mode change would work.
   if (typeof code === "string" && ESCALATABLE_REFUSALS[code] === true)

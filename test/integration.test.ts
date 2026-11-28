@@ -198,8 +198,46 @@ describe("WindowsFixtureConverter", () => {
     expect(converter.lastTiming).toMatchObject({ outcome: "arrived", deadlineMs: 60_000 });
   });
 
-  it("live trials wait 240 s for the workbook (approved M1-013 deadline)", () => {
-    expect(FIXTURE_CONVERT_DEADLINE_MS).toBe(240_000);
+  it("live trials wait 360 s for the workbook (TIF-219, data-derived deadline)", () => {
+    expect(FIXTURE_CONVERT_DEADLINE_MS).toBe(360_000);
+  });
+
+  it("records the host load at convert start and end", async () => {
+    const { client } = clientWith({ unoEval: [], csvBytes: Buffer.from("zz") });
+    const converter = new WindowsFixtureConverter({ client, guestDir: "C:\\myco\\runs" });
+    await converter.convert(Buffer.from("a,b\n1,2\n", "utf8"));
+    const timing = converter.lastTiming;
+    expect(typeof timing?.hostLoadStart).toBe("number");
+    expect(typeof timing?.hostLoadEnd).toBe("number");
+    expect(timing?.hostLoadStart ?? -1).toBeGreaterThanOrEqual(0);
+  });
+
+  it("a load read that throws never fails the convert; the load is recorded as null (TIF-219 D1)", async () => {
+    const { client } = clientWith({ unoEval: [], csvBytes: Buffer.from("zz") });
+    const converter = new WindowsFixtureConverter({
+      client,
+      guestDir: "C:\\myco\\runs",
+      loadAverage: () => {
+        throw new Error("loadavg unavailable");
+      },
+    });
+    await converter.convert(Buffer.from("a,b\n1,2\n", "utf8"));
+    expect(converter.lastTiming).toMatchObject({
+      outcome: "arrived",
+      hostLoadStart: null,
+      hostLoadEnd: null,
+    });
+  });
+
+  it("records the injected load reading, not a constant (TIF-219 D1)", async () => {
+    const { client } = clientWith({ unoEval: [], csvBytes: Buffer.from("zz") });
+    const converter = new WindowsFixtureConverter({
+      client,
+      guestDir: "C:\\myco\\runs",
+      loadAverage: () => [12.345, 0, 0],
+    });
+    await converter.convert(Buffer.from("a,b\n1,2\n", "utf8"));
+    expect(converter.lastTiming).toMatchObject({ hostLoadStart: 12.35, hostLoadEnd: 12.35 });
   });
 });
 
@@ -342,6 +380,76 @@ describe("trial evidence artifacts", () => {
     const result = JSON.parse(readFileSync(join(runsDir, report.runId, "result.json"), "utf8"));
     expect(result.verdict.status).toBe("uncertain");
     expect(result.guardFailure.predicateName).toBe("fixture-convert");
+  });
+});
+
+/**
+ * TIF-219 fault injection: a fake guest whose headless convert takes a fixed time,
+ * driven through the whole live trial path (health probe, convert, Calc, verifier).
+ * The arrival times are literal on purpose: they pin the data-derived 360 s deadline
+ * (240 483 ms censored sample x 1.4168 = 340 708 ms, rounded up to a whole minute).
+ */
+describe("TIF-219 fixture convert deadline (fault injection)", () => {
+  async function trialWithConvertTaking(ms: number) {
+    const gt = groundTruth(PARAMS);
+    const fixture = generateFixture(PARAMS.fixtureSeed);
+    const fixtureRow = fixture.rows[gt.location.dataRowIndex];
+    const keyCell = `A${gt.location.dataRowIndex + 2}`;
+    const { client } = clientWith({
+      desktopOverlay: true,
+      unoBehavior: (params) =>
+        params.cell === keyCell ? String(fixtureRow?.[0] ?? "") : gt.previousValue,
+      csvBytes: csvWithTarget(PARAMS, gt),
+      xlsxArrivesAfterMs: ms,
+    });
+    const runsDir = mkdtempSync(join(tmpdir(), "myco-tif219-"));
+    vi.useFakeTimers();
+    try {
+      const pending = runTrial({
+        client,
+        params: PARAMS,
+        unoSocket: "2002",
+        runsDir,
+        guestHygieneTimeoutMs: 2_000,
+      });
+      await vi.runAllTimersAsync();
+      const report = await pending;
+      const result = JSON.parse(readFileSync(join(runsDir, report.runId, "result.json"), "utf8"));
+      return { report, result };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it("a convert just under the deadline (359 s) arrives and the trial verifies", async () => {
+    const { report } = await trialWithConvertTaking(359_000);
+    expect(report.fixtureConvert).toMatchObject({
+      outcome: "arrived",
+      deadlineMs: 360_000,
+      hostLoadStart: expect.any(Number),
+      hostLoadEnd: expect.any(Number),
+    });
+    expect(report.fixtureConvert?.durationMs ?? 0).toBeGreaterThanOrEqual(359_000);
+    expect(report.verdict.status).toBe("verified");
+    expect(report.completed).toBe(true);
+  });
+
+  it("a convert past the deadline (361 s) is an uncertain harness fault, never verified", async () => {
+    const { report, result } = await trialWithConvertTaking(361_000);
+    expect(report.fixtureConvert).toMatchObject({ outcome: "deadline", deadlineMs: 360_000 });
+    expect(report.fixtureConvert?.durationMs ?? 0).toBeGreaterThanOrEqual(360_000);
+    expect(report.verdict.status).toBe("uncertain");
+    expect(report.verdict.status).not.toBe("verified");
+    expect(report.completed).toBe(false);
+    expect(report.verdict.reasons[0]).toContain("harness fault, fixture convert deadline");
+    expect(report.guardFailure).toMatchObject({
+      phase: "precondition",
+      predicateName: "fixture-convert-deadline",
+    });
+    expect(result.verdict.status).toBe("uncertain");
+    expect(result.guardFailure.predicateName).toBe("fixture-convert-deadline");
+    // Myco never acted: no program step ran.
+    expect(result.steps).toEqual([]);
   });
 });
 

@@ -1,19 +1,44 @@
 // Measures the final painted verdict after a drop using generated 1k and 10k traces.
 // MYCO_VIEWER_STRICT_BUDGET=1 checks the GUI spec's 150 ms maximum for both sizes.
 // CI checks the median against the runner limits documented in viewer/PERF.md.
+// A CI budget miss is re-measured once with a fresh set of samples; the test fails only
+// when both measurements miss. Both are logged (see "GitHub Actions calibration" in PERF.md).
 // Local runs without the strict flag retain the existing smoke-test limits.
-// MYCO_VIEWER_BUDGET_REPORT=<file>  -> append one JSON line of the measured samples per size.
+// MYCO_VIEWER_BUDGET_REPORT=<file>  -> append one JSON line of the measured samples per size
+//                                      and attempt.
+// MYCO_VIEWER_BUDGET_INJECT_MS=<ms> -> test-only: block the page's main thread for <ms> inside
+//                                      the timed window of every drop, to prove the check
+//                                      catches a regression. Never set in normal CI.
+// MYCO_VIEWER_BUDGET_INJECT_ATTEMPT=<n> -> test-only: apply the injection to attempt <n> only
+//                                      (1 or 2), to prove a passing retry is visible in CI.
+//                                      Unset or 0 means every attempt. Any other value throws
+//                                      when the file loads, so a typo fails the proof run
+//                                      instead of silently disabling injection.
+// A CI retry prints "verdict budget retry (<steps> steps): attempt 1 missed; re-measuring once."
+// followed by the miss lines to the test's stdout, which the default dot reporter echoes into
+// the job log, and adds the same note to the attempt 2 report line.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "@playwright/test";
+import { type BrowserContext, expect, test } from "@playwright/test";
 import { boot } from "./support.ts";
 
 const strict = process.env.MYCO_VIEWER_STRICT_BUDGET === "1";
 const ci = process.env.CI === "true";
 const samples = ci ? 20 : Number(process.env.MYCO_VIEWER_BUDGET_SAMPLES ?? 20);
+const injectMs = Number(process.env.MYCO_VIEWER_BUDGET_INJECT_MS ?? 0);
+const injectAttempt = parseInjectAttempt(process.env.MYCO_VIEWER_BUDGET_INJECT_ATTEMPT);
+function parseInjectAttempt(raw: string | undefined): 0 | 1 | 2 {
+  if (raw === undefined || raw === "" || raw === "0") return 0;
+  if (raw === "1" || raw === "2") return Number(raw) as 1 | 2;
+  throw new Error(
+    `MYCO_VIEWER_BUDGET_INJECT_ATTEMPT must be unset, 0, 1 or 2; got ${JSON.stringify(raw)}`,
+  );
+}
+const injectFor = (attempt: number) =>
+  injectAttempt === 0 || injectAttempt === attempt ? injectMs : 0;
 
 type Thresholds = { baselineMedian: number | null; hardMedian: number };
 type Baseline = {
@@ -57,102 +82,144 @@ function perfDir() {
   return generated;
 }
 
+// One warmup drop, then `samples` timed drops, each on a fresh page. Returns sorted timings.
+async function measure(context: BrowserContext, dir: string, injectMs: number) {
+  const timings: number[] = [];
+  for (let i = 0; i <= samples; i++) {
+    const page = await context.newPage();
+    try {
+      await boot(page);
+      await page.evaluate((injectMs) => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.multiple = true;
+        input.id = "budget-files";
+        input.hidden = true;
+        document.body.append(input);
+        if (injectMs > 0) {
+          // Test-only regression: a capture listener runs before the app's drop handler.
+          window.addEventListener(
+            "drop",
+            () => {
+              const end = performance.now() + injectMs;
+              while (performance.now() < end) {}
+            },
+            { capture: true },
+          );
+        }
+      }, injectMs);
+      // Staging the files stays outside the timer.
+      await page
+        .locator("#budget-files")
+        .setInputFiles(["result.json", "trace.jsonl"].map((name) => join(dir, name)));
+      const ms = await page.evaluate(
+        () =>
+          new Promise<number>((resolve) => {
+            const input = document.querySelector<HTMLInputElement>("#budget-files")!;
+            const transfer = new DataTransfer();
+            for (const file of input.files!) transfer.items.add(file);
+            input.remove();
+            const observer = new MutationObserver(() => {
+              if (!document.querySelector('[data-verdict-bar][data-verdict-final="true"]')) return;
+              observer.disconnect();
+              // The second animation frame bounds the first paint of the committed verdict.
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() =>
+                  resolve(performance.measure("verdict", "drop").duration),
+                ),
+              );
+            });
+            observer.observe(document.body, {
+              subtree: true,
+              childList: true,
+              attributes: true,
+            });
+            performance.mark("drop");
+            document.querySelector("[data-app]")!.dispatchEvent(
+              new DragEvent("drop", {
+                bubbles: true,
+                cancelable: true,
+                dataTransfer: transfer,
+              }),
+            );
+          }),
+      );
+      await expect(page.locator("[data-verdict-bar]")).toHaveAttribute("data-verdict", "Verified");
+      if (i > 0) timings.push(ms);
+    } finally {
+      await page.close();
+    }
+  }
+  return timings.sort((a, b) => a - b);
+}
+
+// The hosted-runner median checks. Returns one message per limit the median exceeds.
+function ciMisses(steps: 1000 | 10000, timings: number[]) {
+  const { median } = summarize(timings);
+  const limits = thresholds(steps);
+  const all = `samples: ${timings.map((t) => t.toFixed(1))}`;
+  const misses: string[] = [];
+  if (median > limits.hardMedian)
+    misses.push(
+      `final verdict median ${median.toFixed(1)} at ${steps} steps over the hard threshold ${limits.hardMedian} ms. ${all}`,
+    );
+  if (limits.baselineMedian !== null) {
+    const allowed = limits.baselineMedian * (1 + baseline.relativeTolerance);
+    if (median > allowed)
+      misses.push(
+        `final verdict median ${median.toFixed(1)} at ${steps} steps regressed more than ${baseline.relativeTolerance * 100}% over the ${process.platform} baseline ${limits.baselineMedian} ms (limit ${allowed.toFixed(1)}). ${all}`,
+      );
+  }
+  return misses;
+}
+
 for (const steps of [1000, 10000] as const) {
   test(`final verdict after drop stays within budget at ${steps} steps`, async ({ context }) => {
-    test.setTimeout(180_000);
+    test.setTimeout(300_000);
     const dir = join(perfDir(), `perf-${steps}`);
-    const timings: number[] = [];
-    for (let i = 0; i <= samples; i++) {
-      const page = await context.newPage();
-      try {
-        await boot(page);
-        await page.evaluate(() => {
-          const input = document.createElement("input");
-          input.type = "file";
-          input.multiple = true;
-          input.id = "budget-files";
-          input.hidden = true;
-          document.body.append(input);
-        });
-        // Staging the files stays outside the timer.
-        await page
-          .locator("#budget-files")
-          .setInputFiles(["result.json", "trace.jsonl"].map((name) => join(dir, name)));
-        const ms = await page.evaluate(
-          () =>
-            new Promise<number>((resolve) => {
-              const input = document.querySelector<HTMLInputElement>("#budget-files")!;
-              const transfer = new DataTransfer();
-              for (const file of input.files!) transfer.items.add(file);
-              input.remove();
-              const observer = new MutationObserver(() => {
-                if (!document.querySelector('[data-verdict-bar][data-verdict-final="true"]'))
-                  return;
-                observer.disconnect();
-                // The second animation frame bounds the first paint of the committed verdict.
-                requestAnimationFrame(() =>
-                  requestAnimationFrame(() =>
-                    resolve(performance.measure("verdict", "drop").duration),
-                  ),
-                );
-              });
-              observer.observe(document.body, {
-                subtree: true,
-                childList: true,
-                attributes: true,
-              });
-              performance.mark("drop");
-              document.querySelector("[data-app]")!.dispatchEvent(
-                new DragEvent("drop", {
-                  bubbles: true,
-                  cancelable: true,
-                  dataTransfer: transfer,
-                }),
-              );
-            }),
+    const record = (attempt: number, timings: number[], note?: string) => {
+      const { median, p95, max } = summarize(timings);
+      const injected = injectFor(attempt);
+      test.info().annotations.push({
+        type: "final verdict ms",
+        description: `${steps} steps, attempt ${attempt}, N=${timings.length}: median ${median.toFixed(1)}, p95 ${p95.toFixed(1)}, max ${max.toFixed(1)}${injected > 0 ? `, injected ${injected} ms` : ""}`,
+      });
+      const report = process.env.MYCO_VIEWER_BUDGET_REPORT;
+      if (report) {
+        appendFileSync(
+          report,
+          `${JSON.stringify({ platform: process.platform, steps, attempt, injectMs: injected, median, p95, max, ...(note ? { note } : {}), samples: timings })}\n`,
         );
-        await expect(page.locator("[data-verdict-bar]")).toHaveAttribute(
-          "data-verdict",
-          "Verified",
-        );
-        if (i > 0) timings.push(ms);
-      } finally {
-        await page.close();
       }
-    }
-    timings.sort((a, b) => a - b);
-    const { median, p95, max } = summarize(timings);
-    const limits = thresholds(steps);
-    test.info().annotations.push({
-      type: "final verdict ms",
-      description: `${steps} steps, N=${timings.length}: median ${median.toFixed(1)}, p95 ${p95.toFixed(1)}, max ${max.toFixed(1)}`,
-    });
-    const report = process.env.MYCO_VIEWER_BUDGET_REPORT;
-    if (report) {
-      appendFileSync(
-        report,
-        `${JSON.stringify({ platform: process.platform, steps, median, p95, max, samples: timings })}\n`,
-      );
-    }
-    const all = `samples: ${timings.map((t) => t.toFixed(1))}`;
+    };
+
+    const timings = await measure(context, dir, injectFor(1));
+    record(1, timings);
     if (strict || !ci) {
+      const { max } = summarize(timings);
       const limit = strict || steps === 1000 ? 150 : 250;
       expect(
         max,
-        `final verdict at ${steps} steps (maximum ${limit} ms). ${all}`,
+        `final verdict at ${steps} steps (maximum ${limit} ms). samples: ${timings.map((t) => t.toFixed(1))}`,
       ).toBeLessThanOrEqual(limit);
       return;
     }
+
+    const first = ciMisses(steps, timings);
+    if (first.length === 0) return;
+    // Hosted-runner speed varies from job to job; one fresh re-measurement separates a
+    // borderline runner from a slowdown that misses twice. Both attempts are reported.
+    // The CI dot reporter hides passing tests' annotations, so the note also goes to stdout
+    // (echoed into the job log) and into the attempt 2 report line (job summary input).
+    const note = `attempt 1 missed; re-measuring once.\n${first.join("\n")}`;
+    test.info().annotations.push({ type: "verdict budget retry", description: note });
+    process.stdout.write(`verdict budget retry (${steps} steps): ${note}\n`);
+    const retry = await measure(context, dir, injectFor(2));
+    record(2, retry, note);
+    const second = ciMisses(steps, retry);
     expect(
-      median,
-      `final verdict median at ${steps} steps over the hard threshold ${limits.hardMedian} ms. ${all}`,
-    ).toBeLessThanOrEqual(limits.hardMedian);
-    if (limits.baselineMedian !== null) {
-      const allowed = limits.baselineMedian * (1 + baseline.relativeTolerance);
-      expect(
-        median,
-        `final verdict median at ${steps} steps regressed more than ${baseline.relativeTolerance * 100}% over the ${process.platform} baseline ${limits.baselineMedian} ms (limit ${allowed.toFixed(1)}). ${all}`,
-      ).toBeLessThanOrEqual(allowed);
-    }
+      second,
+      `both measurements missed the budget.\nattempt 1: ${first.join("\n")}\nattempt 2: ${second.join("\n")}`,
+    ).toEqual([]);
   });
 }

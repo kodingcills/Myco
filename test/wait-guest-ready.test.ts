@@ -13,7 +13,7 @@
  * silently booting the guest (a verifier did exactly that on 2026-11-23).
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -34,11 +34,9 @@ let stubDir = "";
  */
 function stub(name: string, body: string): void {
   const marker = join(dir, `${name}.marker`);
-  writeFileSync(
-    join(stubDir, name),
-    ["#!/bin/bash", `echo ran >> "${marker}"`, body].join("\n") + "\n",
-    { mode: 0o755 },
-  );
+  writeFileSync(join(stubDir, name), `#!/bin/bash\necho ran >> "${marker}"\n${body}\n`, {
+    mode: 0o755,
+  });
 }
 
 /**
@@ -69,6 +67,18 @@ function runGate(opts: {
   sshAnswers: boolean;
   timeout?: number;
   noProcess?: boolean;
+  /**
+   * Per-probe SSH outcomes, "ok" or "drop"; the last one repeats. Overrides
+   * `sshAnswers`. Models sshd answering once and then dropping while it settles
+   * after a cold boot (TIF-220).
+   */
+  sshTrace?: string[];
+  /** Seconds each ssh probe takes (the stub sleeps), to model a slow guest. */
+  sshDelay?: number;
+  /** MYCO_READY_STABLE_SPACING; default 0 so the stability probes add no time. */
+  stableSpacing?: number;
+  /** MYCO_READY_STALL_SECONDS; default 3, i.e. three 1s samples, as before TIF-98. */
+  stallSeconds?: number;
 }): Promise<GateRun> {
   if (opts.noProcess) {
     stub("ps", "exit 1");
@@ -91,7 +101,36 @@ fi
 echo "PID TTY TIME CMD"`,
     );
     stub("pgrep", `echo "${GUEST_PID}"`);
-    stub("ssh", opts.sshAnswers ? "echo ok\nexit 0" : "exit 255");
+    // CRLF, because that is what the guest actually sends. The guest's default
+    // shell is PowerShell, so the answer is `ok\r\n`; command substitution strips
+    // the `\n` and leaves the `\r`. A stub emitting a bare `\n` cannot catch a
+    // comparison that ignores the CR - which is exactly how the CR-intolerant
+    // compare shipped, with this suite green.
+    if (opts.sshTrace) {
+      const sshTracePath = join(dir, "ssh.trace");
+      writeFileSync(sshTracePath, opts.sshTrace.join("\n"));
+      const sshCursor = join(dir, "ssh.cursor");
+      writeFileSync(sshCursor, "0");
+      stub(
+        "ssh",
+        `i=$(cat "${sshCursor}")
+n=${opts.sshTrace.length}
+v=$(sed -n "$((i<n?i+1:n))p" "${sshTracePath}")
+echo $((i+1)) > "${sshCursor}"
+date +%s >> "${join(dir, "ssh.starts")}"
+sleep ${opts.sshDelay ?? 0}
+if [ "$v" = ok ]; then printf "ok\\r\\n"; exit 0; fi
+echo "Connection to 127.0.0.1 closed by remote host." >&2
+exit 255`,
+      );
+    } else {
+      stub(
+        "ssh",
+        `date +%s >> "${join(dir, "ssh.starts")}"\nsleep ${opts.sshDelay ?? 0}\n${
+          opts.sshAnswers ? 'printf "ok\\r\\n"\nexit 0' : "exit 255"
+        }`,
+      );
+    }
   }
 
   return new Promise((resolve) => {
@@ -102,7 +141,15 @@ echo "PID TTY TIME CMD"`,
     // way. `HOME` points at the temp dir so the SSH config the gate reads does
     // not exist, making a fall-through to real ssh unable to authenticate.
     const child = spawn("bash", [GATE, String(opts.timeout ?? 20)], {
-      env: { PATH: `${stubDir}:/usr/bin:/bin`, HOME: dir, MYCO_READY_INTERVAL: "1" },
+      // MYCO_READY_STABLE_SPACING=0 keeps the TIF-220 stability probes from
+      // adding real seconds; the probe count and drop logic are unchanged.
+      env: {
+        PATH: `${stubDir}:/usr/bin:/bin`,
+        HOME: dir,
+        MYCO_READY_INTERVAL: "1",
+        MYCO_READY_STABLE_SPACING: String(opts.stableSpacing ?? 0),
+        MYCO_READY_STALL_SECONDS: String(opts.stallSeconds ?? 3),
+      },
     });
     let stdout = "";
     let stderr = "";
@@ -212,5 +259,147 @@ describe("wait-guest-ready", () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("no qemu process");
     expect(r.markers).toContain("pgrep");
+  });
+  // TIF-220: row-8 trial 14's reset passed this gate on one answered probe, and
+  // the deploy's first scp seconds later was dropped by the still-settling sshd.
+  describe("stable readiness after a cold boot (TIF-220)", () => {
+    const booting = ["00:01", "00:11", "00:21"];
+
+    it("does not declare ready on one answer: it re-probes until the answer holds", {
+      timeout: SLOW,
+    }, async () => {
+      const r = await runGate({ cpuTrace: booting, sshAnswers: true, timeout: 45 });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("stable for 3 consecutive probes");
+      // The ssh stub appends one marker line per probe.
+      const probes = readFileSync(join(dir, "ssh.marker"), "utf8").trim().split("\n");
+      expect(probes).toHaveLength(3);
+    });
+
+    it("rides out a transient drop right after the first answer", {
+      timeout: SLOW,
+    }, async () => {
+      // The trial-14 shape: answers, drops, then settles. Ready only after
+      // three consecutive answers that follow the drop.
+      const r = await runGate({
+        cpuTrace: booting,
+        sshAnswers: true,
+        sshTrace: ["ok", "drop", "ok", "ok", "ok"],
+        timeout: 45,
+      });
+      expect(r.status).toBe(0);
+      expect(r.stderr).toContain("ssh dropped after answering (drop 1/3)");
+      expect(r.stdout).toContain("stable for 3 consecutive probes");
+    });
+
+    it("fails loudly, and fast, when sshd keeps dropping after it answered", {
+      timeout: SLOW,
+    }, async () => {
+      // A persistent drop is a broken guest, not a settling one: it must not be
+      // retried into a "ready", and must not burn the whole budget either.
+      const r = await runGate({
+        cpuTrace: booting,
+        sshAnswers: true,
+        sshTrace: ["ok", "drop"],
+        timeout: 600,
+      });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("dropped 3 times");
+      expect(r.stderr).toContain("guest or UTM unhealthy");
+      expect(r.stdout).not.toContain("ssh up");
+    });
+
+    // TIF-98: spacing is start to start. These two together pin the property
+    // (answers at least STABLE_SPACING apart) AND the speedup (no sleep stacked
+    // on a probe that already took longer than the spacing).
+    function probeStarts(): number[] {
+      return readFileSync(join(dir, "ssh.starts"), "utf8").trim().split("\n").map(Number);
+    }
+    function gaps(xs: number[]): number[] {
+      return xs.slice(1).map((x, i) => x - (xs[i] ?? x));
+    }
+
+    it("keeps stability probes at least STABLE_SPACING apart when probes are fast", {
+      timeout: SLOW,
+    }, async () => {
+      const r = await runGate({
+        cpuTrace: booting,
+        sshAnswers: true,
+        stableSpacing: 2,
+        timeout: 45,
+      });
+      expect(r.status).toBe(0);
+      const starts = probeStarts();
+      expect(starts).toHaveLength(3);
+      // Whole-second clock: a real gap of >= 2s shows as >= 2 (the gate waits
+      // an extra second when the integer gap is exactly the spacing).
+      for (const gap of gaps(starts)) expect(gap).toBeGreaterThanOrEqual(2);
+    });
+
+    it("adds no sleep after a probe that already took longer than the spacing", {
+      timeout: SLOW,
+    }, async () => {
+      // Each probe takes 3s and the spacing is 2s. The old fixed sleep made the
+      // gap 2 + 3 = 5s; start to start it is the probe's own 3s (4 at most,
+      // allowing for the whole-second clock).
+      const r = await runGate({
+        cpuTrace: booting,
+        sshAnswers: true,
+        stableSpacing: 2,
+        sshDelay: 3,
+        timeout: 45,
+      });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("apart start to start");
+      const starts = probeStarts();
+      expect(starts).toHaveLength(3);
+      for (const gap of gaps(starts)) {
+        expect(gap).toBeGreaterThanOrEqual(3);
+        expect(gap).toBeLessThanOrEqual(4);
+      }
+    });
+  });
+
+  // TIF-98: the stall verdict is a wall-clock window (STALL_SECONDS), not a fixed
+  // count of samples, so sampling faster cannot make the gate quicker to call a
+  // slow boot a stall.
+  describe("stall window in seconds (TIF-98)", () => {
+    it("tolerates a flat run shorter than the stall window, then passes", {
+      timeout: SLOW,
+    }, async () => {
+      // Four flat 1s samples, then progress. A fixed 3-sample rule (the old
+      // behaviour) calls this a stall; a 6s window does not.
+      const r = await runGate({
+        cpuTrace: ["00:01", "00:01", "00:01", "00:01", "00:01", "00:11", "00:21", "00:31"],
+        sshAnswers: true,
+        stallSeconds: 6,
+        timeout: 45,
+      });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("ssh up");
+    });
+
+    it("still fails a flat guest once the window has passed", { timeout: SLOW }, async () => {
+      const r = await runGate({
+        cpuTrace: ["00:01"],
+        sshAnswers: true,
+        stallSeconds: 6,
+        timeout: 45,
+      });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("CPU flat for 6 intervals of 1s");
+      expect(r.markers).not.toContain("ssh");
+    });
+
+    it("never decides a stall on fewer than 3 samples", { timeout: SLOW }, async () => {
+      const r = await runGate({
+        cpuTrace: ["00:01"],
+        sshAnswers: true,
+        stallSeconds: 1,
+        timeout: 45,
+      });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("CPU flat for 3 intervals of 1s");
+    });
   });
 });

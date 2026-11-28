@@ -1,23 +1,26 @@
 /**
  * Live-VM entrypoint for normal and corrupted calc-record-edit trials.
  *
- * Usage (host, with the ssh tunnel and MYCO_AGENT_TOKEN set):
- *   tsx src/integration/run-live.ts --mode normal   [--seed s] [--runs-dir runs]
+ * Usage (host; run-live starts its own ssh tunnel):
+ *   tsx src/integration/run-live.ts --mode normal   [--seed s] [--runs-dir runs] [--token-file PATH]
  *       [--row-key K --column C --new-value V]   (sweep: pass --seed with the set's fixtureSeed)
  *   tsx src/integration/run-live.ts --mode kill    [--kill-after-step 3] [--recovery]
  *   tsx src/integration/run-live.ts --mode invalid-target|dropped-save|focus-change [--recovery]
  *
- * The token is never committed: it is read from MYCO_AGENT_TOKEN (fetched
- * from the guest over vssh by the caller) or from the .myco-token file.
+ * The token is never committed. It comes from `--token-file PATH`, else
+ * MYCO_AGENT_TOKEN, else ~/.myco-token, the file a verified deploy writes
+ * (`./run-live-token.ts`).
  */
 
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { generateParameterSets } from "../tasks/intent.ts";
 import { AgentClient, SshTunnel } from "../win/agent-client.ts";
+import { resolveRunLiveToken } from "./run-live-token.ts";
 import { LIVE_CORRUPTION_MODES, runTrial } from "./trial.ts";
+import { acquireVmLockUnlessOwnedByAncestor, VmLockedError } from "./vm-lock.ts";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -30,15 +33,31 @@ async function main(): Promise<void> {
   const recovery = process.argv.includes("--recovery");
   const seed = arg("seed") ?? "m1-013-live";
   const socket = arg("uno-socket") ?? "2002";
-  let token = process.env.MYCO_AGENT_TOKEN;
-  if (!token) {
-    try {
-      token = readFileSync(join(homedir(), ".myco-token"), "utf8").trim();
-      if (!token) throw new Error("empty");
-    } catch {
-      process.stderr.write("MYCO_AGENT_TOKEN is required (or ~/.myco-token from vssh)");
-      process.exit(1);
+
+  // The VM lock, before anything touches the guest (TIF-191). A driver that holds
+  // it is either running trials or resetting the snapshot, and a §6 run under a
+  // reset measured 19 rows of 0-1 ms `uncertain` because the tunnel died with the
+  // guest. Refuse instead. A sweep spawns this as a child and already owns the
+  // lock, so that case inherits rather than re-acquires.
+  try {
+    const lock = acquireVmLockUnlessOwnedByAncestor({ driver: "run-live.ts" });
+    // process.exit runs this handler, which is the normal path for the modes below.
+    if (lock) process.on("exit", () => lock.release());
+  } catch (error) {
+    if (error instanceof VmLockedError) {
+      process.stderr.write(`REFUSED_VM_LOCKED: holder ${error.holder}\n`);
+      process.exit(10);
     }
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(10);
+  }
+
+  let token: string;
+  try {
+    token = resolveRunLiveToken(process.argv, process.env, homedir());
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
   }
   mkdirSync(runsDir, { recursive: true });
 

@@ -1,0 +1,771 @@
+{
+  "manifestSha256": "bb256a9b2b28ee929c94352887a3d4bc402f4a14181a2a41a16e82bf76351995",
+  "c1": {
+    "0": {
+      "status": "scored",
+      "micros": 11658,
+      "row": {
+        "index": 0,
+        "params": {
+          "fixtureSeed": "m1-013-live",
+          "rowKey": "EMP-0038",
+          "column": "name",
+          "newValue": "REVISED-908578"
+        },
+        "cellRef": "B39",
+        "expected": "REVISED-908578",
+        "previousValue": "Enzo Nakamura",
+        "subArm": "c1",
+        "instruction": "Set the cell at record EMP-0038, column name, to \"REVISED-908578\", and save the file.",
+        "verdict": "refuted",
+        "verdictReason": "modified",
+        "transcript": {
+          "actions": [
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 70,
+                "y": 146
+              }
+            },
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 75,
+                "y": 146
+              }
+            },
+            {
+              "tool": "type_text",
+              "arguments": {
+                "x": 75,
+                "y": 146,
+                "text": "B39\n"
+              }
+            }
+          ],
+          "claims": [],
+          "deliveries": [
+            {
+              "step": 1,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 2,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 3,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            }
+          ]
+        },
+        "usage": [
+          {
+            "prompt": 571,
+            "completion": 132,
+            "cost": 0.002462
+          },
+          {
+            "prompt": 571,
+            "completion": 107,
+            "cost": 0.002212
+          },
+          {
+            "prompt": 571,
+            "completion": 214,
+            "cost": 0.003282
+          },
+          {
+            "prompt": 571,
+            "completion": 256,
+            "cost": 0.003702
+          }
+        ],
+        "cost": 0.011658000000000002,
+        "tokens": {
+          "in": 2284,
+          "out": 709
+        },
+        "modelCalls": 4,
+        "steps": 3,
+        "stepBudget": 30,
+        "budgetExhausted": false,
+        "audited": false,
+        "independentValuePresent": null,
+        "falseSuccess": false,
+        "elapsedMs": 34906,
+        "resetMs": 234957,
+        "acPower": false,
+        "caffeinate": true,
+        "hostLoad": {
+          "loadAvg1": 8.26513671875
+        },
+        "screenshotSource": "cua-window",
+        "resumed": false,
+        "recoveryEvents": 0,
+        "driver": {
+          "hostVersion": "0.56.4",
+          "guestVersion": "0.56.4",
+          "pipeReachable": true,
+          "sessionIdentityMatches": true
+        },
+        "deviations": [
+          "reset:cua-c1-base",
+          "step-budget-asymmetry",
+          "cua-action-1-verified:false",
+          "cua-action-2-verified:false",
+          "cua-action-3-verified:false",
+          "planner-no-action",
+          "planner:claude-sonnet-5-5"
+        ]
+      }
+    },
+    "1": {
+      "status": "scored",
+      "micros": 49634,
+      "row": {
+        "index": 1,
+        "params": {
+          "fixtureSeed": "seed-b",
+          "rowKey": "EMP-0023",
+          "column": "qty",
+          "newValue": "9733"
+        },
+        "cellRef": "C24",
+        "expected": "9733",
+        "previousValue": "142",
+        "subArm": "c1",
+        "instruction": "Set the cell at record EMP-0023, column qty, to \"9733\", and save the file.",
+        "verdict": "refuted",
+        "verdictReason": "modified",
+        "transcript": {
+          "actions": [
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 75,
+                "y": 146
+              }
+            },
+            {
+              "tool": "type_text",
+              "arguments": {
+                "x": 75,
+                "y": 146,
+                "text": "A24\n"
+              }
+            },
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 75,
+                "y": 146
+              }
+            },
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 75,
+                "y": 146
+              }
+            },
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 75,
+                "y": 146
+              }
+            },
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 75,
+                "y": 146
+              }
+            },
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 75,
+                "y": 146
+              }
+            },
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 70,
+                "y": 146
+              }
+            },
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 75,
+                "y": 146
+              }
+            },
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 75,
+                "y": 146
+              }
+            },
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 70,
+                "y": 146
+              }
+            },
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 75,
+                "y": 146
+              }
+            },
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 70,
+                "y": 146
+              }
+            },
+            {
+              "tool": "type_text",
+              "arguments": {
+                "x": 70,
+                "y": 146,
+                "text": "C24\n"
+              }
+            },
+            {
+              "tool": "click",
+              "arguments": {
+                "x": 75,
+                "y": 146
+              }
+            }
+          ],
+          "claims": [],
+          "deliveries": [
+            {
+              "step": 1,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 2,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 3,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 4,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 5,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 6,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 7,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 8,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 9,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 10,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 11,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 12,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 13,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 14,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 15,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            }
+          ]
+        },
+        "usage": [
+          {
+            "prompt": 567,
+            "completion": 140,
+            "cost": 0.002534
+          },
+          {
+            "prompt": 567,
+            "completion": 223,
+            "cost": 0.003364
+          },
+          {
+            "prompt": 567,
+            "completion": 244,
+            "cost": 0.003574
+          },
+          {
+            "prompt": 567,
+            "completion": 177,
+            "cost": 0.002904
+          },
+          {
+            "prompt": 567,
+            "completion": 163,
+            "cost": 0.002764
+          },
+          {
+            "prompt": 567,
+            "completion": 217,
+            "cost": 0.003304
+          },
+          {
+            "prompt": 567,
+            "completion": 127,
+            "cost": 0.002404
+          },
+          {
+            "prompt": 567,
+            "completion": 187,
+            "cost": 0.003004
+          },
+          {
+            "prompt": 567,
+            "completion": 143,
+            "cost": 0.002564
+          },
+          {
+            "prompt": 567,
+            "completion": 207,
+            "cost": 0.003204
+          },
+          {
+            "prompt": 567,
+            "completion": 154,
+            "cost": 0.002674
+          },
+          {
+            "prompt": 567,
+            "completion": 228,
+            "cost": 0.003414
+          },
+          {
+            "prompt": 567,
+            "completion": 230,
+            "cost": 0.003434
+          },
+          {
+            "prompt": 567,
+            "completion": 223,
+            "cost": 0.003364
+          },
+          {
+            "prompt": 567,
+            "completion": 230,
+            "cost": 0.003434
+          },
+          {
+            "prompt": 567,
+            "completion": 256,
+            "cost": 0.003694
+          }
+        ],
+        "cost": 0.049634000000000005,
+        "tokens": {
+          "in": 9072,
+          "out": 3149
+        },
+        "modelCalls": 16,
+        "steps": 15,
+        "stepBudget": 30,
+        "budgetExhausted": false,
+        "audited": false,
+        "independentValuePresent": null,
+        "falseSuccess": false,
+        "elapsedMs": 78621,
+        "resetMs": 190233,
+        "acPower": false,
+        "caffeinate": true,
+        "hostLoad": {
+          "loadAvg1": 9.19921875
+        },
+        "screenshotSource": "cua-window",
+        "resumed": false,
+        "recoveryEvents": 0,
+        "driver": {
+          "hostVersion": "0.56.4",
+          "guestVersion": "0.56.4",
+          "pipeReachable": true,
+          "sessionIdentityMatches": true
+        },
+        "deviations": [
+          "reset:cua-c1-base",
+          "step-budget-asymmetry",
+          "cua-action-1-verified:false",
+          "cua-action-2-verified:false",
+          "cua-action-3-verified:false",
+          "cua-action-4-verified:false",
+          "cua-action-5-verified:false",
+          "cua-action-6-verified:false",
+          "cua-action-7-verified:false",
+          "cua-action-8-verified:false",
+          "cua-action-9-verified:false",
+          "cua-action-10-verified:false",
+          "cua-action-11-verified:false",
+          "cua-action-12-verified:false",
+          "cua-action-13-verified:false",
+          "cua-action-14-verified:false",
+          "cua-action-15-verified:false",
+          "planner-no-action",
+          "planner:claude-sonnet-5-5"
+        ]
+      }
+    },
+    "2": {
+      "status": "scored",
+      "micros": 17530,
+      "row": {
+        "index": 2,
+        "params": {
+          "fixtureSeed": "seed-c",
+          "rowKey": "EMP-0059",
+          "column": "joined",
+          "newValue": "2024-05-28"
+        },
+        "cellRef": "D60",
+        "expected": "2024-05-28",
+        "previousValue": "2023-07-30",
+        "subArm": "c1",
+        "instruction": "Set the cell at record EMP-0059, column joined, to \"2024-05-28\", and save the file.",
+        "verdict": "refuted",
+        "verdictReason": "modified",
+        "transcript": {
+          "actions": [
+            {
+              "tool": "type_text",
+              "arguments": {
+                "x": 80,
+                "y": 146,
+                "text": "D60\n"
+              }
+            },
+            {
+              "tool": "type_text",
+              "arguments": {
+                "x": 283,
+                "y": 260,
+                "text": "2024-05-28\n"
+              }
+            },
+            {
+              "tool": "press_key",
+              "arguments": {
+                "x": 312,
+                "y": 261,
+                "key": "Ctrl+s"
+              }
+            },
+            {
+              "tool": "press_key",
+              "arguments": {
+                "x": 283,
+                "y": 260,
+                "key": "ctrl+a"
+              }
+            }
+          ],
+          "claims": [],
+          "deliveries": [
+            {
+              "step": 1,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 2,
+              "mode": "background",
+              "escalated": false,
+              "outcome": "delivered"
+            },
+            {
+              "step": 3,
+              "mode": "foreground",
+              "escalated": true,
+              "outcome": "delivered"
+            },
+            {
+              "step": 4,
+              "mode": "foreground",
+              "escalated": true,
+              "outcome": "delivered"
+            }
+          ]
+        },
+        "usage": [
+          {
+            "prompt": 571,
+            "completion": 203,
+            "cost": 0.003172
+          },
+          {
+            "prompt": 571,
+            "completion": 219,
+            "cost": 0.003332
+          },
+          {
+            "prompt": 571,
+            "completion": 256,
+            "cost": 0.003702
+          },
+          {
+            "prompt": 571,
+            "completion": 248,
+            "cost": 0.003622
+          },
+          {
+            "prompt": 571,
+            "completion": 256,
+            "cost": 0.003702
+          }
+        ],
+        "cost": 0.01753,
+        "tokens": {
+          "in": 2855,
+          "out": 1182
+        },
+        "modelCalls": 5,
+        "steps": 4,
+        "stepBudget": 30,
+        "budgetExhausted": false,
+        "audited": false,
+        "independentValuePresent": null,
+        "falseSuccess": false,
+        "elapsedMs": 62087,
+        "resetMs": 176493,
+        "acPower": false,
+        "caffeinate": true,
+        "hostLoad": {
+          "loadAvg1": 10.26171875
+        },
+        "screenshotSource": "cua-window",
+        "resumed": false,
+        "recoveryEvents": 0,
+        "driver": {
+          "hostVersion": "0.56.4",
+          "guestVersion": "0.56.4",
+          "pipeReachable": true,
+          "sessionIdentityMatches": true
+        },
+        "deviations": [
+          "reset:cua-c1-base",
+          "step-budget-asymmetry",
+          "cua-action-1-verified:false",
+          "cua-action-2-verified:false",
+          "cua-action-3-verified:false",
+          "cua-action-4-verified:false",
+          "planner-no-action",
+          "planner:claude-sonnet-5-5"
+        ]
+      }
+    },
+    "3": {
+      "status": "scored",
+      "micros": 3700,
+      "row": {
+        "index": 3,
+        "params": {
+          "fixtureSeed": "seed-d",
+          "rowKey": "EMP-0009",
+          "column": "salary",
+          "newValue": "$12458.13"
+        },
+        "cellRef": "E10",
+        "expected": "$12458.13",
+        "previousValue": "$77544.00",
+        "subArm": "c1",
+        "instruction": "Set the cell at record EMP-0009, column salary, to \"$12458.13\", and save the file.",
+        "verdict": "refuted",
+        "verdictReason": "persisted-mismatch",
+        "transcript": {
+          "actions": [],
+          "claims": [],
+          "deliveries": []
+        },
+        "usage": [
+          {
+            "prompt": 570,
+            "completion": 256,
+            "cost": 0.0037
+          }
+        ],
+        "cost": 0.0037,
+        "tokens": {
+          "in": 570,
+          "out": 256
+        },
+        "modelCalls": 1,
+        "steps": 0,
+        "stepBudget": 30,
+        "budgetExhausted": false,
+        "audited": false,
+        "independentValuePresent": null,
+        "falseSuccess": false,
+        "elapsedMs": 7578,
+        "resetMs": 26335,
+        "acPower": false,
+        "caffeinate": true,
+        "hostLoad": {
+          "loadAvg1": 11.349609375
+        },
+        "screenshotSource": "cua-window",
+        "resumed": false,
+        "recoveryEvents": 0,
+        "driver": {
+          "hostVersion": "0.56.4",
+          "guestVersion": "0.56.4",
+          "pipeReachable": true,
+          "sessionIdentityMatches": true
+        },
+        "deviations": [
+          "reset:cua-c1-base",
+          "step-budget-asymmetry",
+          "planner-no-action",
+          "planner:claude-sonnet-5-5"
+        ]
+      }
+    },
+    "4": {
+      "status": "scored",
+      "micros": 3702,
+      "row": {
+        "index": 4,
+        "params": {
+          "fixtureSeed": "seed-e",
+          "rowKey": "EMP-0011",
+          "column": "name",
+          "newValue": "REVISED-465160"
+        },
+        "cellRef": "B12",
+        "expected": "REVISED-465160",
+        "previousValue": "Gil Jovic",
+        "subArm": "c1",
+        "instruction": "Set the cell at record EMP-0011, column name, to \"REVISED-465160\", and save the file.",
+        "verdict": "refuted",
+        "verdictReason": "persisted-mismatch",
+        "transcript": {
+          "actions": [],
+          "claims": [],
+          "deliveries": []
+        },
+        "usage": [
+          {
+            "prompt": 571,
+            "completion": 256,
+            "cost": 0.003702
+          }
+        ],
+        "cost": 0.003702,
+        "tokens": {
+          "in": 571,
+          "out": 256
+        },
+        "modelCalls": 1,
+        "steps": 0,
+        "stepBudget": 30,
+        "budgetExhausted": false,
+        "audited": false,
+        "independentValuePresent": null,
+        "falseSuccess": false,
+        "elapsedMs": 5948,
+        "resetMs": 35329,
+        "acPower": false,
+        "caffeinate": true,
+        "hostLoad": {
+          "loadAvg1": 12.005859375
+        },
+        "screenshotSource": "cua-window",
+        "resumed": false,
+        "recoveryEvents": 0,
+        "driver": {
+          "hostVersion": "0.56.4",
+          "guestVersion": "0.56.4",
+          "pipeReachable": true,
+          "sessionIdentityMatches": true
+        },
+        "deviations": [
+          "reset:cua-c1-base",
+          "step-budget-asymmetry",
+          "planner-no-action",
+          "planner:claude-sonnet-5-5"
+        ]
+      }
+    },
+    "5": {
+      "status": "reserved",
+      "micros": 376800
+    }
+  },
+  "c2": {}
+}

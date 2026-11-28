@@ -3,46 +3,370 @@ name: CI
 on:
   push:
     branches: [main]
+  # labeled/unlabeled: adding `tier-2` (or `full-ci`) to a PR starts a new run, which
+  # cancels the narrower one, so a label added after a targeted run still forces the
+  # full suite before merge (test audit, docs/ci.md "Targeted CI").
+  # ready_for_review: a draft's `affected` runs never report the required `check (...)`
+  # names; marking the PR ready starts the run that does, and it is never `affected`
+  # (CI speed, #678; docs/ci.md "Draft PRs: affected mode").
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+# Least privilege (TIF-241): no job writes to the repo, PRs, or checks via the API.
+# actions/cache and actions/upload-artifact use the runner's own Actions runtime
+# token, not GITHUB_TOKEN scopes, so they need no extra permission here.
+permissions:
+  contents: read
+
+# A newer push to the same PR cancels its superseded run. Pushes to main get a
+# per-run group (github.run_id) and cancel-in-progress false, so a main run is
+# never cancelled or displaced by another main push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Test audit (TIF-265 follow-up): decides which steps of each job run, from the PR's
+  # changed paths, labels and stated tier. Required jobs never skip at the job level:
+  # they always start, report under their unchanged names, and run everything when this
+  # job fails or is skipped (fail safe). Path classes: scripts/ci-plan.py, docs/ci.md.
+  plan:
+    name: ci plan (path classes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      linux_path: ${{ steps.plan.outputs.linux_path }}
+      m2: ${{ steps.plan.outputs.m2 }}
+      launcher: ${{ steps.plan.outputs.launcher }}
+      doc_tests: ${{ steps.plan.outputs.doc_tests }}
+      smoke: ${{ steps.plan.outputs.smoke }}
+      scanners: ${{ steps.plan.outputs.scanners }}
+      safety: ${{ steps.plan.outputs.safety }}
+      related: ${{ steps.plan.outputs.related }}
+      affected_all: ${{ steps.plan.outputs.affected_all }}
+      agent_macos: ${{ steps.plan.outputs.agent_macos }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Plan
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+        run: python3 scripts/ci-plan.py
+
+  # TIF-206: a key must never reach the repo. Scans only the commits this PR or push
+  # adds (older history predates the scanner), with findings REDACTED in the log.
+  # Allow a reviewed synthetic fixture inline with a `gitleaks:allow` comment.
+  secret-scan:
+    name: secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks 8.30.1 (checksum pinned)
+        run: |
+          set -euo pipefail
+          curl -sSL -o /tmp/gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+      - name: Scan new commits
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_REF:-}" ]; then
+            range="origin/${BASE_REF}..HEAD"
+          elif [ -n "${BEFORE:-}" ] && ! echo "$BEFORE" | grep -qE '^0+$' && git cat-file -e "$BEFORE" 2>/dev/null; then
+            range="${BEFORE}..HEAD"
+          else
+            range="HEAD~1..HEAD"
+          fi
+          echo "scanning $range"
+          /tmp/gitleaks git --redact --no-banner --verbose --log-opts="$range" .
+
+  # M2-14 (plan label, Linear pending): enforce the workflow rules in docs/ci.md and
+  # docs/security/public-release-safety.md: no pull_request_target, GitHub-hosted runners
+  # only, no write token on workflow_run, read-only top-level permissions, no job
+  # widening them, and every action pinned to a full SHA with a version comment.
+  ci-hygiene:
+    name: ci hygiene (workflows)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML (hash pinned)
+        run: |
+          pip install --require-hashes --only-binary :all: --no-deps -r scripts/ci-hygiene-requirements.txt
+      - name: Check workflows
+        run: python scripts/ci-hygiene-check.py
+      - name: Test the checker and the history scan
+        run: python -m unittest discover -s test/ci-hygiene -v
+
   check:
+    needs: plan
+    # Skipped at the job level only on a successful plan whose mode is exactly `affected`
+    # (a draft PR; `check-affected` runs instead). A skipped matrix job reports as
+    # "check (${{ matrix.os }})", never as `check (macos-latest)` or `check (ubuntu-latest)`,
+    # so those required checks stay unreported for that commit and the draft cannot merge on
+    # that run. Marking it ready starts a run that is never `affected` (#678). Every other
+    # plan result or mode, a failed or garbled plan included, starts this job.
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.mode != 'affected') }}
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    # TIF-256: from 2026-11-23 to 11-25, macOS runs of this job took at most 3.5 min
+    # once a runner had it (p50 1.8). 15 min fails a hang loudly, as "timed out" in
+    # the step that hung. It does not cover queue time: a job no runner picks up is
+    # cancelled by GitHub; re-run it by hand (docs/ci.md, TIF-256).
+    # #747: by 2026-11-27 macOS runs on plain main took 11-14 min and hit the 15-min
+    # limit (once on main, three times on #711), cancelling a required check. macOS gets
+    # 25 for margin; ubuntu keeps 15. Step 2 of #747 brings macOS back under 15.
+    # Pinned by test/ci-check-timeout.test.ts.
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 25 || 15 }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: CI plan
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          PLAN_MODE: ${{ needs.plan.outputs.mode }}
+          PLAN_LAUNCHER: ${{ needs.plan.outputs.launcher }}
+          PLAN_SCANNERS: ${{ needs.plan.outputs.scanners }}
+          PLAN_SAFETY: ${{ needs.plan.outputs.safety }}
+        run: |
+          # Fail safe: only a successful plan naming a known narrow mode narrows anything.
+          # `case` matches the whole value; `grep -x` would accept any one line of it.
+          # `affected` is not known here: this job runs it only by mistake, so in full.
+          mode="$PLAN_MODE"
+          case "$mode" in full | targeted | docs) known=yes ;; *) known=no ;; esac
+          if [ "$PLAN_RESULT" != "success" ] || [ "$known" != yes ]; then
+            echo "plan job '$PLAN_RESULT' (mode '$mode'): running the full suite (fail safe)"
+            mode=full
+          fi
+          # A narrow mode must run the directory-scanning guards; with none listed, it cannot.
+          if [ "$mode" != full ] && [ -z "$PLAN_SCANNERS" ]; then
+            echo "plan mode '$mode' lists no directory-scanning tests: running the full suite (fail safe)"
+            mode=full
+          fi
+          # ...and the safety set (gate integrity, R5, fault injection, security; #678).
+          if [ "$mode" != full ] && [ -z "$PLAN_SAFETY" ]; then
+            echo "plan mode '$mode' lists no safety tests: running the full suite (fail safe)"
+            mode=full
+          fi
+          launcher=true
+          if [ "$PLAN_LAUNCHER" = "false" ]; then launcher=false; fi
+          echo "MODE=$mode" >> "$GITHUB_ENV"
+          echo "LAUNCHER=$launcher" >> "$GITHUB_ENV"
+          echo "mode: $mode, launcher: $launcher"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # targeted mode diffs against the PR base (`vitest run --changed`).
+          fetch-depth: ${{ env.MODE == 'targeted' && '0' || '1' }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
       - name: Install pnpm
         run: npm install -g pnpm@10
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      # TIF-265 T: plugin children run in an empty network namespace (unshare --user --net);
+      # Ubuntu 24.04 blocks unprivileged user namespaces by default, so lift that here. With no
+      # OS network layer every plugin call fails closed (PLUGIN_NO_NET_ISOLATION).
+      # No `if:`: the script is a no-op where the sysctl does not exist (macOS), and the
+      # workflow evaluator in test/ci-hygiene/test_ci_plan.py has no `runner.os` token.
+      - name: Allow user namespaces (plugin sandbox network layer)
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Typecheck
+        if: env.MODE != 'docs'
+        run: pnpm typecheck
+      - name: Lint
+        if: env.MODE != 'docs'
+        run: pnpm lint
+      - name: Test
+        if: env.MODE == 'full'
+        run: pnpm test
+      - name: Test (targeted, files related to the change)
+        if: env.MODE == 'targeted'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: pnpm exec vitest run --changed "$BASE_SHA" --passWithNoTests --exclude test/discovery/s0-live-launcher.test.ts
+      # `pnpm test` runs the launcher test alone in a forked pool; `--changed` excludes it,
+      # so a narrow mode reruns it the same way when test/discovery/ changed or it is a
+      # directory-scanning test (it lists its run directory, so today: always).
+      - name: Test (s0 launcher, forked)
+        if: env.MODE != 'full' && env.LAUNCHER == 'true'
+        run: pnpm exec vitest run --pool=forks --no-file-parallelism test/discovery/s0-live-launcher.test.ts
+      # Directory-scanning guards (grader independence, hidden split, home paths, ...)
+      # never import what they scan, so `--changed` cannot select them: always run them.
+      # The safety set (gate integrity, R5, fault injection, security) runs on every PR.
+      - name: Test (core smoke, safety set, directory-scanning tests and doc tests)
+        if: env.MODE != 'full'
+        env:
+          SMOKE: ${{ needs.plan.outputs.smoke }}
+          SAFETY: ${{ needs.plan.outputs.safety }}
+          SCANNERS: ${{ needs.plan.outputs.scanners }}
+          DOC_TESTS: ${{ needs.plan.outputs.doc_tests }}
+        run: |
+          # shellcheck disable=SC2086 # space-separated file lists, written by scripts/ci-plan.py
+          pnpm exec vitest run $SMOKE $SAFETY $SCANNERS $DOC_TESTS
+      - name: Schema validate
+        if: env.MODE == 'targeted'
+        run: pnpm schema-validate
+      - name: Build
+        if: env.MODE != 'docs'
+        run: pnpm build
+
+  # CI speed (#678): a draft PR that does not touch CI tooling. Not a required check, by
+  # design: its name is not one of the five, and `check` is skipped in this mode, so
+  # `check (macos-latest)` and `check (ubuntu-latest)` are never reported for the commit
+  # and the PR cannot merge on this run. Marking the PR ready for review starts a run that
+  # is never `affected`. Ubuntu only: no macOS runner is taken while a PR is a draft.
+  # With `affected_all` (too many related tests to be worth narrowing) it runs the whole
+  # suite instead of the affected subset.
+  check-affected:
+    name: check affected (ubuntu-latest)
+    needs: plan
+    if: ${{ needs.plan.result == 'success' && needs.plan.outputs.mode == 'affected' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ALL: ${{ needs.plan.outputs.affected_all == 'true' }}
+    steps:
+      - name: Plan lists the guards
+        env:
+          SCANNERS: ${{ needs.plan.outputs.scanners }}
+          SAFETY: ${{ needs.plan.outputs.safety }}
+        run: |
+          # Fail closed: a narrowed affected run that cannot run the safety set or the
+          # directory-scanning guards fails instead of passing on less.
+          [ "$ALL" = true ] && exit 0
+          [ -n "$SCANNERS" ] || { echo "::error::affected plan lists no directory-scanning tests"; exit 1; }
+          [ -n "$SAFETY" ] || { echo "::error::affected plan lists no safety tests"; exit 1; }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # `vitest run --changed` diffs against the PR base.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Allow user namespaces (plugin sandbox network layer)
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - name: Typecheck
         run: pnpm typecheck
       - name: Lint
         run: pnpm lint
-      - name: Test
+      - name: Test (whole suite, ubuntu only)
+        if: env.ALL == 'true'
         run: pnpm test
+      - name: Test (affected, files related to the change by vitest's import graph)
+        if: env.ALL != 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: pnpm exec vitest run --changed "$BASE_SHA" --passWithNoTests --exclude test/discovery/s0-live-launcher.test.ts
+      - name: Test (s0 launcher, forked)
+        if: env.ALL != 'true' && needs.plan.outputs.launcher != 'false'
+        run: pnpm exec vitest run --pool=forks --no-file-parallelism test/discovery/s0-live-launcher.test.ts
+      - name: Test (core smoke, safety set, directory-scanning, related and doc tests)
+        if: env.ALL != 'true'
+        env:
+          SMOKE: ${{ needs.plan.outputs.smoke }}
+          SAFETY: ${{ needs.plan.outputs.safety }}
+          SCANNERS: ${{ needs.plan.outputs.scanners }}
+          RELATED: ${{ needs.plan.outputs.related }}
+          DOC_TESTS: ${{ needs.plan.outputs.doc_tests }}
+        run: |
+          # shellcheck disable=SC2086 # space-separated file lists, written by scripts/ci-plan.py
+          pnpm exec vitest run $SMOKE $SAFETY $SCANNERS $RELATED $DOC_TESTS
+      - name: Schema validate
+        if: env.ALL != 'true'
+        run: pnpm schema-validate
       - name: Build
         run: pnpm build
 
   agent:
-    name: myco-agent tests (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    name: myco-agent tests (ubuntu-latest)
+    needs: plan
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: agent
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: CI plan
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          PLAN_MODE: ${{ needs.plan.outputs.mode }}
+        run: |
+          # Fail safe: skip only on a successful plan naming a narrow mode; a failed or
+          # skipped plan, or an empty or unknown mode, runs the tests.
+          case "$PLAN_MODE" in targeted | docs) narrow=yes ;; *) narrow=no ;; esac
+          if [ "$PLAN_RESULT" = "success" ] && [ "$narrow" = yes ]; then
+            echo "RUN=false" >> "$GITHUB_ENV"
+            echo "plan mode '$PLAN_MODE': agent/ is untouched (it is a full-suite path class); not run"
+          else
+            echo "RUN=true" >> "$GITHUB_ENV"
+          fi
+      - name: Install
+        if: env.RUN == 'true'
+        run: pip install -e . pytest
+      - name: Test
+        if: env.RUN == 'true'
+        run: pytest -v
+
+  # Not required. CI speed (#678): on PRs it waited up to 19.5 min for a macOS runner (PR
+  # #642's run 45970632580, then 17 s of tests) and was the last job to finish. It runs on
+  # every push to main, and on a PR only when the plan says agent/ or the workflows
+  # changed (or the plan did not succeed). Results stay on every main run.
+  agent-macos:
+    name: myco-agent tests (macos-latest)
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || needs.plan.outputs.agent_macos != 'false') }}
+    runs-on: macos-latest
+    # TIF-256: macOS runs took at most 0.9 min once a runner had them; see `check`.
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Install
@@ -56,25 +380,54 @@ jobs:
   # and fails if the file_grant test count is zero, so the gap cannot silently return.
   runtime-agent-linux:
     name: runtime guest agent tests (ubuntu-latest)
+    needs: plan
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: runtime
     steps:
-      - uses: actions/checkout@v4
+      - name: CI plan
+        working-directory: .
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          PLAN_MODE: ${{ needs.plan.outputs.mode }}
+        run: |
+          # Fail safe: skip only on a successful plan naming a narrow mode; a failed or
+          # skipped plan, or an empty or unknown mode, runs the tests.
+          case "$PLAN_MODE" in targeted | docs) narrow=yes ;; *) narrow=no ;; esac
+          if [ "$PLAN_RESULT" = "success" ] && [ "$narrow" = yes ]; then
+            echo "RUN=false" >> "$GITHUB_ENV"
+            echo "plan mode '$PLAN_MODE': runtime/ is untouched (it is a full-suite path class); not run"
+          else
+            echo "RUN=true" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: env.RUN == 'true'
+        with:
+          persist-credentials: false
       - name: Native deps (xa11y-linux links libxkbcommon)
+        if: env.RUN == 'true'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev pkg-config
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # Pinned to a commit on dtolnay/rust-toolchain's master branch (its README asks
+      # SHA pins to come from master); with a SHA the toolchain must be named.
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master branch commit
+        if: env.RUN == 'true'
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: env.RUN == 'true'
         with:
           workspaces: runtime
       - name: Test myco-rt-agent
+        if: env.RUN == 'true'
         # pipefail: a job-level `defaults.run` makes the shell `bash -e` without
         # pipefail, so `| tee` swallowed a compile failure (first run of this job).
         run: |
           set -o pipefail
           cargo test -p myco-rt-agent 2>&1 | tee /tmp/agent-test.log
       - name: Confinement tests actually ran
+        if: env.RUN == 'true'
         run: |
           set -euo pipefail
           n=$(grep -cE '^test file_grant::.* \.\.\. ok$' /tmp/agent-test.log || true)
@@ -85,16 +438,280 @@ jobs:
       # MCP-surface tests. Build the agent explicitly so the transport tests never
       # spawn a stale cached binary.
       - name: Test transport (real agent over the wire), core, mcp
+        if: env.RUN == 'true'
         run: |
           set -o pipefail
           cargo build -p myco-rt-agent
           cargo test -p myco-rt-transport -p myco-rt-core -p myco-rt-mcp 2>&1 | tee /tmp/host-test.log
       - name: Wire round trip actually ran
+        if: env.RUN == 'true'
         run: |
           set -euo pipefail
           for t in file_write_over_control_channel_round_trips_through_the_agent agent_refuses_an_oversize_write_on_its_own file_read_over_control_channel_requires_grant; do
             grep -qE "^test tests::$t \.\.\. ok$" /tmp/host-test.log || { echo "::error::$t did not run and pass on Linux"; exit 1; }
           done
+
+  # TIF-273 (M2-11): the M2 scorecard check and the process gates the M2 plan §2.2
+  # keeps as CI checks instead of scorecard rows: schema validity of every committed
+  # M2 evidence pack, a cause on every non-verified row (with a harness class), and the
+  # guest load gate record. Host only: no VM, no model, no secrets. Not a required check.
+  m2-scorecard:
+    name: m2 evidence and scorecard
+    needs: plan
+    # Not required: skipped at the job level when the plan says no M2 path changed.
+    # Fail safe: runs unless a successful plan names a narrow mode and says m2 is false.
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || (needs.plan.outputs.mode != 'targeted' && needs.plan.outputs.mode != 'docs' && needs.plan.outputs.mode != 'affected') || needs.plan.outputs.m2 != 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Evidence gates (every committed m2-* pack)
+        run: pnpm exec tsx scripts/m2-evidence-check.ts --all
+      - name: M2 scorecard check
+        run: python3 scripts/m2-scorecard-check.py
+      - name: Checker tests (fixture packs, every failure mode)
+        run: pnpm exec vitest run test/m2
+
+  # Track G (#613, #612 N2): the public false-completion release, reproduced from the
+  # archive alone. Builds the release twice from the checked-out commit (allowlisted files
+  # only, leak scan, plain ustar with no xattrs or owner names) and requires the two archives
+  # to be byte-identical, then unpacks one into an empty directory with no clone and no
+  # node_modules and runs the bundled verifier, sha256sum -c and the bundled grader with plain
+  # Node: the regraded rows must equal the bundle's expected rows. Not required. No VM, no
+  # model, no secrets.
+  benchmark-release:
+    name: benchmark release (bundle alone)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build the release twice
+        run: |
+          pnpm exec tsx scripts/benchmark-release-package.ts --out "$RUNNER_TEMP/release-a"
+          pnpm exec tsx scripts/benchmark-release-package.ts --out "$RUNNER_TEMP/release-b"
+      - name: Archives are byte-identical
+        run: cmp "$RUNNER_TEMP/release-a/myco-false-completion-fc-v1.tar" "$RUNNER_TEMP/release-b/myco-false-completion-fc-v1.tar"
+      - name: Reproduce the grader from the archive alone
+        run: scripts/benchmark-release-repro.sh "$RUNNER_TEMP/release-a/myco-false-completion-fc-v1.tar"
+
+  # Track L2: strict per-trial isolation (strict-linux-ns). Ubuntu 24.04 restricts
+  # unprivileged user namespaces through AppArmor, so the job lifts that sysctl first;
+  # MYCO_STRICT_NS_REQUIRED=1 makes the namespace suite FAIL instead of skip when the
+  # backend cannot start. Runs as the unprivileged runner user. No VM, no model, no secrets.
+  strict-isolation:
+    name: strict isolation (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MYCO_STRICT_NS_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Allow unprivileged user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Strict isolation tests (namespaces; must not skip)
+        run: pnpm exec vitest run test/isolation
+
+  # TIF-269 (M2-06): the Linux path an outsider can run. A real headless
+  # LibreOffice Calc is driven by a scripted agent; Myco's oracle reads the saved
+  # workbook and must return verified / refuted / uncertain as each scenario
+  # expects, including the false completion (agent says done, file disagrees).
+  # No VM, no model, no secrets. MYCO_LINUX_PATH_REQUIRED=1 makes the real-Calc
+  # suite fail instead of skip if LibreOffice or Python-UNO is missing.
+  linux-path:
+    name: linux path (ubuntu-latest)
+    needs: plan
+    # Not required: skipped at the job level unless a Linux-path or init path changed.
+    # Fail safe: runs unless a successful plan names a narrow mode and says linux_path is false.
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || (needs.plan.outputs.mode != 'targeted' && needs.plan.outputs.mode != 'docs' && needs.plan.outputs.mode != 'affected') || needs.plan.outputs.linux_path != 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MYCO_PYTHON: /usr/bin/python3
+      MYCO_LINUX_PATH_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      # libreoffice-writer: the cross-app suite (track P, test/linux/cross-app-libreoffice.test.ts)
+      # drives a real headless Writer too.
+      - name: Install LibreOffice Calc, Writer and Python-UNO
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc libreoffice-writer python3-uno
+      - name: Prerequisites
+        run: pnpm myco-linux --check
+      - name: Linux path tests (real Calc; must not skip)
+        run: pnpm exec vitest run test/linux
+      - name: Demo (every scenario must produce its expected verdict)
+        run: pnpm myco-linux --demo --out "$RUNNER_TEMP/myco-linux"
+      # TIF-265 track D: `myco init` (desktop check on) writes the project configs, real Calc
+      # edits the file under the configured evidence root, and a scripted MCP client gets
+      # verified / refuted through the written .mcp.json and .codex/config.toml. Must not skip.
+      - name: myco init end to end (real Calc, written config, scripted MCP client)
+        env:
+          MYCO_INIT_E2E_TRANSCRIPT: ${{ runner.temp }}/myco-linux/init-e2e.txt
+        run: pnpm exec vitest run test/init/init-linux-e2e.test.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: linux-path-runs
+          path: ${{ runner.temp }}/myco-linux
+          if-no-files-found: ignore
+
+  # TIF-265 track D: the newcomer path. On a clean runner with only the documented
+  # prerequisites (Node 24, pnpm 10, the LibreOffice line setup.md and init print), the test
+  # clones this commit and runs every command of the docs blocks marked
+  # `<!-- newcomer-path: ... -->` as written (linux-path.md clone/install/check, setup.md
+  # quickstart, README quickstart, setup.md Linux block) with a fresh HOME, then a simulated
+  # task must get verified / refuted through the written .mcp.json. Timed; a non-zero exit, an
+  # undocumented placeholder or a blown budget fails it. $0: no model, no secrets, no VM.
+  # Not required; runs on the same plan condition as `linux path`.
+  newcomer-path:
+    name: newcomer path (ubuntu-latest)
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || (needs.plan.outputs.mode != 'targeted' && needs.plan.outputs.mode != 'docs' && needs.plan.outputs.mode != 'affected') || needs.plan.outputs.linux_path != 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MYCO_NEWCOMER_PATH_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install LibreOffice Calc and Python-UNO (the documented line)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc python3-uno
+      # The harness side only (vitest, the MCP client, the scripted agents). The product under
+      # test is the fresh clone the test makes and installs from its own docs.
+      - name: Install the harness
+        run: pnpm install --frozen-lockfile
+      - name: Newcomer path (fresh clone, documented commands only, timed)
+        env:
+          MYCO_NEWCOMER_REPORT: ${{ runner.temp }}/newcomer-path/report.json
+        run: pnpm exec vitest run test/init/newcomer-path.test.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: newcomer-path
+          path: ${{ runner.temp }}/newcomer-path
+          if-no-files-found: ignore
+
+  # TIF-265 track D: the newcomer path on macOS (#672). The same live test on a clean macOS
+  # runner with only the documented prerequisites (Node 24, pnpm 10; no LibreOffice, which
+  # init skips off Linux): setup.md's `macos` clone block, the setup.md quickstart and the
+  # README quickstart as written, with a fresh HOME; then a simulated df-s01 task on the mock
+  # desktop must get verified / refuted through the written .mcp.json. Timed, same budget.
+  # $0: no model, no secrets, no VM. Not required; same plan condition as the Linux job.
+  newcomer-path-macos:
+    name: newcomer path (macos-latest)
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result != 'success' || (needs.plan.outputs.mode != 'targeted' && needs.plan.outputs.mode != 'docs' && needs.plan.outputs.mode != 'affected') || needs.plan.outputs.linux_path != 'false') }}
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      MYCO_NEWCOMER_PATH_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      # The harness side only (vitest, the MCP client). The product under test is the fresh
+      # clone the test makes and installs from its own docs.
+      - name: Install the harness
+        run: pnpm install --frozen-lockfile
+      - name: Newcomer path (fresh clone, documented commands only, timed)
+        env:
+          MYCO_NEWCOMER_REPORT: ${{ runner.temp }}/newcomer-path-macos/report.json
+        run: pnpm exec vitest run test/init/newcomer-path.test.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: newcomer-path-macos
+          path: ${{ runner.temp }}/newcomer-path-macos
+          if-no-files-found: ignore
+
+  # Track L (safe parallelism): N disposable Linux desktops in parallel on the unprivileged
+  # `linux-plain` backend (private root and HOME, own process group, own Xvfb), real
+  # headless Calc driven by scripted agents ($0: no model, no API, no secrets).
+  # MYCO_PARALLEL_REQUIRED=1 makes the Xvfb and real-Calc suites FAIL instead of skip when
+  # anything is missing. Strict namespace isolation (linux-ns) is NOT in this PR, so no
+  # trial here is ever counted as verified (shared-host-dirs); the run checks every gate
+  # verdict, contamination and teardown.
+  safe-parallelism:
+    name: safe parallelism (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MYCO_PYTHON: /usr/bin/python3
+      MYCO_PARALLEL_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install LibreOffice Calc, Python-UNO and Xvfb
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc python3-uno xvfb
+      - name: Probe the backend (reports linux-plain and its weak isolation)
+        run: pnpm myco-parallel --probe
+      - name: Safe-parallelism tests (Xvfb and real Calc; must not skip)
+        run: pnpm exec vitest run test/parallel
+      - name: Throughput run ($0, real Calc, N = 1,2,4; measured, never counted)
+        run: pnpm myco-parallel --n 1,2,4 --trials 8 --agent calc --display xvfb --allow-weak-isolation --out "$RUNNER_TEMP/myco-parallel"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: safe-parallelism-runs
+          path: ${{ runner.temp }}/myco-parallel
+          if-no-files-found: ignore
 
   # Runs both verdict fixture sizes on main pushes and PRs labelled `perf`.
   # The hosted 10k check compares the median against calibrated runner caps.
@@ -105,8 +722,10 @@ jobs:
   # 2.1-2.7x over baseline, indistinguishable from a real regression by any
   # median threshold. So this gate runs post-merge on main and on PRs labelled
   # `perf`, where a timing failure is actionable; docs-only PRs are not gated on
-  # a runner noise race. Thresholds are unchanged and still catch a 2x slowdown
-  # (630.8 ms vs hardMedian 580 / relative limit 425.8 on darwin).
+  # a runner noise race. The darwin 10k baseline (339.1 ms) is the median of 94
+  # macos-latest job medians on unchanged viewer code; a budget miss re-measures
+  # once and fails only if both attempts miss (viewer/PERF.md). A 1.5x slowdown
+  # on a baseline-speed runner (508.7 ms) still fails the 457.8 ms limit.
   viewer-perf:
     name: viewer verdict budget (${{ matrix.os }})
     if: >-
@@ -122,8 +741,10 @@ jobs:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
       MYCO_VIEWER_BUDGET_REPORT: ${{ github.workspace }}/verdict-budget.ndjson
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
       - name: Install pnpm
@@ -131,7 +752,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .playwright-browsers
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -146,11 +767,11 @@ jobs:
         run: |
           echo '### Verdict budget samples (${{ matrix.os }})' >> "$GITHUB_STEP_SUMMARY"
           if [ -f "$MYCO_VIEWER_BUDGET_REPORT" ]; then
-            node -e 'for (const l of require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n")) { const r = JSON.parse(l); console.log(`- ${r.steps} steps, N=${r.samples.length}: median ${r.median.toFixed(1)}, p95 ${r.p95.toFixed(1)}, max ${r.max.toFixed(1)} ms`); }' "$MYCO_VIEWER_BUDGET_REPORT" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "raw samples (ms), one JSON line per size:"
+            node -e 'for (const l of require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n")) { const r = JSON.parse(l); console.log(`- ${r.steps} steps, attempt ${r.attempt ?? 1}, N=${r.samples.length}: median ${r.median.toFixed(1)}, p95 ${r.p95.toFixed(1)}, max ${r.max.toFixed(1)} ms`); }' "$MYCO_VIEWER_BUDGET_REPORT" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "raw samples (ms), one JSON line per size and attempt (a retry line carries its note):"
             cat "$MYCO_VIEWER_BUDGET_REPORT"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: verdict-budget-${{ matrix.os }}

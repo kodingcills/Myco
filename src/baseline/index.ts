@@ -1,7 +1,7 @@
 import type { Verdict, VerdictStatus } from "../core/verify.ts";
 
 export type SubArm = "c1" | "c2";
-export type BaselineEvidenceArm = SubArm | "hcu";
+export type BaselineEvidenceArm = SubArm | "hcu" | "hcu+shell"; // hcu+shell: TIF-268
 export type Claim = "done" | "failure";
 /** The transport outcomes TIF-167 distinguishes. Static lookup, so a Record. */
 const DELIVERY_OUTCOMES: Record<string, true> = {
@@ -266,7 +266,7 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     d = x.driver,
     t = x.transcript;
   return (
-    (x.subArm === "c1" || x.subArm === "c2" || x.subArm === "hcu") &&
+    (x.subArm === "c1" || x.subArm === "c2" || x.subArm === "hcu" || x.subArm === "hcu+shell") &&
     count(x.index) &&
     str(p.fixtureSeed) &&
     str(p.rowKey) &&
@@ -278,6 +278,8 @@ export function isBaselineRow(x: unknown): x is BaselineRow {
     (x.verdict === "verified" || x.verdict === "refuted" || x.verdict === "uncertain") &&
     // TIF-128: a C1 row records the instruction it was given, or declares that it
     // predates the field. See `instructionUnrecorded` for why both are needed.
+    // TIF-268: an hcu+shell row is new, so it has no pre-field exemption.
+    (x.subArm !== "hcu+shell" || str(x.instruction)) &&
     (x.subArm !== "c1" ||
       // `str` already rejects "", so no separate length check is needed.
       str(x.instruction) ||
